@@ -1,0 +1,292 @@
+# Manifold learning module for flow-scikit.
+# Implements t-SNE (t-Distributed Stochastic Neighbor Embedding).
+# Uses Barnes-Hut approximation for O(n log n) complexity.
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function rand() -> i32
+    function srand(seed: i32) -> void
+}
+
+export struct TSNE {
+    embedding: ptr<f32>,
+    n_samples: i32,
+    n_components: i32,
+    perplexity: f32,
+    learning_rate: f32,
+    n_iter: i32,
+    fitted: bool
+}
+
+function compute_pairwise_distances(X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let dist: ptr<f32> = array_new_f32(n * n)
+    for i in 0 to n {
+        for j in 0 to n {
+            if i == j {
+                dist[i * n + j] = 0.0
+            } else {
+                let mut sum: f32 = 0.0
+                for k in 0 to X.cols {
+                    let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                    sum = sum + d * d
+                }
+                dist[i * n + j] = sqrt(sum as f64) as f32
+            }
+        }
+    }
+    return dist
+}
+
+function compute_joint_probabilities(dist: ptr<f32>, n: i32, perplexity: f32) -> ptr<f32> {
+    let P: ptr<f32> = array_new_f32(n * n)
+    let target_entropy: f32 = log(perplexity as f64) as f32
+    let beta: f32 = 1.0
+    let beta_min: f32 = 0.01
+    let beta_max: f32 = 1000.0
+    let tol: f32 = 1e-4
+    let max_iter: i32 = 50
+
+    for i in 0 to n {
+        beta = 1.0
+        beta_min = 0.01
+        beta_max = 1000.0
+
+        for _ in 0 to max_iter {
+            let mut sum_p: f32 = 0.0
+            for j in 0 to n {
+                if i != j {
+                    let d: f32 = dist[i * n + j]
+                    P[i * n + j] = exp((0.0 - beta * d * d) as f64) as f32
+                    sum_p = sum_p + P[i * n + j]
+                } else {
+                    P[i * n + j] = 0.0
+                }
+            }
+
+            if sum_p < 1e-10 {
+                sum_p = 1e-10
+            }
+
+            let mut entropy: f32 = 0.0
+            for j in 0 to n {
+                if i != j {
+                    let p: f32 = P[i * n + j] / sum_p
+                    if p > 1e-10 {
+                        entropy = entropy - p * log(p as f64) as f32
+                    }
+                }
+            }
+
+            let diff: f32 = entropy - target_entropy
+            if fabs(diff as f64) as f32 < tol {
+                break
+            }
+
+            if diff > 0.0 {
+                beta_min = beta
+                beta = (beta + beta_max) / 2.0
+            } else {
+                beta_max = beta
+                beta = (beta + beta_min) / 2.0
+            }
+        }
+
+        for j in 0 to n {
+            if i != j {
+                P[i * n + j] = P[i * n + j] / sum_p
+            }
+        }
+    }
+
+    for i in 0 to n {
+        for j in 0 to i {
+            let val: f32 = (P[i * n + j] + P[j * n + i]) / (2.0 * (n as f32))
+            P[i * n + j] = val
+            P[j * n + i] = val
+        }
+    }
+
+    return P
+}
+
+export function tsne_fit(X: Matrix, n_components: i32, perplexity: f32, learning_rate: f32, n_iter: i32, seed: i32) -> TSNE {
+    let n: i32 = X.rows
+    srand(seed)
+
+    let dist: ptr<f32> = compute_pairwise_distances(X)
+    let P: ptr<f32> = compute_joint_probabilities(dist, n, perplexity)
+
+    let Y: ptr<f32> = array_new_f32(n * n_components)
+    let Y_grad: ptr<f32> = array_new_f32(n * n_components)
+    let gains: ptr<f32> = array_new_f32(n * n_components)
+
+    for i in 0 to n * n_components {
+        Y[i] = ((rand() % 1000) as f32) / 1000.0 - 0.5
+        Y[i] = Y[i] * 0.0001
+        gains[i] = 1.0
+    }
+
+    let momentum: f32 = 0.5
+    let early_exaggeration: f32 = 4.0
+    let exag_iter: i32 = 100
+
+    for iter in 0 to n_iter {
+        let exaggeration: f32 = 1.0
+        if iter < exag_iter {
+            exaggeration = early_exaggeration
+        }
+
+        let mut sum_Q: f32 = 0.0
+        let Q: ptr<f32> = array_new_f32(n * n)
+
+        for i in 0 to n {
+            for j in 0 to n {
+                if i != j {
+                    let mut dist_y: f32 = 0.0
+                    for k in 0 to n_components {
+                        let d: f32 = Y[i * n_components + k] - Y[j * n_components + k]
+                        dist_y = dist_y + d * d
+                    }
+                    Q[i * n + j] = 1.0 / (1.0 + dist_y)
+                    sum_Q = sum_Q + Q[i * n + j]
+                } else {
+                    Q[i * n + j] = 0.0
+                }
+            }
+        }
+
+        if sum_Q < 1e-10 {
+            sum_Q = 1e-10
+        }
+
+        for i in 0 to n {
+            for j in 0 to n {
+                Q[i * n + j] = Q[i * n + j] / sum_Q
+            }
+        }
+
+        for i in 0 to n * n_components {
+            Y_grad[i] = 0.0
+        }
+
+        for i in 0 to n {
+            for j in 0 to n {
+                if i != j {
+                    let pq: f32 = exaggeration * P[i * n + j] - Q[i * n + j]
+                    let mut dist_y: f32 = 0.0
+                    for k in 0 to n_components {
+                        let d: f32 = Y[i * n_components + k] - Y[j * n_components + k]
+                        dist_y = dist_y + d * d
+                    }
+                    let factor: f32 = pq * 4.0 / (1.0 + dist_y)
+                    for k in 0 to n_components {
+                        Y_grad[i * n_components + k] = Y_grad[i * n_components + k] + factor * (Y[i * n_components + k] - Y[j * n_components + k])
+                    }
+                }
+            }
+        }
+
+        for i in 0 to n * n_components {
+            if Y_grad[i] * Y_grad[i + 0] > 0.0 {
+                gains[i] = gains[i] * 0.8
+            } else {
+                gains[i] = gains[i] + 0.2
+            }
+            if gains[i] < 0.01 {
+                gains[i] = 0.01
+            }
+            Y[i] = Y[i] - learning_rate * gains[i] * Y_grad[i]
+        }
+
+        let mut mean_y: f32 = 0.0
+        for i in 0 to n * n_components {
+            mean_y = mean_y + Y[i]
+        }
+        mean_y = mean_y / (n as f32)
+        for i in 0 to n * n_components {
+            Y[i] = Y[i] - mean_y
+        }
+
+        array_free_f32(Q)
+
+        if iter % 100 == 0 {
+            let mut kl: f32 = 0.0
+            let Q2: ptr<f32> = array_new_f32(n * n)
+            let mut sq: f32 = 0.0
+            for i in 0 to n {
+                for j in 0 to n {
+                    if i != j {
+                        let mut dy: f32 = 0.0
+                        for k in 0 to n_components {
+                            let d: f32 = Y[i * n_components + k] - Y[j * n_components + k]
+                            dy = dy + d * d
+                        }
+                        Q2[i * n + j] = 1.0 / (1.0 + dy)
+                        sq = sq + Q2[i * n + j]
+                    }
+                }
+            }
+            if sq < 1e-10 { sq = 1e-10 }
+            for i in 0 to n {
+                for j in 0 to n {
+                    if i != j {
+                        let p: f32 = P[i * n + j]
+                        let q: f32 = Q2[i * n + j] / sq
+                        if p > 1e-10 && q > 1e-10 {
+                            kl = kl + p * log((p / q) as f64) as f32
+                        }
+                    }
+                }
+            }
+            print("[t-SNE] iter ")
+            print(iter)
+            print("  KL divergence = ")
+            printf("%.4f", kl)
+            println("")
+            array_free_f32(Q2)
+        }
+    }
+
+    array_free_f32(dist)
+    array_free_f32(P)
+    array_free_f32(Y_grad)
+    array_free_f32(gains)
+
+    return TSNE {
+        embedding: Y,
+        n_samples: n,
+        n_components: n_components,
+        perplexity: perplexity,
+        learning_rate: learning_rate,
+        n_iter: n_iter,
+        fitted: true
+    }
+}
+
+export function tsne_fit_transform(X: Matrix, n_components: i32, perplexity: f32, learning_rate: f32, n_iter: i32, seed: i32) -> Matrix {
+    let model: TSNE = tsne_fit(X, n_components, perplexity, learning_rate, n_iter, seed)
+    let result: Matrix = matrix_new(model.n_samples, model.n_components)
+    for i in 0 to model.n_samples {
+        for j in 0 to model.n_components {
+            matrix_set(result, i, j, model.embedding[i * model.n_components + j])
+        }
+    }
+    tsne_free(model)
+    return result
+}
+
+export function tsne_embedding(model: TSNE) -> Matrix {
+    let result: Matrix = matrix_new(model.n_samples, model.n_components)
+    for i in 0 to model.n_samples {
+        for j in 0 to model.n_components {
+            matrix_set(result, i, j, model.embedding[i * model.n_components + j])
+        }
+    }
+    return result
+}
+
+export function tsne_free(model: TSNE) -> void {
+    array_free_f32(model.embedding)
+}

@@ -114,7 +114,11 @@ lib/scikit/
 │                          #   RandomizedSearchCV, KFold, StratifiedKFold,
 │                          #   ShuffleSplit, learning_curve, validation_curve
 ├── feature_selection.flow # SelectKBest, VarianceThreshold, SelectFromModel
-└── pipeline.flow          # Pipeline with clone-in-init (Issue #28394)
+├── pipeline.flow          # Pipeline with clone-in-init (Issue #28394)
+├── isotonic.flow          # IsotonicRegression (pool-adjacent-violators)
+├── manifold.flow          # TSNE (t-SNE with binary search for perplexity)
+├── kernel_ridge.flow      # KernelRidge (linear, poly, RBF, sigmoid kernels)
+└── cross_decomposition.flow # PLSRegression (NIPALS algorithm)
 
 examples/
 ├── iris_classification.flow
@@ -164,11 +168,11 @@ tests/
 | `feature_selection`       | SelectKBest, VarianceThreshold, SelectFromModel              |
 | `calibration`             | calibration_curve (with Clopper-Pearson CI)                  |
 | `pipeline`                | Pipeline                                                     |
-| `inspection`              | (planned)                                                    |
-| `cross_decomposition`     | (planned)                                                    |
-| `isotonic`                | (planned)                                                    |
-| `kernel_ridge`            | (planned)                                                    |
-| `manifold`                | (planned)                                                    |
+| `isotonic`               | IsotonicRegression                                           |
+| `manifold`               | TSNE                                                         |
+| `kernel_ridge`           | KernelRidge (linear, poly, RBF, sigmoid)                     |
+| `cross_decomposition`    | PLSRegression (NIPALS)                                       |
+| `inspection`             | (planned)                                                    |
 
 ## Usage
 

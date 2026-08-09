@@ -1,0 +1,295 @@
+# Cross decomposition module for flow-scikit.
+# Implements PLS (Partial Least Squares) regression via NIPALS algorithm.
+# Supports PLSRegression for supervised dimensionality reduction.
+
+import "lib/scikit/matrix.flow"
+
+export struct PLSRegression {
+    x_mean: ptr<f32>,
+    x_std: ptr<f32>,
+    y_mean: ptr<f32>,
+    y_std: ptr<f32>,
+    x_weights: ptr<f32>,
+    y_weights: ptr<f32>,
+    x_scores: ptr<f32>,
+    y_scores: ptr<f32>,
+    x_loadings: ptr<f32>,
+    y_loadings: ptr<f32>,
+    coef: ptr<f32>,
+    n_components: i32,
+    n_features: i32,
+    n_targets: i32,
+    n_samples: i32,
+    fitted: bool
+}
+
+function compute_mean_col(m: Matrix, col: i32) -> f32 {
+    let mut sum: f32 = 0.0
+    for i in 0 to m.rows {
+        sum = sum + matrix_at(m, i, col)
+    }
+    return sum / (m.rows as f32)
+}
+
+function compute_std_col(m: Matrix, col: i32, mean: f32) -> f32 {
+    let mut sum_sq: f32 = 0.0
+    for i in 0 to m.rows {
+        let d: f32 = matrix_at(m, i, col) - mean
+        sum_sq = sum_sq + d * d
+    }
+    let var: f32 = sum_sq / (m.rows as f32)
+    if var < 1e-10 {
+        return 1.0
+    }
+    return sqrt(var as f64) as f32
+}
+
+export function pls_fit(X: Matrix, Y: Matrix, n_components: i32, max_iter: i32, tol: f32) -> PLSRegression {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let q: i32 = Y.cols
+
+    let x_mean: ptr<f32> = array_new_f32(p)
+    let x_std: ptr<f32> = array_new_f32(p)
+    let y_mean: ptr<f32> = array_new_f32(q)
+    let y_std: ptr<f32> = array_new_f32(q)
+
+    for j in 0 to p {
+        x_mean[j] = compute_mean_col(X, j)
+        x_std[j] = compute_std_col(X, j, x_mean[j])
+    }
+    for j in 0 to q {
+        y_mean[j] = compute_mean_col(Y, j)
+        y_std[j] = compute_std_col(Y, j, y_mean[j])
+    }
+
+    let Xc: Matrix = matrix_new(n, p)
+    let Yc: Matrix = matrix_new(n, q)
+    for i in 0 to n {
+        for j in 0 to p {
+            matrix_set(Xc, i, j, (matrix_at(X, i, j) - x_mean[j]) / x_std[j])
+        }
+        for j in 0 to q {
+            matrix_set(Yc, i, j, (matrix_at(Y, i, j) - y_mean[j]) / y_std[j])
+        }
+    }
+
+    let x_weights: ptr<f32> = array_new_f32(n_components * p)
+    let y_weights: ptr<f32> = array_new_f32(n_components * q)
+    let x_scores: ptr<f32> = array_new_f32(n * n_components)
+    let y_scores: ptr<f32> = array_new_f32(n * n_components)
+    let x_loadings: ptr<f32> = array_new_f32(n_components * p)
+    let y_loadings: ptr<f32> = array_new_f32(n_components * q)
+
+    let Xk: Matrix = matrix_copy(Xc)
+    let Yk: Matrix = matrix_copy(Yc)
+
+    for c in 0 to n_components {
+        let u: ptr<f32> = array_new_f32(n)
+        for i in 0 to n {
+            u[i] = matrix_at(Yk, i, 0)
+        }
+
+        let t: ptr<f32> = array_new_f32(n)
+        let w: ptr<f32> = array_new_f32(p)
+        let c_vec: ptr<f32> = array_new_f32(q)
+
+        for _ in 0 to max_iter {
+            let w_new: ptr<f32> = array_new_f32(p)
+            for j in 0 to p {
+                let mut sum: f32 = 0.0
+                for i in 0 to n {
+                    sum = sum + matrix_at(Xk, i, j) * u[i]
+                }
+                w_new[j] = sum
+            }
+            let w_norm: f32 = 0.0
+            for j in 0 to p {
+                w_norm = w_norm + w_new[j] * w_new[j]
+            }
+            w_norm = sqrt(w_norm as f64) as f32
+            if w_norm < 1e-10 { w_norm = 1.0 }
+            for j in 0 to p {
+                w_new[j] = w_new[j] / w_norm
+            }
+
+            let t_new: ptr<f32> = array_new_f32(n)
+            for i in 0 to n {
+                let mut sum: f32 = 0.0
+                for j in 0 to p {
+                    sum = sum + matrix_at(Xk, i, j) * w_new[j]
+                }
+                t_new[i] = sum
+            }
+
+            let c_new: ptr<f32> = array_new_f32(q)
+            for j in 0 to q {
+                let mut sum: f32 = 0.0
+                for i in 0 to n {
+                    sum = sum + matrix_at(Yk, i, j) * t_new[i]
+                }
+                c_new[j] = sum
+            }
+
+            let u_new: ptr<f32> = array_new_f32(n)
+            for i in 0 to n {
+                let mut sum: f32 = 0.0
+                for j in 0 to q {
+                    sum = sum + matrix_at(Yk, i, j) * c_new[j]
+                }
+                u_new[i] = sum
+            }
+
+            let mut diff: f32 = 0.0
+            for i in 0 to n {
+                let d: f32 = t_new[i] - t[i]
+                diff = diff + d * d
+            }
+            diff = sqrt(diff as f64) as f32
+
+            for i in 0 to n { t[i] = t_new[i] }
+            for j in 0 to p { w[j] = w_new[j] }
+            for j in 0 to q { c_vec[j] = c_new[j] }
+            for i in 0 to n { u[i] = u_new[i] }
+
+            array_free_f32(w_new)
+            array_free_f32(t_new)
+            array_free_f32(c_new)
+            array_free_f32(u_new)
+
+            if diff < tol {
+                break
+            }
+        }
+
+        let p_vec: ptr<f32> = array_new_f32(p)
+        for j in 0 to p {
+            let mut sum: f32 = 0.0
+            for i in 0 to n {
+                sum = sum + matrix_at(Xk, i, j) * t[i]
+            }
+            p_vec[j] = sum
+        }
+
+        let t_norm: f32 = 0.0
+        for i in 0 to n {
+            t_norm = t_norm + t[i] * t[i]
+        }
+        if t_norm < 1e-10 { t_norm = 1.0 }
+
+        for j in 0 to p {
+            x_weights[c * p + j] = w[j]
+            x_loadings[c * p + j] = p_vec[j] / t_norm
+        }
+        for j in 0 to q {
+            y_weights[c * q + j] = c_vec[j]
+            y_loadings[c * q + j] = c_vec[j] / t_norm
+        }
+        for i in 0 to n {
+            x_scores[i * n_components + c] = t[i]
+            y_scores[i * n_components + c] = u[i]
+        }
+
+        for i in 0 to n {
+            for j in 0 to p {
+                let val: f32 = matrix_at(Xk, i, j) - t[i] * p_vec[j] / t_norm
+                matrix_set(Xk, i, j, val)
+            }
+            for j in 0 to q {
+                let val: f32 = matrix_at(Yk, i, j) - t[i] * c_vec[j] / t_norm
+                matrix_set(Yk, i, j, val)
+            }
+        }
+
+        array_free_f32(u)
+        array_free_f32(t)
+        array_free_f32(w)
+        array_free_f32(c_vec)
+        array_free_f32(p_vec)
+    }
+
+    let coef: ptr<f32> = array_new_f32(p * q)
+    for a in 0 to n_components {
+        for j in 0 to p {
+            for k in 0 to q {
+                let w_a: f32 = x_weights[a * p + j]
+                let c_a: f32 = y_weights[a * q + k]
+                coef[j * q + k] = coef[j * q + k] + w_a * c_a
+            }
+        }
+    }
+
+    matrix_free(Xc)
+    matrix_free(Yc)
+    matrix_free(Xk)
+    matrix_free(Yk)
+
+    return PLSRegression {
+        x_mean: x_mean,
+        x_std: x_std,
+        y_mean: y_mean,
+        y_std: y_std,
+        x_weights: x_weights,
+        y_weights: y_weights,
+        x_scores: x_scores,
+        y_scores: y_scores,
+        x_loadings: x_loadings,
+        y_loadings: y_loadings,
+        coef: coef,
+        n_components: n_components,
+        n_features: p,
+        n_targets: q,
+        n_samples: n,
+        fitted: true
+    }
+}
+
+export function pls_predict(model: PLSRegression, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let result: Matrix = matrix_new(n, model.n_targets)
+
+    for i in 0 to n {
+        for k in 0 to model.n_targets {
+            let mut sum: f32 = 0.0
+            for j in 0 to model.n_features {
+                let x_val: f32 = (matrix_at(X, i, j) - model.x_mean[j]) / model.x_std[j]
+                sum = sum + x_val * model.coef[j * model.n_targets + k]
+            }
+            matrix_set(result, i, k, sum * model.y_std[k] + model.y_mean[k])
+        }
+    }
+
+    return result
+}
+
+export function pls_transform(model: PLSRegression, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let result: Matrix = matrix_new(n, model.n_components)
+
+    for i in 0 to n {
+        for c in 0 to model.n_components {
+            let mut sum: f32 = 0.0
+            for j in 0 to model.n_features {
+                let x_val: f32 = (matrix_at(X, i, j) - model.x_mean[j]) / model.x_std[j]
+                sum = sum + x_val * model.x_weights[c * model.n_features + j]
+            }
+            matrix_set(result, i, c, sum)
+        }
+    }
+
+    return result
+}
+
+export function pls_free(model: PLSRegression) -> void {
+    array_free_f32(model.x_mean)
+    array_free_f32(model.x_std)
+    array_free_f32(model.y_mean)
+    array_free_f32(model.y_std)
+    array_free_f32(model.x_weights)
+    array_free_f32(model.y_weights)
+    array_free_f32(model.x_scores)
+    array_free_f32(model.y_scores)
+    array_free_f32(model.x_loadings)
+    array_free_f32(model.y_loadings)
+    array_free_f32(model.coef)
+}

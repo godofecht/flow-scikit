@@ -1,0 +1,153 @@
+# Kernel ridge regression module for flow-scikit.
+# Combines ridge regression (L2 regularization) with the kernel trick.
+# Supports linear, polynomial, and RBF kernels.
+
+import "lib/scikit/matrix.flow"
+
+export struct KernelRidge {
+    alpha: f32,
+    kernel_type: i32,
+    gamma: f32,
+    degree: i32,
+    coef0: f32,
+    dual_coef: ptr<f32>,
+    X_train: Matrix,
+    n_samples: i32,
+    n_features: i32,
+    n_outputs: i32,
+    fitted: bool
+}
+
+const KERNEL_LINEAR: i32 = 0
+const KERNEL_POLY: i32 = 1
+const KERNEL_RBF: i32 = 2
+const KERNEL_SIGMOID: i32 = 3
+
+export const KERNEL_TYPE_LINEAR: i32 = 0
+export const KERNEL_TYPE_POLY: i32 = 1
+export const KERNEL_TYPE_RBF: i32 = 2
+export const KERNEL_TYPE_SIGMOID: i32 = 3
+
+function kernel_compute(x1: ptr<f32>, x2: ptr<f32>, n: i32, kernel_type: i32, gamma: f32, degree: i32, coef0: f32) -> f32 {
+    if kernel_type == KERNEL_LINEAR {
+        return dot_product(x1, x2, n)
+    } else if kernel_type == KERNEL_POLY {
+        let dot: f32 = dot_product(x1, x2, n)
+        return pow_f32(gamma * dot + coef0, degree)
+    } else if kernel_type == KERNEL_RBF {
+        let mut sum: f32 = 0.0
+        for i in 0 to n {
+            let d: f32 = x1[i] - x2[i]
+            sum = sum + d * d
+        }
+        return exp((0.0 - gamma * sum) as f64) as f32
+    } else if kernel_type == KERNEL_SIGMOID {
+        let dot: f32 = dot_product(x1, x2, n)
+        return tanh_f32(gamma * dot + coef0)
+    }
+    return dot_product(x1, x2, n)
+}
+
+function pow_f32(base: f32, exp: i32) -> f32 {
+    let mut result: f32 = 1.0
+    for _ in 0 to exp {
+        result = result * base
+    }
+    return result
+}
+
+function tanh_f32(x: f32) -> f32 {
+    let e1: f64 = exp(x as f64)
+    let e2: f64 = exp((0.0 - x) as f64)
+    return ((e1 - e2) / (e1 + e2)) as f32
+}
+
+function compute_kernel_matrix(X: Matrix, kernel_type: i32, gamma: f32, degree: i32, coef0: f32) -> Matrix {
+    let n: i32 = X.rows
+    let K: Matrix = matrix_new(n, n)
+    for i in 0 to n {
+        let xi: ptr<f32> = array_new_f32(X.cols)
+        matrix_row(X, i, xi)
+        for j in 0 to n {
+            let xj: ptr<f32> = array_new_f32(X.cols)
+            matrix_row(X, j, xj)
+            matrix_set(K, i, j, kernel_compute(xi, xj, X.cols, kernel_type, gamma, degree, coef0))
+            array_free_f32(xj)
+        }
+        array_free_f32(xi)
+    }
+    return K
+}
+
+export function kernel_ridge_fit(X: Matrix, y: ptr<f32>, alpha: f32, kernel_type: i32, gamma: f32, degree: i32, coef0: f32) -> KernelRidge {
+    let n: i32 = X.rows
+    let K: Matrix = compute_kernel_matrix(X, kernel_type, gamma, degree, coef0)
+
+    let K_reg: Matrix = matrix_copy(K)
+    for i in 0 to n {
+        let val: f32 = matrix_at(K_reg, i, i) + alpha
+        matrix_set(K_reg, i, i, val)
+    }
+
+    let dual_coef: ptr<f32> = array_new_f32(n)
+
+    let max_iter: i32 = 1000
+    let lr: f32 = 0.01
+    for _ in 0 to max_iter {
+        let Kt_y: ptr<f32> = array_new_f32(n)
+        matrix_multiply_vec(K_reg, dual_coef, Kt_y)
+        for i in 0 to n {
+            Kt_y[i] = Kt_y[i] - y[i]
+        }
+        for i in 0 to n {
+            dual_coef[i] = dual_coef[i] - lr * Kt_y[i]
+        }
+        array_free_f32(Kt_y)
+    }
+
+    matrix_free(K)
+    matrix_free(K_reg)
+
+    let X_copy: Matrix = matrix_copy(X)
+
+    return KernelRidge {
+        alpha: alpha,
+        kernel_type: kernel_type,
+        gamma: gamma,
+        degree: degree,
+        coef0: coef0,
+        dual_coef: dual_coef,
+        X_train: X_copy,
+        n_samples: n,
+        n_features: X.cols,
+        n_outputs: 1,
+        fitted: true
+    }
+}
+
+export function kernel_ridge_predict(model: KernelRidge, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let xi: ptr<f32> = array_new_f32(X.cols)
+        matrix_row(X, i, xi)
+        let mut sum: f32 = 0.0
+        for j in 0 to model.n_samples {
+            let xj: ptr<f32> = array_new_f32(model.n_features)
+            matrix_row(model.X_train, j, xj)
+            let k: f32 = kernel_compute(xi, xj, model.n_features, model.kernel_type, model.gamma, model.degree, model.coef0)
+            sum = sum + model.dual_coef[j] * k
+            array_free_f32(xj)
+        }
+        result[i] = sum
+        array_free_f32(xi)
+    }
+
+    return result
+}
+
+export function kernel_ridge_free(model: KernelRidge) -> void {
+    array_free_f32(model.dual_coef)
+    matrix_free(model.X_train)
+}
