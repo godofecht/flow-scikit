@@ -185,3 +185,95 @@ export function knn_regressor_free(model: KNNRegressor) -> void {
     matrix_free(model.X_train)
     array_free_f32(model.y_train)
 }
+
+export struct NearestNeighbors {
+    X_train: Matrix,
+    n_neighbors: i32,
+    fitted: bool
+}
+
+export function nearest_neighbors_fit(X: Matrix, n_neighbors: i32) -> NearestNeighbors {
+    return NearestNeighbors {
+        X_train: matrix_copy(X),
+        n_neighbors: n_neighbors,
+        fitted: true
+    }
+}
+
+export struct NeighborResult {
+    indices: ptr<i32>,
+    distances: ptr<f32>,
+    n_neighbors: i32
+}
+
+export function nearest_neighbors_kneighbors(model: NearestNeighbors, X: Matrix) -> ptr<NeighborResult> {
+    let n: i32 = X.rows
+    let results: ptr<NeighborResult> = malloc((n as i64) * 16) as ptr<NeighborResult>
+
+    for i in 0 to n {
+        let dists: ptr<f32> = array_new_f32(model.X_train.rows)
+        let indices: ptr<i32> = malloc((model.X_train.rows as i64) * 4) as ptr<i32>
+
+        for j in 0 to model.X_train.rows {
+            let mut dist: f32 = 0.0
+            for k in 0 to X.cols {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(model.X_train, j, k)
+                dist = dist + d * d
+            }
+            dists[j] = sqrt(dist as f64) as f32
+            indices[j] = j
+        }
+
+        let k: i32 = model.n_neighbors
+        if k > model.X_train.rows {
+            k = model.X_train.rows
+        }
+
+        for s in 0 to k {
+            let mut min_idx: i32 = s
+            let mut min_val: f32 = dists[s]
+            for j in s + 1 to model.X_train.rows {
+                if dists[j] < min_val {
+                    min_val = dists[j]
+                    min_idx = j
+                }
+            }
+            let tmp_d: f32 = dists[s]
+            let tmp_i: i32 = indices[s]
+            dists[s] = dists[min_idx]
+            indices[s] = indices[min_idx]
+            dists[min_idx] = tmp_d
+            indices[min_idx] = tmp_i
+        }
+
+        let k_indices: ptr<i32> = malloc((k as i64) * 4) as ptr<i32>
+        let k_dists: ptr<f32> = array_new_f32(k)
+        for s in 0 to k {
+            k_indices[s] = indices[s]
+            k_dists[s] = dists[s]
+        }
+
+        results[i] = NeighborResult {
+            indices: k_indices,
+            distances: k_dists,
+            n_neighbors: k
+        }
+
+        array_free_f32(dists)
+        free(indices as ptr<void>)
+    }
+
+    return results
+}
+
+export function nearest_neighbors_free_results(results: ptr<NeighborResult>, n: i32) -> void {
+    for i in 0 to n {
+        free(results[i].indices as ptr<void>)
+        array_free_f32(results[i].distances)
+    }
+    free(results as ptr<void>)
+}
+
+export function nearest_neighbors_free(model: NearestNeighbors) -> void {
+    matrix_free(model.X_train)
+}

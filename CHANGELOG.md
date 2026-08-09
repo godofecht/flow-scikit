@@ -13,6 +13,7 @@
 - Added TruncatedSVD (truncated SVD for sparse data)
 - Added MultinomialNB, BernoulliNB (naive Bayes for discrete features)
 - Added RidgeClassifier (linear classification via ridge regression)
+- Added NearestNeighbors (unsupervised k-nearest neighbors)
 - Added version module
 - Added Apache-2.0 license
 - Private repository setup

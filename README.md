@@ -93,7 +93,7 @@ lib/scikit/
 ├── linear.flow            # LinearRegression, LogisticRegression, Ridge,
 │                          #   RidgeClassifier, SGDClassifier,
 │                          #   SGDRegressor, MultiClassLogisticRegression
-├── neighbors.flow         # KNNClassifier, KNNRegressor
+├── neighbors.flow         # KNNClassifier, KNNRegressor, NearestNeighbors
 ├── svm.flow               # LinearSVC, LinearSVR, KernelSVC (RBF)
 ├── tree.flow              # DecisionTreeClassifier, DecisionTreeRegressor
 ├── naive_bayes.flow       # GaussianNB, MultinomialNB, BernoulliNB
@@ -149,7 +149,7 @@ tests/
 | `linear_model`            | LinearRegression, LogisticRegression, Ridge, Lasso,          |
 |                           | ElasticNet, RidgeClassifier, SGDClassifier,                 |
 |                           | SGDRegressor, MultiClassLogisticRegression                 |
-| `neighbors`               | KNNClassifier, KNNRegressor                                  |
+| `neighbors`               | KNNClassifier, KNNRegressor, NearestNeighbors                |
 | `svm`                     | LinearSVC, LinearSVR, KernelSVC                              |
 | `tree`                    | DecisionTreeClassifier, DecisionTreeRegressor                |
 | `naive_bayes`             | GaussianNB, MultinomialNB, BernoulliNB                      |
