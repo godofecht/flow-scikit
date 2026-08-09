@@ -156,14 +156,16 @@ tests/
 |                           | GradientBoostingClassifier, GradientBoostingRegressor,       |
 |                           | AdaBoostClassifier                                           |
 | `cluster`                 | KMeans, DBSCAN, AgglomerativeClustering                      |
-| `decomposition`           | PCA                                                          |
+| `decomposition`           | PCA, NMF                                                    |
 | `metrics`                 | accuracy_score, precision_recall_fscore,                     |
 |                           | classification_report, confusion_matrix,                     |
 |                           | roc_curve, roc_auc_score, precision_recall_curve,            |
 |                           | log_loss, cohen_kappa, matthews_corrcoef,                    |
 |                           | hinge_loss, balanced_accuracy_score, fbeta_score,            |
 |                           | mean_squared_error, root_mean_squared_error,                 |
-|                           | mean_absolute_error, r2_score, explained_variance_score      |
+|                           | mean_absolute_error, median_absolute_error,                 |
+|                           | max_error, mean_squared_log_error, r2_score,                |
+|                           | explained_variance_score, silhouette_score                  |
 | `model_selection`         | train_test_split, cross_validate_score, GridSearchCV,        |
 |                           | RandomizedSearchCV, KFold, StratifiedKFold,                  |
 |                           | ShuffleSplit, learning_curve, validation_curve               |

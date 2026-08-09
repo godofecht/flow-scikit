@@ -7,6 +7,8 @@
 - Added KernelRidge (linear, polynomial, RBF, sigmoid kernels)
 - Added PLSRegression (NIPALS algorithm for cross decomposition)
 - Added permutation_importance (inspection module)
+- Added NMF (Non-Negative Matrix Factorization)
+- Added silhouette_score, median_absolute_error, max_error, mean_squared_log_error metrics
 - Added version module
 - Added Apache-2.0 license
 - Private repository setup

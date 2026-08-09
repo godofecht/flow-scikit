@@ -722,3 +722,124 @@ export function fbeta_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, classes:
     free(pr as ptr<void>)
     return sum_f / (n_classes as f32)
 }
+
+export function median_absolute_error(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
+    let errors: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        errors[i] = fabs((y_true[i] - y_pred[i]) as f64) as f32
+    }
+
+    for i in 1 to n {
+        let key: f32 = errors[i]
+        let mut j: i32 = i - 1
+        while j >= 0 && errors[j] > key {
+            errors[j + 1] = errors[j]
+            j = j - 1
+        }
+        errors[j + 1] = key
+    }
+
+    let median: f32 = 0.0
+    if n % 2 == 0 {
+        median = (errors[n / 2 - 1] + errors[n / 2]) / 2.0
+    } else {
+        median = errors[n / 2]
+    }
+
+    array_free_f32(errors)
+    return median
+}
+
+export function max_error(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
+    let mut max_err: f32 = fabs((y_true[0] - y_pred[0]) as f64) as f32
+    for i in 1 to n {
+        let err: f32 = fabs((y_true[i] - y_pred[i]) as f64) as f32
+        if err > max_err {
+            max_err = err
+        }
+    }
+    return max_err
+}
+
+export function mean_squared_log_error(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
+    let mut sum: f32 = 0.0
+    for i in 0 to n {
+        let log_true: f32 = log((y_true[i] + 1.0) as f64) as f32
+        let log_pred: f32 = log((y_pred[i] + 1.0) as f64) as f32
+        let d: f32 = log_true - log_pred
+        sum = sum + d * d
+    }
+    return sum / (n as f32)
+}
+
+export function silhouette_score(X: Matrix, labels: ptr<i32>, n: i32) -> f32 {
+    let mut total: f32 = 0.0
+
+    for i in 0 to n {
+        let label_i: i32 = labels[i]
+
+        let mut a_i: f32 = 0.0
+        let mut count_same: i32 = 0
+        for j in 0 to n {
+            if i != j && labels[j] == label_i {
+                let mut dist: f32 = 0.0
+                for k in 0 to X.cols {
+                    let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                    dist = dist + d * d
+                }
+                a_i = a_i + sqrt(dist as f64) as f32
+                count_same = count_same + 1
+            }
+        }
+        if count_same > 0 {
+            a_i = a_i / (count_same as f32)
+        }
+
+        let mut best_b: f32 = 1e10
+        let mut found_other: bool = false
+        for c in 0 to 100 {
+            let mut has_cluster: bool = false
+            for j in 0 to n {
+                if labels[j] == c && c != label_i {
+                    has_cluster = true
+                    break
+                }
+            }
+            if !has_cluster { continue }
+
+            let mut b_i: f32 = 0.0
+            let mut count_other: i32 = 0
+            for j in 0 to n {
+                if labels[j] == c {
+                    let mut dist: f32 = 0.0
+                    for k in 0 to X.cols {
+                        let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                        dist = dist + d * d
+                    }
+                    b_i = b_i + sqrt(dist as f64) as f32
+                    count_other = count_other + 1
+                }
+            }
+            if count_other > 0 {
+                b_i = b_i / (count_other as f32)
+                if b_i < best_b {
+                    best_b = b_i
+                    found_other = true
+                }
+            }
+        }
+
+        if !found_other {
+            total = total + 0.0
+        } else {
+            let denom: f32 = a_i
+            if best_b > denom {
+                total = total + (best_b - a_i) / best_b
+            } else {
+                total = total + (best_b - a_i) / denom
+            }
+        }
+    }
+
+    return total / (n as f32)
+}

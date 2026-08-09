@@ -184,3 +184,135 @@ export function pca_print_summary(model: PCA) -> void {
         println("")
     }
 }
+
+export struct NMF {
+    W: ptr<f32>,
+    H: ptr<f32>,
+    n_components: i32,
+    n_samples: i32,
+    n_features: i32,
+    reconstruction_err: f32,
+    n_iter: i32,
+    fitted: bool
+}
+
+export function nmf_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f32, seed: i32) -> NMF {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let k: i32 = n_components
+
+    srand(seed)
+
+    let W: ptr<f32> = array_new_f32(n * k)
+    let H: ptr<f32> = array_new_f32(k * p)
+
+    for i in 0 to n * k {
+        W[i] = ((rand() % 100) as f32) / 100.0 + 0.01
+    }
+    for i in 0 to k * p {
+        H[i] = ((rand() % 100) as f32) / 100.0 + 0.01
+    }
+
+    let mut prev_err: f32 = 1e10
+
+    for iter in 0 to max_iter {
+        let H_new: ptr<f32> = array_new_f32(k * p)
+        for a in 0 to k {
+            for b in 0 to p {
+                let mut numerator: f32 = 0.0
+                let mut denominator: f32 = 0.0
+                for i in 0 to n {
+                    let mut wh: f32 = 0.0
+                    for j in 0 to k {
+                        wh = wh + W[i * k + j] * H[j * p + b]
+                    }
+                    numerator = numerator + W[i * k + a] * matrix_at(X, i, b)
+                    denominator = denominator + W[i * k + a] * wh
+                }
+                if denominator < 1e-10 { denominator = 1e-10 }
+                H_new[a * p + b] = H[a * p + b] * numerator / denominator
+            }
+        }
+        for i in 0 to k * p {
+            H[i] = H_new[i]
+        }
+        array_free_f32(H_new)
+
+        let W_new: ptr<f32> = array_new_f32(n * k)
+        for i in 0 to n {
+            for a in 0 to k {
+                let mut numerator: f32 = 0.0
+                let mut denominator: f32 = 0.0
+                for b in 0 to p {
+                    let mut wh: f32 = 0.0
+                    for j in 0 to k {
+                        wh = wh + W[i * k + j] * H[j * p + b]
+                    }
+                    numerator = numerator + H[a * p + b] * matrix_at(X, i, b)
+                    denominator = denominator + wh * H[a * p + b]
+                }
+                if denominator < 1e-10 { denominator = 1e-10 }
+                W_new[i * k + a] = W[i * k + a] * numerator / denominator
+            }
+        }
+        for i in 0 to n * k {
+            W[i] = W_new[i]
+        }
+        array_free_f32(W_new)
+
+        let mut err: f32 = 0.0
+        for i in 0 to n {
+            for b in 0 to p {
+                let mut wh: f32 = 0.0
+                for j in 0 to k {
+                    wh = wh + W[i * k + j] * H[j * p + b]
+                }
+                let d: f32 = matrix_at(X, i, b) - wh
+                err = err + d * d
+            }
+        }
+        err = sqrt(err as f64) as f32
+
+        if fabs((prev_err - err) as f64) as f32 < tol {
+            break
+        }
+        prev_err = err
+    }
+
+    return NMF {
+        W: W,
+        H: H,
+        n_components: k,
+        n_samples: n,
+        n_features: p,
+        reconstruction_err: prev_err,
+        n_iter: max_iter,
+        fitted: true
+    }
+}
+
+export function nmf_transform(model: NMF, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, model.n_components)
+    let H_trans: Matrix = matrix_new(model.n_features, model.n_components)
+    for i in 0 to model.n_components {
+        for j in 0 to model.n_features {
+            matrix_set(H_trans, j, i, model.H[i * model.n_features + j])
+        }
+    }
+    for i in 0 to X.rows {
+        for a in 0 to model.n_components {
+            let mut sum: f32 = 0.0
+            for b in 0 to X.cols {
+                sum = sum + matrix_at(X, i, b) * matrix_at(H_trans, b, a)
+            }
+            matrix_set(result, i, a, sum)
+        }
+    }
+    matrix_free(H_trans)
+    return result
+}
+
+export function nmf_free(model: NMF) -> void {
+    array_free_f32(model.W)
+    array_free_f32(model.H)
+}
