@@ -6,6 +6,7 @@
 - Added TSNE (t-SNE with binary search for perplexity calibration)
 - Added KernelRidge (linear, polynomial, RBF, sigmoid kernels)
 - Added PLSRegression (NIPALS algorithm for cross decomposition)
+- Added permutation_importance (inspection module)
 - Added version module
 - Added Apache-2.0 license
 - Private repository setup

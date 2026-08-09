@@ -1,0 +1,113 @@
+# Inspection module for flow-scikit.
+# Implements permutation_importance for feature importance evaluation.
+# Measures the drop in a metric when a feature's values are shuffled.
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function rand() -> i32
+    function srand(seed: i32) -> void
+}
+
+export struct PermutationImportanceResult {
+    importances_mean: ptr<f32>,
+    importances_std: ptr<f32>,
+    importances: ptr<f32>,
+    n_features: i32,
+    n_repeats: i32
+}
+
+export function permutation_importance_regression(
+    X: Matrix,
+    y: ptr<f32>,
+    predict_fn: ptr<f32>,
+    metric_fn: ptr<f32>,
+    n_repeats: i32,
+    seed: i32
+) -> PermutationImportanceResult {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let importances_mean: ptr<f32> = array_new_f32(p)
+    let importances_std: ptr<f32> = array_new_f32(p)
+    let importances: ptr<f32> = array_new_f32(p * n_repeats)
+
+    let baseline_preds: ptr<f32> = predict_fn
+
+    let baseline_score: f32 = metric_fn
+
+    srand(seed)
+
+    for j in 0 to p {
+        let mut sum: f32 = 0.0
+        let mut sum_sq: f32 = 0.0
+
+        for r in 0 to n_repeats {
+            let X_perm: Matrix = matrix_copy(X)
+
+            let perm: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+            for i in 0 to n {
+                perm[i] = i
+            }
+            for i in n - 1 down to 1 {
+                let j_idx: i32 = rand() % (i + 1)
+                let tmp: i32 = perm[i]
+                perm[i] = perm[j_idx]
+                perm[j_idx] = tmp
+            }
+
+            let orig_col: ptr<f32> = array_new_f32(n)
+            for i in 0 to n {
+                orig_col[i] = matrix_at(X_perm, i, j)
+            }
+            for i in 0 to n {
+                matrix_set(X_perm, i, j, orig_col[perm[i]])
+            }
+            array_free_f32(orig_col)
+            free(perm as ptr<void>)
+
+            let perm_preds: ptr<f32> = predict_fn
+            let perm_score: f32 = metric_fn
+
+            let imp: f32 = baseline_score - perm_score
+            importances[j * n_repeats + r] = imp
+            sum = sum + imp
+            sum_sq = sum_sq + imp * imp
+
+            matrix_free(X_perm)
+        }
+
+        importances_mean[j] = sum / (n_repeats as f32)
+        let variance: f32 = sum_sq / (n_repeats as f32) - importances_mean[j] * importances_mean[j]
+        if variance < 0.0 { variance = 0.0 }
+        importances_std[j] = sqrt(variance as f64) as f32
+    }
+
+    return PermutationImportanceResult {
+        importances_mean: importances_mean,
+        importances_std: importances_std,
+        importances: importances,
+        n_features: p,
+        n_repeats: n_repeats
+    }
+}
+
+export function permutation_importance_free(result: PermutationImportanceResult) -> void {
+    array_free_f32(result.importances_mean)
+    array_free_f32(result.importances_std)
+    array_free_f32(result.importances)
+}
+
+export function permutation_importance_print(result: PermutationImportanceResult) -> void {
+    println("Permutation Importance")
+    println("=====================")
+    for j in 0 to result.n_features {
+        print("  Feature ")
+        print(j)
+        print(": ")
+        printf("%.4f", result.importances_mean[j])
+        print(" +/- ")
+        printf("%.4f", result.importances_std[j])
+        println("")
+    }
+}

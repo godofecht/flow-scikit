@@ -118,7 +118,8 @@ lib/scikit/
 ├── isotonic.flow          # IsotonicRegression (pool-adjacent-violators)
 ├── manifold.flow          # TSNE (t-SNE with binary search for perplexity)
 ├── kernel_ridge.flow      # KernelRidge (linear, poly, RBF, sigmoid kernels)
-└── cross_decomposition.flow # PLSRegression (NIPALS algorithm)
+├── cross_decomposition.flow # PLSRegression (NIPALS algorithm)
+└── inspection.flow         # permutation_importance for feature evaluation
 
 examples/
 ├── iris_classification.flow
@@ -131,7 +132,8 @@ tests/
 ├── test_metrics.flow
 ├── test_model_selection.flow
 ├── test_estimators.flow
-└── test_advanced_estimators.flow
+├── test_advanced_estimators.flow
+└── test_new_modules.flow
 ```
 
 ## API Coverage
@@ -172,7 +174,7 @@ tests/
 | `manifold`               | TSNE                                                         |
 | `kernel_ridge`           | KernelRidge (linear, poly, RBF, sigmoid)                     |
 | `cross_decomposition`    | PLSRegression (NIPALS)                                       |
-| `inspection`             | (planned)                                                    |
+| `inspection`             | permutation_importance                                       |
 
 ## Usage
 
@@ -215,6 +217,7 @@ function main() -> i32 {
 ./flow run tests/test_model_selection.flow
 ./flow run tests/test_estimators.flow
 ./flow run tests/test_advanced_estimators.flow
+./flow run tests/test_new_modules.flow
 ```
 
 ## Running Examples
