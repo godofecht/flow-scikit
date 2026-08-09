@@ -91,12 +91,12 @@ lib/scikit/
 │                          #   SimpleImputer, KBinsDiscretizer,
 │                          #   PolynomialFeatures, FunctionTransformer
 ├── linear.flow            # LinearRegression, LogisticRegression, Ridge,
-│                          #   Lasso, ElasticNet, SGDClassifier,
+│                          #   RidgeClassifier, SGDClassifier,
 │                          #   SGDRegressor, MultiClassLogisticRegression
 ├── neighbors.flow         # KNNClassifier, KNNRegressor
 ├── svm.flow               # LinearSVC, LinearSVR, KernelSVC (RBF)
 ├── tree.flow              # DecisionTreeClassifier, DecisionTreeRegressor
-├── naive_bayes.flow       # GaussianNB
+├── naive_bayes.flow       # GaussianNB, MultinomialNB, BernoulliNB
 ├── ensemble.flow          # RandomForestClassifier/Regressor,
 │                          #   BaggingClassifier, VotingClassifier,
 │                          #   GradientBoostingClassifier/Regressor,
@@ -147,12 +147,12 @@ tests/
 |                           | LabelEncoder, SimpleImputer, KBinsDiscretizer,               |
 |                           | PolynomialFeatures, FunctionTransformer                      |
 | `linear_model`            | LinearRegression, LogisticRegression, Ridge, Lasso,          |
-|                           | ElasticNet, SGDClassifier, SGDRegressor,                     |
-|                           | MultiClassLogisticRegression                                 |
+|                           | ElasticNet, RidgeClassifier, SGDClassifier,                 |
+|                           | SGDRegressor, MultiClassLogisticRegression                 |
 | `neighbors`               | KNNClassifier, KNNRegressor                                  |
 | `svm`                     | LinearSVC, LinearSVR, KernelSVC                              |
 | `tree`                    | DecisionTreeClassifier, DecisionTreeRegressor                |
-| `naive_bayes`             | GaussianNB                                                   |
+| `naive_bayes`             | GaussianNB, MultinomialNB, BernoulliNB                      |
 | `ensemble`                | RandomForestClassifier, RandomForestRegressor,               |
 |                           | BaggingClassifier, VotingClassifier,                         |
 |                           | GradientBoostingClassifier, GradientBoostingRegressor,       |

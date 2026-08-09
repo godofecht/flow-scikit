@@ -175,3 +175,262 @@ export function gaussian_nb_free(model: GaussianNB) -> void {
     array_free_f32(model.classes)
     array_free_f32(model.priors)
 }
+
+export struct MultinomialNB {
+    classes: ptr<f32>,
+    n_classes: i32,
+    n_features: i32,
+    feature_log_prob: ptr<ptr<f32>>,
+    class_log_prior: ptr<f32>,
+    fitted: bool
+}
+
+export function multinomial_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, alpha: f32) -> MultinomialNB {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    for c in 0 to n_classes {
+        class_counts[c] = 0
+    }
+
+    let mut class_idx: i32 = 0
+    for i in 0 to n {
+        let found: bool = false
+        for c in 0 to class_idx {
+            if classes[c] == y[i] {
+                class_counts[c] = class_counts[c] + 1
+                found = true
+                break
+            }
+        }
+        if !found {
+            classes[class_idx] = y[i]
+            class_counts[class_idx] = 1
+            class_idx = class_idx + 1
+        }
+    }
+
+    let feature_log_prob: ptr<ptr<f32>> = malloc((n_classes as i64) * 8) as ptr<ptr<f32>>
+    let class_log_prior: ptr<f32> = array_new_f32(n_classes)
+
+    for c in 0 to n_classes {
+        let feature_counts: ptr<f32> = array_new_f32(p)
+        for j in 0 to p {
+            feature_counts[j] = alpha
+        }
+
+        for i in 0 to n {
+            if y[i] == classes[c] {
+                for j in 0 to p {
+                    feature_counts[j] = feature_counts[j] + matrix_at(X, i, j)
+                }
+            }
+        }
+
+        let mut total: f32 = 0.0
+        for j in 0 to p {
+            total = total + feature_counts[j]
+        }
+
+        feature_log_prob[c] = array_new_f32(p)
+        for j in 0 to p {
+            feature_log_prob[c][j] = log((feature_counts[j] / total) as f64) as f32
+        }
+        array_free_f32(feature_counts)
+
+        class_log_prior[c] = log(((class_counts[c] as f32) / (n as f32)) as f64) as f32
+    }
+
+    free(class_counts as ptr<void>)
+
+    return MultinomialNB {
+        classes: classes,
+        n_classes: n_classes,
+        n_features: p,
+        feature_log_prob: feature_log_prob,
+        class_log_prior: class_log_prior,
+        fitted: true
+    }
+}
+
+export function multinomial_nb_predict(model: MultinomialNB, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best_score: f32 = -1e10
+        for c in 0 to model.n_classes {
+            let mut score: f32 = model.class_log_prior[c]
+            for j in 0 to model.n_features {
+                score = score + matrix_at(X, i, j) * model.feature_log_prob[c][j]
+            }
+            if score > best_score {
+                best_score = score
+                best_c = c
+            }
+        }
+        result[i] = model.classes[best_c]
+    }
+
+    return result
+}
+
+export function multinomial_nb_predict_proba(model: MultinomialNB, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let result: Matrix = matrix_new(n, model.n_classes)
+
+    for i in 0 to n {
+        let log_probs: ptr<f32> = array_new_f32(model.n_classes)
+        let mut max_lp: f32 = -1e10
+
+        for c in 0 to model.n_classes {
+            let mut score: f32 = model.class_log_prior[c]
+            for j in 0 to model.n_features {
+                score = score + matrix_at(X, i, j) * model.feature_log_prob[c][j]
+            }
+            log_probs[c] = score
+            if score > max_lp {
+                max_lp = score
+            }
+        }
+
+        let mut sum_exp: f32 = 0.0
+        for c in 0 to model.n_classes {
+            log_probs[c] = exp((log_probs[c] - max_lp) as f64) as f32
+            sum_exp = sum_exp + log_probs[c]
+        }
+        for c in 0 to model.n_classes {
+            matrix_set(result, i, c, log_probs[c] / sum_exp)
+        }
+        array_free_f32(log_probs)
+    }
+
+    return result
+}
+
+export function multinomial_nb_free(model: MultinomialNB) -> void {
+    for c in 0 to model.n_classes {
+        array_free_f32(model.feature_log_prob[c])
+    }
+    free(model.feature_log_prob as ptr<void>)
+    array_free_f32(model.classes)
+    array_free_f32(model.class_log_prior)
+}
+
+export struct BernoulliNB {
+    classes: ptr<f32>,
+    n_classes: i32,
+    n_features: i32,
+    feature_log_prob: ptr<ptr<f32>>,
+    class_log_prior: ptr<f32>,
+    fitted: bool
+}
+
+export function bernoulli_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, alpha: f32) -> BernoulliNB {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    for c in 0 to n_classes {
+        class_counts[c] = 0
+    }
+
+    let mut class_idx: i32 = 0
+    for i in 0 to n {
+        let found: bool = false
+        for c in 0 to class_idx {
+            if classes[c] == y[i] {
+                class_counts[c] = class_counts[c] + 1
+                found = true
+                break
+            }
+        }
+        if !found {
+            classes[class_idx] = y[i]
+            class_counts[class_idx] = 1
+            class_idx = class_idx + 1
+        }
+    }
+
+    let feature_log_prob: ptr<ptr<f32>> = malloc((n_classes as i64) * 8) as ptr<ptr<f32>>
+    let class_log_prior: ptr<f32> = array_new_f32(n_classes)
+
+    for c in 0 to n_classes {
+        let feature_present: ptr<f32> = array_new_f32(p)
+        for j in 0 to p {
+            feature_present[j] = alpha
+        }
+
+        for i in 0 to n {
+            if y[i] == classes[c] {
+                for j in 0 to p {
+                    if matrix_at(X, i, j) > 0.5 {
+                        feature_present[j] = feature_present[j] + 1.0
+                    }
+                }
+            }
+        }
+
+        let count: f32 = (class_counts[c] as f32) + 2.0 * alpha
+
+        feature_log_prob[c] = array_new_f32(p)
+        for j in 0 to p {
+            feature_log_prob[c][j] = log((feature_present[j] / count) as f64) as f32
+        }
+        array_free_f32(feature_present)
+
+        class_log_prior[c] = log(((class_counts[c] as f32) / (n as f32)) as f64) as f32
+    }
+
+    free(class_counts as ptr<void>)
+
+    return BernoulliNB {
+        classes: classes,
+        n_classes: n_classes,
+        n_features: p,
+        feature_log_prob: feature_log_prob,
+        class_log_prior: class_log_prior,
+        fitted: true
+    }
+}
+
+export function bernoulli_nb_predict(model: BernoulliNB, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best_score: f32 = -1e10
+        for c in 0 to model.n_classes {
+            let mut score: f32 = model.class_log_prior[c]
+            for j in 0 to model.n_features {
+                let x_ij: f32 = matrix_at(X, i, j)
+                if x_ij > 0.5 {
+                    score = score + model.feature_log_prob[c][j]
+                } else {
+                    score = score + log((1.0 - exp(model.feature_log_prob[c][j] as f64) as f32) as f64) as f32
+                }
+            }
+            if score > best_score {
+                best_score = score
+                best_c = c
+            }
+        }
+        result[i] = model.classes[best_c]
+    }
+
+    return result
+}
+
+export function bernoulli_nb_free(model: BernoulliNB) -> void {
+    for c in 0 to model.n_classes {
+        array_free_f32(model.feature_log_prob[c])
+    }
+    free(model.feature_log_prob as ptr<void>)
+    array_free_f32(model.classes)
+    array_free_f32(model.class_log_prior)
+}
