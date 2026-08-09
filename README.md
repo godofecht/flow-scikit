@@ -126,6 +126,7 @@ examples/
 ├── regression_demo.flow
 ├── grid_search_demo.flow
 └── full_demo.flow
+└── new_modules_demo.flow
 
 tests/
 ├── test_preprocessing.flow
@@ -229,4 +230,5 @@ function main() -> i32 {
 ./flow run examples/regression_demo.flow
 ./flow run examples/grid_search_demo.flow
 ./flow run examples/full_demo.flow
+./flow run examples/new_modules_demo.flow
 ```
