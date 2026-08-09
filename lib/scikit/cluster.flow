@@ -413,3 +413,111 @@ export function agglomerative_clustering_fit(X: Matrix, n_clusters: i32) -> Aggl
 export function agglomerative_clustering_free(model: AgglomerativeClustering) -> void {
     free(model.labels as ptr<void>)
 }
+
+export struct MiniBatchKMeans {
+    centroids: ptr<ptr<f32>>,
+    n_clusters: i32,
+    n_features: i32,
+    inertia: f32,
+    n_iter: i32,
+    fitted: bool
+}
+
+export function minibatch_kmeans_fit(X: Matrix, n_clusters: i32, batch_size: i32, max_iter: i32, tol: f32, seed: i32) -> MiniBatchKMeans {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+    let centroids: ptr<ptr<f32>> = malloc((n_clusters as i64) * 8) as ptr<ptr<f32>>
+
+    srand(seed)
+    for k in 0 to n_clusters {
+        centroids[k] = array_new_f32(n_features)
+        let idx: i32 = rand() % n
+        for j in 0 to n_features {
+            centroids[k][j] = matrix_at(X, idx, j)
+        }
+    }
+
+    let mut prev_inertia: f32 = 1e10
+
+    for iter in 0 to max_iter {
+        let batch_indices: ptr<i32> = malloc((batch_size as i64) * 4) as ptr<i32>
+        for i in 0 to batch_size {
+            batch_indices[i] = rand() % n
+        }
+
+        let mut inertia: f32 = 0.0
+        let counts: ptr<i32> = malloc((n_clusters as i64) * 4) as ptr<i32>
+        for k in 0 to n_clusters {
+            counts[k] = 0
+        }
+
+        for bi in 0 to batch_size {
+            let idx: i32 = batch_indices[bi]
+            let mut best_k: i32 = 0
+            let mut best_dist: f32 = 1e10
+            for k in 0 to n_clusters {
+                let mut dist: f32 = 0.0
+                for j in 0 to n_features {
+                    let d: f32 = matrix_at(X, idx, j) - centroids[k][j]
+                    dist = dist + d * d
+                }
+                if dist < best_dist {
+                    best_dist = dist
+                    best_k = k
+                }
+            }
+            inertia = inertia + best_dist
+            counts[best_k] = counts[best_k] + 1
+
+            let lr: f32 = 1.0 / (counts[best_k] as f32)
+            for j in 0 to n_features {
+                centroids[best_k][j] = centroids[best_k][j] * (1.0 - lr) + matrix_at(X, idx, j) * lr
+            }
+        }
+
+        free(batch_indices as ptr<void>)
+        free(counts as ptr<void>)
+
+        if fabs((prev_inertia - inertia) as f64) as f32 < tol {
+            break
+        }
+        prev_inertia = inertia
+    }
+
+    return MiniBatchKMeans {
+        centroids: centroids,
+        n_clusters: n_clusters,
+        n_features: n_features,
+        inertia: prev_inertia,
+        n_iter: max_iter,
+        fitted: true
+    }
+}
+
+export function minibatch_kmeans_predict(model: MiniBatchKMeans, X: Matrix) -> ptr<i32> {
+    let labels: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
+    for i in 0 to X.rows {
+        let mut best_k: i32 = 0
+        let mut best_dist: f32 = 1e10
+        for k in 0 to model.n_clusters {
+            let mut dist: f32 = 0.0
+            for j in 0 to model.n_features {
+                let d: f32 = matrix_at(X, i, j) - model.centroids[k][j]
+                dist = dist + d * d
+            }
+            if dist < best_dist {
+                best_dist = dist
+                best_k = k
+            }
+        }
+        labels[i] = best_k
+    }
+    return labels
+}
+
+export function minibatch_kmeans_free(model: MiniBatchKMeans) -> void {
+    for k in 0 to model.n_clusters {
+        array_free_f32(model.centroids[k])
+    }
+    free(model.centroids as ptr<void>)
+}

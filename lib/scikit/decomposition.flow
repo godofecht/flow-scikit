@@ -316,3 +316,128 @@ export function nmf_free(model: NMF) -> void {
     array_free_f32(model.W)
     array_free_f32(model.H)
 }
+
+export struct TruncatedSVD {
+    components: ptr<ptr<f32>>,
+    n_components: i32,
+    n_features: i32,
+    explained_variance: ptr<f32>,
+    explained_variance_ratio: ptr<f32>,
+    fitted: bool
+}
+
+export function truncated_svd_fit(X: Matrix, n_components: i32) -> TruncatedSVD {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let At: Matrix = matrix_transpose(X)
+    let AtA: Matrix = matrix_multiply(At, X)
+
+    let components: ptr<ptr<f32>> = malloc((n_components as i64) * 8) as ptr<ptr<f32>>
+    let explained_variance: ptr<f32> = array_new_f32(n_components)
+
+    let AtA_copy: Matrix = matrix_copy(AtA)
+
+    for c in 0 to n_components {
+        let eigvec: ptr<f32> = array_new_f32(p)
+        for j in 0 to p {
+            eigvec[j] = 1.0 / sqrt((p as f64) as f32)
+        }
+
+        for _ in 0 to 100 {
+            let new_vec: ptr<f32> = array_new_f32(p)
+            for j1 in 0 to p {
+                let mut sum: f32 = 0.0
+                for j2 in 0 to p {
+                    sum = sum + matrix_at(AtA_copy, j1, j2) * eigvec[j2]
+                }
+                new_vec[j1] = sum
+            }
+
+            let mut norm: f32 = 0.0
+            for j in 0 to p {
+                norm = norm + new_vec[j] * new_vec[j]
+            }
+            norm = sqrt(norm as f64) as f32
+            if norm < 1e-10 { norm = 1.0 }
+            for j in 0 to p {
+                eigvec[j] = new_vec[j] / norm
+            }
+            array_free_f32(new_vec)
+        }
+
+        let mut eigval: f32 = 0.0
+        let tmp: ptr<f32> = array_new_f32(p)
+        for j1 in 0 to p {
+            let mut sum: f32 = 0.0
+            for j2 in 0 to p {
+                sum = sum + matrix_at(AtA_copy, j1, j2) * eigvec[j2]
+            }
+            tmp[j1] = sum
+        }
+        for j in 0 to p {
+            eigval = eigval + eigvec[j] * tmp[j]
+        }
+        array_free_f32(tmp)
+
+        for j1 in 0 to p {
+            for j2 in 0 to p {
+                let val: f32 = matrix_at(AtA_copy, j1, j2) - eigval * eigvec[j1] * eigvec[j2]
+                matrix_set(AtA_copy, j1, j2, val)
+            }
+        }
+
+        components[c] = eigvec
+        explained_variance[c] = eigval
+    }
+
+    let mut total_var: f32 = 0.0
+    for j in 0 to p {
+        total_var = total_var + matrix_at(AtA, j, j)
+    }
+
+    let explained_variance_ratio: ptr<f32> = array_new_f32(n_components)
+    for c in 0 to n_components {
+        if total_var > 1e-10 {
+            explained_variance_ratio[c] = explained_variance[c] / total_var
+        } else {
+            explained_variance_ratio[c] = 0.0
+        }
+    }
+
+    matrix_free(At)
+    matrix_free(AtA)
+    matrix_free(AtA_copy)
+
+    return TruncatedSVD {
+        components: components,
+        n_components: n_components,
+        n_features: p,
+        explained_variance: explained_variance,
+        explained_variance_ratio: explained_variance_ratio,
+        fitted: true
+    }
+}
+
+export function truncated_svd_transform(model: TruncatedSVD, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, model.n_components)
+    for i in 0 to X.rows {
+        for c in 0 to model.n_components {
+            let mut sum: f32 = 0.0
+            for j in 0 to model.n_features {
+                sum = sum + matrix_at(X, i, j) * model.components[c][j]
+            }
+            matrix_set(result, i, c, sum)
+        }
+    }
+    return result
+}
+
+export function truncated_svd_free(model: TruncatedSVD) -> void {
+    for c in 0 to model.n_components {
+        array_free_f32(model.components[c])
+    }
+    free(model.components as ptr<void>)
+    array_free_f32(model.explained_variance)
+    array_free_f32(model.explained_variance_ratio)
+}

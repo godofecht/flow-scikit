@@ -9,6 +9,8 @@
 - Added permutation_importance (inspection module)
 - Added NMF (Non-Negative Matrix Factorization)
 - Added silhouette_score, median_absolute_error, max_error, mean_squared_log_error metrics
+- Added MiniBatchKMeans (mini-batch stochastic k-means)
+- Added TruncatedSVD (truncated SVD for sparse data)
 - Added version module
 - Added Apache-2.0 license
 - Private repository setup

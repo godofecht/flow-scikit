@@ -101,8 +101,9 @@ lib/scikit/
 │                          #   BaggingClassifier, VotingClassifier,
 │                          #   GradientBoostingClassifier/Regressor,
 │                          #   AdaBoostClassifier
-├── cluster.flow           # KMeans, DBSCAN, AgglomerativeClustering
-├── decomposition.flow     # PCA
+├── cluster.flow           # KMeans, MiniBatchKMeans, DBSCAN,
+│                          #   AgglomerativeClustering
+├── decomposition.flow     # PCA, TruncatedSVD, NMF
 ├── metrics.flow           # accuracy, precision/recall/f1, classification_report,
 │                          #   MSE, RMSE, MAE, R2, roc_auc, roc_curve,
 │                          #   precision_recall_curve, log_loss, cohen_kappa,
@@ -156,8 +157,8 @@ tests/
 |                           | BaggingClassifier, VotingClassifier,                         |
 |                           | GradientBoostingClassifier, GradientBoostingRegressor,       |
 |                           | AdaBoostClassifier                                           |
-| `cluster`                 | KMeans, DBSCAN, AgglomerativeClustering                      |
-| `decomposition`           | PCA, NMF                                                    |
+| `cluster`                 | KMeans, MiniBatchKMeans, DBSCAN, AgglomerativeClustering      |
+| `decomposition`           | PCA, TruncatedSVD, NMF                                      |
 | `metrics`                 | accuracy_score, precision_recall_fscore,                     |
 |                           | classification_report, confusion_matrix,                     |
 |                           | roc_curve, roc_auc_score, precision_recall_curve,            |
