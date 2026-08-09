@@ -1,0 +1,525 @@
+# Tests for SVM, multi-class logistic, gradient boosting, DBSCAN, and extended metrics.
+# Run: ./flow run tests/test_advanced_estimators.flow
+
+import "lib/scikit/scikit.flow"
+
+function _noise(seed: i32) -> f32 {
+    let s: i32 = seed * 1103515245 + 12345
+    let n: i32 = ((s % 100) + 100) % 100
+    return ((n as f32) / 100.0 - 0.5) * 0.3
+}
+
+function make_binary_data() -> Dataset {
+    let n: i32 = 40
+    let X: Matrix = matrix_new(n, 2)
+    let y: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to 20 {
+        matrix_set(X, i, 0, 2.0 + _noise(i))
+        matrix_set(X, i, 1, 2.0 + _noise(i + 100))
+        y[i] = 0.0
+    }
+    for i in 0 to 20 {
+        matrix_set(X, 20 + i, 0, -2.0 + _noise(i + 200))
+        matrix_set(X, 20 + i, 1, -2.0 + _noise(i + 300))
+        y[20 + i] = 1.0
+    }
+
+    return Dataset { X: X, y: y, n_samples: n, n_features: 2, n_classes: 2, is_classification: true }
+}
+
+function make_multiclass_data() -> Dataset {
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 2)
+    let y: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to 10 {
+        matrix_set(X, i, 0, 3.0 + _noise(i))
+        matrix_set(X, i, 1, 3.0 + _noise(i + 50))
+        y[i] = 0.0
+    }
+    for i in 0 to 10 {
+        matrix_set(X, 10 + i, 0, -3.0 + _noise(i + 200))
+        matrix_set(X, 10 + i, 1, 3.0 + _noise(i + 250))
+        y[10 + i] = 1.0
+    }
+    for i in 0 to 10 {
+        matrix_set(X, 20 + i, 0, 0.0 + _noise(i + 400))
+        matrix_set(X, 20 + i, 1, -3.0 + _noise(i + 450))
+        y[20 + i] = 2.0
+    }
+
+    return Dataset { X: X, y: y, n_samples: n, n_features: 2, n_classes: 3, is_classification: true }
+}
+
+function test_linear_svc() -> i32 {
+    println("Test: LinearSVC")
+    let data: Dataset = make_binary_data()
+
+    let svc: LinearSVC = linear_svc_fit(data.X, data.y, 2, 1.0, 300, 0.01)
+    let scores: ptr<f32> = linear_svc_predict(svc, data.X)
+    let preds: ptr<f32> = linear_svc_decide(svc, scores, data.n_samples)
+
+    let acc: f32 = accuracy_score(data.y, preds, data.n_samples)
+    if acc < 0.8 {
+        println("  FAIL: LinearSVC accuracy should be > 0.8")
+        return 1
+    }
+
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+
+    linear_svc_free(svc)
+    array_free_f32(scores)
+    array_free_f32(preds)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+    return 0
+}
+
+function test_kernel_svc() -> i32 {
+    println("Test: KernelSVC (RBF)")
+    let data: Dataset = make_binary_data()
+
+    let svc: KernelSVC = kernel_svc_fit(data.X, data.y, 2, 1.0, 0.5, 50)
+    let scores: ptr<f32> = kernel_svc_predict(svc, data.X)
+    let preds: ptr<f32> = kernel_svc_decide(svc, scores, data.n_samples)
+
+    let acc: f32 = accuracy_score(data.y, preds, data.n_samples)
+    if acc < 0.7 {
+        println("  FAIL: KernelSVC accuracy should be > 0.7")
+        return 1
+    }
+
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+
+    kernel_svc_free(svc)
+    array_free_f32(scores)
+    array_free_f32(preds)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+    return 0
+}
+
+function test_linear_svr() -> i32 {
+    println("Test: LinearSVR")
+    let X: Matrix = matrix_new(15, 1)
+    let y: ptr<f32> = array_new_f32(15)
+    for i in 0 to 15 {
+        let x: f32 = (i as f32) * 0.5
+        matrix_set(X, i, 0, x)
+        y[i] = 3.0 * x + 2.0
+    }
+
+    let svr: LinearSVR = linear_svr_fit(X, y, 1.0, 0.1, 500, 0.001)
+    let preds: ptr<f32> = linear_svr_predict(svr, X)
+    let r2: f32 = r2_score(y, preds, 15)
+
+    if r2 < 0.9 {
+        println("  FAIL: LinearSVR R2 should be > 0.9")
+        return 1
+    }
+
+    print("  OK: R2 = ")
+    printf("%.4f", r2)
+    println("")
+
+    linear_svr_free(svr)
+    array_free_f32(preds)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
+function test_multiclass_logistic() -> i32 {
+    println("Test: MultiClassLogisticRegression")
+    let data: Dataset = make_multiclass_data()
+
+    let model: MultiClassLogisticRegression = multiclass_logistic_fit(data.X, data.y, 3, 500, 0.1, penalty_l2(0.01))
+    let probs: Matrix = multiclass_logistic_predict(model, data.X)
+    let preds: ptr<f32> = multiclass_logistic_decide(model, probs)
+
+    let acc: f32 = accuracy_score(data.y, preds, data.n_samples)
+    if acc < 0.7 {
+        println("  FAIL: MultiClassLogistic accuracy should be > 0.7")
+        return 1
+    }
+
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+
+    multiclass_logistic_free(model)
+    matrix_free(probs)
+    array_free_f32(preds)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+    return 0
+}
+
+function test_gradient_boosting() -> i32 {
+    println("Test: GradientBoostingClassifier")
+    let data: Dataset = make_binary_data()
+
+    let gb: GradientBoostingClassifier = gradient_boosting_classifier_fit(data.X, data.y, 2, 30, 0.1, 3, 42)
+    let preds: ptr<f32> = gradient_boosting_classifier_predict(gb, data.X)
+
+    let acc: f32 = accuracy_score(data.y, preds, data.n_samples)
+    if acc < 0.8 {
+        println("  FAIL: GradientBoosting accuracy should be > 0.8")
+        return 1
+    }
+
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+
+    gradient_boosting_classifier_free(gb)
+    array_free_f32(preds)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+    return 0
+}
+
+function test_adaboost() -> i32 {
+    println("Test: AdaBoostClassifier")
+    let data: Dataset = make_binary_data()
+
+    let ada: AdaBoostClassifier = adaboost_classifier_fit(data.X, data.y, 2, 20, 3, 42)
+    let preds: ptr<f32> = adaboost_classifier_predict(ada, data.X)
+
+    let acc: f32 = accuracy_score(data.y, preds, data.n_samples)
+    if acc < 0.7 {
+        println("  FAIL: AdaBoost accuracy should be > 0.7")
+        return 1
+    }
+
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+
+    adaboost_classifier_free(ada)
+    array_free_f32(preds)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+    return 0
+}
+
+function test_dbscan() -> i32 {
+    println("Test: DBSCAN")
+    let data: Dataset = make_binary_data()
+
+    let dbscan: DBSCAN = dbscan_fit(data.X, 1.5, 3)
+
+    if dbscan.n_clusters < 1 {
+        println("  FAIL: DBSCAN should find at least 1 cluster")
+        return 1
+    }
+
+    print("  OK: found ")
+    print(dbscan.n_clusters)
+    print(" clusters, ")
+    print(dbscan.n_noise)
+    println(" noise points")
+
+    dbscan_free(dbscan)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+    return 0
+}
+
+function test_agglomerative() -> i32 {
+    println("Test: AgglomerativeClustering")
+    let data: Dataset = make_binary_data()
+
+    let agg: AgglomerativeClustering = agglomerative_clustering_fit(data.X, 2)
+
+    if agg.n_clusters != 2 {
+        println("  FAIL: should find exactly 2 clusters")
+        return 1
+    }
+
+    print("  OK: found ")
+    print(agg.n_clusters)
+    println(" clusters")
+
+    agglomerative_clustering_free(agg)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+    return 0
+}
+
+function test_elastic_net() -> i32 {
+    println("Test: ElasticNet")
+    let X: Matrix = matrix_new(10, 2)
+    let y: ptr<f32> = array_new_f32(10)
+    for i in 0 to 10 {
+        let x: f32 = (i as f32)
+        matrix_set(X, i, 0, x)
+        matrix_set(X, i, 1, x * 0.5)
+        y[i] = 2.0 * x + 1.0
+    }
+
+    let model: ElasticNet = elastic_net_fit(X, y, 0.01, 0.5, 500, 0.001)
+    let preds: ptr<f32> = elastic_net_predict(model, X)
+    let r2: f32 = r2_score(y, preds, 10)
+
+    if r2 < 0.9 {
+        println("  FAIL: ElasticNet R2 should be > 0.9")
+        return 1
+    }
+
+    print("  OK: R2 = ")
+    printf("%.4f", r2)
+    println("")
+
+    elastic_net_free(model)
+    array_free_f32(preds)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
+function test_sgd_classifier() -> i32 {
+    println("Test: SGDClassifier")
+    let data: Dataset = make_binary_data()
+
+    let sgd: SGDClassifier = sgd_classifier_fit(data.X, data.y, 2, SGD_LOSS_LOG, 0.0001, 300, 0.01)
+    let probs: ptr<f32> = sgd_classifier_predict(sgd, data.X)
+    let preds: ptr<f32> = sgd_classifier_decide(sgd, probs, data.n_samples, 0.5)
+
+    let acc: f32 = accuracy_score(data.y, preds, data.n_samples)
+    if acc < 0.7 {
+        println("  FAIL: SGDClassifier accuracy should be > 0.7")
+        return 1
+    }
+
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+
+    sgd_classifier_free(sgd)
+    array_free_f32(probs)
+    array_free_f32(preds)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+    return 0
+}
+
+function test_roc_pr_curves() -> i32 {
+    println("Test: roc_curve and precision_recall_curve")
+    let y_true: ptr<f32> = array_new_f32(6)
+    let y_score: ptr<f32> = array_new_f32(6)
+    y_true[0] = 0.0; y_score[0] = 0.1
+    y_true[1] = 1.0; y_score[1] = 0.9
+    y_true[2] = 0.0; y_score[2] = 0.3
+    y_true[3] = 1.0; y_score[3] = 0.8
+    y_true[4] = 1.0; y_score[4] = 0.6
+    y_true[5] = 0.0; y_score[5] = 0.2
+
+    let roc: ROCCurve = roc_curve(y_true, y_score, 6, 1.0)
+    let pr: PRCurve = precision_recall_curve(y_true, y_score, 6, 1.0)
+
+    if roc.auc < 0.9 {
+        println("  FAIL: AUC should be > 0.9 for good separation")
+        return 1
+    }
+
+    if pr.n_points < 6 {
+        println("  FAIL: PR curve should have at least 6 points")
+        return 1
+    }
+
+    print("  OK: AUC = ")
+    printf("%.4f", roc.auc)
+    print(", PR points = ")
+    print(pr.n_points)
+    println("")
+
+    roc_curve_free(roc)
+    pr_curve_free(pr)
+    array_free_f32(y_true)
+    array_free_f32(y_score)
+    return 0
+}
+
+function test_log_loss() -> i32 {
+    println("Test: log_loss")
+    let y_true: ptr<f32> = array_new_f32(3)
+    let y_pred: ptr<f32> = array_new_f32(3)
+    y_true[0] = 1.0; y_pred[0] = 0.9
+    y_true[1] = 0.0; y_pred[1] = 0.1
+    y_true[2] = 1.0; y_pred[2] = 0.8
+
+    let loss: f32 = log_loss(y_true, y_pred, 3, 1.0)
+
+    if loss > 0.5 {
+        println("  FAIL: log_loss should be small for good predictions")
+        return 1
+    }
+
+    print("  OK: log_loss = ")
+    printf("%.4f", loss)
+    println("")
+
+    array_free_f32(y_true)
+    array_free_f32(y_pred)
+    return 0
+}
+
+function test_matthews_corrcoef() -> i32 {
+    println("Test: matthews_corrcoef")
+    let y_true: ptr<f32> = array_new_f32(5)
+    let y_pred: ptr<f32> = array_new_f32(5)
+    y_true[0] = 1.0; y_pred[0] = 1.0
+    y_true[1] = 1.0; y_pred[1] = 1.0
+    y_true[2] = 0.0; y_pred[2] = 0.0
+    y_true[3] = 0.0; y_pred[3] = 0.0
+    y_true[4] = 1.0; y_pred[4] = 0.0
+
+    let mcc: f32 = matthews_corrcoef(y_true, y_pred, 5, 1.0)
+
+    if mcc < 0.7 {
+        println("  FAIL: MCC should be high for good predictions")
+        return 1
+    }
+
+    print("  OK: MCC = ")
+    printf("%.4f", mcc)
+    println("")
+
+    array_free_f32(y_true)
+    array_free_f32(y_pred)
+    return 0
+}
+
+function test_variance_threshold() -> i32 {
+    println("Test: VarianceThreshold")
+    let X: Matrix = matrix_new(10, 3)
+    for i in 0 to 10 {
+        matrix_set(X, i, 0, (i as f32))
+        matrix_set(X, i, 1, 5.0)
+        matrix_set(X, i, 2, (i as f32) * 2.0)
+    }
+
+    let vt: VarianceThreshold = variance_threshold_fit(X, 0.0)
+
+    if vt.n_selected != 2 {
+        println("  FAIL: should select 2 features (exclude constant)")
+        return 1
+    }
+
+    print("  OK: selected ")
+    print(vt.n_selected)
+    println(" features (removed constant)")
+
+    variance_threshold_free(vt)
+    matrix_free(X)
+    return 0
+}
+
+function test_kfold() -> i32 {
+    println("Test: KFold and StratifiedKFold")
+    let kf: KFold = kfold_init(5, false, 42)
+    let fold: FoldIndices = kfold_get_fold(kf, 100, 0)
+
+    if fold.n_train + fold.n_test != 100 {
+        println("  FAIL: train + test should equal total")
+        return 1
+    }
+
+    print("  OK: KFold(5) on 100 samples: ")
+    print(fold.n_train)
+    print(" train + ")
+    print(fold.n_test)
+    println(" test")
+
+    fold_indices_free(fold)
+
+    let y: ptr<f32> = array_new_f32(20)
+    for i in 0 to 10 {
+        y[i] = 0.0
+    }
+    for i in 0 to 10 {
+        y[10 + i] = 1.0
+    }
+
+    let skf: StratifiedKFold = stratified_kfold_init(5, false, 42)
+    let sfold: FoldIndices = stratified_kfold_get_fold(skf, y, 20, 0)
+
+    let mut class0_in_test: i32 = 0
+    let mut class1_in_test: i32 = 0
+    for i in 0 to sfold.n_test {
+        if y[sfold.test_indices[i]] == 0.0 {
+            class0_in_test = class0_in_test + 1
+        } else {
+            class1_in_test = class1_in_test + 1
+        }
+    }
+
+    if class0_in_test == 0 || class1_in_test == 0 {
+        println("  FAIL: stratified fold should have both classes in test")
+        return 1
+    }
+
+    print("  OK: StratifiedKFold test has ")
+    print(class0_in_test)
+    print("/")
+    print(class1_in_test)
+    println(" class0/class1")
+
+    fold_indices_free(sfold)
+    array_free_f32(y)
+    return 0
+}
+
+function main() -> i32 {
+    println("Running advanced estimator tests...")
+    println("===================================")
+    println("")
+
+    let mut failures: i32 = 0
+
+    if test_linear_svc() != 0 { failures = failures + 1 }
+    println("")
+    if test_kernel_svc() != 0 { failures = failures + 1 }
+    println("")
+    if test_linear_svr() != 0 { failures = failures + 1 }
+    println("")
+    if test_multiclass_logistic() != 0 { failures = failures + 1 }
+    println("")
+    if test_gradient_boosting() != 0 { failures = failures + 1 }
+    println("")
+    if test_adaboost() != 0 { failures = failures + 1 }
+    println("")
+    if test_dbscan() != 0 { failures = failures + 1 }
+    println("")
+    if test_agglomerative() != 0 { failures = failures + 1 }
+    println("")
+    if test_elastic_net() != 0 { failures = failures + 1 }
+    println("")
+    if test_sgd_classifier() != 0 { failures = failures + 1 }
+    println("")
+    if test_roc_pr_curves() != 0 { failures = failures + 1 }
+    println("")
+    if test_log_loss() != 0 { failures = failures + 1 }
+    println("")
+    if test_matthews_corrcoef() != 0 { failures = failures + 1 }
+    println("")
+    if test_variance_threshold() != 0 { failures = failures + 1 }
+    println("")
+    if test_kfold() != 0 { failures = failures + 1 }
+
+    println("")
+    if failures == 0 {
+        println("All advanced estimator tests passed!")
+        return 0
+    }
+    print("FAILED: ")
+    print(failures)
+    println(" tests")
+    return 1
+}

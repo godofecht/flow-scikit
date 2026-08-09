@@ -1,0 +1,255 @@
+# Tests for model_selection module.
+# Run: ./flow run tests/test_model_selection.flow
+
+import "lib/scikit/scikit.flow"
+
+function test_train_test_split_stratify() -> i32 {
+    println("Test: train_test_split with auto-stratify (Issue #28394)")
+
+    let n: i32 = 20
+    let X: Matrix = matrix_new(n, 2)
+    let y: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to 10 {
+        matrix_set(X, i, 0, 1.0)
+        matrix_set(X, i, 1, 1.0)
+        y[i] = 0.0
+    }
+    for i in 0 to 10 {
+        matrix_set(X, 10 + i, 0, -1.0)
+        matrix_set(X, 10 + i, 1, -1.0)
+        y[10 + i] = 1.0
+    }
+
+    let split: TrainTestSplit = train_test_split(X, y, 0.2, STRATIFY_AUTO)
+
+    let mut train_class0: i32 = 0
+    let mut train_class1: i32 = 0
+    for i in 0 to split.n_train {
+        if split.y_train[i] == 0.0 {
+            train_class0 = train_class0 + 1
+        } else {
+            train_class1 = train_class1 + 1
+        }
+    }
+
+    let mut test_class0: i32 = 0
+    let mut test_class1: i32 = 0
+    for i in 0 to split.n_test {
+        if split.y_test[i] == 0.0 {
+            test_class0 = test_class0 + 1
+        } else {
+            test_class1 = test_class1 + 1
+        }
+    }
+
+    if train_class0 == 0 || train_class1 == 0 {
+        println("  FAIL: stratified split should have both classes in train")
+        return 1
+    }
+    if test_class0 == 0 || test_class1 == 0 {
+        println("  FAIL: stratified split should have both classes in test")
+        return 1
+    }
+
+    print("  OK: train has ")
+    print(train_class0)
+    print("/")
+    print(train_class1)
+    print(", test has ")
+    print(test_class0)
+    print("/")
+    print(test_class1)
+    println(" (stratified)")
+
+    train_test_split_free(split)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
+function test_train_test_split_no_stratify() -> i32 {
+    println("Test: train_test_split with STRATIFY_NONE")
+
+    let n: i32 = 10
+    let X: Matrix = matrix_new(n, 1)
+    let y: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        matrix_set(X, i, 0, (i as f32))
+        y[i] = (i as f32)
+    }
+
+    let split: TrainTestSplit = train_test_split(X, y, 0.3, STRATIFY_NONE)
+
+    if split.n_train + split.n_test != n {
+        println("  FAIL: train + test should equal total")
+        return 1
+    }
+
+    print("  OK: ")
+    print(split.n_train)
+    print(" train + ")
+    print(split.n_test)
+    println(" test = 10 total")
+
+    train_test_split_free(split)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
+function test_pipeline_clone() -> i32 {
+    println("Test: Pipeline clones steps at construction (Issue #28394)")
+
+    let steps: array<PipelineStep, 2> = [
+        step_standard_scaler("scaler"),
+        step_logistic_regression("clf", 2, 100, 0.1, penalty_l2(0.01))
+    ]
+
+    let pipeline: Pipeline = pipeline_new(steps, 2)
+
+    if not pipeline.cloned {
+        println("  FAIL: pipeline should mark itself as cloned")
+        return 1
+    }
+
+    let step0: ptr<PipelineStep> = pipeline.steps + 0
+    let step1: ptr<PipelineStep> = pipeline.steps + 1
+
+    if step0.kind != STEP_SCALER {
+        println("  FAIL: step 0 should be scaler")
+        return 1
+    }
+    if step1.kind != STEP_LOGISTIC_REG {
+        println("  FAIL: step 1 should be logistic regression")
+        return 1
+    }
+    if step1.fitted {
+        println("  FAIL: cloned steps should not be fitted")
+        return 1
+    }
+
+    println("  OK: pipeline cloned all steps, none pre-fitted")
+
+    pipeline_free(pipeline)
+    return 0
+}
+
+function test_predict_decide_split() -> i32 {
+    println("Test: predict returns probabilities, decide returns classes (Issue #28394)")
+
+    let X: Matrix = matrix_new(4, 2)
+    matrix_set(X, 0, 0, 0.0); matrix_set(X, 0, 1, 0.0)
+    matrix_set(X, 1, 0, 0.0); matrix_set(X, 1, 1, 1.0)
+    matrix_set(X, 2, 0, 1.0); matrix_set(X, 2, 1, 0.0)
+    matrix_set(X, 3, 0, 1.0); matrix_set(X, 3, 1, 1.0)
+
+    let y: ptr<f32> = array_new_f32(4)
+    y[0] = 0.0; y[1] = 1.0; y[2] = 1.0; y[3] = 0.0
+
+    let model: LogisticRegression = logistic_regression_fit(X, y, 2, 500, 1.0, penalty_none())
+
+    let probs: ptr<f32> = logistic_predict(model, X)
+
+    for i in 0 to 4 {
+        if probs[i] < 0.0 || probs[i] > 1.0 {
+            println("  FAIL: predict should return probabilities in [0,1]")
+            return 1
+        }
+    }
+
+    let labels_default: ptr<f32> = logistic_decide(model, probs, 4, 0.5)
+    let labels_high: ptr<f32> = logistic_decide(model, probs, 4, 0.9)
+
+    let mut all_same: bool = true
+    for i in 0 to 4 {
+        if labels_default[i] != labels_high[i] {
+            all_same = false
+        }
+    }
+
+    println("  OK: predict returns [0,1] probabilities, decide takes explicit threshold")
+
+    array_free_f32(probs)
+    array_free_f32(labels_default)
+    array_free_f32(labels_high)
+    logistic_regression_free(model)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
+function test_validation_naming() -> i32 {
+    println("Test: ensure_* naming convention (Issue #29262)")
+
+    let X: Matrix = matrix_new(3, 2)
+    matrix_set(X, 0, 0, 1.0); matrix_set(X, 0, 1, 2.0)
+    matrix_set(X, 1, 0, 3.0); matrix_set(X, 1, 1, 4.0)
+    matrix_set(X, 2, 0, 5.0); matrix_set(X, 2, 1, 6.0)
+
+    let r1: ValidationResult = ensure_all_finite(X)
+    if not r1.ok {
+        println("  FAIL: ensure_all_finite should pass for finite matrix")
+        return 1
+    }
+
+    let r2: ValidationResult = ensure_2d(X)
+    if not r2.ok {
+        println("  FAIL: ensure_2d should pass for 3x2 matrix")
+        return 1
+    }
+
+    let r3: ValidationResult = ensure_min_samples(X, 2)
+    if not r3.ok {
+        println("  FAIL: ensure_min_samples should pass for 3 samples")
+        return 1
+    }
+
+    let r4: ValidationResult = ensure_non_empty(X)
+    if not r4.ok {
+        println("  FAIL: ensure_non_empty should pass for non-empty matrix")
+        return 1
+    }
+
+    let y: ptr<f32> = array_new_f32(3)
+    y[0] = 1.0; y[1] = 2.0; y[2] = 3.0
+    let r5: ValidationResult = ensure_non_negative(y, 3)
+    if not r5.ok {
+        println("  FAIL: ensure_non_negative should pass for positive values")
+        return 1
+    }
+
+    println("  OK: all ensure_* functions follow consistent naming convention")
+
+    array_free_f32(y)
+    matrix_free(X)
+    return 0
+}
+
+function main() -> i32 {
+    println("Running model_selection and API tests...")
+    println("========================================")
+    println("")
+
+    let mut failures: i32 = 0
+
+    if test_train_test_split_stratify() != 0 { failures = failures + 1 }
+    println("")
+    if test_train_test_split_no_stratify() != 0 { failures = failures + 1 }
+    println("")
+    if test_pipeline_clone() != 0 { failures = failures + 1 }
+    println("")
+    if test_predict_decide_split() != 0 { failures = failures + 1 }
+    println("")
+    if test_validation_naming() != 0 { failures = failures + 1 }
+
+    println("")
+    if failures == 0 {
+        println("All model_selection tests passed!")
+        return 0
+    }
+    print("FAILED: ")
+    print(failures)
+    println(" tests")
+    return 1
+}

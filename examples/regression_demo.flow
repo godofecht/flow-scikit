@@ -1,0 +1,127 @@
+# Regression demo for flow-scikit.
+# Demonstrates:
+#   - LinearRegression with TermSpec (polynomial features)
+#   - Regression metrics (MSE, RMSE, MAE, R2)
+#   - StandardScaler preprocessing
+#   - Pipeline with clone-in-init
+#
+# Run: ./flow run examples/regression_demo.flow
+
+import "lib/scikit/scikit.flow"
+
+function make_regression_data() -> Dataset {
+    let n: i32 = 50
+    let n_features: i32 = 1
+    let X: Matrix = matrix_new(n, n_features)
+    let y: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let x: f32 = (i as f32) * 0.2
+        matrix_set(X, i, 0, x)
+        y[i] = 2.0 * x * x + 1.5 * x + 0.5 + _noise(i)
+    }
+
+    return Dataset {
+        X: X,
+        y: y,
+        n_samples: n,
+        n_features: n_features,
+        n_classes: 0,
+        is_classification: false
+    }
+}
+
+function _noise(seed: i32) -> f32 {
+    let n: i32 = (seed * 1103515245 + 12345) % 1000
+    return ((n as f32) / 1000.0 - 0.5) * 0.5
+}
+
+function main() -> i32 {
+    println("flow-scikit: Regression Demo")
+    println("============================")
+    println("")
+
+    let data: Dataset = make_regression_data()
+    print("Dataset: ")
+    print(data.n_samples)
+    print(" samples, ")
+    print(data.n_features)
+    println(" feature (quadratic: y = 2x^2 + 1.5x + 0.5 + noise)")
+    println("")
+
+    let split: TrainTestSplit = train_test_split(data.X, data.y, 0.2, STRATIFY_NONE)
+    print("Split: ")
+    print(split.n_train)
+    print(" train, ")
+    print(split.n_test)
+    println(" test")
+    println("")
+
+    let scaler: StandardScaler = standard_scaler_fit(split.X_train)
+    let X_train: Matrix = standard_scaler_transform(scaler, split.X_train)
+    let X_test: Matrix = standard_scaler_transform(scaler, split.X_test)
+
+    let feature_idx: ptr<i32> = malloc(4) as ptr<i32>
+    feature_idx[0] = 0
+
+    let terms: ptr<TermSpec> = malloc(16) as ptr<TermSpec>
+    terms[0].feature_indices = feature_idx
+    terms[0].n_indices = 1
+    terms[0].degree = 2
+    terms[0].term_type = TERM_POLYNOMIAL
+
+    let X_train_exp: Matrix = expand_features(X_train, terms, 1)
+    let X_test_exp: Matrix = expand_features(X_test, terms, 1)
+
+    println("Training LinearRegression with polynomial terms (degree=2)...")
+    let model: LinearRegression = linear_regression_fit(X_train_exp, split.y_train, penalty_l2(0.001))
+
+    let preds: ptr<f32> = linear_regression_predict(model, X_test_exp)
+
+    let mse: f32 = mean_squared_error(split.y_test, preds, split.n_test)
+    let rmse: f32 = root_mean_squared_error(split.y_test, preds, split.n_test)
+    let mae: f32 = mean_absolute_error(split.y_test, preds, split.n_test)
+    let r2: f32 = r2_score(split.y_test, preds, split.n_test)
+
+    println("")
+    println("Regression Metrics:")
+    print("  MSE:  ")
+    printf("%.4f", mse)
+    println("")
+    print("  RMSE: ")
+    printf("%.4f", rmse)
+    println("")
+    print("  MAE:  ")
+    printf("%.4f", mae)
+    println("")
+    print("  R2:   ")
+    printf("%.4f", r2)
+    println("")
+
+    println("")
+    println("Sample predictions:")
+    for i in 0 to split.n_test {
+        if i < 5 {
+            print("  predicted: ")
+            printf("%.4f", preds[i])
+            print("  actual: ")
+            printf("%.4f", split.y_test[i])
+            println("")
+        }
+    }
+
+    array_free_f32(preds)
+    linear_regression_free(model)
+    matrix_free(X_train_exp)
+    matrix_free(X_test_exp)
+    free(terms as ptr<void>)
+    free(feature_idx as ptr<void>)
+    matrix_free(X_train)
+    matrix_free(X_test)
+    standard_scaler_free(scaler)
+    train_test_split_free(split)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+
+    return 0
+}

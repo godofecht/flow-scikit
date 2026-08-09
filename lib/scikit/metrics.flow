@@ -1,0 +1,724 @@
+# Metrics module for flow-scikit.
+# Addresses Issue #29205: classification_report returns structured output,
+#   not a dict with collision-prone keys. Uses a ClassificationReport struct
+#   with separate class_metrics and average_metrics arrays.
+# Addresses Issue #30909: pos_label handled internally via classes_ array.
+#   Metrics that need pos_label accept the estimator's classes array and
+#   handle the switching internally.
+
+import "lib/scikit/matrix.flow"
+
+# ============================================================================
+# Classification metrics
+# ============================================================================
+
+export function accuracy_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
+    let mut correct: i32 = 0
+    for i in 0 to n {
+        if y_true[i] == y_pred[i] {
+            correct = correct + 1
+        }
+    }
+    return (correct as f32) / (n as f32)
+}
+
+export struct PrecisionRecall {
+    precision: f32,
+    recall: f32,
+    f1: f32,
+    support: i32
+}
+
+export function precision_recall_fscore(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32) -> ptr<PrecisionRecall> {
+    let results: ptr<PrecisionRecall> = malloc((n_classes as i64) * 16) as ptr<PrecisionRecall>
+
+    for c in 0 to n_classes {
+        let cls: f32 = classes[c]
+        let mut tp: i32 = 0
+        let mut fp: i32 = 0
+        let mut fn: i32 = 0
+        let mut support: i32 = 0
+
+        for i in 0 to n {
+            let true_cls: bool = y_true[i] == cls
+            let pred_cls: bool = y_pred[i] == cls
+
+            if true_cls && pred_cls {
+                tp = tp + 1
+            }
+            if not true_cls && pred_cls {
+                fp = fp + 1
+            }
+            if true_cls && not pred_cls {
+                fn = fn + 1
+            }
+            if true_cls {
+                support = support + 1
+            }
+        }
+
+        let prec: f32 = 0.0
+        if tp + fp > 0 {
+            prec = (tp as f32) / ((tp + fp) as f32)
+        }
+        let rec: f32 = 0.0
+        if tp + fn > 0 {
+            rec = (tp as f32) / ((tp + fn) as f32)
+        }
+        let f1: f32 = 0.0
+        if prec + rec > 0.0 {
+            f1 = 2.0 * prec * rec / (prec + rec)
+        }
+
+        (results + c).precision = prec
+        (results + c).recall = rec
+        (results + c).f1 = f1
+        (results + c).support = support
+    }
+
+    return results
+}
+
+export struct ClassificationReport {
+    class_metrics: ptr<PrecisionRecall>,
+    classes: ptr<f32>,
+    n_classes: i32,
+    accuracy: f32,
+    macro_precision: f32,
+    macro_recall: f32,
+    macro_f1: f32,
+    weighted_precision: f32,
+    weighted_recall: f32,
+    weighted_f1: f32,
+    n_samples: i32
+}
+
+export function classification_report(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32) -> ClassificationReport {
+    let class_metrics: ptr<PrecisionRecall> = precision_recall_fscore(y_true, y_pred, n, classes, n_classes)
+    let acc: f32 = accuracy_score(y_true, y_pred, n)
+
+    let mut macro_p: f32 = 0.0
+    let mut macro_r: f32 = 0.0
+    let mut macro_f: f32 = 0.0
+    let mut weighted_p: f32 = 0.0
+    let mut weighted_r: f32 = 0.0
+    let mut weighted_f: f32 = 0.0
+    let mut total_support: i32 = 0
+
+    for c in 0 to n_classes {
+        let m: PrecisionRecall = class_metrics[c]
+        macro_p = macro_p + m.precision
+        macro_r = macro_r + m.recall
+        macro_f = macro_f + m.f1
+        weighted_p = weighted_p + m.precision * (m.support as f32)
+        weighted_r = weighted_r + m.recall * (m.support as f32)
+        weighted_f = weighted_f + m.f1 * (m.support as f32)
+        total_support = total_support + m.support
+    }
+
+    macro_p = macro_p / (n_classes as f32)
+    macro_r = macro_r / (n_classes as f32)
+    macro_f = macro_f / (n_classes as f32)
+
+    if total_support > 0 {
+        weighted_p = weighted_p / (total_support as f32)
+        weighted_r = weighted_r / (total_support as f32)
+        weighted_f = weighted_f / (total_support as f32)
+    }
+
+    return ClassificationReport {
+        class_metrics: class_metrics,
+        classes: classes,
+        n_classes: n_classes,
+        accuracy: acc,
+        macro_precision: macro_p,
+        macro_recall: macro_r,
+        macro_f1: macro_f,
+        weighted_precision: weighted_p,
+        weighted_recall: weighted_r,
+        weighted_f1: weighted_f,
+        n_samples: n
+    }
+}
+
+export function print_classification_report(report: ClassificationReport) -> void {
+    println("")
+    println("              precision    recall  f1-score   support")
+    println("")
+
+    for c in 0 to report.n_classes {
+        let m: PrecisionRecall = report.class_metrics[c]
+        print("  class ")
+        print(report.classes[c])
+        print("       ")
+        printf("%.4f", m.precision)
+        print("   ")
+        printf("%.4f", m.recall)
+        print("   ")
+        printf("%.4f", m.f1)
+        print("     ")
+        print(m.support)
+        println("")
+    }
+
+    println("")
+    print("  accuracy                          ")
+    printf("%.4f", report.accuracy)
+    print("     ")
+    print(report.n_samples)
+    println("")
+    print("  macro avg     ")
+    printf("%.4f", report.macro_precision)
+    print("   ")
+    printf("%.4f", report.macro_recall)
+    print("   ")
+    printf("%.4f", report.macro_f1)
+    print("     ")
+    print(report.n_samples)
+    println("")
+    print("  weighted avg  ")
+    printf("%.4f", report.weighted_precision)
+    print("   ")
+    printf("%.4f", report.weighted_recall)
+    print("   ")
+    printf("%.4f", report.weighted_f1)
+    print("     ")
+    print(report.n_samples)
+    println("")
+}
+
+export function classification_report_free(report: ClassificationReport) -> void {
+    free(report.class_metrics as ptr<void>)
+}
+
+# ============================================================================
+# pos_label-aware metrics (Issue #30909)
+# Accept the estimator's classes_ array and handle pos_label internally.
+# ============================================================================
+
+export function roc_auc_score(y_true: ptr<f32>, y_score: ptr<f32>, n: i32, classes: ptr<f32>, pos_label: f32) -> f32 {
+    let mut pos_count: i32 = 0
+    let mut neg_count: i32 = 0
+
+    for i in 0 to n {
+        if y_true[i] == pos_label {
+            pos_count = pos_count + 1
+        } else {
+            neg_count = neg_count + 1
+        }
+    }
+
+    if pos_count == 0 || neg_count == 0 {
+        return 0.0
+    }
+
+    let mut auc: f32 = 0.0
+    for i in 0 to n {
+        if y_true[i] == pos_label {
+            for j in 0 to n {
+                if y_true[j] != pos_label {
+                    if y_score[i] > y_score[j] {
+                        auc = auc + 1.0
+                    } elif y_score[i] == y_score[j] {
+                        auc = auc + 0.5
+                    }
+                }
+            }
+        }
+    }
+
+    return auc / ((pos_count as f32) * (neg_count as f32))
+}
+
+export function precision_at_threshold(y_true: ptr<f32>, y_score: ptr<f32>, n: i32, pos_label: f32, threshold: f32) -> f32 {
+    let mut tp: i32 = 0
+    let mut fp: i32 = 0
+    for i in 0 to n {
+        let predicted_pos: bool = y_score[i] >= threshold
+        let actual_pos: bool = y_true[i] == pos_label
+        if predicted_pos && actual_pos {
+            tp = tp + 1
+        }
+        if predicted_pos && not actual_pos {
+            fp = fp + 1
+        }
+    }
+    if tp + fp == 0 {
+        return 0.0
+    }
+    return (tp as f32) / ((tp + fp) as f32)
+}
+
+export function recall_at_threshold(y_true: ptr<f32>, y_score: ptr<f32>, n: i32, pos_label: f32, threshold: f32) -> f32 {
+    let mut tp: i32 = 0
+    let mut fn: i32 = 0
+    for i in 0 to n {
+        let predicted_pos: bool = y_score[i] >= threshold
+        let actual_pos: bool = y_true[i] == pos_label
+        if predicted_pos && actual_pos {
+            tp = tp + 1
+        }
+        if not predicted_pos && actual_pos {
+            fn = fn + 1
+        }
+    }
+    if tp + fn == 0 {
+        return 0.0
+    }
+    return (tp as f32) / ((tp + fn) as f32)
+}
+
+# ============================================================================
+# Regression metrics
+# ============================================================================
+
+export function mean_squared_error(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
+    let mut sum: f32 = 0.0
+    for i in 0 to n {
+        let d: f32 = y_true[i] - y_pred[i]
+        sum = sum + d * d
+    }
+    return sum / (n as f32)
+}
+
+export function root_mean_squared_error(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
+    return sqrt(mean_squared_error(y_true, y_pred, n) as f64) as f32
+}
+
+export function mean_absolute_error(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
+    let mut sum: f32 = 0.0
+    for i in 0 to n {
+        let d: f32 = y_true[i] - y_pred[i]
+        if d < 0.0 {
+            sum = sum - d
+        } else {
+            sum = sum + d
+        }
+    }
+    return sum / (n as f32)
+}
+
+export function r2_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
+    let mean: f32 = array_mean(y_true, n)
+    let mut ss_res: f32 = 0.0
+    let mut ss_tot: f32 = 0.0
+    for i in 0 to n {
+        let d_res: f32 = y_true[i] - y_pred[i]
+        ss_res = ss_res + d_res * d_res
+        let d_tot: f32 = y_true[i] - mean
+        ss_tot = ss_tot + d_tot * d_tot
+    }
+    if ss_tot < 1e-10 {
+        return 0.0
+    }
+    return 1.0 - ss_res / ss_tot
+}
+
+# ============================================================================
+# Confusion matrix
+# ============================================================================
+
+export struct ConfusionMatrix {
+    matrix: ptr<i32>,
+    n_classes: i32,
+    classes: ptr<f32>
+}
+
+export function confusion_matrix(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32) -> ConfusionMatrix {
+    let cm: ptr<i32> = malloc((n_classes * n_classes) as i64 * 4) as ptr<i32>
+    for i in 0 to n_classes * n_classes {
+        cm[i] = 0
+    }
+
+    for i in 0 to n {
+        let mut true_idx: i32 = -1
+        let mut pred_idx: i32 = -1
+        for c in 0 to n_classes {
+            if classes[c] == y_true[i] {
+                true_idx = c
+            }
+            if classes[c] == y_pred[i] {
+                pred_idx = c
+            }
+        }
+        if true_idx >= 0 && pred_idx >= 0 {
+            cm[true_idx * n_classes + pred_idx] = cm[true_idx * n_classes + pred_idx] + 1
+        }
+    }
+
+    return ConfusionMatrix { matrix: cm, n_classes: n_classes, classes: classes }
+}
+
+export function print_confusion_matrix(cm: ConfusionMatrix) -> void {
+    println("")
+    print("  ")
+    for c in 0 to cm.n_classes {
+        print("  pred ")
+        print(c)
+        print("  ")
+    }
+    println("")
+
+    for r in 0 to cm.n_classes {
+        print("  true ")
+        print(r)
+        for c in 0 to cm.n_classes {
+            let val: i32 = cm.matrix[r * cm.n_classes + c]
+            if val < 10 {
+                print("    ")
+            } elif val < 100 {
+                print("   ")
+            } else {
+                print("  ")
+            }
+            print(val)
+            print("  ")
+        }
+        println("")
+    }
+}
+
+export function confusion_matrix_free(cm: ConfusionMatrix) -> void {
+    free(cm.matrix as ptr<void>)
+}
+
+# ============================================================================
+# ROC curve
+# ============================================================================
+
+export struct ROCPoint {
+    fpr: f32,
+    tpr: f32,
+    threshold: f32
+}
+
+export struct ROCCurve {
+    points: ptr<ROCPoint>,
+    n_points: i32,
+    auc: f32
+}
+
+export function roc_curve(y_true: ptr<f32>, y_score: ptr<f32>, n: i32, pos_label: f32) -> ROCCurve {
+    let indices: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        indices[i] = i
+    }
+
+    for i in 0 to n {
+        let mut max_idx: i32 = i
+        for j in i + 1 to n {
+            if y_score[indices[j]] > y_score[indices[max_idx]] {
+                max_idx = j
+            }
+        }
+        let tmp: i32 = indices[i]
+        indices[i] = indices[max_idx]
+        indices[max_idx] = tmp
+    }
+
+    let mut n_pos: i32 = 0
+    let mut n_neg: i32 = 0
+    for i in 0 to n {
+        if y_true[i] == pos_label {
+            n_pos = n_pos + 1
+        } else {
+            n_neg = n_neg + 1
+        }
+    }
+
+    let max_points: i32 = n + 2
+    let points: ptr<ROCPoint> = malloc((max_points as i64) * 16) as ptr<ROCPoint>
+    let mut n_points: i32 = 0
+
+    let mut tp: i32 = 0
+    let mut fp: i32 = 0
+
+    (points + n_points).fpr = 0.0
+    (points + n_points).tpr = 0.0
+    (points + n_points).threshold = y_score[indices[0]] + 1.0
+    n_points = n_points + 1
+
+    for i in 0 to n {
+        if y_true[indices[i]] == pos_label {
+            tp = tp + 1
+        } else {
+            fp = fp + 1
+        }
+
+        let fpr: f32 = (fp as f32) / (n_neg as f32)
+        let tpr: f32 = (tp as f32) / (n_pos as f32)
+
+        (points + n_points).fpr = fpr
+        (points + n_points).tpr = tpr
+        (points + n_points).threshold = y_score[indices[i]]
+        n_points = n_points + 1
+    }
+
+    let auc: f32 = 0.0
+    for i in 1 to n_points {
+        let width: f32 = (points + i).fpr - (points + i - 1).fpr
+        let height: f32 = ((points + i).tpr + (points + i - 1).tpr) / 2.0
+        auc = auc + width * height
+    }
+
+    free(indices as ptr<void>)
+
+    return ROCCurve { points: points, n_points: n_points, auc: auc }
+}
+
+export function roc_curve_free(curve: ROCCurve) -> void {
+    free(curve.points as ptr<void>)
+}
+
+# ============================================================================
+# Precision-Recall curve
+# ============================================================================
+
+export struct PRPoint {
+    precision: f32,
+    recall: f32,
+    threshold: f32
+}
+
+export struct PRCurve {
+    points: ptr<PRPoint>,
+    n_points: i32
+}
+
+export function precision_recall_curve(y_true: ptr<f32>, y_score: ptr<f32>, n: i32, pos_label: f32) -> PRCurve {
+    let indices: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        indices[i] = i
+    }
+
+    for i in 0 to n {
+        let mut max_idx: i32 = i
+        for j in i + 1 to n {
+            if y_score[indices[j]] > y_score[indices[max_idx]] {
+                max_idx = j
+            }
+        }
+        let tmp: i32 = indices[i]
+        indices[i] = indices[max_idx]
+        indices[max_idx] = tmp
+    }
+
+    let mut n_pos: i32 = 0
+    for i in 0 to n {
+        if y_true[i] == pos_label {
+            n_pos = n_pos + 1
+        }
+    }
+
+    let max_points: i32 = n + 2
+    let points: ptr<PRPoint> = malloc((max_points as i64) * 16) as ptr<PRPoint>
+    let mut n_points: i32 = 0
+
+    let mut tp: i32 = 0
+    let mut fp: i32 = 0
+
+    (points + n_points).precision = 1.0
+    (points + n_points).recall = 0.0
+    (points + n_points).threshold = y_score[indices[0]] + 1.0
+    n_points = n_points + 1
+
+    for i in 0 to n {
+        if y_true[indices[i]] == pos_label {
+            tp = tp + 1
+        } else {
+            fp = fp + 1
+        }
+
+        let prec: f32 = (tp as f32) / ((tp + fp) as f32)
+        let rec: f32 = (tp as f32) / (n_pos as f32)
+
+        (points + n_points).precision = prec
+        (points + n_points).recall = rec
+        (points + n_points).threshold = y_score[indices[i]]
+        n_points = n_points + 1
+    }
+
+    free(indices as ptr<void>)
+
+    return PRCurve { points: points, n_points: n_points }
+}
+
+export function pr_curve_free(curve: PRCurve) -> void {
+    free(curve.points as ptr<void>)
+}
+
+# ============================================================================
+# Log loss (cross-entropy)
+# ============================================================================
+
+export function log_loss(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, pos_label: f32) -> f32 {
+    let mut sum: f32 = 0.0
+    for i in 0 to n {
+        let p: f32 = y_pred[i]
+        if p > 1.0 - 1e-10 {
+            p = 1.0 - 1e-10
+        }
+        if p < 1e-10 {
+            p = 1e-10
+        }
+        if y_true[i] == pos_label {
+            sum = sum - log(p as f64) as f32
+        } else {
+            sum = sum - log((1.0 - p) as f64) as f32
+        }
+    }
+    return sum / (n as f32)
+}
+
+# ============================================================================
+# Cohen's Kappa
+# ============================================================================
+
+export function cohen_kappa(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32) -> f32 {
+    let cm: ConfusionMatrix = confusion_matrix(y_true, y_pred, n, classes, n_classes)
+
+    let mut po: f32 = 0.0
+    for c in 0 to n_classes {
+        po = po + (cm.matrix[c * n_classes + c] as f32)
+    }
+    po = po / (n as f32)
+
+    let mut pe: f32 = 0.0
+    for c in 0 to n_classes {
+        let row_sum: f32 = 0.0
+        let col_sum: f32 = 0.0
+        for k in 0 to n_classes {
+            row_sum = row_sum + (cm.matrix[c * n_classes + k] as f32)
+            col_sum = col_sum + (cm.matrix[k * n_classes + c] as f32)
+        }
+        pe = pe + (row_sum / (n as f32)) * (col_sum / (n as f32))
+    }
+
+    confusion_matrix_free(cm)
+
+    if pe > 1.0 - 1e-10 {
+        return 0.0
+    }
+    return (po - pe) / (1.0 - pe)
+}
+
+# ============================================================================
+# Matthews Correlation Coefficient
+# ============================================================================
+
+export function matthews_corrcoef(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, pos_label: f32) -> f32 {
+    let mut tp: i32 = 0
+    let mut tn: i32 = 0
+    let mut fp: i32 = 0
+    let mut fn: i32 = 0
+
+    for i in 0 to n {
+        let actual_pos: bool = y_true[i] == pos_label
+        let pred_pos: bool = y_pred[i] == pos_label
+
+        if actual_pos && pred_pos {
+            tp = tp + 1
+        } elif not actual_pos && not pred_pos {
+            tn = tn + 1
+        } elif not actual_pos && pred_pos {
+            fp = fp + 1
+        } else {
+            fn = fn + 1
+        }
+    }
+
+    let numerator: f32 = ((tp as f32) * (tn as f32) - (fp as f32) * (fn as f32))
+    let denominator: f32 = sqrt((((tp + fp) as f32) * ((tp + fn) as f32) * ((tn + fp) as f32) * ((tn + fn) as f32)) as f64) as f32
+
+    if denominator < 1e-10 {
+        return 0.0
+    }
+    return numerator / denominator
+}
+
+# ============================================================================
+# Hinge loss
+# ============================================================================
+
+export function hinge_loss(y_true: ptr<f32>, y_decision: ptr<f32>, n: i32, pos_label: f32) -> f32 {
+    let mut sum: f32 = 0.0
+    for i in 0 to n {
+        let label: f32 = 1.0
+        if y_true[i] != pos_label {
+            label = -1.0
+        }
+        let margin: f32 = 1.0 - label * y_decision[i]
+        if margin > 0.0 {
+            sum = sum + margin
+        }
+    }
+    return sum / (n as f32)
+}
+
+# ============================================================================
+# Explained variance score
+# ============================================================================
+
+export function explained_variance_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
+    let mean_true: f32 = array_mean(y_true, n)
+    let mut var_diff: f32 = 0.0
+    let mut var_true: f32 = 0.0
+    for i in 0 to n {
+        let d_diff: f32 = y_true[i] - y_pred[i]
+        let d_true: f32 = y_true[i] - mean_true
+        var_diff = var_diff + d_diff * d_diff
+        var_true = var_true + d_true * d_true
+    }
+    if var_true < 1e-10 {
+        return 0.0
+    }
+    return 1.0 - var_diff / var_true
+}
+
+# ============================================================================
+# Balanced accuracy
+# ============================================================================
+
+export function balanced_accuracy_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32) -> f32 {
+    let mut sum_recall: f32 = 0.0
+    for c in 0 to n_classes {
+        let cls: f32 = classes[c]
+        let mut tp: i32 = 0
+        let mut total: i32 = 0
+        for i in 0 to n {
+            if y_true[i] == cls {
+                total = total + 1
+                if y_pred[i] == cls {
+                    tp = tp + 1
+                }
+            }
+        }
+        if total > 0 {
+            sum_recall = sum_recall + (tp as f32) / (total as f32)
+        }
+    }
+    return sum_recall / (n_classes as f32)
+}
+
+# ============================================================================
+# F-beta score
+# ============================================================================
+
+export function fbeta_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32, beta: f32) -> f32 {
+    let beta_sq: f32 = beta * beta
+    let pr: ptr<PrecisionRecall> = precision_recall_fscore(y_true, y_pred, n, classes, n_classes)
+
+    let mut sum_f: f32 = 0.0
+    for c in 0 to n_classes {
+        let prec: f32 = pr[c].precision
+        let rec: f32 = pr[c].recall
+        let fb: f32 = 0.0
+        if prec + rec > 0.0 {
+            fb = (1.0 + beta_sq) * prec * rec / (beta_sq * prec + rec)
+        }
+        sum_f = sum_f + fb
+    }
+
+    free(pr as ptr<void>)
+    return sum_f / (n_classes as f32)
+}

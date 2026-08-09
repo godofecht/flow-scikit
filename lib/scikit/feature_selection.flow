@@ -1,0 +1,307 @@
+# Feature selection module for flow-scikit.
+# Implements SelectKBest (with f_classif and mutual info style scores),
+# SelectFromModel, and VarianceThreshold.
+
+import "lib/scikit/matrix.flow"
+
+# ============================================================================
+# SelectKBest
+# ============================================================================
+
+export const SCORE_F_CLASSIF: i32 = 0
+export const SCORE_F_REGRESSION: i32 = 1
+export const SCORE_MUTUAL_INFO: i32 = 2
+
+export struct SelectKBest {
+    scores: ptr<f32>,
+    selected_indices: ptr<i32>,
+    k: i32,
+    n_features: i32,
+    score_func: i32,
+    fitted: bool
+}
+
+export function select_k_best_fit(X: Matrix, y: ptr<f32>, k: i32, score_func: i32) -> SelectKBest {
+    let n_features: i32 = X.cols
+    let scores: ptr<f32> = array_new_f32(n_features)
+
+    if score_func == SCORE_F_CLASSIF {
+        let classes: ptr<f32> = array_new_f32(X.rows)
+        let mut n_classes: i32 = 0
+        for i in 0 to X.rows {
+            let mut found: bool = false
+            for c in 0 to n_classes {
+                if classes[c] == y[i] {
+                    found = true
+                }
+            }
+            if not found {
+                classes[n_classes] = y[i]
+                n_classes = n_classes + 1
+            }
+        }
+
+        for j in 0 to n_features {
+            let mut overall_mean: f32 = 0.0
+            for i in 0 to X.rows {
+                overall_mean = overall_mean + matrix_at(X, i, j)
+            }
+            overall_mean = overall_mean / (X.rows as f32)
+
+            let mut ss_between: f32 = 0.0
+            let mut ss_within: f32 = 0.0
+
+            for c in 0 to n_classes {
+                let mut group_mean: f32 = 0.0
+                let mut group_n: i32 = 0
+                for i in 0 to X.rows {
+                    if y[i] == classes[c] {
+                        group_mean = group_mean + matrix_at(X, i, j)
+                        group_n = group_n + 1
+                    }
+                }
+                if group_n > 0 {
+                    group_mean = group_mean / (group_n as f32)
+                    let diff: f32 = group_mean - overall_mean
+                    ss_between = ss_between + (group_n as f32) * diff * diff
+
+                    for i in 0 to X.rows {
+                        if y[i] == classes[c] {
+                            let d: f32 = matrix_at(X, i, j) - group_mean
+                            ss_within = ss_within + d * d
+                        }
+                    }
+                }
+            }
+
+            if ss_within < 1e-10 {
+                scores[j] = 0.0
+            } else {
+                let df_between: f32 = (n_classes - 1) as f32
+                let df_within: f32 = (X.rows - n_classes) as f32
+                if df_within < 1.0 {
+                    df_within = 1.0
+                }
+                scores[j] = (ss_between / df_between) / (ss_within / df_within)
+            }
+        }
+
+        array_free_f32(classes)
+    } elif score_func == SCORE_F_REGRESSION {
+        let y_mean: f32 = array_mean(y, X.rows)
+
+        for j in 0 to n_features {
+            let col: ptr<f32> = array_new_f32(X.rows)
+            for i in 0 to X.rows {
+                col[i] = matrix_at(X, i, j)
+            }
+            let x_mean: f32 = array_mean(col, X.rows)
+
+            let mut ss_xy: f32 = 0.0
+            let mut ss_xx: f32 = 0.0
+            let mut ss_yy: f32 = 0.0
+            for i in 0 to X.rows {
+                let dx: f32 = col[i] - x_mean
+                let dy: f32 = y[i] - y_mean
+                ss_xy = ss_xy + dx * dy
+                ss_xx = ss_xx + dx * dx
+                ss_yy = ss_yy + dy * dy
+            }
+
+            if ss_xx < 1e-10 || ss_yy < 1e-10 {
+                scores[j] = 0.0
+            } else {
+                let r: f32 = ss_xy / sqrt((ss_xx * ss_yy) as f64) as f32
+                let r_sq: f32 = r * r
+                let df: f32 = (X.rows - 2) as f32
+                if df < 1.0 {
+                    df = 1.0
+                }
+                if r_sq > 1.0 - 1e-10 {
+                    r_sq = 1.0 - 1e-10
+                }
+                scores[j] = (r_sq / df) / ((1.0 - r_sq) / df)
+            }
+
+            array_free_f32(col)
+        }
+    } else {
+        for j in 0 to n_features {
+            scores[j] = 0.0
+        }
+    }
+
+    let selected: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    for i in 0 to n_features {
+        selected[i] = i
+    }
+
+    for i in 0 to n_features {
+        let mut max_idx: i32 = i
+        for j in i + 1 to n_features {
+            if scores[selected[j]] > scores[selected[max_idx]] {
+                max_idx = j
+            }
+        }
+        let tmp: i32 = selected[i]
+        selected[i] = selected[max_idx]
+        selected[max_idx] = tmp
+    }
+
+    let final_selected: ptr<i32> = malloc((k as i64) * 4) as ptr<i32>
+    for i in 0 to k {
+        final_selected[i] = selected[i]
+    }
+    free(selected as ptr<void>)
+
+    return SelectKBest {
+        scores: scores,
+        selected_indices: final_selected,
+        k: k,
+        n_features: n_features,
+        score_func: score_func,
+        fitted: true
+    }
+}
+
+export function select_k_best_transform(selector: SelectKBest, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, selector.k)
+    for i in 0 to X.rows {
+        for j in 0 to selector.k {
+            let feat_idx: i32 = selector.selected_indices[j]
+            matrix_set(result, i, j, matrix_at(X, i, feat_idx))
+        }
+    }
+    return result
+}
+
+export function select_k_best_free(selector: SelectKBest) -> void {
+    array_free_f32(selector.scores)
+    free(selector.selected_indices as ptr<void>)
+}
+
+# ============================================================================
+# VarianceThreshold
+# ============================================================================
+
+export struct VarianceThreshold {
+    variances: ptr<f32>,
+    selected_indices: ptr<i32>,
+    n_selected: i32,
+    n_features: i32,
+    threshold: f32,
+    fitted: bool
+}
+
+export function variance_threshold_fit(X: Matrix, threshold: f32) -> VarianceThreshold {
+    let n_features: i32 = X.cols
+    let variances: ptr<f32> = array_new_f32(n_features)
+
+    for j in 0 to n_features {
+        let col: ptr<f32> = array_new_f32(X.rows)
+        for i in 0 to X.rows {
+            col[i] = matrix_at(X, i, j)
+        }
+        let mean: f32 = array_mean(col, X.rows)
+        variances[j] = array_std(col, X.rows, mean)
+        variances[j] = variances[j] * variances[j]
+        array_free_f32(col)
+    }
+
+    let mut n_selected: i32 = 0
+    let selected: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    for j in 0 to n_features {
+        if variances[j] > threshold {
+            selected[n_selected] = j
+            n_selected = n_selected + 1
+        }
+    }
+
+    let final_selected: ptr<i32> = malloc((n_selected as i64) * 4) as ptr<i32>
+    for i in 0 to n_selected {
+        final_selected[i] = selected[i]
+    }
+    free(selected as ptr<void>)
+
+    return VarianceThreshold {
+        variances: variances,
+        selected_indices: final_selected,
+        n_selected: n_selected,
+        n_features: n_features,
+        threshold: threshold,
+        fitted: true
+    }
+}
+
+export function variance_threshold_transform(selector: VarianceThreshold, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, selector.n_selected)
+    for i in 0 to X.rows {
+        for j in 0 to selector.n_selected {
+            let feat_idx: i32 = selector.selected_indices[j]
+            matrix_set(result, i, j, matrix_at(X, i, feat_idx))
+        }
+    }
+    return result
+}
+
+export function variance_threshold_free(selector: VarianceThreshold) -> void {
+    array_free_f32(selector.variances)
+    free(selector.selected_indices as ptr<void>)
+}
+
+# ============================================================================
+# SelectFromModel (select features with weights above a threshold)
+# ============================================================================
+
+export struct SelectFromModel {
+    selected_indices: ptr<i32>,
+    n_selected: i32,
+    n_features: i32,
+    threshold: f32,
+    fitted: bool
+}
+
+export function select_from_model_fit(weights: ptr<f32>, n_features: i32, threshold: f32) -> SelectFromModel {
+    let selected: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    let mut n_selected: i32 = 0
+
+    for j in 0 to n_features {
+        let abs_w: f32 = weights[j]
+        if abs_w < 0.0 {
+            abs_w = 0.0 - abs_w
+        }
+        if abs_w >= threshold {
+            selected[n_selected] = j
+            n_selected = n_selected + 1
+        }
+    }
+
+    let final_selected: ptr<i32> = malloc((n_selected as i64) * 4) as ptr<i32>
+    for i in 0 to n_selected {
+        final_selected[i] = selected[i]
+    }
+    free(selected as ptr<void>)
+
+    return SelectFromModel {
+        selected_indices: final_selected,
+        n_selected: n_selected,
+        n_features: n_features,
+        threshold: threshold,
+        fitted: true
+    }
+}
+
+export function select_from_model_transform(selector: SelectFromModel, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, selector.n_selected)
+    for i in 0 to X.rows {
+        for j in 0 to selector.n_selected {
+            let feat_idx: i32 = selector.selected_indices[j]
+            matrix_set(result, i, j, matrix_at(X, i, feat_idx))
+        }
+    }
+    return result
+}
+
+export function select_from_model_free(selector: SelectFromModel) -> void {
+    free(selector.selected_indices as ptr<void>)
+}

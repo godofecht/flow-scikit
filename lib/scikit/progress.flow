@@ -1,0 +1,129 @@
+# Progress effect system for flow-scikit.
+# Addresses Issues #30852 and #32946:
+#   - GridSearchCV needs a progress bar, not a confusing verbose integer
+#   - verbose documentation doesn't match actual behavior
+#
+# Instead of `verbose=0/1/2/3+` with inconsistent behavior, we use Flow's
+# algebraic effect system. Users install a capability that handles progress
+# events. ConsoleProgress prints a progress bar. SilentProgress does nothing.
+# Custom capabilities can log to files, send to UIs, etc.
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+    function fflush(stream: ptr<void>) -> i32
+}
+
+export effect Progress {
+    on_fit_start(candidate_idx: i32, total: i32, params: string) -> void,
+    on_fit_end(candidate_idx: i32, total: i32, score: f32) -> void,
+    on_epoch_start(epoch: i32, total_epochs: i32, loss: f32) -> void,
+    on_epoch_end(epoch: i32, total_epochs: i32, loss: f32) -> void,
+    on_complete(message: string) -> void,
+}
+
+export capability SilentProgress {
+    effect Progress,
+
+    function on_fit_start(candidate_idx: i32, total: i32, params: string) -> void {
+    },
+
+    function on_fit_end(candidate_idx: i32, total: i32, score: f32) -> void {
+    },
+
+    function on_epoch_start(epoch: i32, total_epochs: i32, loss: f32) -> void {
+    },
+
+    function on_epoch_end(epoch: i32, total_epochs: i32, loss: f32) -> void {
+    },
+
+    function on_complete(message: string) -> void {
+    },
+}
+
+export capability ConsoleProgress {
+    effect Progress,
+
+    function on_fit_start(candidate_idx: i32, total: i32, params: string) -> void {
+        print("[flow-scikit] Fitting candidate ")
+        print(candidate_idx + 1)
+        print("/")
+        print(total)
+        print(": ")
+        println(params)
+    },
+
+    function on_fit_end(candidate_idx: i32, total: i32, score: f32) -> void {
+        let pct: i32 = ((candidate_idx + 1) * 100) / total
+        print("[flow-scikit]   done [")
+        print(pct)
+        print("%] score = ")
+        printf("%.4f", score)
+        println("")
+    },
+
+    function on_epoch_start(epoch: i32, total_epochs: i32, loss: f32) -> void {
+        if epoch % 100 == 0 {
+            print("[flow-scikit]   epoch ")
+            print(epoch)
+            print("/")
+            print(total_epochs)
+            print("  loss = ")
+            printf("%.6f", loss)
+            println("")
+        }
+    },
+
+    function on_epoch_end(epoch: i32, total_epochs: i32, loss: f32) -> void {
+    },
+
+    function on_complete(message: string) -> void {
+        print("[flow-scikit] ")
+        println(message)
+    },
+}
+
+export capability VerboseProgress {
+    effect Progress,
+
+    function on_fit_start(candidate_idx: i32, total: i32, params: string) -> void {
+        print("[flow-scikit] Starting candidate ")
+        print(candidate_idx + 1)
+        print(" of ")
+        print(total)
+        print(" with params: ")
+        println(params)
+    },
+
+    function on_fit_end(candidate_idx: i32, total: i32, score: f32) -> void {
+        print("[flow-scikit] Completed candidate ")
+        print(candidate_idx + 1)
+        print(" of ")
+        print(total)
+        print(" | score = ")
+        printf("%.6f", score)
+        println("")
+    },
+
+    function on_epoch_start(epoch: i32, total_epochs: i32, loss: f32) -> void {
+        print("[flow-scikit]   epoch ")
+        print(epoch)
+        print("/")
+        print(total_epochs)
+        print("  loss = ")
+        printf("%.6f", loss)
+        println("")
+    },
+
+    function on_epoch_end(epoch: i32, total_epochs: i32, loss: f32) -> void {
+        if loss > 1e10 {
+            println("[flow-scikit]   WARNING: loss is very large, consider reducing learning rate")
+        }
+    },
+
+    function on_complete(message: string) -> void {
+        print("[flow-scikit] Search complete: ")
+        println(message)
+    },
+}

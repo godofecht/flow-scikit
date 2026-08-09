@@ -1,0 +1,532 @@
+# Decision tree module for flow-scikit.
+# Implements CART-style decision trees for classification and regression.
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function fabs(x: f64) -> f64
+}
+
+export const TREE_MAX_DEPTH: i32 = 50
+export const TREE_MIN_SAMPLES_SPLIT: i32 = 2
+export const TREE_MIN_SAMPLES_LEAF: i32 = 1
+
+export const CRITERION_GINI: i32 = 0
+export const CRITERION_ENTROPY: i32 = 1
+export const CRITERION_MSE: i32 = 2
+export const CRITERION_MAE: i32 = 3
+
+export struct TreeNode {
+    feature: i32,
+    threshold: f32,
+    left: i32,
+    right: i32,
+    is_leaf: bool,
+    value: f32,
+    n_samples: i32
+}
+
+export struct DecisionTreeClassifier {
+    nodes: ptr<TreeNode>,
+    n_nodes: i32,
+    max_depth: i32,
+    criterion: i32,
+    n_classes: i32,
+    classes: ptr<f32>,
+    fitted: bool
+}
+
+export struct DecisionTreeRegressor {
+    nodes: ptr<TreeNode>,
+    n_nodes: i32,
+    max_depth: i32,
+    criterion: i32,
+    fitted: bool
+}
+
+function _gini(y: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32) -> f32 {
+    let counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    for c in 0 to n_classes {
+        counts[c] = 0
+    }
+    for i in 0 to n {
+        for c in 0 to n_classes {
+            if y[i] == classes[c] {
+                counts[c] = counts[c] + 1
+            }
+        }
+    }
+    let mut impurity: f32 = 1.0
+    for c in 0 to n_classes {
+        let p: f32 = (counts[c] as f32) / (n as f32)
+        impurity = impurity - p * p
+    }
+    free(counts as ptr<void>)
+    return impurity
+}
+
+function _entropy(y: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32) -> f32 {
+    let counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    for c in 0 to n_classes {
+        counts[c] = 0
+    }
+    for i in 0 to n {
+        for c in 0 to n_classes {
+            if y[i] == classes[c] {
+                counts[c] = counts[c] + 1
+            }
+        }
+    }
+    let mut impurity: f32 = 0.0
+    for c in 0 to n_classes {
+        let p: f32 = (counts[c] as f32) / (n as f32)
+        if p > 0.0 {
+            let log_p: f64 = log(p as f64)
+            impurity = impurity - p * (log_p as f32)
+        }
+    }
+    free(counts as ptr<void>)
+    return impurity
+}
+
+function _mse(y: ptr<f32>, n: i32) -> f32 {
+    let mut mean: f32 = 0.0
+    for i in 0 to n {
+        mean = mean + y[i]
+    }
+    mean = mean / (n as f32)
+    let mut sum_sq: f32 = 0.0
+    for i in 0 to n {
+        let d: f32 = y[i] - mean
+        sum_sq = sum_sq + d * d
+    }
+    return sum_sq / (n as f32)
+}
+
+function _majority_class(y: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32) -> f32 {
+    let counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    for c in 0 to n_classes {
+        counts[c] = 0
+    }
+    for i in 0 to n {
+        for c in 0 to n_classes {
+            if y[i] == classes[c] {
+                counts[c] = counts[c] + 1
+            }
+        }
+    }
+    let mut best_c: i32 = 0
+    let mut best_count: i32 = 0
+    for c in 0 to n_classes {
+        if counts[c] > best_count {
+            best_count = counts[c]
+            best_c = c
+        }
+    }
+    free(counts as ptr<void>)
+    return classes[best_c]
+}
+
+function _mean_val(y: ptr<f32>, n: i32) -> f32 {
+    let mut sum: f32 = 0.0
+    for i in 0 to n {
+        sum = sum + y[i]
+    }
+    return sum / (n as f32)
+}
+
+export function decision_tree_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, max_depth: i32, criterion: i32) -> DecisionTreeClassifier {
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to X.rows {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let max_nodes: i32 = 2 * X.rows + 1
+    let nodes: ptr<TreeNode> = malloc((max_nodes as i64) * 32) as ptr<TreeNode>
+    let mut n_nodes: i32 = 0
+
+    let indices: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
+    for i in 0 to X.rows {
+        indices[i] = i
+    }
+
+    _build_classifier_tree(nodes, n_nodes, X, y, indices, X.rows, 0, max_depth, criterion, classes, n_classes)
+
+    free(indices as ptr<void>)
+
+    return DecisionTreeClassifier {
+        nodes: nodes,
+        n_nodes: n_nodes,
+        max_depth: max_depth,
+        criterion: criterion,
+        n_classes: n_classes,
+        classes: classes,
+        fitted: true
+    }
+}
+
+function _build_classifier_tree(
+    nodes: ptr<TreeNode>,
+    n_nodes: ptr<i32>,
+    X: Matrix,
+    y: ptr<f32>,
+    indices: ptr<i32>,
+    n_indices: i32,
+    depth: i32,
+    max_depth: i32,
+    criterion: i32,
+    classes: ptr<f32>,
+    n_classes: i32
+) -> i32 {
+    let node_idx: i32 = n_nodes[0]
+    n_nodes[0] = n_nodes[0] + 1
+
+    let should_stop: bool = depth >= max_depth || n_indices < 2
+
+    if should_stop {
+        let y_subset: ptr<f32> = array_new_f32(n_indices)
+        for i in 0 to n_indices {
+            y_subset[i] = y[indices[i]]
+        }
+        (nodes + node_idx).is_leaf = true
+        (nodes + node_idx).value = _majority_class(y_subset, n_indices, classes, n_classes)
+        (nodes + node_idx).n_samples = n_indices
+        (nodes + node_idx).left = -1
+        (nodes + node_idx).right = -1
+        array_free_f32(y_subset)
+        return node_idx
+    }
+
+    let mut best_feature: i32 = -1
+    let mut best_threshold: f32 = 0.0
+    let mut best_impurity: f32 = 1e30
+
+    let y_subset: ptr<f32> = array_new_f32(n_indices)
+    for i in 0 to n_indices {
+        y_subset[i] = y[indices[i]]
+    }
+    let parent_impurity: f32 = _gini(y_subset, n_indices, classes, n_classes)
+    array_free_f32(y_subset)
+
+    for f in 0 to X.cols {
+        let values: ptr<f32> = array_new_f32(n_indices)
+        for i in 0 to n_indices {
+            values[i] = matrix_at(X, indices[i], f)
+        }
+
+        for i in 0 to n_indices {
+            let threshold: f32 = values[i]
+            let mut left_n: i32 = 0
+            let mut right_n: i32 = 0
+
+            for j in 0 to n_indices {
+                if values[j] <= threshold {
+                    left_n = left_n + 1
+                } else {
+                    right_n = right_n + 1
+                }
+            }
+
+            if left_n < 1 || right_n < 1 {
+                continue
+            }
+
+            let left_y: ptr<f32> = array_new_f32(left_n)
+            let right_y: ptr<f32> = array_new_f32(right_n)
+            let mut li: i32 = 0
+            let mut ri: i32 = 0
+            for j in 0 to n_indices {
+                if values[j] <= threshold {
+                    left_y[li] = y[indices[j]]
+                    li = li + 1
+                } else {
+                    right_y[ri] = y[indices[j]]
+                    ri = ri + 1
+                }
+            }
+
+            let left_imp: f32 = _gini(left_y, left_n, classes, n_classes)
+            let right_imp: f32 = _gini(right_y, right_n, classes, n_classes)
+            let weighted: f32 = (left_n as f32) / (n_indices as f32) * left_imp + (right_n as f32) / (n_indices as f32) * right_imp
+
+            if weighted < best_impurity {
+                best_impurity = weighted
+                best_feature = f
+                best_threshold = threshold
+            }
+
+            array_free_f32(left_y)
+            array_free_f32(right_y)
+        }
+
+        array_free_f32(values)
+    }
+
+    if best_feature < 0 || best_impurity >= parent_impurity - 1e-10 {
+        let y_sub: ptr<f32> = array_new_f32(n_indices)
+        for i in 0 to n_indices {
+            y_sub[i] = y[indices[i]]
+        }
+        (nodes + node_idx).is_leaf = true
+        (nodes + node_idx).value = _majority_class(y_sub, n_indices, classes, n_classes)
+        (nodes + node_idx).n_samples = n_indices
+        (nodes + node_idx).left = -1
+        (nodes + node_idx).right = -1
+        array_free_f32(y_sub)
+        return node_idx
+    }
+
+    let left_indices: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
+    let right_indices: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
+    let mut left_n: i32 = 0
+    let mut right_n: i32 = 0
+
+    for i in 0 to n_indices {
+        if matrix_at(X, indices[i], best_feature) <= best_threshold {
+            left_indices[left_n] = indices[i]
+            left_n = left_n + 1
+        } else {
+            right_indices[right_n] = indices[i]
+            right_n = right_n + 1
+        }
+    }
+
+    (nodes + node_idx).is_leaf = false
+    (nodes + node_idx).feature = best_feature
+    (nodes + node_idx).threshold = best_threshold
+    (nodes + node_idx).n_samples = n_indices
+
+    let left_idx: i32 = _build_classifier_tree(nodes, n_nodes, X, y, left_indices, left_n, depth + 1, max_depth, criterion, classes, n_classes)
+    let right_idx: i32 = _build_classifier_tree(nodes, n_nodes, X, y, right_indices, right_n, depth + 1, max_depth, criterion, classes, n_classes)
+
+    (nodes + node_idx).left = left_idx
+    (nodes + node_idx).right = right_idx
+
+    free(left_indices as ptr<void>)
+    free(right_indices as ptr<void>)
+
+    return node_idx
+}
+
+export function decision_tree_classifier_predict_one(model: DecisionTreeClassifier, x: ptr<f32>) -> f32 {
+    let mut node_idx: i32 = 0
+    while not (model.nodes + node_idx).is_leaf {
+        let node: ptr<TreeNode> = model.nodes + node_idx
+        if x[node.feature] <= node.threshold {
+            node_idx = node.left
+        } else {
+            node_idx = node.right
+        }
+    }
+    return (model.nodes + node_idx).value
+}
+
+export function decision_tree_classifier_predict(model: DecisionTreeClassifier, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    let row: ptr<f32> = array_new_f32(X.cols)
+    for i in 0 to X.rows {
+        matrix_row(X, i, row)
+        preds[i] = decision_tree_classifier_predict_one(model, row)
+    }
+    array_free_f32(row)
+    return preds
+}
+
+export function decision_tree_classifier_free(model: DecisionTreeClassifier) -> void {
+    free(model.nodes as ptr<void>)
+    array_free_f32(model.classes)
+}
+
+export function decision_tree_regressor_fit(X: Matrix, y: ptr<f32>, max_depth: i32, criterion: i32) -> DecisionTreeRegressor {
+    let max_nodes: i32 = 2 * X.rows + 1
+    let nodes: ptr<TreeNode> = malloc((max_nodes as i64) * 32) as ptr<TreeNode>
+    let mut n_nodes: i32 = 0
+
+    let indices: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
+    for i in 0 to X.rows {
+        indices[i] = i
+    }
+
+    _build_regressor_tree(nodes, n_nodes, X, y, indices, X.rows, 0, max_depth, criterion)
+
+    free(indices as ptr<void>)
+
+    return DecisionTreeRegressor {
+        nodes: nodes,
+        n_nodes: n_nodes,
+        max_depth: max_depth,
+        criterion: criterion,
+        fitted: true
+    }
+}
+
+function _build_regressor_tree(
+    nodes: ptr<TreeNode>,
+    n_nodes: ptr<i32>,
+    X: Matrix,
+    y: ptr<f32>,
+    indices: ptr<i32>,
+    n_indices: i32,
+    depth: i32,
+    max_depth: i32,
+    criterion: i32
+) -> i32 {
+    let node_idx: i32 = n_nodes[0]
+    n_nodes[0] = n_nodes[0] + 1
+
+    let should_stop: bool = depth >= max_depth || n_indices < 2
+
+    if should_stop {
+        let y_subset: ptr<f32> = array_new_f32(n_indices)
+        for i in 0 to n_indices {
+            y_subset[i] = y[indices[i]]
+        }
+        (nodes + node_idx).is_leaf = true
+        (nodes + node_idx).value = _mean_val(y_subset, n_indices)
+        (nodes + node_idx).n_samples = n_indices
+        (nodes + node_idx).left = -1
+        (nodes + node_idx).right = -1
+        array_free_f32(y_subset)
+        return node_idx
+    }
+
+    let y_subset: ptr<f32> = array_new_f32(n_indices)
+    for i in 0 to n_indices {
+        y_subset[i] = y[indices[i]]
+    }
+    let parent_impurity: f32 = _mse(y_subset, n_indices)
+    array_free_f32(y_subset)
+
+    let mut best_feature: i32 = -1
+    let mut best_threshold: f32 = 0.0
+    let mut best_impurity: f32 = 1e30
+
+    for f in 0 to X.cols {
+        let values: ptr<f32> = array_new_f32(n_indices)
+        for i in 0 to n_indices {
+            values[i] = matrix_at(X, indices[i], f)
+        }
+
+        for i in 0 to n_indices {
+            let threshold: f32 = values[i]
+            let left_y: ptr<f32> = array_new_f32(n_indices)
+            let right_y: ptr<f32> = array_new_f32(n_indices)
+            let mut left_n: i32 = 0
+            let mut right_n: i32 = 0
+
+            for j in 0 to n_indices {
+                if values[j] <= threshold {
+                    left_y[left_n] = y[indices[j]]
+                    left_n = left_n + 1
+                } else {
+                    right_y[right_n] = y[indices[j]]
+                    right_n = right_n + 1
+                }
+            }
+
+            if left_n < 1 || right_n < 1 {
+                continue
+            }
+
+            let left_imp: f32 = _mse(left_y, left_n)
+            let right_imp: f32 = _mse(right_y, right_n)
+            let weighted: f32 = (left_n as f32) / (n_indices as f32) * left_imp + (right_n as f32) / (n_indices as f32) * right_imp
+
+            if weighted < best_impurity {
+                best_impurity = weighted
+                best_feature = f
+                best_threshold = threshold
+            }
+
+            array_free_f32(left_y)
+            array_free_f32(right_y)
+        }
+
+        array_free_f32(values)
+    }
+
+    if best_feature < 0 || best_impurity >= parent_impurity - 1e-10 {
+        let y_sub: ptr<f32> = array_new_f32(n_indices)
+        for i in 0 to n_indices {
+            y_sub[i] = y[indices[i]]
+        }
+        (nodes + node_idx).is_leaf = true
+        (nodes + node_idx).value = _mean_val(y_sub, n_indices)
+        (nodes + node_idx).n_samples = n_indices
+        (nodes + node_idx).left = -1
+        (nodes + node_idx).right = -1
+        array_free_f32(y_sub)
+        return node_idx
+    }
+
+    let left_indices: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
+    let right_indices: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
+    let mut left_n: i32 = 0
+    let mut right_n: i32 = 0
+
+    for i in 0 to n_indices {
+        if matrix_at(X, indices[i], best_feature) <= best_threshold {
+            left_indices[left_n] = indices[i]
+            left_n = left_n + 1
+        } else {
+            right_indices[right_n] = indices[i]
+            right_n = right_n + 1
+        }
+    }
+
+    (nodes + node_idx).is_leaf = false
+    (nodes + node_idx).feature = best_feature
+    (nodes + node_idx).threshold = best_threshold
+    (nodes + node_idx).n_samples = n_indices
+
+    let left_idx: i32 = _build_regressor_tree(nodes, n_nodes, X, y, left_indices, left_n, depth + 1, max_depth, criterion)
+    let right_idx: i32 = _build_regressor_tree(nodes, n_nodes, X, y, right_indices, right_n, depth + 1, max_depth, criterion)
+
+    (nodes + node_idx).left = left_idx
+    (nodes + node_idx).right = right_idx
+
+    free(left_indices as ptr<void>)
+    free(right_indices as ptr<void>)
+
+    return node_idx
+}
+
+export function decision_tree_regressor_predict_one(model: DecisionTreeRegressor, x: ptr<f32>) -> f32 {
+    let mut node_idx: i32 = 0
+    while not (model.nodes + node_idx).is_leaf {
+        let node: ptr<TreeNode> = model.nodes + node_idx
+        if x[node.feature] <= node.threshold {
+            node_idx = node.left
+        } else {
+            node_idx = node.right
+        }
+    }
+    return (model.nodes + node_idx).value
+}
+
+export function decision_tree_regressor_predict(model: DecisionTreeRegressor, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    let row: ptr<f32> = array_new_f32(X.cols)
+    for i in 0 to X.rows {
+        matrix_row(X, i, row)
+        preds[i] = decision_tree_regressor_predict_one(model, row)
+    }
+    array_free_f32(row)
+    return preds
+}
+
+export function decision_tree_regressor_free(model: DecisionTreeRegressor) -> void {
+    free(model.nodes as ptr<void>)
+}

@@ -1,0 +1,415 @@
+# Clustering module for flow-scikit.
+# Implements KMeans clustering.
+
+import "lib/scikit/matrix.flow"
+
+export struct KMeans {
+    centroids: ptr<ptr<f32>>,
+    n_clusters: i32,
+    n_features: i32,
+    labels: ptr<i32>,
+    inertia: f32,
+    n_iter: i32,
+    max_iter: i32,
+    tol: f32,
+    fitted: bool
+}
+
+export function kmeans_fit(X: Matrix, n_clusters: i32, max_iter: i32, tol: f32, seed: i32) -> KMeans {
+    let n_features: i32 = X.cols
+    let centroids: ptr<ptr<f32>> = malloc((n_clusters as i64) * 8) as ptr<ptr<f32>>
+
+    srand(seed)
+    for k in 0 to n_clusters {
+        centroids[k] = array_new_f32(n_features)
+        let idx: i32 = rand() % X.rows
+        for j in 0 to n_features {
+            centroids[k][j] = matrix_at(X, idx, j)
+        }
+    }
+
+    let labels: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
+    let mut inertia: f32 = 0.0
+    let mut n_iter_run: i32 = 0
+
+    for iter in 0 to max_iter {
+        n_iter_run = iter + 1
+        let mut new_inertia: f32 = 0.0
+
+        for i in 0 to X.rows {
+            let mut best_k: i32 = 0
+            let mut best_dist: f32 = 1e30
+            for k in 0 to n_clusters {
+                let mut dist: f32 = 0.0
+                for j in 0 to n_features {
+                    let d: f32 = matrix_at(X, i, j) - centroids[k][j]
+                    dist = dist + d * d
+                }
+                if dist < best_dist {
+                    best_dist = dist
+                    best_k = k
+                }
+            }
+            labels[i] = best_k
+            new_inertia = new_inertia + best_dist
+        }
+
+        let sums: ptr<ptr<f32>> = malloc((n_clusters as i64) * 8) as ptr<ptr<f32>>
+        let counts: ptr<i32> = malloc((n_clusters as i64) * 4) as ptr<i32>
+        for k in 0 to n_clusters {
+            sums[k] = array_new_f32(n_features)
+            counts[k] = 0
+        }
+
+        for i in 0 to X.rows {
+            let k: i32 = labels[i]
+            counts[k] = counts[k] + 1
+            for j in 0 to n_features {
+                sums[k][j] = sums[k][j] + matrix_at(X, i, j)
+            }
+        }
+
+        let mut max_shift: f32 = 0.0
+        for k in 0 to n_clusters {
+            if counts[k] > 0 {
+                for j in 0 to n_features {
+                    let new_val: f32 = sums[k][j] / (counts[k] as f32)
+                    let shift: f32 = new_val - centroids[k][j]
+                    if shift < 0.0 {
+                        let abs_shift: f32 = 0.0 - shift
+                        if abs_shift > max_shift {
+                            max_shift = abs_shift
+                        }
+                    } else {
+                        if shift > max_shift {
+                            max_shift = shift
+                        }
+                    }
+                    centroids[k][j] = new_val
+                }
+            }
+            array_free_f32(sums[k])
+        }
+        free(sums as ptr<void>)
+        free(counts as ptr<void>)
+
+        inertia = new_inertia
+
+        if max_shift < tol {
+            break
+        }
+    }
+
+    return KMeans {
+        centroids: centroids,
+        n_clusters: n_clusters,
+        n_features: n_features,
+        labels: labels,
+        inertia: inertia,
+        n_iter: n_iter_run,
+        max_iter: max_iter,
+        tol: tol,
+        fitted: true
+    }
+}
+
+export function kmeans_predict(model: KMeans, X: Matrix) -> ptr<i32> {
+    let preds: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
+    for i in 0 to X.rows {
+        let mut best_k: i32 = 0
+        let mut best_dist: f32 = 1e30
+        for k in 0 to model.n_clusters {
+            let mut dist: f32 = 0.0
+            for j in 0 to model.n_features {
+                let d: f32 = matrix_at(X, i, j) - model.centroids[k][j]
+                dist = dist + d * d
+            }
+            if dist < best_dist {
+                best_dist = dist
+                best_k = k
+            }
+        }
+        preds[i] = best_k
+    }
+    return preds
+}
+
+export function kmeans_transform(model: KMeans, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, model.n_clusters)
+    for i in 0 to X.rows {
+        for k in 0 to model.n_clusters {
+            let mut dist: f32 = 0.0
+            for j in 0 to model.n_features {
+                let d: f32 = matrix_at(X, i, j) - model.centroids[k][j]
+                dist = dist + d * d
+            }
+            matrix_set(result, i, k, sqrt(dist as f64) as f32)
+        }
+    }
+    return result
+}
+
+export function kmeans_free(model: KMeans) -> void {
+    for k in 0 to model.n_clusters {
+        array_free_f32(model.centroids[k])
+    }
+    free(model.centroids as ptr<void>)
+    free(model.labels as ptr<void>)
+}
+
+# ============================================================================
+# DBSCAN (Density-Based Spatial Clustering of Applications with Noise)
+# ============================================================================
+
+export struct DBSCAN {
+    labels: ptr<i32>,
+    n_clusters: i32,
+    n_noise: i32,
+    eps: f32,
+    min_samples: i32,
+    n_samples: i32,
+    fitted: bool
+}
+
+export function dbscan_fit(X: Matrix, eps: f32, min_samples: i32) -> DBSCAN {
+    let n: i32 = X.rows
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        labels[i] = -1
+    }
+
+    let visited: ptr<bool> = malloc((n as i64) * 1) as ptr<bool>
+    for i in 0 to n {
+        visited[i] = false
+    }
+
+    let mut cluster_id: i32 = 0
+    let mut n_noise: i32 = 0
+
+    let eps_sq: f32 = eps * eps
+
+    for i in 0 to n {
+        if visited[i] {
+            continue
+        }
+
+        visited[i] = true
+        let neighbors: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+        let mut n_neighbors: i32 = 0
+
+        for j in 0 to n {
+            if i == j {
+                continue
+            }
+            let mut dist_sq: f32 = 0.0
+            for k in 0 to X.cols {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                dist_sq = dist_sq + d * d
+            }
+            if dist_sq <= eps_sq {
+                neighbors[n_neighbors] = j
+                n_neighbors = n_neighbors + 1
+            }
+        }
+
+        if n_neighbors + 1 < min_samples {
+            labels[i] = -1
+            n_noise = n_noise + 1
+            free(neighbors as ptr<void>)
+            continue
+        }
+
+        labels[i] = cluster_id
+
+        let mut processed: i32 = 0
+        while processed < n_neighbors {
+            let j: i32 = neighbors[processed]
+            processed = processed + 1
+
+            if not visited[j] {
+                visited[j] = true
+
+                let j_neighbors: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+                let mut n_j_neighbors: i32 = 0
+
+                for k in 0 to n {
+                    if j == k {
+                        continue
+                    }
+                    let mut dist_sq: f32 = 0.0
+                    for f in 0 to X.cols {
+                        let d: f32 = matrix_at(X, j, f) - matrix_at(X, k, f)
+                        dist_sq = dist_sq + d * d
+                    }
+                    if dist_sq <= eps_sq {
+                        j_neighbors[n_j_neighbors] = k
+                        n_j_neighbors = n_j_neighbors + 1
+                    }
+                }
+
+                if n_j_neighbors + 1 >= min_samples {
+                    let new_neighbors: ptr<i32> = malloc(((n_neighbors + n_j_neighbors) as i64) * 4) as ptr<i32>
+                    for k in 0 to n_neighbors {
+                        new_neighbors[k] = neighbors[k]
+                    }
+                    for k in 0 to n_j_neighbors {
+                        new_neighbors[n_neighbors + k] = j_neighbors[k]
+                    }
+                    n_neighbors = n_neighbors + n_j_neighbors
+                    free(neighbors as ptr<void>)
+                    neighbors = new_neighbors
+                }
+
+                free(j_neighbors as ptr<void>)
+            }
+
+            if labels[j] == -1 {
+                labels[j] = cluster_id
+            }
+        }
+
+        free(neighbors as ptr<void>)
+        cluster_id = cluster_id + 1
+    }
+
+    free(visited as ptr<void>)
+
+    return DBSCAN {
+        labels: labels,
+        n_clusters: cluster_id,
+        n_noise: n_noise,
+        eps: eps,
+        min_samples: min_samples,
+        n_samples: n,
+        fitted: true
+    }
+}
+
+export function dbscan_free(model: DBSCAN) -> void {
+    free(model.labels as ptr<void>)
+}
+
+# ============================================================================
+# AgglomerativeClustering (bottom-up hierarchical, single linkage)
+# ============================================================================
+
+export struct AgglomerativeClustering {
+    labels: ptr<i32>,
+    n_clusters: i32,
+    n_samples: i32,
+    fitted: bool
+}
+
+export function agglomerative_clustering_fit(X: Matrix, n_clusters: i32) -> AgglomerativeClustering {
+    let n: i32 = X.rows
+
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        labels[i] = i
+    }
+
+    let mut active_clusters: i32 = n
+
+    let dist: ptr<f32> = malloc((n * n) as i64 * 4) as ptr<f32>
+    for i in 0 to n {
+        for j in 0 to n {
+            if i == j {
+                dist[i * n + j] = 0.0
+            } else {
+                let mut d: f32 = 0.0
+                for k in 0 to X.cols {
+                    let diff: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                    d = d + diff * diff
+                }
+                dist[i * n + j] = d
+            }
+        }
+    }
+
+    while active_clusters > n_clusters {
+        let mut min_dist: f32 = 1e30
+        let mut min_i: i32 = -1
+        let mut min_j: i32 = -1
+
+        for i in 0 to n {
+            if labels[i] != i {
+                continue
+            }
+            for j in i + 1 to n {
+                if labels[j] != j {
+                    continue
+                }
+                if dist[i * n + j] < min_dist {
+                    min_dist = dist[i * n + j]
+                    min_i = i
+                    min_j = j
+                }
+            }
+        }
+
+        if min_i < 0 {
+            break
+        }
+
+        for k in 0 to n {
+            if labels[k] == min_j {
+                labels[k] = min_i
+            }
+        }
+
+        for k in 0 to n {
+            if k == min_i {
+                continue
+            }
+            let d_ik: f32 = dist[min_i * n + k]
+            let d_jk: f32 = dist[min_j * n + k]
+            let new_dist: f32 = d_ik
+            if d_jk < new_dist {
+                new_dist = d_jk
+            }
+            dist[min_i * n + k] = new_dist
+            dist[k * n + min_i] = new_dist
+        }
+
+        active_clusters = active_clusters - 1
+    }
+
+    let unique_labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let mut n_unique: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_unique {
+            if unique_labels[k] == labels[i] {
+                found = true
+            }
+        }
+        if not found {
+            unique_labels[n_unique] = labels[i]
+            n_unique = n_unique + 1
+        }
+    }
+
+    let final_labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        for k in 0 to n_unique {
+            if labels[i] == unique_labels[k] {
+                final_labels[i] = k
+            }
+        }
+    }
+
+    free(dist as ptr<void>)
+    free(labels as ptr<void>)
+    free(unique_labels as ptr<void>)
+
+    return AgglomerativeClustering {
+        labels: final_labels,
+        n_clusters: n_unique,
+        n_samples: n,
+        fitted: true
+    }
+}
+
+export function agglomerative_clustering_free(model: AgglomerativeClustering) -> void {
+    free(model.labels as ptr<void>)
+}

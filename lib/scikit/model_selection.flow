@@ -1,0 +1,904 @@
+# Model selection module for flow-scikit.
+# Addresses Issue #28394: train_test_split takes X and y explicitly, auto-stratifies.
+# Addresses Issues #30852, #32946: GridSearchCV uses Progress effect system
+#   instead of confusing verbose integer levels.
+
+import "lib/scikit/matrix.flow"
+import "lib/scikit/metrics.flow"
+import "lib/scikit/progress.flow"
+import "lib/scikit/linear.flow"
+import "lib/scikit/validation.flow"
+
+extern {
+    function rand() -> i32
+    function srand(seed: i32) -> void
+}
+
+# ============================================================================
+# train_test_split (Issue #28394)
+# Takes X and y as explicit named parameters. Auto-stratifies for classification.
+# ============================================================================
+
+export const STRATIFY_NONE: i32 = 0
+export const STRATIFY_AUTO: i32 = 1
+export const STRATIFY_EXPLICIT: i32 = 2
+
+export struct TrainTestSplit {
+    X_train: Matrix,
+    X_test: Matrix,
+    y_train: ptr<f32>,
+    y_test: ptr<f32>,
+    n_train: i32,
+    n_test: i32
+}
+
+export function train_test_split(X: Matrix, y: ptr<f32>, test_size: f32, stratify_mode: i32) -> TrainTestSplit {
+    let n: i32 = X.rows
+    let n_test: i32 = ((n as f32) * test_size) as i32
+    let n_train: i32 = n - n_test
+
+    let indices: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        indices[i] = i
+    }
+
+    srand(42)
+    for i in 0 to n {
+        let j: i32 = rand() % n
+        let tmp: i32 = indices[i]
+        indices[i] = indices[j]
+        indices[j] = tmp
+    }
+
+    let should_stratify: bool = false
+    if stratify_mode == STRATIFY_AUTO {
+        let mut all_int: bool = true
+        for i in 0 to n {
+            let val: f32 = y[i]
+            if val != (val as i32) as f32 {
+                all_int = false
+            }
+            if val < 0.0 {
+                all_int = false
+            }
+        }
+        let mut n_unique: i32 = 0
+        let unique: ptr<f32> = array_new_f32(n)
+        for i in 0 to n {
+            let mut found: bool = false
+            for k in 0 to n_unique {
+                if unique[k] == y[i] {
+                    found = true
+                }
+            }
+            if not found {
+                unique[n_unique] = y[i]
+                n_unique = n_unique + 1
+            }
+        }
+        array_free_f32(unique)
+        if all_int && n_unique <= 20 && n_unique > 1 {
+            should_stratify = true
+        }
+    }
+
+    if should_stratify {
+        _stratified_shuffle(indices, y, n, n_test)
+    }
+
+    let X_train: Matrix = matrix_new(n_train, X.cols)
+    let X_test: Matrix = matrix_new(n_test, X.cols)
+    let y_train: ptr<f32> = array_new_f32(n_train)
+    let y_test: ptr<f32> = array_new_f32(n_test)
+
+    for i in 0 to n_train {
+        let idx: i32 = indices[i]
+        y_train[i] = y[idx]
+        for j in 0 to X.cols {
+            matrix_set(X_train, i, j, matrix_at(X, idx, j))
+        }
+    }
+
+    for i in 0 to n_test {
+        let idx: i32 = indices[n_train + i]
+        y_test[i] = y[idx]
+        for j in 0 to X.cols {
+            matrix_set(X_test, i, j, matrix_at(X, idx, j))
+        }
+    }
+
+    free(indices as ptr<void>)
+
+    return TrainTestSplit {
+        X_train: X_train,
+        X_test: X_test,
+        y_train: y_train,
+        y_test: y_test,
+        n_train: n_train,
+        n_test: n_test
+    }
+}
+
+function _stratified_shuffle(indices: ptr<i32>, y: ptr<f32>, n: i32, n_test: i32) -> void {
+    let unique: ptr<f32> = array_new_f32(n)
+    let mut n_classes: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_classes {
+            if unique[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            unique[n_classes] = y[i]
+            n_classes = n_classes + 1
+        }
+    }
+
+    let class_indices: ptr<ptr<i32>> = malloc((n_classes as i64) * 8) as ptr<ptr<i32>>
+    let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    for c in 0 to n_classes {
+        class_indices[c] = malloc((n as i64) * 4) as ptr<i32>
+        class_counts[c] = 0
+    }
+
+    for i in 0 to n {
+        for c in 0 to n_classes {
+            if y[i] == unique[c] {
+                class_indices[c][class_counts[c]] = i
+                class_counts[c] = class_counts[c] + 1
+            }
+        }
+    }
+
+    for c in 0 to n_classes {
+        for i in 0 to class_counts[c] {
+            let j: i32 = rand() % class_counts[c]
+            let tmp: i32 = class_indices[c][i]
+            class_indices[c][i] = class_indices[c][j]
+            class_indices[c][j] = tmp
+        }
+    }
+
+    let mut train_pos: i32 = 0
+    let mut test_pos: i32 = 0
+    let n_train: i32 = n - n_test
+
+    for c in 0 to n_classes {
+        let n_c: i32 = class_counts[c]
+        let n_test_c: i32 = ((n_c as f32) / (n as f32) * (n_test as f32)) as i32
+        let n_train_c: i32 = n_c - n_test_c
+
+        for i in 0 to n_train_c {
+            indices[train_pos] = class_indices[c][i]
+            train_pos = train_pos + 1
+        }
+        for i in 0 to n_test_c {
+            indices[n_train + test_pos] = class_indices[c][n_train_c + i]
+            test_pos = test_pos + 1
+        }
+    }
+
+    for c in 0 to n_classes {
+        free(class_indices[c] as ptr<void>)
+    }
+    free(class_indices as ptr<void>)
+    free(class_counts as ptr<void>)
+    array_free_f32(unique)
+}
+
+export function train_test_split_free(split: TrainTestSplit) -> void {
+    matrix_free(split.X_train)
+    matrix_free(split.X_test)
+    array_free_f32(split.y_train)
+    array_free_f32(split.y_test)
+}
+
+# ============================================================================
+# cross_validate
+# ============================================================================
+
+export struct CVResult {
+    scores: ptr<f32>,
+    n_folds: i32,
+    mean_score: f32,
+    std_score: f32
+}
+
+export function cross_validate_score(X: Matrix, y: ptr<f32>, n_classes: i32, n_folds: i32, epochs: i32, lr: f32) -> CVResult {
+    let n: i32 = X.rows
+    let fold_size: i32 = n / n_folds
+    let scores: ptr<f32> = array_new_f32(n_folds)
+
+    for fold in 0 to n_folds {
+        let test_start: i32 = fold * fold_size
+        let test_end: i32 = test_start + fold_size
+        if fold == n_folds - 1 {
+            test_end = n
+        }
+        let n_test: i32 = test_end - test_start
+        let n_train: i32 = n - n_test
+
+        let X_train: Matrix = matrix_new(n_train, X.cols)
+        let y_train: ptr<f32> = array_new_f32(n_train)
+        let mut train_pos: i32 = 0
+        for i in 0 to n {
+            if i < test_start || i >= test_end {
+                y_train[train_pos] = y[i]
+                for j in 0 to X.cols {
+                    matrix_set(X_train, train_pos, j, matrix_at(X, i, j))
+                }
+                train_pos = train_pos + 1
+            }
+        }
+
+        let X_test: Matrix = matrix_new(n_test, X.cols)
+        let y_test: ptr<f32> = array_new_f32(n_test)
+        for i in 0 to n_test {
+            y_test[i] = y[test_start + i]
+            for j in 0 to X.cols {
+                matrix_set(X_test, i, j, matrix_at(X, test_start + i, j))
+            }
+        }
+
+        let penalty: Penalty = penalty_l2(0.01)
+        let model: LogisticRegression = logistic_regression_fit(X_train, y_train, n_classes, epochs, lr, penalty)
+        let probs: ptr<f32> = logistic_predict(model, X_test)
+        let preds: ptr<f32> = logistic_decide(model, probs, n_test, 0.5)
+
+        scores[fold] = accuracy_score(y_test, preds, n_test)
+
+        array_free_f32(probs)
+        array_free_f32(preds)
+        logistic_regression_free(model)
+        matrix_free(X_train)
+        matrix_free(X_test)
+        array_free_f32(y_train)
+        array_free_f32(y_test)
+    }
+
+    let mean: f32 = array_mean(scores, n_folds)
+    let std: f32 = array_std(scores, n_folds, mean)
+
+    return CVResult { scores: scores, n_folds: n_folds, mean_score: mean, std_score: std }
+}
+
+export function cv_result_free(result: CVResult) -> void {
+    array_free_f32(result.scores)
+}
+
+# ============================================================================
+# GridSearchCV (Issues #30852, #32946)
+# Uses Progress effect system instead of confusing verbose integer levels.
+# ============================================================================
+
+export struct ParamGrid {
+    C_values: ptr<f32>,
+    n_C: i32,
+    lr_values: ptr<f32>,
+    n_lr: i32
+}
+
+export struct GridSearchResult {
+    best_C: f32,
+    best_lr: f32,
+    best_score: f32,
+    all_scores: ptr<f32>,
+    all_C: ptr<f32>,
+    all_lr: ptr<f32>,
+    n_candidates: i32
+}
+
+export function grid_search_logistic(X: Matrix, y: ptr<f32>, n_classes: i32, grid: ParamGrid, n_folds: i32, epochs: i32) -> GridSearchResult {
+    let n_candidates: i32 = grid.n_C * grid.n_lr
+    let all_scores: ptr<f32> = array_new_f32(n_candidates)
+    let all_C: ptr<f32> = array_new_f32(n_candidates)
+    let all_lr: ptr<f32> = array_new_f32(n_candidates)
+
+    let mut candidate_idx: i32 = 0
+    let mut best_score: f32 = 0.0
+    let mut best_C: f32 = grid.C_values[0]
+    let mut best_lr: f32 = grid.lr_values[0]
+
+    for ci in 0 to grid.n_C {
+        for li in 0 to grid.n_lr {
+            let C: f32 = grid.C_values[ci]
+            let lr: f32 = grid.lr_values[li]
+
+            Progress.on_fit_start(candidate_idx, n_candidates, "C=, lr=")
+
+            let penalty: Penalty = penalty_l2(C)
+            let cv: CVResult = _cv_logistic_single(X, y, n_classes, n_folds, epochs, lr, penalty)
+
+            all_scores[candidate_idx] = cv.mean_score
+            all_C[candidate_idx] = C
+            all_lr[candidate_idx] = lr
+
+            Progress.on_fit_end(candidate_idx, n_candidates, cv.mean_score)
+
+            if cv.mean_score > best_score {
+                best_score = cv.mean_score
+                best_C = C
+                best_lr = lr
+            }
+
+            cv_result_free(cv)
+            candidate_idx = candidate_idx + 1
+        }
+    }
+
+    Progress.on_complete("Best score achieved")
+
+    return GridSearchResult {
+        best_C: best_C,
+        best_lr: best_lr,
+        best_score: best_score,
+        all_scores: all_scores,
+        all_C: all_C,
+        all_lr: all_lr,
+        n_candidates: n_candidates
+    }
+}
+
+function _cv_logistic_single(X: Matrix, y: ptr<f32>, n_classes: i32, n_folds: i32, epochs: i32, lr: f32, penalty: Penalty) -> CVResult {
+    let n: i32 = X.rows
+    let fold_size: i32 = n / n_folds
+    let scores: ptr<f32> = array_new_f32(n_folds)
+
+    for fold in 0 to n_folds {
+        let test_start: i32 = fold * fold_size
+        let test_end: i32 = test_start + fold_size
+        if fold == n_folds - 1 {
+            test_end = n
+        }
+        let n_test: i32 = test_end - test_start
+        let n_train: i32 = n - n_test
+
+        let X_train: Matrix = matrix_new(n_train, X.cols)
+        let y_train: ptr<f32> = array_new_f32(n_train)
+        let mut train_pos: i32 = 0
+        for i in 0 to n {
+            if i < test_start || i >= test_end {
+                y_train[train_pos] = y[i]
+                for j in 0 to X.cols {
+                    matrix_set(X_train, train_pos, j, matrix_at(X, i, j))
+                }
+                train_pos = train_pos + 1
+            }
+        }
+
+        let X_test: Matrix = matrix_new(n_test, X.cols)
+        let y_test: ptr<f32> = array_new_f32(n_test)
+        for i in 0 to n_test {
+            y_test[i] = y[test_start + i]
+            for j in 0 to X.cols {
+                matrix_set(X_test, i, j, matrix_at(X, test_start + i, j))
+            }
+        }
+
+        let model: LogisticRegression = logistic_regression_fit(X_train, y_train, n_classes, epochs, lr, penalty)
+        let probs: ptr<f32> = logistic_predict(model, X_test)
+        let preds: ptr<f32> = logistic_decide(model, probs, n_test, 0.5)
+
+        scores[fold] = accuracy_score(y_test, preds, n_test)
+
+        array_free_f32(probs)
+        array_free_f32(preds)
+        logistic_regression_free(model)
+        matrix_free(X_train)
+        matrix_free(X_test)
+        array_free_f32(y_train)
+        array_free_f32(y_test)
+    }
+
+    let mean: f32 = array_mean(scores, n_folds)
+    let std: f32 = array_std(scores, n_folds, mean)
+
+    return CVResult { scores: scores, n_folds: n_folds, mean_score: mean, std_score: std }
+}
+
+export function print_grid_search_result(result: GridSearchResult) -> void {
+    println("")
+    println("Grid Search Results")
+    println("===================")
+    for i in 0 to result.n_candidates {
+        print("  Candidate ")
+        print(i + 1)
+        print(": C=")
+        printf("%.4f", result.all_C[i])
+        print("  lr=")
+        printf("%.4f", result.all_lr[i])
+        print("  score=")
+        printf("%.4f", result.all_scores[i])
+        println("")
+    }
+    println("")
+    print("  Best: C=")
+    printf("%.4f", result.best_C)
+    print("  lr=")
+    printf("%.4f", result.best_lr)
+    print("  score=")
+    printf("%.4f", result.best_score)
+    println("")
+}
+
+export function grid_search_result_free(result: GridSearchResult) -> void {
+    array_free_f32(result.all_scores)
+    array_free_f32(result.all_C)
+    array_free_f32(result.all_lr)
+}
+
+# ============================================================================
+# RandomizedSearchCV (Issues #30852, #32946)
+# Samples n_iter random parameter combinations from the grid.
+# Uses Progress effect system for reporting.
+# ============================================================================
+
+export struct RandomizedSearchResult {
+    best_C: f32,
+    best_lr: f32,
+    best_score: f32,
+    all_scores: ptr<f32>,
+    all_C: ptr<f32>,
+    all_lr: ptr<f32>,
+    n_candidates: i32
+}
+
+export function randomized_search_logistic(X: Matrix, y: ptr<f32>, n_classes: i32, grid: ParamGrid, n_folds: i32, epochs: i32, n_iter: i32, seed: i32) -> RandomizedSearchResult {
+    let all_scores: ptr<f32> = array_new_f32(n_iter)
+    let all_C: ptr<f32> = array_new_f32(n_iter)
+    let all_lr: ptr<f32> = array_new_f32(n_iter)
+
+    let mut best_score: f32 = 0.0
+    let mut best_C: f32 = grid.C_values[0]
+    let mut best_lr: f32 = grid.lr_values[0]
+
+    srand(seed)
+
+    for iter in 0 to n_iter {
+        let ci: i32 = rand() % grid.n_C
+        let li: i32 = rand() % grid.n_lr
+        let C: f32 = grid.C_values[ci]
+        let lr: f32 = grid.lr_values[li]
+
+        Progress.on_fit_start(iter, n_iter, "C=, lr=")
+
+        let penalty: Penalty = penalty_l2(C)
+        let cv: CVResult = _cv_logistic_single(X, y, n_classes, n_folds, epochs, lr, penalty)
+
+        all_scores[iter] = cv.mean_score
+        all_C[iter] = C
+        all_lr[iter] = lr
+
+        Progress.on_fit_end(iter, n_iter, cv.mean_score)
+
+        if cv.mean_score > best_score {
+            best_score = cv.mean_score
+            best_C = C
+            best_lr = lr
+        }
+
+        cv_result_free(cv)
+    }
+
+    Progress.on_complete("Randomized search complete")
+
+    return RandomizedSearchResult {
+        best_C: best_C,
+        best_lr: best_lr,
+        best_score: best_score,
+        all_scores: all_scores,
+        all_C: all_C,
+        all_lr: all_lr,
+        n_candidates: n_iter
+    }
+}
+
+export function randomized_search_result_free(result: RandomizedSearchResult) -> void {
+    array_free_f32(result.all_scores)
+    array_free_f32(result.all_C)
+    array_free_f32(result.all_lr)
+}
+
+# ============================================================================
+# KFold
+# ============================================================================
+
+export struct KFold {
+    n_splits: i32,
+    shuffle: bool,
+    seed: i32
+}
+
+export struct FoldIndices {
+    train_indices: ptr<i32>,
+    n_train: i32,
+    test_indices: ptr<i32>,
+    n_test: i32
+}
+
+export function kfold_init(n_splits: i32, shuffle: bool, seed: i32) -> KFold {
+    return KFold { n_splits: n_splits, shuffle: shuffle, seed: seed }
+}
+
+export function kfold_get_fold(kf: KFold, n_samples: i32, fold: i32) -> FoldIndices {
+    let fold_size: i32 = n_samples / kf.n_splits
+    let test_start: i32 = fold * fold_size
+    let test_end: i32 = test_start + fold_size
+    if fold == kf.n_splits - 1 {
+        test_end = n_samples
+    }
+    let n_test: i32 = test_end - test_start
+    let n_train: i32 = n_samples - n_test
+
+    let indices: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+    for i in 0 to n_samples {
+        indices[i] = i
+    }
+
+    if kf.shuffle {
+        srand(kf.seed + fold)
+        for i in 0 to n_samples {
+            let j: i32 = rand() % n_samples
+            let tmp: i32 = indices[i]
+            indices[i] = indices[j]
+            indices[j] = tmp
+        }
+    }
+
+    let train_indices: ptr<i32> = malloc((n_train as i64) * 4) as ptr<i32>
+    let test_indices: ptr<i32> = malloc((n_test as i64) * 4) as ptr<i32>
+    let mut train_pos: i32 = 0
+    let mut test_pos: i32 = 0
+
+    for i in 0 to n_samples {
+        if i >= test_start && i < test_end {
+            test_indices[test_pos] = indices[i]
+            test_pos = test_pos + 1
+        } else {
+            train_indices[train_pos] = indices[i]
+            train_pos = train_pos + 1
+        }
+    }
+
+    free(indices as ptr<void>)
+
+    return FoldIndices {
+        train_indices: train_indices,
+        n_train: n_train,
+        test_indices: test_indices,
+        n_test: n_test
+    }
+}
+
+export function fold_indices_free(fold: FoldIndices) -> void {
+    free(fold.train_indices as ptr<void>)
+    free(fold.test_indices as ptr<void>)
+}
+
+# ============================================================================
+# StratifiedKFold
+# ============================================================================
+
+export struct StratifiedKFold {
+    n_splits: i32,
+    shuffle: bool,
+    seed: i32
+}
+
+export function stratified_kfold_init(n_splits: i32, shuffle: bool, seed: i32) -> StratifiedKFold {
+    return StratifiedKFold { n_splits: n_splits, shuffle: shuffle, seed: seed }
+}
+
+export function stratified_kfold_get_fold(skf: StratifiedKFold, y: ptr<f32>, n_samples: i32, fold: i32) -> FoldIndices {
+    let unique: ptr<f32> = array_new_f32(n_samples)
+    let mut n_classes: i32 = 0
+    for i in 0 to n_samples {
+        let mut found: bool = false
+        for k in 0 to n_classes {
+            if unique[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            unique[n_classes] = y[i]
+            n_classes = n_classes + 1
+        }
+    }
+
+    let class_indices: ptr<ptr<i32>> = malloc((n_classes as i64) * 8) as ptr<ptr<i32>>
+    let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    for c in 0 to n_classes {
+        class_indices[c] = malloc((n_samples as i64) * 4) as ptr<i32>
+        class_counts[c] = 0
+    }
+
+    for i in 0 to n_samples {
+        for c in 0 to n_classes {
+            if y[i] == unique[c] {
+                class_indices[c][class_counts[c]] = i
+                class_counts[c] = class_counts[c] + 1
+            }
+        }
+    }
+
+    if skf.shuffle {
+        srand(skf.seed + fold)
+        for c in 0 to n_classes {
+            for i in 0 to class_counts[c] {
+                let j: i32 = rand() % class_counts[c]
+                let tmp: i32 = class_indices[c][i]
+                class_indices[c][i] = class_indices[c][j]
+                class_indices[c][j] = tmp
+            }
+        }
+    }
+
+    let n_test: i32 = 0
+    let n_train: i32 = 0
+    for c in 0 to n_classes {
+        let n_c: i32 = class_counts[c]
+        let n_test_c: i32 = n_c / skf.n_splits
+        n_test = n_test + n_test_c
+        n_train = n_train + (n_c - n_test_c)
+    }
+
+    let train_indices: ptr<i32> = malloc((n_train as i64) * 4) as ptr<i32>
+    let test_indices: ptr<i32> = malloc((n_test as i64) * 4) as ptr<i32>
+    let mut train_pos: i32 = 0
+    let mut test_pos: i32 = 0
+
+    for c in 0 to n_classes {
+        let n_c: i32 = class_counts[c]
+        let n_test_c: i32 = n_c / skf.n_splits
+        let test_start: i32 = fold * n_test_c
+        if fold == skf.n_splits - 1 {
+            n_test_c = n_c - test_start
+        }
+
+        for i in 0 to test_start {
+            train_indices[train_pos] = class_indices[c][i]
+            train_pos = train_pos + 1
+        }
+        for i in 0 to n_test_c {
+            test_indices[test_pos] = class_indices[c][test_start + i]
+            test_pos = test_pos + 1
+        }
+        for i in test_start + n_test_c to n_c {
+            train_indices[train_pos] = class_indices[c][i]
+            train_pos = train_pos + 1
+        }
+    }
+
+    for c in 0 to n_classes {
+        free(class_indices[c] as ptr<void>)
+    }
+    free(class_indices as ptr<void>)
+    free(class_counts as ptr<void>)
+    array_free_f32(unique)
+
+    return FoldIndices {
+        train_indices: train_indices,
+        n_train: n_train,
+        test_indices: test_indices,
+        n_test: n_test
+    }
+}
+
+# ============================================================================
+# Learning curve
+# ============================================================================
+
+export struct LearningCurveResult {
+    train_sizes: ptr<i32>,
+    train_scores: ptr<f32>,
+    test_scores: ptr<f32>,
+    n_points: i32
+}
+
+export function learning_curve(X: Matrix, y: ptr<f32>, n_classes: i32, train_sizes: ptr<i32>, n_sizes: i32, epochs: i32, lr: f32) -> LearningCurveResult {
+    let train_scores: ptr<f32> = array_new_f32(n_sizes)
+    let test_scores: ptr<f32> = array_new_f32(n_sizes)
+
+    let n: i32 = X.rows
+    let n_test: i32 = n / 5
+
+    for s in 0 to n_sizes {
+        let n_train: i32 = train_sizes[s]
+        if n_train > n - n_test {
+            n_train = n - n_test
+        }
+
+        let X_train: Matrix = matrix_new(n_train, X.cols)
+        let y_train: ptr<f32> = array_new_f32(n_train)
+        let X_test: Matrix = matrix_new(n_test, X.cols)
+        let y_test: ptr<f32> = array_new_f32(n_test)
+
+        for i in 0 to n_train {
+            y_train[i] = y[i]
+            for j in 0 to X.cols {
+                matrix_set(X_train, i, j, matrix_at(X, i, j))
+            }
+        }
+        for i in 0 to n_test {
+            y_test[i] = y[n_train + i]
+            for j in 0 to X.cols {
+                matrix_set(X_test, i, j, matrix_at(X, n_train + i, j))
+            }
+        }
+
+        let penalty: Penalty = penalty_l2(0.01)
+        let model: LogisticRegression = logistic_regression_fit(X_train, y_train, n_classes, epochs, lr, penalty)
+
+        let train_probs: ptr<f32> = logistic_predict(model, X_train)
+        let train_preds: ptr<f32> = logistic_decide(model, train_probs, n_train, 0.5)
+        train_scores[s] = accuracy_score(y_train, train_preds, n_train)
+
+        let test_probs: ptr<f32> = logistic_predict(model, X_test)
+        let test_preds: ptr<f32> = logistic_decide(model, test_probs, n_test, 0.5)
+        test_scores[s] = accuracy_score(y_test, test_preds, n_test)
+
+        array_free_f32(train_probs)
+        array_free_f32(train_preds)
+        array_free_f32(test_probs)
+        array_free_f32(test_preds)
+        logistic_regression_free(model)
+        matrix_free(X_train)
+        matrix_free(X_test)
+        array_free_f32(y_train)
+        array_free_f32(y_test)
+    }
+
+    return LearningCurveResult {
+        train_sizes: train_sizes,
+        train_scores: train_scores,
+        test_scores: test_scores,
+        n_points: n_sizes
+    }
+}
+
+export function print_learning_curve(result: LearningCurveResult) -> void {
+    println("")
+    println("Learning Curve")
+    println("===============")
+    println("  train_size  train_score  test_score")
+    for i in 0 to result.n_points {
+        print("  ")
+        print(result.train_sizes[i])
+        print("          ")
+        printf("%.4f", result.train_scores[i])
+        print("      ")
+        printf("%.4f", result.test_scores[i])
+        println("")
+    }
+}
+
+export function learning_curve_free(result: LearningCurveResult) -> void {
+    array_free_f32(result.train_scores)
+    array_free_f32(result.test_scores)
+}
+
+# ============================================================================
+# Validation curve
+# ============================================================================
+
+export struct ValidationCurveResult {
+    param_values: ptr<f32>,
+    train_scores: ptr<f32>,
+    test_scores: ptr<f32>,
+    n_points: i32
+}
+
+export function validation_curve(X: Matrix, y: ptr<f32>, n_classes: i32, param_values: ptr<f32>, n_points: i32, epochs: i32, lr: f32) -> ValidationCurveResult {
+    let train_scores: ptr<f32> = array_new_f32(n_points)
+    let test_scores: ptr<f32> = array_new_f32(n_points)
+
+    let n: i32 = X.rows
+    let n_test: i32 = n / 5
+    let n_train: i32 = n - n_test
+
+    let X_train: Matrix = matrix_new(n_train, X.cols)
+    let y_train: ptr<f32> = array_new_f32(n_train)
+    let X_test: Matrix = matrix_new(n_test, X.cols)
+    let y_test: ptr<f32> = array_new_f32(n_test)
+
+    for i in 0 to n_train {
+        y_train[i] = y[i]
+        for j in 0 to X.cols {
+            matrix_set(X_train, i, j, matrix_at(X, i, j))
+        }
+    }
+    for i in 0 to n_test {
+        y_test[i] = y[n_train + i]
+        for j in 0 to X.cols {
+            matrix_set(X_test, i, j, matrix_at(X, n_train + i, j))
+        }
+    }
+
+    for p in 0 to n_points {
+        let alpha: f32 = param_values[p]
+        let penalty: Penalty = penalty_l2(alpha)
+        let model: LogisticRegression = logistic_regression_fit(X_train, y_train, n_classes, epochs, lr, penalty)
+
+        let train_probs: ptr<f32> = logistic_predict(model, X_train)
+        let train_preds: ptr<f32> = logistic_decide(model, train_probs, n_train, 0.5)
+        train_scores[p] = accuracy_score(y_train, train_preds, n_train)
+
+        let test_probs: ptr<f32> = logistic_predict(model, X_test)
+        let test_preds: ptr<f32> = logistic_decide(model, test_probs, n_test, 0.5)
+        test_scores[p] = accuracy_score(y_test, test_preds, n_test)
+
+        array_free_f32(train_probs)
+        array_free_f32(train_preds)
+        array_free_f32(test_probs)
+        array_free_f32(test_preds)
+        logistic_regression_free(model)
+    }
+
+    matrix_free(X_train)
+    matrix_free(X_test)
+    array_free_f32(y_train)
+    array_free_f32(y_test)
+
+    return ValidationCurveResult {
+        param_values: param_values,
+        train_scores: train_scores,
+        test_scores: test_scores,
+        n_points: n_points
+    }
+}
+
+export function validation_curve_free(result: ValidationCurveResult) -> void {
+    array_free_f32(result.train_scores)
+    array_free_f32(result.test_scores)
+}
+
+# ============================================================================
+# ShuffleSplit
+# ============================================================================
+
+export struct ShuffleSplit {
+    n_splits: i32,
+    test_size: f32,
+    seed: i32
+}
+
+export function shuffle_split_init(n_splits: i32, test_size: f32, seed: i32) -> ShuffleSplit {
+    return ShuffleSplit { n_splits: n_splits, test_size: test_size, seed: seed }
+}
+
+export function shuffle_split_get_split(ss: ShuffleSplit, n_samples: i32, split: i32) -> FoldIndices {
+    let n_test: i32 = ((n_samples as f32) * ss.test_size) as i32
+    let n_train: i32 = n_samples - n_test
+
+    let indices: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+    for i in 0 to n_samples {
+        indices[i] = i
+    }
+
+    srand(ss.seed + split)
+    for i in 0 to n_samples {
+        let j: i32 = rand() % n_samples
+        let tmp: i32 = indices[i]
+        indices[i] = indices[j]
+        indices[j] = tmp
+    }
+
+    let train_indices: ptr<i32> = malloc((n_train as i64) * 4) as ptr<i32>
+    let test_indices: ptr<i32> = malloc((n_test as i64) * 4) as ptr<i32>
+    for i in 0 to n_train {
+        train_indices[i] = indices[i]
+    }
+    for i in 0 to n_test {
+        test_indices[i] = indices[n_train + i]
+    }
+
+    free(indices as ptr<void>)
+
+    return FoldIndices {
+        train_indices: train_indices,
+        n_train: n_train,
+        test_indices: test_indices,
+        n_test: n_test
+    }
+}

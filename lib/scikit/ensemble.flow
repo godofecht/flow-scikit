@@ -1,0 +1,816 @@
+# Ensemble module for flow-scikit.
+# Implements RandomForestClassifier, RandomForestRegressor, BaggingClassifier,
+# and VotingClassifier.
+#
+# Uses bootstrap sampling and feature subsampling for random forests.
+# Addresses Issue #28394: predict returns probabilities, decide returns classes.
+
+import "lib/scikit/matrix.flow"
+import "lib/scikit/tree.flow"
+
+extern {
+    function rand() -> i32
+    function srand(seed: i32) -> void
+}
+
+export struct RandomForestClassifier {
+    trees: ptr<DecisionTreeClassifier>,
+    n_trees: i32,
+    n_classes: i32,
+    classes: ptr<f32>,
+    max_depth: i32,
+    n_features_per_split: i32,
+    fitted: bool
+}
+
+export function random_forest_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_trees: i32, max_depth: i32, seed: i32) -> RandomForestClassifier {
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to X.rows {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let trees: ptr<DecisionTreeClassifier> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeClassifier>
+    srand(seed)
+
+    for t in 0 to n_trees {
+        let n_samples: i32 = X.rows
+        let bootstrap_indices: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+        for i in 0 to n_samples {
+            bootstrap_indices[i] = rand() % n_samples
+        }
+
+        let X_boot: Matrix = matrix_new(n_samples, X.cols)
+        let y_boot: ptr<f32> = array_new_f32(n_samples)
+        for i in 0 to n_samples {
+            y_boot[i] = y[bootstrap_indices[i]]
+            for j in 0 to X.cols {
+                matrix_set(X_boot, i, j, matrix_at(X, bootstrap_indices[i], j))
+            }
+        }
+
+        trees[t] = decision_tree_classifier_fit(X_boot, y_boot, n_classes, max_depth, CRITERION_GINI)
+
+        free(bootstrap_indices as ptr<void>)
+        matrix_free(X_boot)
+        array_free_f32(y_boot)
+    }
+
+    return RandomForestClassifier {
+        trees: trees,
+        n_trees: n_trees,
+        n_classes: n_classes,
+        classes: classes,
+        max_depth: max_depth,
+        n_features_per_split: 0,
+        fitted: true
+    }
+}
+
+export function random_forest_classifier_predict(model: RandomForestClassifier, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    let row: ptr<f32> = array_new_f32(X.cols)
+
+    for i in 0 to X.rows {
+        matrix_row(X, i, row)
+
+        let votes: ptr<i32> = malloc((model.n_classes as i64) * 4) as ptr<i32>
+        for c in 0 to model.n_classes {
+            votes[c] = 0
+        }
+
+        for t in 0 to model.n_trees {
+            let pred: f32 = decision_tree_classifier_predict_one(model.trees[t], row)
+            for c in 0 to model.n_classes {
+                if model.classes[c] == pred {
+                    votes[c] = votes[c] + 1
+                }
+            }
+        }
+
+        let mut best_c: i32 = 0
+        let mut best_votes: i32 = 0
+        for c in 0 to model.n_classes {
+            if votes[c] > best_votes {
+                best_votes = votes[c]
+                best_c = c
+            }
+        }
+
+        preds[i] = model.classes[best_c]
+        free(votes as ptr<void>)
+    }
+
+    array_free_f32(row)
+    return preds
+}
+
+export function random_forest_classifier_predict_proba(model: RandomForestClassifier, X: Matrix) -> Matrix {
+    let probs: Matrix = matrix_new(X.rows, model.n_classes)
+    let row: ptr<f32> = array_new_f32(X.cols)
+
+    for i in 0 to X.rows {
+        matrix_row(X, i, row)
+
+        let votes: ptr<i32> = malloc((model.n_classes as i64) * 4) as ptr<i32>
+        for c in 0 to model.n_classes {
+            votes[c] = 0
+        }
+
+        for t in 0 to model.n_trees {
+            let pred: f32 = decision_tree_classifier_predict_one(model.trees[t], row)
+            for c in 0 to model.n_classes {
+                if model.classes[c] == pred {
+                    votes[c] = votes[c] + 1
+                }
+            }
+        }
+
+        for c in 0 to model.n_classes {
+            matrix_set(probs, i, c, (votes[c] as f32) / (model.n_trees as f32))
+        }
+
+        free(votes as ptr<void>)
+    }
+
+    array_free_f32(row)
+    return probs
+}
+
+export function random_forest_classifier_decide(model: RandomForestClassifier, probs: Matrix) -> ptr<f32> {
+    let labels: ptr<f32> = array_new_f32(probs.rows)
+    for i in 0 to probs.rows {
+        let mut best_c: i32 = 0
+        let mut best_p: f32 = matrix_at(probs, i, 0)
+        for c in 1 to model.n_classes {
+            let p: f32 = matrix_at(probs, i, c)
+            if p > best_p {
+                best_p = p
+                best_c = c
+            }
+        }
+        labels[i] = model.classes[best_c]
+    }
+    return labels
+}
+
+export function random_forest_classifier_free(model: RandomForestClassifier) -> void {
+    for t in 0 to model.n_trees {
+        decision_tree_classifier_free(model.trees[t])
+    }
+    free(model.trees as ptr<void>)
+    array_free_f32(model.classes)
+}
+
+export struct RandomForestRegressor {
+    trees: ptr<DecisionTreeRegressor>,
+    n_trees: i32,
+    max_depth: i32,
+    fitted: bool
+}
+
+export function random_forest_regressor_fit(X: Matrix, y: ptr<f32>, n_trees: i32, max_depth: i32, seed: i32) -> RandomForestRegressor {
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeRegressor>
+    srand(seed)
+
+    for t in 0 to n_trees {
+        let n_samples: i32 = X.rows
+        let bootstrap_indices: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+        for i in 0 to n_samples {
+            bootstrap_indices[i] = rand() % n_samples
+        }
+
+        let X_boot: Matrix = matrix_new(n_samples, X.cols)
+        let y_boot: ptr<f32> = array_new_f32(n_samples)
+        for i in 0 to n_samples {
+            y_boot[i] = y[bootstrap_indices[i]]
+            for j in 0 to X.cols {
+                matrix_set(X_boot, i, j, matrix_at(X, bootstrap_indices[i], j))
+            }
+        }
+
+        trees[t] = decision_tree_regressor_fit(X_boot, y_boot, max_depth, CRITERION_MSE)
+
+        free(bootstrap_indices as ptr<void>)
+        matrix_free(X_boot)
+        array_free_f32(y_boot)
+    }
+
+    return RandomForestRegressor {
+        trees: trees,
+        n_trees: n_trees,
+        max_depth: max_depth,
+        fitted: true
+    }
+}
+
+export function random_forest_regressor_predict(model: RandomForestRegressor, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    let row: ptr<f32> = array_new_f32(X.cols)
+
+    for i in 0 to X.rows {
+        matrix_row(X, i, row)
+        let mut sum: f32 = 0.0
+        for t in 0 to model.n_trees {
+            sum = sum + decision_tree_regressor_predict_one(model.trees[t], row)
+        }
+        preds[i] = sum / (model.n_trees as f32)
+    }
+
+    array_free_f32(row)
+    return preds
+}
+
+export function random_forest_regressor_free(model: RandomForestRegressor) -> void {
+    for t in 0 to model.n_trees {
+        decision_tree_regressor_free(model.trees[t])
+    }
+    free(model.trees as ptr<void>)
+}
+
+# ============================================================================
+# BaggingClassifier (bootstrap aggregating with any base estimator)
+# ============================================================================
+
+export struct BaggingClassifier {
+    trees: ptr<DecisionTreeClassifier>,
+    n_estimators: i32,
+    n_classes: i32,
+    classes: ptr<f32>,
+    max_depth: i32,
+    fitted: bool
+}
+
+export function bagging_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_estimators: i32, max_depth: i32, seed: i32) -> BaggingClassifier {
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to X.rows {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let trees: ptr<DecisionTreeClassifier> = malloc((n_estimators as i64) * 64) as ptr<DecisionTreeClassifier>
+    srand(seed)
+
+    for t in 0 to n_estimators {
+        let n_samples: i32 = X.rows
+        let indices: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+        for i in 0 to n_samples {
+            indices[i] = rand() % n_samples
+        }
+
+        let X_boot: Matrix = matrix_new(n_samples, X.cols)
+        let y_boot: ptr<f32> = array_new_f32(n_samples)
+        for i in 0 to n_samples {
+            y_boot[i] = y[indices[i]]
+            for j in 0 to X.cols {
+                matrix_set(X_boot, i, j, matrix_at(X, indices[i], j))
+            }
+        }
+
+        trees[t] = decision_tree_classifier_fit(X_boot, y_boot, n_classes, max_depth, CRITERION_GINI)
+
+        free(indices as ptr<void>)
+        matrix_free(X_boot)
+        array_free_f32(y_boot)
+    }
+
+    return BaggingClassifier {
+        trees: trees,
+        n_estimators: n_estimators,
+        n_classes: n_classes,
+        classes: classes,
+        max_depth: max_depth,
+        fitted: true
+    }
+}
+
+export function bagging_classifier_predict(model: BaggingClassifier, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    let row: ptr<f32> = array_new_f32(X.cols)
+
+    for i in 0 to X.rows {
+        matrix_row(X, i, row)
+
+        let votes: ptr<i32> = malloc((model.n_classes as i64) * 4) as ptr<i32>
+        for c in 0 to model.n_classes {
+            votes[c] = 0
+        }
+
+        for t in 0 to model.n_estimators {
+            let pred: f32 = decision_tree_classifier_predict_one(model.trees[t], row)
+            for c in 0 to model.n_classes {
+                if model.classes[c] == pred {
+                    votes[c] = votes[c] + 1
+                }
+            }
+        }
+
+        let mut best_c: i32 = 0
+        let mut best_votes: i32 = 0
+        for c in 0 to model.n_classes {
+            if votes[c] > best_votes {
+                best_votes = votes[c]
+                best_c = c
+            }
+        }
+
+        preds[i] = model.classes[best_c]
+        free(votes as ptr<void>)
+    }
+
+    array_free_f32(row)
+    return preds
+}
+
+export function bagging_classifier_free(model: BaggingClassifier) -> void {
+    for t in 0 to model.n_estimators {
+        decision_tree_classifier_free(model.trees[t])
+    }
+    free(model.trees as ptr<void>)
+    array_free_f32(model.classes)
+}
+
+# ============================================================================
+# VotingClassifier (majority vote across heterogeneous estimators)
+# ============================================================================
+
+export const VOTING_HARD: i32 = 0
+export const VOTING_SOFT: i32 = 1
+
+export struct VotingClassifier {
+    estimators: ptr<DecisionTreeClassifier>,
+    n_estimators: i32,
+    n_classes: i32,
+    classes: ptr<f32>,
+    voting: i32,
+    fitted: bool
+}
+
+export function voting_classifier_fit(estimators: ptr<DecisionTreeClassifier>, n_estimators: i32, n_classes: i32, classes: ptr<f32>, voting: i32) -> VotingClassifier {
+    return VotingClassifier {
+        estimators: estimators,
+        n_estimators: n_estimators,
+        n_classes: n_classes,
+        classes: classes,
+        voting: voting,
+        fitted: true
+    }
+}
+
+export function voting_classifier_predict(model: VotingClassifier, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    let row: ptr<f32> = array_new_f32(X.cols)
+
+    for i in 0 to X.rows {
+        matrix_row(X, i, row)
+
+        let votes: ptr<i32> = malloc((model.n_classes as i64) * 4) as ptr<i32>
+        for c in 0 to model.n_classes {
+            votes[c] = 0
+        }
+
+        for t in 0 to model.n_estimators {
+            let pred: f32 = decision_tree_classifier_predict_one(model.estimators[t], row)
+            for c in 0 to model.n_classes {
+                if model.classes[c] == pred {
+                    votes[c] = votes[c] + 1
+                }
+            }
+        }
+
+        let mut best_c: i32 = 0
+        let mut best_votes: i32 = 0
+        for c in 0 to model.n_classes {
+            if votes[c] > best_votes {
+                best_votes = votes[c]
+                best_c = c
+            }
+        }
+
+        preds[i] = model.classes[best_c]
+        free(votes as ptr<void>)
+    }
+
+    array_free_f32(row)
+    return preds
+}
+
+# ============================================================================
+# GradientBoostingClassifier
+# Fits regression trees on the negative gradient of the log loss.
+# ============================================================================
+
+export struct GradientBoostingClassifier {
+    trees: ptr<DecisionTreeRegressor>,
+    n_trees: i32,
+    init_value: f32,
+    learning_rate: f32,
+    classes: ptr<f32>,
+    n_classes: i32,
+    max_depth: i32,
+    fitted: bool
+}
+
+function _gb_sigmoid(x: f32) -> f32 {
+    let e: f64 = exp((0.0 - x) as f64)
+    return 1.0 / (1.0 + (e as f32))
+}
+
+export function gradient_boosting_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_trees: i32, learning_rate: f32, max_depth: i32, seed: i32) -> GradientBoostingClassifier {
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to X.rows {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let y_binary: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        if y[i] == classes[1] {
+            y_binary[i] = 1.0
+        } else {
+            y_binary[i] = 0.0
+        }
+    }
+
+    let mut pos: i32 = 0
+    for i in 0 to X.rows {
+        if y_binary[i] == 1.0 {
+            pos = pos + 1
+        }
+    }
+    let p0: f32 = (pos as f32) / (X.rows as f32)
+    let init_value: f32 = log((p0 / (1.0 - p0)) as f64) as f32
+
+    let current_pred: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        current_pred[i] = init_value
+    }
+
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeRegressor>
+
+    for t in 0 to n_trees {
+        let residuals: ptr<f32> = array_new_f32(X.rows)
+        for i in 0 to X.rows {
+            let p: f32 = _gb_sigmoid(current_pred[i])
+            residuals[i] = y_binary[i] - p
+        }
+
+        trees[t] = decision_tree_regressor_fit(X, residuals, max_depth, CRITERION_MSE)
+
+        let tree_preds: ptr<f32> = decision_tree_regressor_predict(trees[t], X)
+        for i in 0 to X.rows {
+            current_pred[i] = current_pred[i] + learning_rate * tree_preds[i]
+        }
+
+        array_free_f32(residuals)
+        array_free_f32(tree_preds)
+    }
+
+    array_free_f32(current_pred)
+    array_free_f32(y_binary)
+
+    return GradientBoostingClassifier {
+        trees: trees,
+        n_trees: n_trees,
+        init_value: init_value,
+        learning_rate: learning_rate,
+        classes: classes,
+        n_classes: n_classes,
+        max_depth: max_depth,
+        fitted: true
+    }
+}
+
+export function gradient_boosting_classifier_predict(model: GradientBoostingClassifier, X: Matrix) -> ptr<f32> {
+    let raw_scores: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        raw_scores[i] = model.init_value
+    }
+
+    let row: ptr<f32> = array_new_f32(X.cols)
+    for t in 0 to model.n_trees {
+        for i in 0 to X.rows {
+            matrix_row(X, i, row)
+            raw_scores[i] = raw_scores[i] + model.learning_rate * decision_tree_regressor_predict_one(model.trees[t], row)
+        }
+    }
+    array_free_f32(row)
+
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let p: f32 = _gb_sigmoid(raw_scores[i])
+        if p >= 0.5 {
+            preds[i] = model.classes[1]
+        } else {
+            preds[i] = model.classes[0]
+        }
+    }
+
+    array_free_f32(raw_scores)
+    return preds
+}
+
+export function gradient_boosting_classifier_predict_proba(model: GradientBoostingClassifier, X: Matrix) -> Matrix {
+    let probs: Matrix = matrix_new(X.rows, 2)
+    let raw_scores: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        raw_scores[i] = model.init_value
+    }
+
+    let row: ptr<f32> = array_new_f32(X.cols)
+    for t in 0 to model.n_trees {
+        for i in 0 to X.rows {
+            matrix_row(X, i, row)
+            raw_scores[i] = raw_scores[i] + model.learning_rate * decision_tree_regressor_predict_one(model.trees[t], row)
+        }
+    }
+    array_free_f32(row)
+
+    for i in 0 to X.rows {
+        let p: f32 = _gb_sigmoid(raw_scores[i])
+        matrix_set(probs, i, 0, 1.0 - p)
+        matrix_set(probs, i, 1, p)
+    }
+
+    array_free_f32(raw_scores)
+    return probs
+}
+
+export function gradient_boosting_classifier_free(model: GradientBoostingClassifier) -> void {
+    for t in 0 to model.n_trees {
+        decision_tree_regressor_free(model.trees[t])
+    }
+    free(model.trees as ptr<void>)
+    array_free_f32(model.classes)
+}
+
+# ============================================================================
+# GradientBoostingRegressor
+# ============================================================================
+
+export struct GradientBoostingRegressor {
+    trees: ptr<DecisionTreeRegressor>,
+    n_trees: i32,
+    init_value: f32,
+    learning_rate: f32,
+    max_depth: i32,
+    fitted: bool
+}
+
+export function gradient_boosting_regressor_fit(X: Matrix, y: ptr<f32>, n_trees: i32, learning_rate: f32, max_depth: i32) -> GradientBoostingRegressor {
+    let init_value: f32 = array_mean(y, X.rows)
+
+    let current_pred: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        current_pred[i] = init_value
+    }
+
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeRegressor>
+
+    for t in 0 to n_trees {
+        let residuals: ptr<f32> = array_new_f32(X.rows)
+        for i in 0 to X.rows {
+            residuals[i] = y[i] - current_pred[i]
+        }
+
+        trees[t] = decision_tree_regressor_fit(X, residuals, max_depth, CRITERION_MSE)
+
+        let tree_preds: ptr<f32> = decision_tree_regressor_predict(trees[t], X)
+        for i in 0 to X.rows {
+            current_pred[i] = current_pred[i] + learning_rate * tree_preds[i]
+        }
+
+        array_free_f32(residuals)
+        array_free_f32(tree_preds)
+    }
+
+    array_free_f32(current_pred)
+
+    return GradientBoostingRegressor {
+        trees: trees,
+        n_trees: n_trees,
+        init_value: init_value,
+        learning_rate: learning_rate,
+        max_depth: max_depth,
+        fitted: true
+    }
+}
+
+export function gradient_boosting_regressor_predict(model: GradientBoostingRegressor, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        preds[i] = model.init_value
+    }
+
+    let row: ptr<f32> = array_new_f32(X.cols)
+    for t in 0 to model.n_trees {
+        for i in 0 to X.rows {
+            matrix_row(X, i, row)
+            preds[i] = preds[i] + model.learning_rate * decision_tree_regressor_predict_one(model.trees[t], row)
+        }
+    }
+    array_free_f32(row)
+
+    return preds
+}
+
+export function gradient_boosting_regressor_free(model: GradientBoostingRegressor) -> void {
+    for t in 0 to model.n_trees {
+        decision_tree_regressor_free(model.trees[t])
+    }
+    free(model.trees as ptr<void>)
+}
+
+# ============================================================================
+# AdaBoostClassifier
+# ============================================================================
+
+export struct AdaBoostClassifier {
+    trees: ptr<DecisionTreeClassifier>,
+    alphas: ptr<f32>,
+    n_trees: i32,
+    classes: ptr<f32>,
+    n_classes: i32,
+    fitted: bool
+}
+
+export function adaboost_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_trees: i32, max_depth: i32, seed: i32) -> AdaBoostClassifier {
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to X.rows {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let trees: ptr<DecisionTreeClassifier> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeClassifier>
+    let alphas: ptr<f32> = array_new_f32(n_trees)
+
+    let weights: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        weights[i] = 1.0 / (X.rows as f32)
+    }
+
+    srand(seed)
+
+    for t in 0 to n_trees {
+        let n_samples: i32 = X.rows
+        let sample_indices: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+
+        let mut cum: f32 = 0.0
+        for i in 0 to n_samples {
+            cum = cum + weights[i]
+        }
+
+        for i in 0 to n_samples {
+            let r: f32 = (rand() as f32) / 2147483647.0 * cum
+            let mut acc: f32 = 0.0
+            let mut idx: i32 = 0
+            for j in 0 to n_samples {
+                acc = acc + weights[j]
+                if acc >= r {
+                    idx = j
+                }
+            }
+            sample_indices[i] = idx
+        }
+
+        let X_boot: Matrix = matrix_new(n_samples, X.cols)
+        let y_boot: ptr<f32> = array_new_f32(n_samples)
+        for i in 0 to n_samples {
+            y_boot[i] = y[sample_indices[i]]
+            for j in 0 to X.cols {
+                matrix_set(X_boot, i, j, matrix_at(X, sample_indices[i], j))
+            }
+        }
+
+        trees[t] = decision_tree_classifier_fit(X_boot, y_boot, n_classes, max_depth, CRITERION_GINI)
+
+        let preds: ptr<f32> = decision_tree_classifier_predict(trees[t], X)
+
+        let mut err: f32 = 0.0
+        for i in 0 to X.rows {
+            if preds[i] != y[i] {
+                err = err + weights[i]
+            }
+        }
+
+        if err > 0.5 {
+            alphas[t] = 0.0
+        } else {
+            err = err + 1e-10
+            alphas[t] = 0.5 * log(((1.0 - err) / err) as f64) as f32
+        }
+
+        let mut total_w: f32 = 0.0
+        for i in 0 to X.rows {
+            let y_sign: f32 = -1.0
+            if preds[i] == y[i] {
+                y_sign = 1.0
+            }
+            weights[i] = weights[i] * exp((0.0 - alphas[t] * y_sign) as f64) as f32
+            total_w = total_w + weights[i]
+        }
+
+        for i in 0 to X.rows {
+            weights[i] = weights[i] / total_w
+        }
+
+        free(sample_indices as ptr<void>)
+        matrix_free(X_boot)
+        array_free_f32(y_boot)
+        array_free_f32(preds)
+    }
+
+    array_free_f32(weights)
+
+    return AdaBoostClassifier {
+        trees: trees,
+        alphas: alphas,
+        n_trees: n_trees,
+        classes: classes,
+        n_classes: n_classes,
+        fitted: true
+    }
+}
+
+export function adaboost_classifier_predict(model: AdaBoostClassifier, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    let row: ptr<f32> = array_new_f32(X.cols)
+
+    for i in 0 to X.rows {
+        matrix_row(X, i, row)
+
+        let class_scores: ptr<f32> = array_new_f32(model.n_classes)
+        for c in 0 to model.n_classes {
+            class_scores[c] = 0.0
+        }
+
+        for t in 0 to model.n_trees {
+            let pred: f32 = decision_tree_classifier_predict_one(model.trees[t], row)
+            for c in 0 to model.n_classes {
+                if model.classes[c] == pred {
+                    class_scores[c] = class_scores[c] + model.alphas[t]
+                }
+            }
+        }
+
+        let mut best_c: i32 = 0
+        let mut best_score: f32 = class_scores[0]
+        for c in 1 to model.n_classes {
+            if class_scores[c] > best_score {
+                best_score = class_scores[c]
+                best_c = c
+            }
+        }
+
+        preds[i] = model.classes[best_c]
+        free(class_scores as ptr<void>)
+    }
+
+    array_free_f32(row)
+    return preds
+}
+
+export function adaboost_classifier_free(model: AdaBoostClassifier) -> void {
+    for t in 0 to model.n_trees {
+        decision_tree_classifier_free(model.trees[t])
+    }
+    free(model.trees as ptr<void>)
+    array_free_f32(model.alphas)
+    array_free_f32(model.classes)
+}

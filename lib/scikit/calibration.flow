@@ -1,0 +1,281 @@
+# Calibration metrics for flow-scikit.
+# Addresses Issue #30664: CalibrationDisplay naive use leads to confusing results.
+#
+# Fixes:
+#   - min_samples_per_bin (default 30) auto-merges sparse bins
+#   - Confidence intervals (Clopper-Pearson) computed and returned by default
+#   - No more degenerate noisy curves from naive n_bins usage
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function sqrt(x: f64) -> f64
+    function log(x: f64) -> f64
+    function exp(x: f64) -> f64
+    function pow(base: f64, exponent: f64) -> f64
+    function printf(fmt: string, ...) -> i32
+}
+
+export struct CalibrationBin {
+    mean_predicted: f32,
+    fraction_positive: f32,
+    n_samples: i32,
+    ci_lower: f32,
+    ci_upper: f32
+}
+
+export struct CalibrationResult {
+    bins: ptr<CalibrationBin>,
+    n_bins: i32,
+    n_samples: i32
+}
+
+export function calibration_curve(
+    y_true: ptr<f32>,
+    y_prob: ptr<f32>,
+    n: i32,
+    n_bins: i32,
+    min_samples_per_bin: i32,
+    strategy: i32
+) -> CalibrationResult {
+    let bin_indices: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+
+    let const STRATEGY_UNIFORM: i32 = 0
+    let const STRATEGY_QUANTILE: i32 = 1
+
+    if strategy == STRATEGY_QUANTILE {
+        let sorted_probs: ptr<f32> = array_copy_f32(y_prob, n)
+        _sort_f32(sorted_probs, n)
+        for i in 0 to n {
+            let bin: i32 = (i * n_bins) / n
+            if bin >= n_bins {
+                bin = n_bins - 1
+            }
+            bin_indices[i] = bin
+        }
+        array_free_f32(sorted_probs)
+    } else {
+        let min_prob: f32 = array_min_val(y_prob, n)
+        let max_prob: f32 = array_max_val(y_prob, n)
+        let range: f32 = max_prob - min_prob
+        if range < 1e-10 {
+            range = 1.0
+        }
+        for i in 0 to n {
+            let bin: i32 = ((y_prob[i] - min_prob) / range * (n_bins as f32)) as i32
+            if bin >= n_bins {
+                bin = n_bins - 1
+            }
+            if bin < 0 {
+                bin = 0
+            }
+            bin_indices[i] = bin
+        }
+    }
+
+    let bins: ptr<CalibrationBin> = malloc((n_bins as i64) * 24) as ptr<CalibrationBin>
+    let mut active_bins: i32 = n_bins
+
+    for b in 0 to n_bins {
+        _init_bin(bins, b)
+    }
+
+    for i in 0 to n {
+        let b: i32 = bin_indices[i]
+        (bins + b).mean_predicted = (bins + b).mean_predicted + y_prob[i]
+        (bins + b).fraction_positive = (bins + b).fraction_positive + y_true[i]
+        (bins + b).n_samples = (bins + b).n_samples + 1
+    }
+
+    for b in 0 to active_bins {
+        if (bins + b).n_samples > 0 {
+            (bins + b).mean_predicted = (bins + b).mean_predicted / ((bins + b).n_samples as f32)
+            (bins + b).fraction_positive = (bins + b).fraction_positive / ((bins + b).n_samples as f32)
+            _compute_clopper_pearson(bins, b)
+        }
+    }
+
+    let mut merged: i32 = 1
+    while merged == 1 {
+        merged = 0
+        let mut b: i32 = 0
+        while b < active_bins {
+            if (bins + b).n_samples < min_samples_per_bin && active_bins > 3 {
+                if b < active_bins - 1 {
+                    _merge_bins(bins, b, b + 1)
+                    _shift_bins_down(bins, b + 1, active_bins)
+                    active_bins = active_bins - 1
+                    merged = 1
+                } elif b > 0 {
+                    _merge_bins(bins, b - 1, b)
+                    _shift_bins_down(bins, b, active_bins)
+                    active_bins = active_bins - 1
+                    merged = 1
+                }
+            }
+            if merged == 1 {
+                b = active_bins
+            } else {
+                b = b + 1
+            }
+        }
+    }
+
+    free(bin_indices as ptr<void>)
+
+    return CalibrationResult { bins: bins, n_bins: active_bins, n_samples: n }
+}
+
+function _init_bin(bins: ptr<CalibrationBin>, idx: i32) -> void {
+    (bins + idx).mean_predicted = 0.0
+    (bins + idx).fraction_positive = 0.0
+    (bins + idx).n_samples = 0
+    (bins + idx).ci_lower = 0.0
+    (bins + idx).ci_upper = 1.0
+}
+
+function _merge_bins(bins: ptr<CalibrationBin>, a: i32, b: i32) -> void {
+    let n_a: i32 = (bins + a).n_samples
+    let n_b: i32 = (bins + b).n_samples
+    let n_total: i32 = n_a + n_b
+
+    if n_total == 0 {
+        return
+    }
+
+    let sum_pred_a: f32 = (bins + a).mean_predicted * (n_a as f32)
+    let sum_pred_b: f32 = (bins + b).mean_predicted * (n_b as f32)
+    let sum_pos_a: f32 = (bins + a).fraction_positive * (n_a as f32)
+    let sum_pos_b: f32 = (bins + b).fraction_positive * (n_b as f32)
+
+    (bins + a).mean_predicted = (sum_pred_a + sum_pred_b) / (n_total as f32)
+    (bins + a).fraction_positive = (sum_pos_a + sum_pos_b) / (n_total as f32)
+    (bins + a).n_samples = n_total
+
+    _compute_clopper_pearson(bins, a)
+}
+
+function _shift_bins_down(bins: ptr<CalibrationBin>, from: i32, n_bins: i32) -> void {
+    for i in from to n_bins - 1 {
+        (bins + i).mean_predicted = (bins + i + 1).mean_predicted
+        (bins + i).fraction_positive = (bins + i + 1).fraction_positive
+        (bins + i).n_samples = (bins + i + 1).n_samples
+        (bins + i).ci_lower = (bins + i + 1).ci_lower
+        (bins + i).ci_upper = (bins + i + 1).ci_upper
+    }
+}
+
+function _compute_clopper_pearson(bins: ptr<CalibrationBin>, idx: i32) -> void {
+    let n: i32 = (bins + idx).n_samples
+    let k: f32 = (bins + idx).fraction_positive * (n as f32)
+    let k_int: i32 = k as i32
+
+    if n == 0 {
+        (bins + idx).ci_lower = 0.0
+        (bins + idx).ci_upper = 1.0
+        return
+    }
+
+    let alpha: f64 = 0.05
+    let nf: f64 = n as f64
+    let kf: f64 = k_int as f64
+
+    if k_int == 0 {
+        (bins + idx).ci_lower = 0.0
+    } else {
+        let lower: f64 = _beta_inv(0.5 * alpha, kf, nf - kf + 1.0)
+        (bins + idx).ci_lower = lower as f32
+    }
+
+    if k_int == n {
+        (bins + idx).ci_upper = 1.0
+    } else {
+        let upper: f64 = _beta_inv(1.0 - 0.5 * alpha, kf + 1.0, nf - kf)
+        (bins + idx).ci_upper = upper as f32
+    }
+}
+
+function _beta_inv(p: f64, a: f64, b: f64) -> f64 {
+    let mut lo: f64 = 0.0
+    let mut hi: f64 = 1.0
+    for _ in 0 to 50 {
+        let mid: f64 = (lo + hi) / 2.0
+        let cdf: f64 = _beta_cdf(mid, a, b)
+        if cdf < p {
+            lo = mid
+        } else {
+            hi = mid
+        }
+    }
+    return (lo + hi) / 2.0
+}
+
+function _beta_cdf(x: f64, a: f64, b: f64) -> f64 {
+    let n: i32 = 1000
+    let mut sum: f64 = 0.0
+    let dx: f64 = x / (n as f64)
+    for i in 0 to n {
+        let t: f64 = ((i as f64) + 0.5) * dx
+        let val: f64 = pow(t, a - 1.0) * pow(1.0 - t, b - 1.0)
+        sum = sum + val * dx
+    }
+    let beta_func: f64 = _beta_func(a, b)
+    return sum / beta_func
+}
+
+function _beta_func(a: f64, b: f64) -> f64 {
+    return exp(_log_gamma(a) + _log_gamma(b) - _log_gamma(a + b))
+}
+
+function _log_gamma(x: f64) -> f64 {
+    if x < 0.5 {
+        return log(3.14159265358979 / (sin(3.14159265358979 * x) as f64)) + _log_gamma(1.0 - x)
+    }
+    let mut g: f64 = 7.0
+    let c: array<f64, 9> = [0.99999999999980993, 671.520238121407, -1259.1392167224028, 771.32342877765313, -176.6150291621406, 12.507343278686905, -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7]
+    let mut a: f64 = c[0]
+    let mut t: f64 = x + g - 0.5
+    for i in 1 to 9 {
+        a = a + c[i] / (x + (i as f64) - 1.0)
+    }
+    return 0.5 * log(2.0 * 3.14159265358979) + (x - 0.5) * log(t) - t + log(a)
+}
+
+function _sort_f32(a: ptr<f32>, n: i32) -> void {
+    for i in 1 to n {
+        let key: f32 = a[i]
+        let mut j: i32 = i - 1
+        while j >= 0 && a[j] > key {
+            a[j + 1] = a[j]
+            j = j - 1
+        }
+        a[j + 1] = key
+    }
+}
+
+export function print_calibration_result(result: CalibrationResult) -> void {
+    println("")
+    println("Calibration Curve (with Clopper-Pearson 95% CI)")
+    println("================================================")
+    print("  bin   mean_pred   frac_pos    CI_lower    CI_upper    n_samples")
+    println("")
+    for b in 0 to result.n_bins {
+        print("  ")
+        print(b)
+        print("     ")
+        printf("%.4f", (result.bins + b).mean_predicted)
+        print("      ")
+        printf("%.4f", (result.bins + b).fraction_positive)
+        print("      ")
+        printf("%.4f", (result.bins + b).ci_lower)
+        print("      ")
+        printf("%.4f", (result.bins + b).ci_upper)
+        print("      ")
+        print((result.bins + b).n_samples)
+        println("")
+    }
+}
+
+export function calibration_result_free(result: CalibrationResult) -> void {
+    free(result.bins as ptr<void>)
+}

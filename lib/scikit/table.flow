@@ -1,0 +1,53 @@
+# Unified Table interface for flow-scikit.
+# Addresses Issue #31049: Adopt narwhals-style unified dataframe support.
+# All data ingestion goes through this interface. Internal code uses one path.
+
+import "lib/scikit/matrix.flow"
+
+export struct Table {
+    data: Matrix,
+    col_names: ptr<string>,
+    n_cols: i32,
+    source: i32
+}
+
+export const SOURCE_NDARRAY: i32 = 0
+export const SOURCE_PANDAS: i32 = 1
+export const SOURCE_POLARS: i32 = 2
+export const SOURCE_GENERIC: i32 = 3
+
+export function table_from_matrix(m: Matrix) -> Table {
+    let names: ptr<string> = malloc((m.cols as i64) * 8) as ptr<string>
+    for j in 0 to m.cols {
+        names[j] = "col_"
+    }
+    return Table {
+        data: m,
+        col_names: names,
+        n_cols: m.cols,
+        source: SOURCE_NDARRAY
+    }
+}
+
+export function table_to_matrix(t: Table) -> Matrix {
+    return matrix_copy(t.data)
+}
+
+export function table_n_rows(t: Table) -> i32 {
+    return t.data.rows
+}
+
+export function table_n_cols(t: Table) -> i32 {
+    return t.n_cols
+}
+
+export function table_get_column(t: Table, col_idx: i32, out: ptr<f32>) -> void {
+    for i in 0 to t.data.rows {
+        out[i] = matrix_at(t.data, i, col_idx)
+    }
+}
+
+export function table_free(t: Table) -> void {
+    matrix_free(t.data)
+    free(t.col_names as ptr<void>)
+}

@@ -1,0 +1,248 @@
+# Comprehensive example showcasing the full flow-scikit API.
+# Run: ./flow run examples/full_demo.flow
+
+import "lib/scikit/scikit.flow"
+
+function make_iris_like() -> Dataset {
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 4)
+    let y: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to 10 {
+        matrix_set(X, i, 0, 5.0 + _noise(i))
+        matrix_set(X, i, 1, 3.5 + _noise(i + 50))
+        matrix_set(X, i, 2, 1.4 + _noise(i + 100))
+        matrix_set(X, i, 3, 0.2 + _noise(i + 150))
+        y[i] = 0.0
+    }
+    for i in 0 to 10 {
+        matrix_set(X, 10 + i, 0, 6.0 + _noise(i + 200))
+        matrix_set(X, 10 + i, 1, 2.8 + _noise(i + 250))
+        matrix_set(X, 10 + i, 2, 4.5 + _noise(i + 300))
+        matrix_set(X, 10 + i, 3, 1.5 + _noise(i + 350))
+        y[10 + i] = 1.0
+    }
+    for i in 0 to 10 {
+        matrix_set(X, 20 + i, 0, 7.0 + _noise(i + 400))
+        matrix_set(X, 20 + i, 1, 3.0 + _noise(i + 450))
+        matrix_set(X, 20 + i, 2, 5.5 + _noise(i + 500))
+        matrix_set(X, 20 + i, 3, 2.0 + _noise(i + 550))
+        y[20 + i] = 2.0
+    }
+
+    return Dataset { X: X, y: y, n_samples: n, n_features: 4, n_classes: 3, is_classification: true }
+}
+
+function _noise(seed: i32) -> f32 {
+    let s: i32 = seed * 1103515245 + 12345
+    let n: i32 = ((s % 100) + 100) % 100
+    return ((n as f32) / 100.0 - 0.5) * 0.3
+}
+
+function main() -> i32 {
+    println("flow-scikit Full API Demo")
+    println("=========================")
+    println("")
+
+    let data: Dataset = make_iris_like()
+
+    # 1. Preprocessing: StandardScaler
+    println("1. Preprocessing")
+    let scaler: StandardScaler = standard_scaler_fit(data.X)
+    let X_scaled: Matrix = standard_scaler_transform(scaler, data.X)
+    println("   StandardScaler applied")
+
+    # 2. PCA for dimensionality reduction
+    let pca: PCA = pca_fit(X_scaled, 2)
+    let X_pca: Matrix = pca_transform(pca, X_scaled)
+    print("   PCA: 4D -> 2D, explained variance ratio = ")
+    printf("%.4f", pca.explained_variance_ratio[0] + pca.explained_variance_ratio[1])
+    println("")
+    pca_free(pca)
+
+    # 3. Feature selection
+    let selector: SelectKBest = select_k_best_fit(X_scaled, data.y, 2, SCORE_F_CLASSIF)
+    println("   SelectKBest: selected top 2 features")
+    select_k_best_free(selector)
+
+    # 4. Train/test split (auto-stratifying)
+    println("")
+    println("2. Model Selection")
+    let split: TrainTestSplit = train_test_split(X_scaled, data.y, 0.3, STRATIFY_AUTO)
+    print("   Split: ")
+    print(split.n_train)
+    print(" train, ")
+    print(split.n_test)
+    println(" test (stratified)")
+
+    # 5. Multi-class logistic regression
+    println("")
+    println("3. Multi-class Classification")
+    let mc_model: MultiClassLogisticRegression = multiclass_logistic_fit(
+        split.X_train, split.y_train, 3, 500, 0.1, penalty_l2(0.01)
+    )
+    let mc_probs: Matrix = multiclass_logistic_predict(mc_model, split.X_test)
+    let mc_preds: ptr<f32> = multiclass_logistic_decide(mc_model, mc_probs)
+    let mc_acc: f32 = accuracy_score(split.y_test, mc_preds, split.n_test)
+    print("   MultiClassLogisticRegression accuracy = ")
+    printf("%.4f", mc_acc)
+    println("")
+
+    # 6. Confusion matrix
+    let classes: ptr<f32> = array_new_f32(3)
+    classes[0] = 0.0; classes[1] = 1.0; classes[2] = 2.0
+    let cm: ConfusionMatrix = confusion_matrix(split.y_test, mc_preds, split.n_test, classes, 3)
+    print_confusion_matrix(cm)
+    confusion_matrix_free(cm)
+    array_free_f32(classes)
+
+    # 7. Decision Tree
+    let tree: DecisionTreeClassifier = decision_tree_classifier_fit(split.X_train, split.y_train, 3, 5, CRITERION_GINI)
+    let tree_preds: ptr<f32> = decision_tree_classifier_predict(tree, split.X_test)
+    let tree_acc: f32 = accuracy_score(split.y_test, tree_preds, split.n_test)
+    print("   DecisionTree accuracy = ")
+    printf("%.4f", tree_acc)
+    println("")
+    decision_tree_classifier_free(tree)
+    array_free_f32(tree_preds)
+
+    # 8. Random Forest
+    let rf: RandomForestClassifier = random_forest_classifier_fit(split.X_train, split.y_train, 3, 20, 5, 42)
+    let rf_preds: ptr<f32> = random_forest_classifier_predict(rf, split.X_test)
+    let rf_acc: f32 = accuracy_score(split.y_test, rf_preds, split.n_test)
+    print("   RandomForest accuracy = ")
+    printf("%.4f", rf_acc)
+    println("")
+    random_forest_classifier_free(rf)
+    array_free_f32(rf_preds)
+
+    # 9. Gradient Boosting
+    let gb: GradientBoostingClassifier = gradient_boosting_classifier_fit(split.X_train, split.y_train, 2, 30, 0.1, 3, 42)
+    let gb_preds: ptr<f32> = gradient_boosting_classifier_predict(gb, split.X_test)
+    let gb_acc: f32 = accuracy_score(split.y_test, gb_preds, split.n_test)
+    print("   GradientBoosting accuracy = ")
+    printf("%.4f", gb_acc)
+    println("")
+    gradient_boosting_classifier_free(gb)
+    array_free_f32(gb_preds)
+
+    # 10. Gaussian NB
+    let nb: GaussianNB = gaussian_nb_fit(split.X_train, split.y_train, 3, 1e-9)
+    let nb_preds: ptr<f32> = gaussian_nb_predict(nb, split.X_test)
+    let nb_acc: f32 = accuracy_score(split.y_test, nb_preds, split.n_test)
+    print("   GaussianNB accuracy = ")
+    printf("%.4f", nb_acc)
+    println("")
+    gaussian_nb_free(nb)
+    array_free_f32(nb_preds)
+
+    # 11. LinearSVC
+    let svc: LinearSVC = linear_svc_fit(split.X_train, split.y_train, 3, 1.0, 500, 0.01)
+    let svc_scores: ptr<f32> = linear_svc_predict(svc, split.X_test)
+    let svc_preds: ptr<f32> = linear_svc_decide(svc, svc_scores, split.n_test)
+    let svc_acc: f32 = accuracy_score(split.y_test, svc_preds, split.n_test)
+    print("   LinearSVC accuracy = ")
+    printf("%.4f", svc_acc)
+    println("")
+    linear_svc_free(svc)
+    array_free_f32(svc_scores)
+    array_free_f32(svc_preds)
+
+    # 12. KMeans clustering
+    println("")
+    println("4. Clustering")
+    let km: KMeans = kmeans_fit(X_scaled, 3, 100, 1e-4, 42)
+    print("   KMeans: ")
+    print(km.n_clusters)
+    print(" clusters, inertia = ")
+    printf("%.4f", km.inertia)
+    println("")
+    kmeans_free(km)
+
+    # 13. DBSCAN
+    let dbscan: DBSCAN = dbscan_fit(X_pca, 1.5, 3)
+    print("   DBSCAN: ")
+    print(dbscan.n_clusters)
+    print(" clusters, ")
+    print(dbscan.n_noise)
+    println(" noise points")
+    dbscan_free(dbscan)
+
+    # 14. Regression demo
+    println("")
+    println("5. Regression")
+    let reg_X: Matrix = matrix_new(20, 1)
+    let reg_y: ptr<f32> = array_new_f32(20)
+    for i in 0 to 20 {
+        let x: f32 = (i as f32) * 0.5
+        matrix_set(reg_X, i, 0, x)
+        reg_y[i] = 2.0 * x + 1.0 + _noise(i + 999)
+    }
+
+    let ridge: Ridge = ridge_fit(reg_X, reg_y, 0.1, 500, 0.001)
+    let ridge_preds: ptr<f32> = ridge_predict(ridge, reg_X)
+    let ridge_r2: f32 = r2_score(reg_y, ridge_preds, 20)
+    print("   Ridge R2 = ")
+    printf("%.4f", ridge_r2)
+    println("")
+
+    let lasso: Lasso = lasso_fit(reg_X, reg_y, 0.01, 500, 0.001)
+    let lasso_preds: ptr<f32> = lasso_predict(lasso, reg_X)
+    let lasso_r2: f32 = r2_score(reg_y, lasso_preds, 20)
+    print("   Lasso R2 = ")
+    printf("%.4f", lasso_r2)
+    println("")
+
+    let gbr: GradientBoostingRegressor = gradient_boosting_regressor_fit(reg_X, reg_y, 20, 0.1, 2)
+    let gbr_preds: ptr<f32> = gradient_boosting_regressor_predict(gbr, reg_X)
+    let gbr_r2: f32 = r2_score(reg_y, gbr_preds, 20)
+    print("   GradientBoostingRegressor R2 = ")
+    printf("%.4f", gbr_r2)
+    println("")
+
+    # 15. Learning curve
+    println("")
+    println("6. Learning Curve")
+    let sizes: ptr<i32> = malloc(12 * 4) as ptr<i32>
+    sizes[0] = 5; sizes[1] = 10; sizes[2] = 15; sizes[3] = 20; sizes[4] = 25; sizes[5] = 30
+    let lc: LearningCurveResult = learning_curve(X_scaled, data.y, 3, sizes, 6, 300, 0.1)
+    print_learning_curve(lc)
+    learning_curve_free(lc)
+    free(sizes as ptr<void>)
+
+    # 16. Additional metrics
+    println("")
+    println("7. Extended Metrics")
+    let ck: f32 = cohen_kappa(split.y_test, mc_preds, split.n_test, array_new_f32(3), 3)
+    print("   Cohen's Kappa = ")
+    printf("%.4f", ck)
+    println("")
+
+    let bal_acc: f32 = balanced_accuracy_score(split.y_test, mc_preds, split.n_test, array_new_f32(3), 3)
+    print("   Balanced Accuracy = ")
+    printf("%.4f", bal_acc)
+    println("")
+
+    # Cleanup
+    multiclass_logistic_free(mc_model)
+    matrix_free(mc_probs)
+    array_free_f32(mc_preds)
+    standard_scaler_free(scaler)
+    matrix_free(X_scaled)
+    matrix_free(X_pca)
+    train_test_split_free(split)
+    ridge_free(ridge)
+    lasso_free(lasso)
+    array_free_f32(ridge_preds)
+    array_free_f32(lasso_preds)
+    gradient_boosting_regressor_free(gbr)
+    array_free_f32(gbr_preds)
+    matrix_free(reg_X)
+    array_free_f32(reg_y)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+
+    println("")
+    println("Demo complete!")
+    return 0
+}

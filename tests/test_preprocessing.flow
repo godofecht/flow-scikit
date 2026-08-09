@@ -1,0 +1,155 @@
+# Tests for preprocessing module.
+# Run: ./flow run tests/test_preprocessing.flow
+
+import "lib/scikit/scikit.flow"
+
+function test_standard_scaler() -> i32 {
+    println("Test: StandardScaler")
+    let X: Matrix = matrix_new(4, 2)
+    matrix_set(X, 0, 0, 0.0); matrix_set(X, 0, 1, 10.0)
+    matrix_set(X, 1, 0, 2.0); matrix_set(X, 1, 1, 20.0)
+    matrix_set(X, 2, 0, 4.0); matrix_set(X, 2, 1, 30.0)
+    matrix_set(X, 3, 0, 6.0); matrix_set(X, 3, 1, 40.0)
+
+    let scaler: StandardScaler = standard_scaler_fit(X)
+    let X_t: Matrix = standard_scaler_transform(scaler, X)
+
+    let mean0: f32 = matrix_at(X_t, 0, 0) + matrix_at(X_t, 1, 0) + matrix_at(X_t, 2, 0) + matrix_at(X_t, 3, 0)
+    if abs(mean0 as i32) > 0 {
+        println("  FAIL: transformed mean should be ~0")
+        return 1
+    }
+
+    println("  OK: transformed mean is ~0")
+    standard_scaler_free(scaler)
+    matrix_free(X_t)
+    matrix_free(X)
+    return 0
+}
+
+function test_onehot_encoder_warn_default() -> i32 {
+    println("Test: OneHotEncoder handle_unknown=warn (default)")
+    let X: Matrix = matrix_new(3, 1)
+    matrix_set(X, 0, 0, 0.0)
+    matrix_set(X, 1, 0, 1.0)
+    matrix_set(X, 2, 0, 2.0)
+
+    let encoder: OneHotEncoder = onehot_encoder_fit(X, HANDLE_UNKNOWN_WARN)
+    if encoder.handle_unknown != HANDLE_UNKNOWN_WARN {
+        println("  FAIL: default should be warn")
+        return 1
+    }
+    if encoder.total_output_cols != 3 {
+        println("  FAIL: should have 3 output cols")
+        return 1
+    }
+
+    let X_test: Matrix = matrix_new(2, 1)
+    matrix_set(X_test, 0, 0, 1.0)
+    matrix_set(X_test, 1, 0, 99.0)
+
+    let result: Matrix = onehot_encoder_transform(encoder, X_test)
+    if matrix_at(result, 0, 1) != 1.0 {
+        println("  FAIL: known category should be encoded")
+        return 1
+    }
+
+    let all_zero: bool = true
+    for j in 0 to 3 {
+        if matrix_at(result, 1, j) != 0.0 {
+            all_zero = false
+        }
+    }
+    if not all_zero {
+        println("  FAIL: unknown category should be all-zeros")
+        return 1
+    }
+
+    println("  OK: known category encoded, unknown category is all-zeros with warning")
+    onehot_encoder_free(encoder)
+    matrix_free(X)
+    matrix_free(X_test)
+    matrix_free(result)
+    return 0
+}
+
+function test_minmax_scaler() -> i32 {
+    println("Test: MinMaxScaler")
+    let X: Matrix = matrix_new(3, 1)
+    matrix_set(X, 0, 0, 0.0)
+    matrix_set(X, 1, 0, 5.0)
+    matrix_set(X, 2, 0, 10.0)
+
+    let scaler: MinMaxScaler = minmax_scaler_fit(X)
+    let X_t: Matrix = minmax_scaler_transform(scaler, X)
+
+    if matrix_at(X_t, 0, 0) != 0.0 {
+        println("  FAIL: min should map to 0")
+        return 1
+    }
+    if matrix_at(X_t, 2, 0) != 1.0 {
+        println("  FAIL: max should map to 1")
+        return 1
+    }
+
+    println("  OK: min->0, max->1")
+    minmax_scaler_free(scaler)
+    matrix_free(X_t)
+    matrix_free(X)
+    return 0
+}
+
+function test_simple_imputer() -> i32 {
+    println("Test: SimpleImputer mean strategy")
+    let X: Matrix = matrix_new(4, 1)
+    matrix_set(X, 0, 0, 1.0)
+    matrix_set(X, 1, 0, 0.0 as f32)
+    let d: f64 = 0.0 as f64
+    let nan_val: f32 = (0.0 / 0.0) as f32
+    matrix_set(X, 2, 0, nan_val)
+    matrix_set(X, 3, 0, 3.0)
+
+    let imputer: SimpleImputer = simple_imputer_fit(X, IMPUTE_STRATEGY_MEAN, 0.0)
+    let X_t: Matrix = simple_imputer_transform(imputer, X)
+
+    let fill: f32 = imputer.fill_values[0]
+    if fill < 1.9 || fill > 2.1 {
+        println("  FAIL: mean fill should be ~2.0")
+        print("  got: ")
+        printf("%.4f", fill)
+        println("")
+        return 1
+    }
+
+    println("  OK: NaN filled with mean")
+    simple_imputer_free(imputer)
+    matrix_free(X_t)
+    matrix_free(X)
+    return 0
+}
+
+function main() -> i32 {
+    println("Running preprocessing tests...")
+    println("=============================")
+    println("")
+
+    let mut failures: i32 = 0
+
+    if test_standard_scaler() != 0 { failures = failures + 1 }
+    println("")
+    if test_onehot_encoder_warn_default() != 0 { failures = failures + 1 }
+    println("")
+    if test_minmax_scaler() != 0 { failures = failures + 1 }
+    println("")
+    if test_simple_imputer() != 0 { failures = failures + 1 }
+
+    println("")
+    if failures == 0 {
+        println("All preprocessing tests passed!")
+        return 0
+    }
+    print("FAILED: ")
+    print(failures)
+    println(" tests")
+    return 1
+}

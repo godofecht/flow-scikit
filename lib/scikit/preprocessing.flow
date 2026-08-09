@@ -1,0 +1,1051 @@
+# Preprocessing module for flow-scikit.
+# Addresses Issue #28394: OneHotEncoder handle_unknown should default to "warn".
+# Addresses Issue #29262: ensure_* naming convention throughout.
+
+import "lib/scikit/matrix.flow"
+import "lib/scikit/validation.flow"
+
+# ============================================================================
+# StandardScaler
+# ============================================================================
+
+export struct StandardScaler {
+    mean: ptr<f32>,
+    std: ptr<f32>,
+    n_features: i32,
+    fitted: bool
+}
+
+export function standard_scaler_fit(X: Matrix) -> StandardScaler {
+    let n: i32 = X.cols
+    let mean: ptr<f32> = array_new_f32(n)
+    let std: ptr<f32> = array_new_f32(n)
+
+    for j in 0 to n {
+        let col: ptr<f32> = array_new_f32(X.rows)
+        for i in 0 to X.rows {
+            col[i] = matrix_at(X, i, j)
+        }
+        mean[j] = array_mean(col, X.rows)
+        std[j] = array_std(col, X.rows, mean[j])
+        if std[j] < 1e-10 {
+            std[j] = 1.0
+        }
+        array_free_f32(col)
+    }
+
+    return StandardScaler { mean: mean, std: std, n_features: n, fitted: true }
+}
+
+export function standard_scaler_transform(scaler: StandardScaler, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, X.cols)
+    for i in 0 to X.rows {
+        for j in 0 to X.cols {
+            let val: f32 = (matrix_at(X, i, j) - scaler.mean[j]) / scaler.std[j]
+            matrix_set(result, i, j, val)
+        }
+    }
+    return result
+}
+
+export function standard_scaler_fit_transform(X: Matrix) -> Matrix {
+    let scaler: StandardScaler = standard_scaler_fit(X)
+    return standard_scaler_transform(scaler, X)
+}
+
+export function standard_scaler_free(scaler: StandardScaler) -> void {
+    array_free_f32(scaler.mean)
+    array_free_f32(scaler.std)
+}
+
+# ============================================================================
+# MinMaxScaler
+# ============================================================================
+
+export struct MinMaxScaler {
+    min_vals: ptr<f32>,
+    max_vals: ptr<f32>,
+    n_features: i32,
+    fitted: bool
+}
+
+export function minmax_scaler_fit(X: Matrix) -> MinMaxScaler {
+    let n: i32 = X.cols
+    let min_vals: ptr<f32> = array_new_f32(n)
+    let max_vals: ptr<f32> = array_new_f32(n)
+
+    for j in 0 to n {
+        let col: ptr<f32> = array_new_f32(X.rows)
+        for i in 0 to X.rows {
+            col[i] = matrix_at(X, i, j)
+        }
+        min_vals[j] = array_min_val(col, X.rows)
+        max_vals[j] = array_max_val(col, X.rows)
+        array_free_f32(col)
+    }
+
+    return MinMaxScaler { min_vals: min_vals, max_vals: max_vals, n_features: n, fitted: true }
+}
+
+export function minmax_scaler_transform(scaler: MinMaxScaler, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, X.cols)
+    for i in 0 to X.rows {
+        for j in 0 to X.cols {
+            let range: f32 = scaler.max_vals[j] - scaler.min_vals[j]
+            if range < 1e-10 {
+                matrix_set(result, i, j, 0.0)
+            } else {
+                let val: f32 = (matrix_at(X, i, j) - scaler.min_vals[j]) / range
+                matrix_set(result, i, j, val)
+            }
+        }
+    }
+    return result
+}
+
+export function minmax_scaler_free(scaler: MinMaxScaler) -> void {
+    array_free_f32(scaler.min_vals)
+    array_free_f32(scaler.max_vals)
+}
+
+# ============================================================================
+# OneHotEncoder
+# Addresses Issue #28394: handle_unknown defaults to "warn" not "error"
+# ============================================================================
+
+export const HANDLE_UNKNOWN_ERROR: i32 = 0
+export const HANDLE_UNKNOWN_WARN: i32 = 1
+export const HANDLE_UNKNOWN_IGNORE: i32 = 2
+
+export struct OneHotEncoder {
+    categories: ptr<ptr<f32>>,
+    n_categories: ptr<i32>,
+    n_features: i32,
+    total_output_cols: i32,
+    handle_unknown: i32,
+    fitted: bool
+}
+
+export function onehot_encoder_init(n_features: i32, handle_unknown: i32) -> OneHotEncoder {
+    let cats: ptr<ptr<f32>> = malloc((n_features as i64) * 8) as ptr<ptr<f32>>
+    let n_cats: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    for j in 0 to n_features {
+        n_cats[j] = 0
+    }
+    return OneHotEncoder {
+        categories: cats,
+        n_categories: n_cats,
+        n_features: n_features,
+        total_output_cols: 0,
+        handle_unknown: handle_unknown,
+        fitted: false
+    }
+}
+
+export function onehot_encoder_fit(X: Matrix, handle_unknown: i32) -> OneHotEncoder {
+    let n_features: i32 = X.cols
+    let encoder: OneHotEncoder = onehot_encoder_init(n_features, handle_unknown)
+
+    let mut total_cols: i32 = 0
+
+    for j in 0 to n_features {
+        let mut unique: ptr<f32> = array_new_f32(X.rows)
+        let mut n_unique: i32 = 0
+
+        for i in 0 to X.rows {
+            let val: f32 = matrix_at(X, i, j)
+            let mut found: bool = false
+            for k in 0 to n_unique {
+                if unique[k] == val {
+                    found = true
+                }
+            }
+            if not found {
+                unique[n_unique] = val
+                n_unique = n_unique + 1
+            }
+        }
+
+        encoder.categories[j] = unique
+        encoder.n_categories[j] = n_unique
+        total_cols = total_cols + n_unique
+    }
+
+    encoder.total_output_cols = total_cols
+    encoder.fitted = true
+    return encoder
+}
+
+export function onehot_encoder_transform(encoder: OneHotEncoder, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, encoder.total_output_cols)
+    matrix_fill(result, 0.0)
+
+    let mut col_offset: i32 = 0
+
+    for j in 0 to encoder.n_features {
+        let n_cats: i32 = encoder.n_categories[j]
+        let cats: ptr<f32> = encoder.categories[j]
+
+        for i in 0 to X.rows {
+            let val: f32 = matrix_at(X, i, j)
+            let mut found_idx: i32 = -1
+            for k in 0 to n_cats {
+                if cats[k] == val {
+                    found_idx = k
+                }
+            }
+
+            if found_idx >= 0 {
+                matrix_set(result, i, col_offset + found_idx, 1.0)
+            } else {
+                if encoder.handle_unknown == HANDLE_UNKNOWN_ERROR {
+                    print("[flow-scikit] ERROR: Unknown category in feature ")
+                    print(j)
+                    println("")
+                } elif encoder.handle_unknown == HANDLE_UNKNOWN_WARN {
+                    print("[flow-scikit] WARNING: Unknown category in feature ")
+                    print(j)
+                    print(" at sample ")
+                    print(i)
+                    println(", encoding as all-zeros")
+                }
+            }
+        }
+
+        col_offset = col_offset + n_cats
+    }
+
+    return result
+}
+
+export function onehot_encoder_free(encoder: OneHotEncoder) -> void {
+    for j in 0 to encoder.n_features {
+        array_free_f32(encoder.categories[j])
+    }
+    free(encoder.categories as ptr<void>)
+    free(encoder.n_categories as ptr<void>)
+}
+
+# ============================================================================
+# SimpleImputer
+# ============================================================================
+
+export const IMPUTE_STRATEGY_MEAN: i32 = 0
+export const IMPUTE_STRATEGY_MEDIAN: i32 = 1
+export const IMPUTE_STRATEGY_CONSTANT: i32 = 2
+
+export struct SimpleImputer {
+    fill_values: ptr<f32>,
+    n_features: i32,
+    strategy: i32,
+    constant_value: f32,
+    fitted: bool
+}
+
+export function simple_imputer_init(strategy: i32, constant_value: f32) -> SimpleImputer {
+    return SimpleImputer {
+        fill_values: null as ptr<f32>,
+        n_features: 0,
+        strategy: strategy,
+        constant_value: constant_value,
+        fitted: false
+    }
+}
+
+export function simple_imputer_fit(X: Matrix, strategy: i32, constant_value: f32) -> SimpleImputer {
+    let n: i32 = X.cols
+    let fill: ptr<f32> = array_new_f32(n)
+
+    for j in 0 to n {
+        if strategy == IMPUTE_STRATEGY_CONSTANT {
+            fill[j] = constant_value
+        } else {
+            let valid: ptr<f32> = array_new_f32(X.rows)
+            let mut n_valid: i32 = 0
+            for i in 0 to X.rows {
+                let val: f32 = matrix_at(X, i, j)
+                let d: f64 = val as f64
+                if d == d {
+                    valid[n_valid] = val
+                    n_valid = n_valid + 1
+                }
+            }
+
+            if n_valid == 0 {
+                fill[j] = 0.0
+            } elif strategy == IMPUTE_STRATEGY_MEAN {
+                fill[j] = array_mean(valid, n_valid)
+            } elif strategy == IMPUTE_STRATEGY_MEDIAN {
+                let sorted: ptr<f32> = array_copy_f32(valid, n_valid)
+                fill[j] = _median(sorted, n_valid)
+                array_free_f32(sorted)
+            }
+
+            array_free_f32(valid)
+        }
+    }
+
+    return SimpleImputer {
+        fill_values: fill,
+        n_features: n,
+        strategy: strategy,
+        constant_value: constant_value,
+        fitted: true
+    }
+}
+
+export function simple_imputer_transform(imputer: SimpleImputer, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_copy(X)
+    for i in 0 to X.rows {
+        for j in 0 to X.cols {
+            let val: f32 = matrix_at(result, i, j)
+            let d: f64 = val as f64
+            if d != d {
+                matrix_set(result, i, j, imputer.fill_values[j])
+            }
+        }
+    }
+    return result
+}
+
+export function simple_imputer_free(imputer: SimpleImputer) -> void {
+    if imputer.fill_values != null as ptr<f32> {
+        array_free_f32(imputer.fill_values)
+    }
+}
+
+function _median(sorted: ptr<f32>, n: i32) -> f32 {
+    if n == 0 {
+        return 0.0
+    }
+    _insertion_sort(sorted, n)
+    if n % 2 == 0 {
+        return (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+    }
+    return sorted[n / 2]
+}
+
+function _insertion_sort(a: ptr<f32>, n: i32) -> void {
+    for i in 1 to n {
+        let key: f32 = a[i]
+        let mut j: i32 = i - 1
+        while j >= 0 && a[j] > key {
+            a[j + 1] = a[j]
+            j = j - 1
+        }
+        a[j + 1] = key
+    }
+}
+
+# ============================================================================
+# RobustScaler
+# Scales using median and IQR, robust to outliers.
+# ============================================================================
+
+export struct RobustScaler {
+    median: ptr<f32>,
+    iqr: ptr<f32>,
+    n_features: i32,
+    fitted: bool
+}
+
+export function robust_scaler_fit(X: Matrix) -> RobustScaler {
+    let n: i32 = X.cols
+    let median: ptr<f32> = array_new_f32(n)
+    let iqr: ptr<f32> = array_new_f32(n)
+
+    for j in 0 to n {
+        let col: ptr<f32> = array_new_f32(X.rows)
+        for i in 0 to X.rows {
+            col[i] = matrix_at(X, i, j)
+        }
+        _insertion_sort(col, X.rows)
+        median[j] = _median_sorted(col, X.rows)
+        let q1_idx: i32 = X.rows / 4
+        let q3_idx: i32 = (X.rows * 3) / 4
+        let q1: f32 = col[q1_idx]
+        let q3: f32 = col[q3_idx]
+        iqr[j] = q3 - q1
+        if iqr[j] < 1e-10 {
+            iqr[j] = 1.0
+        }
+        array_free_f32(col)
+    }
+
+    return RobustScaler { median: median, iqr: iqr, n_features: n, fitted: true }
+}
+
+export function robust_scaler_transform(scaler: RobustScaler, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, X.cols)
+    for i in 0 to X.rows {
+        for j in 0 to X.cols {
+            let val: f32 = (matrix_at(X, i, j) - scaler.median[j]) / scaler.iqr[j]
+            matrix_set(result, i, j, val)
+        }
+    }
+    return result
+}
+
+export function robust_scaler_free(scaler: RobustScaler) -> void {
+    array_free_f32(scaler.median)
+    array_free_f32(scaler.iqr)
+}
+
+function _median_sorted(sorted: ptr<f32>, n: i32) -> f32 {
+    if n == 0 {
+        return 0.0
+    }
+    if n % 2 == 0 {
+        return (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+    }
+    return sorted[n / 2]
+}
+
+# ============================================================================
+# MaxAbsScaler
+# Scales by maximum absolute value, preserves sparsity (0 stays 0).
+# ============================================================================
+
+export struct MaxAbsScaler {
+    max_abs: ptr<f32>,
+    n_features: i32,
+    fitted: bool
+}
+
+export function maxabs_scaler_fit(X: Matrix) -> MaxAbsScaler {
+    let n: i32 = X.cols
+    let max_abs: ptr<f32> = array_new_f32(n)
+
+    for j in 0 to n {
+        let mut m: f32 = 0.0
+        for i in 0 to X.rows {
+            let val: f32 = matrix_at(X, i, j)
+            if val < 0.0 {
+                let abs_val: f32 = 0.0 - val
+                if abs_val > m {
+                    m = abs_val
+                }
+            } else {
+                if val > m {
+                    m = val
+                }
+            }
+        }
+        if m < 1e-10 {
+            m = 1.0
+        }
+        max_abs[j] = m
+    }
+
+    return MaxAbsScaler { max_abs: max_abs, n_features: n, fitted: true }
+}
+
+export function maxabs_scaler_transform(scaler: MaxAbsScaler, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, X.cols)
+    for i in 0 to X.rows {
+        for j in 0 to X.cols {
+            matrix_set(result, i, j, matrix_at(X, i, j) / scaler.max_abs[j])
+        }
+    }
+    return result
+}
+
+export function maxabs_scaler_free(scaler: MaxAbsScaler) -> void {
+    array_free_f32(scaler.max_abs)
+}
+
+# ============================================================================
+# Normalizer
+# Normalizes samples to unit norm (L1, L2, or Max).
+# ============================================================================
+
+export const NORM_L1: i32 = 0
+export const NORM_L2: i32 = 1
+export const NORM_MAX: i32 = 2
+
+export struct Normalizer {
+    norm: i32,
+    fitted: bool
+}
+
+export function normalizer_init(norm: i32) -> Normalizer {
+    return Normalizer { norm: norm, fitted: true }
+}
+
+export function normalizer_transform(normalizer: Normalizer, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, X.cols)
+    for i in 0 to X.rows {
+        if normalizer.norm == NORM_L1 {
+            let mut sum: f32 = 0.0
+            for j in 0 to X.cols {
+                let val: f32 = matrix_at(X, i, j)
+                if val < 0.0 {
+                    sum = sum - val
+                } else {
+                    sum = sum + val
+                }
+            }
+            if sum < 1e-10 {
+                sum = 1.0
+            }
+            for j in 0 to X.cols {
+                matrix_set(result, i, j, matrix_at(X, i, j) / sum)
+            }
+        } elif normalizer.norm == NORM_L2 {
+            let mut sum_sq: f32 = 0.0
+            for j in 0 to X.cols {
+                let val: f32 = matrix_at(X, i, j)
+                sum_sq = sum_sq + val * val
+            }
+            let norm_val: f32 = sqrt(sum_sq as f64) as f32
+            if norm_val < 1e-10 {
+                norm_val = 1.0
+            }
+            for j in 0 to X.cols {
+                matrix_set(result, i, j, matrix_at(X, i, j) / norm_val)
+            }
+        } elif normalizer.norm == NORM_MAX {
+            let mut m: f32 = 0.0
+            for j in 0 to X.cols {
+                let val: f32 = matrix_at(X, i, j)
+                let abs_val: f32 = val
+                if val < 0.0 {
+                    abs_val = 0.0 - val
+                }
+                if abs_val > m {
+                    m = abs_val
+                }
+            }
+            if m < 1e-10 {
+                m = 1.0
+            }
+            for j in 0 to X.cols {
+                matrix_set(result, i, j, matrix_at(X, i, j) / m)
+            }
+        }
+    }
+    return result
+}
+
+# ============================================================================
+# Binarizer
+# Thresholds values to 0 or 1.
+# ============================================================================
+
+export struct Binarizer {
+    threshold: f32,
+    fitted: bool
+}
+
+export function binarizer_init(threshold: f32) -> Binarizer {
+    return Binarizer { threshold: threshold, fitted: true }
+}
+
+export function binarizer_transform(binarizer: Binarizer, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, X.cols)
+    for i in 0 to X.rows {
+        for j in 0 to X.cols {
+            if matrix_at(X, i, j) > binarizer.threshold {
+                matrix_set(result, i, j, 1.0)
+            } else {
+                matrix_set(result, i, j, 0.0)
+            }
+        }
+    }
+    return result
+}
+
+# ============================================================================
+# LabelEncoder
+# Encodes string-like labels (as f32) to contiguous integers 0..n_classes-1.
+# ============================================================================
+
+export struct LabelEncoder {
+    classes: ptr<f32>,
+    n_classes: i32,
+    fitted: bool
+}
+
+export function label_encoder_fit(y: ptr<f32>, n: i32) -> LabelEncoder {
+    let classes: ptr<f32> = array_new_f32(n)
+    let mut n_classes: i32 = 0
+
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_classes {
+            if classes[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_classes] = y[i]
+            n_classes = n_classes + 1
+        }
+    }
+
+    _insertion_sort(classes, n_classes)
+
+    return LabelEncoder { classes: classes, n_classes: n_classes, fitted: true }
+}
+
+export function label_encoder_transform(encoder: LabelEncoder, y: ptr<f32>, n: i32) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        for k in 0 to encoder.n_classes {
+            if encoder.classes[k] == y[i] {
+                result[i] = (k as f32)
+            }
+        }
+    }
+    return result
+}
+
+export function label_encoder_inverse_transform(encoder: LabelEncoder, y: ptr<f32>, n: i32) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let idx: i32 = y[i] as i32
+        if idx >= 0 && idx < encoder.n_classes {
+            result[i] = encoder.classes[idx]
+        } else {
+            result[i] = -1.0
+        }
+    }
+    return result
+}
+
+export function label_encoder_free(encoder: LabelEncoder) -> void {
+    array_free_f32(encoder.classes)
+}
+
+# ============================================================================
+# OrdinalEncoder
+# Encodes categorical features as ordinal integers.
+# ============================================================================
+
+export struct OrdinalEncoder {
+    categories: ptr<ptr<f32>>,
+    n_categories: ptr<i32>,
+    n_features: i32,
+    handle_unknown: i32,
+    fitted: bool
+}
+
+export function ordinal_encoder_fit(X: Matrix, handle_unknown: i32) -> OrdinalEncoder {
+    let n_features: i32 = X.cols
+    let cats: ptr<ptr<f32>> = malloc((n_features as i64) * 8) as ptr<ptr<f32>>
+    let n_cats: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+
+    for j in 0 to n_features {
+        let unique: ptr<f32> = array_new_f32(X.rows)
+        let mut n_unique: i32 = 0
+
+        for i in 0 to X.rows {
+            let val: f32 = matrix_at(X, i, j)
+            let mut found: bool = false
+            for k in 0 to n_unique {
+                if unique[k] == val {
+                    found = true
+                }
+            }
+            if not found {
+                unique[n_unique] = val
+                n_unique = n_unique + 1
+            }
+        }
+
+        _insertion_sort(unique, n_unique)
+        cats[j] = unique
+        n_cats[j] = n_unique
+    }
+
+    return OrdinalEncoder {
+        categories: cats,
+        n_categories: n_cats,
+        n_features: n_features,
+        handle_unknown: handle_unknown,
+        fitted: true
+    }
+}
+
+export function ordinal_encoder_transform(encoder: OrdinalEncoder, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, X.cols)
+
+    for j in 0 to encoder.n_features {
+        let cats: ptr<f32> = encoder.categories[j]
+        let n_cats: i32 = encoder.n_categories[j]
+
+        for i in 0 to X.rows {
+            let val: f32 = matrix_at(X, i, j)
+            let mut found_idx: i32 = -1
+            for k in 0 to n_cats {
+                if cats[k] == val {
+                    found_idx = k
+                }
+            }
+
+            if found_idx >= 0 {
+                matrix_set(result, i, j, (found_idx as f32))
+            } else {
+                if encoder.handle_unknown == HANDLE_UNKNOWN_WARN {
+                    print("[flow-scikit] WARNING: Unknown category in feature ")
+                    print(j)
+                    println(", encoding as -1")
+                }
+                matrix_set(result, i, j, -1.0)
+            }
+        }
+    }
+
+    return result
+}
+
+export function ordinal_encoder_free(encoder: OrdinalEncoder) -> void {
+    for j in 0 to encoder.n_features {
+        array_free_f32(encoder.categories[j])
+    }
+    free(encoder.categories as ptr<void>)
+    free(encoder.n_categories as ptr<void>)
+}
+
+# ============================================================================
+# KBinsDiscretizer
+# Discretizes continuous features into k bins.
+# ============================================================================
+
+export const KBINS_UNIFORM: i32 = 0
+export const KBINS_QUANTILE: i32 = 1
+export const KBINS_KMEANS: i32 = 2
+
+export struct KBinsDiscretizer {
+    bin_edges: ptr<ptr<f32>>,
+    n_bins: ptr<i32>,
+    n_features: i32,
+    strategy: i32,
+    requested_bins: i32,
+    fitted: bool
+}
+
+export function kbins_discretizer_fit(X: Matrix, n_bins: i32, strategy: i32) -> KBinsDiscretizer {
+    let n_features: i32 = X.cols
+    let bin_edges: ptr<ptr<f32>> = malloc((n_features as i64) * 8) as ptr<ptr<f32>>
+    let n_bins_arr: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+
+    for j in 0 to n_features {
+        let col: ptr<f32> = array_new_f32(X.rows)
+        for i in 0 to X.rows {
+            col[i] = matrix_at(X, i, j)
+        }
+        _insertion_sort(col, X.rows)
+
+        let edges: ptr<f32> = array_new_f32(n_bins + 1)
+
+        if strategy == KBINS_UNIFORM {
+            let min_val: f32 = col[0]
+            let max_val: f32 = col[X.rows - 1]
+            let range: f32 = max_val - min_val
+            if range < 1e-10 {
+                range = 1.0
+            }
+            for b in 0 to n_bins + 1 {
+                edges[b] = min_val + (range * (b as f32)) / (n_bins as f32)
+            }
+        } elif strategy == KBINS_QUANTILE {
+            for b in 0 to n_bins + 1 {
+                let idx: i32 = (b * X.rows) / n_bins
+                if idx >= X.rows {
+                    idx = X.rows - 1
+                }
+                edges[b] = col[idx]
+            }
+        } else {
+            let mut centroids: ptr<f32> = array_new_f32(n_bins)
+            for b in 0 to n_bins {
+                let idx: i32 = (b * X.rows) / n_bins
+                if idx >= X.rows {
+                    idx = X.rows - 1
+                }
+                centroids[b] = col[idx]
+            }
+            for _ in 0 to 10 {
+                let sums: ptr<f32> = array_new_f32(n_bins)
+                let counts: ptr<i32> = malloc((n_bins as i64) * 4) as ptr<i32>
+                for b in 0 to n_bins {
+                    counts[b] = 0
+                }
+                for i in 0 to X.rows {
+                    let mut best: i32 = 0
+                    let mut best_dist: f32 = (col[i] - centroids[0]) * (col[i] - centroids[0])
+                    for b in 1 to n_bins {
+                        let d: f32 = (col[i] - centroids[b]) * (col[i] - centroids[b])
+                        if d < best_dist {
+                            best_dist = d
+                            best = b
+                        }
+                    }
+                    sums[best] = sums[best] + col[i]
+                    counts[best] = counts[best] + 1
+                }
+                for b in 0 to n_bins {
+                    if counts[b] > 0 {
+                        centroids[b] = sums[b] / (counts[b] as f32)
+                    }
+                }
+                array_free_f32(sums)
+                free(counts as ptr<void>)
+            }
+            _insertion_sort(centroids, n_bins)
+            edges[0] = col[0]
+            for b in 1 to n_bins {
+                edges[b] = (centroids[b - 1] + centroids[b]) / 2.0
+            }
+            edges[n_bins] = col[X.rows - 1]
+            array_free_f32(centroids)
+        }
+
+        bin_edges[j] = edges
+        n_bins_arr[j] = n_bins
+        array_free_f32(col)
+    }
+
+    return KBinsDiscretizer {
+        bin_edges: bin_edges,
+        n_bins: n_bins_arr,
+        n_features: n_features,
+        strategy: strategy,
+        requested_bins: n_bins,
+        fitted: true
+    }
+}
+
+export function kbins_discretizer_transform(discretizer: KBinsDiscretizer, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, X.cols)
+
+    for j in 0 to discretizer.n_features {
+        let edges: ptr<f32> = discretizer.bin_edges[j]
+        let n_b: i32 = discretizer.n_bins[j]
+
+        for i in 0 to X.rows {
+            let val: f32 = matrix_at(X, i, j)
+            let mut bin: i32 = 0
+            for b in 1 to n_b {
+                if val >= edges[b] {
+                    bin = b
+                }
+            }
+            if bin >= n_b {
+                bin = n_b - 1
+            }
+            matrix_set(result, i, j, (bin as f32))
+        }
+    }
+
+    return result
+}
+
+export function kbins_discretizer_free(discretizer: KBinsDiscretizer) -> void {
+    for j in 0 to discretizer.n_features {
+        array_free_f32(discretizer.bin_edges[j])
+    }
+    free(discretizer.bin_edges as ptr<void>)
+    free(discretizer.n_bins as ptr<void>)
+}
+
+# ============================================================================
+# PolynomialFeatures
+# Generates polynomial and interaction features.
+# ============================================================================
+
+export struct PolynomialFeatures {
+    degree: i32,
+    interaction_only: bool,
+    include_bias: bool,
+    n_input_features: i32,
+    n_output_features: i32,
+    fitted: bool
+}
+
+export function polynomial_features_fit(n_features: i32, degree: i32, interaction_only: bool, include_bias: bool) -> PolynomialFeatures {
+    let mut n_output: i32 = 0
+    if include_bias {
+        n_output = 1
+    }
+
+    if interaction_only {
+        let mut combinations: i32 = 0
+        for d in 1 to degree + 1 {
+            let mut c: i32 = 1
+            for i in 0 to d {
+                c = c * (n_features - i)
+                c = c / (i + 1)
+            }
+            combinations = combinations + c
+        }
+        n_output = n_output + combinations
+    } else {
+        let mut total: i32 = 0
+        for d in 1 to degree + 1 {
+            let mut c: i32 = 1
+            for i in 0 to d {
+                c = c * (n_features + d - 1 - i)
+                c = c / (i + 1)
+            }
+            total = total + c
+        }
+        n_output = n_output + total
+    }
+
+    return PolynomialFeatures {
+        degree: degree,
+        interaction_only: interaction_only,
+        include_bias: include_bias,
+        n_input_features: n_features,
+        n_output_features: n_output,
+        fitted: true
+    }
+}
+
+export function polynomial_features_transform(pf: PolynomialFeatures, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, pf.n_output_features)
+
+    for i in 0 to X.rows {
+        let mut col: i32 = 0
+
+        if pf.include_bias {
+            matrix_set(result, i, col, 1.0)
+            col = col + 1
+        }
+
+        if pf.degree >= 1 {
+            for j in 0 to pf.n_input_features {
+                matrix_set(result, i, col, matrix_at(X, i, j))
+                col = col + 1
+            }
+        }
+
+        if pf.degree >= 2 {
+            for j in 0 to pf.n_input_features {
+                for k in j + 1 to pf.n_input_features {
+                    let val: f32 = matrix_at(X, i, j) * matrix_at(X, i, k)
+                    matrix_set(result, i, col, val)
+                    col = col + 1
+                }
+            }
+            if not pf.interaction_only {
+                for j in 0 to pf.n_input_features {
+                    let val: f32 = matrix_at(X, i, j) * matrix_at(X, i, j)
+                    matrix_set(result, i, col, val)
+                    col = col + 1
+                }
+            }
+        }
+
+        if pf.degree >= 3 {
+            for j in 0 to pf.n_input_features {
+                for k in j + 1 to pf.n_input_features {
+                    for l in k + 1 to pf.n_input_features {
+                        let val: f32 = matrix_at(X, i, j) * matrix_at(X, i, k) * matrix_at(X, i, l)
+                        matrix_set(result, i, col, val)
+                        col = col + 1
+                    }
+                }
+            }
+            if not pf.interaction_only {
+                for j in 0 to pf.n_input_features {
+                    let v: f32 = matrix_at(X, i, j)
+                    let val: f32 = v * v * v
+                    matrix_set(result, i, col, val)
+                    col = col + 1
+                }
+            }
+        }
+    }
+
+    return result
+}
+
+# ============================================================================
+# FunctionTransformer
+# Applies an arbitrary element-wise function (via function pointer pattern).
+# ============================================================================
+
+export const FUNC_LOG: i32 = 0
+export const FUNC_SQRT: i32 = 1
+export const FUNC_SQUARE: i32 = 2
+export const FUNC_ABS: i32 = 3
+export const FUNC_RECIPROCAL: i32 = 4
+
+export struct FunctionTransformer {
+    func_kind: i32,
+    validate: bool,
+    fitted: bool
+}
+
+export function function_transformer_init(func_kind: i32, validate: bool) -> FunctionTransformer {
+    return FunctionTransformer { func_kind: func_kind, validate: validate, fitted: true }
+}
+
+export function function_transformer_transform(ft: FunctionTransformer, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, X.cols)
+    for i in 0 to X.rows {
+        for j in 0 to X.cols {
+            let val: f32 = matrix_at(X, i, j)
+            if ft.func_kind == FUNC_LOG {
+                if val > 0.0 {
+                    matrix_set(result, i, j, log(val as f64) as f32)
+                } else {
+                    matrix_set(result, i, j, 0.0)
+                }
+            } elif ft.func_kind == FUNC_SQRT {
+                if val > 0.0 {
+                    matrix_set(result, i, j, sqrt(val as f64) as f32)
+                } else {
+                    matrix_set(result, i, j, 0.0)
+                }
+            } elif ft.func_kind == FUNC_SQUARE {
+                matrix_set(result, i, j, val * val)
+            } elif ft.func_kind == FUNC_ABS {
+                if val < 0.0 {
+                    matrix_set(result, i, j, 0.0 - val)
+                } else {
+                    matrix_set(result, i, j, val)
+                }
+            } elif ft.func_kind == FUNC_RECIPROCAL {
+                if val > 1e-10 || val < -1e-10 {
+                    matrix_set(result, i, j, 1.0 / val)
+                } else {
+                    matrix_set(result, i, j, 0.0)
+                }
+            }
+        }
+    }
+    return result
+}
+
+export function function_transformer_inverse_transform(ft: FunctionTransformer, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, X.cols)
+    for i in 0 to X.rows {
+        for j in 0 to X.cols {
+            let val: f32 = matrix_at(X, i, j)
+            if ft.func_kind == FUNC_LOG {
+                matrix_set(result, i, j, exp(val as f64) as f32)
+            } elif ft.func_kind == FUNC_SQRT {
+                matrix_set(result, i, j, val * val)
+            } elif ft.func_kind == FUNC_SQUARE {
+                if val > 0.0 {
+                    matrix_set(result, i, j, sqrt(val as f64) as f32)
+                } else {
+                    matrix_set(result, i, j, 0.0)
+                }
+            } elif ft.func_kind == FUNC_ABS {
+                matrix_set(result, i, j, val)
+            } elif ft.func_kind == FUNC_RECIPROCAL {
+                if val > 1e-10 || val < -1e-10 {
+                    matrix_set(result, i, j, 1.0 / val)
+                } else {
+                    matrix_set(result, i, j, 0.0)
+                }
+            }
+        }
+    }
+    return result
+}

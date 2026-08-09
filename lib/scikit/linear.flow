@@ -1,0 +1,930 @@
+# Linear models for flow-scikit.
+# Addresses Issue #28394:
+#   - Classifiers: predict returns probabilities, decide returns classes
+#   - Linear model API with terms, interactions, and penalties
+# Addresses Issue #30909: pos_label handled internally via classes_ array.
+
+import "lib/scikit/matrix.flow"
+import "lib/scikit/validation.flow"
+import "lib/scikit/progress.flow"
+
+# ============================================================================
+# Term specification for linear models (Issue #28394)
+# ============================================================================
+
+export const TERM_LINEAR: i32 = 0
+export const TERM_POLYNOMIAL: i32 = 1
+export const TERM_INTERACTION: i32 = 2
+export const TERM_SPLINE: i32 = 3
+
+export struct TermSpec {
+    feature_indices: ptr<i32>,
+    n_indices: i32,
+    degree: i32,
+    term_type: i32
+}
+
+export const PENALTY_NONE: i32 = 0
+export const PENALTY_L1: i32 = 1
+export const PENALTY_L2: i32 = 2
+export const PENALTY_ELASTICNET: i32 = 3
+
+export struct Penalty {
+    kind: i32,
+    alpha: f32,
+    l1_ratio: f32
+}
+
+export function penalty_none() -> Penalty {
+    return Penalty { kind: PENALTY_NONE, alpha: 0.0, l1_ratio: 0.0 }
+}
+
+export function penalty_l2(alpha: f32) -> Penalty {
+    return Penalty { kind: PENALTY_L2, alpha: alpha, l1_ratio: 0.0 }
+}
+
+export function penalty_l1(alpha: f32) -> Penalty {
+    return Penalty { kind: PENALTY_L1, alpha: alpha, l1_ratio: 1.0 }
+}
+
+export function penalty_elasticnet(alpha: f32, l1_ratio: f32) -> Penalty {
+    return Penalty { kind: PENALTY_ELASTICNET, alpha: alpha, l1_ratio: l1_ratio }
+}
+
+# ============================================================================
+# Feature expansion from TermSpec array
+# ============================================================================
+
+export function expand_features(X: Matrix, terms: ptr<TermSpec>, n_terms: i32) -> Matrix {
+    let mut total_cols: i32 = 0
+    for t in 0 to n_terms {
+        let term: TermSpec = terms[t]
+        if term.term_type == TERM_LINEAR {
+            total_cols = total_cols + term.n_indices
+        } elif term.term_type == TERM_POLYNOMIAL {
+            total_cols = total_cols + term.n_indices * term.degree
+        } elif term.term_type == TERM_INTERACTION {
+            total_cols = total_cols + 1
+        }
+    }
+
+    let result: Matrix = matrix_new(X.rows, total_cols)
+    let mut col: i32 = 0
+
+    for t in 0 to n_terms {
+        let term: TermSpec = terms[t]
+
+        if term.term_type == TERM_LINEAR {
+            for idx in 0 to term.n_indices {
+                let f_idx: i32 = term.feature_indices[idx]
+                for i in 0 to X.rows {
+                    matrix_set(result, i, col, matrix_at(X, i, f_idx))
+                }
+                col = col + 1
+            }
+        } elif term.term_type == TERM_POLYNOMIAL {
+            for idx in 0 to term.n_indices {
+                let f_idx: i32 = term.feature_indices[idx]
+                for d in 1 to term.degree + 1 {
+                    for i in 0 to X.rows {
+                        let val: f32 = matrix_at(X, i, f_idx)
+                        let mut powered: f32 = 1.0
+                        for _ in 0 to d {
+                            powered = powered * val
+                        }
+                        matrix_set(result, i, col, powered)
+                    }
+                    col = col + 1
+                }
+            }
+        } elif term.term_type == TERM_INTERACTION {
+            for i in 0 to X.rows {
+                let mut product: f32 = 1.0
+                for idx in 0 to term.n_indices {
+                    let f_idx: i32 = term.feature_indices[idx]
+                    product = product * matrix_at(X, i, f_idx)
+                }
+                matrix_set(result, i, col, product)
+            }
+            col = col + 1
+        }
+    }
+
+    return result
+}
+
+# ============================================================================
+# LinearRegression
+# ============================================================================
+
+export struct LinearRegression {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    penalty: Penalty,
+    fitted: bool
+}
+
+export function linear_regression_fit(X: Matrix, y: ptr<f32>, penalty: Penalty) -> LinearRegression {
+    let n: i32 = X.cols
+    let weights: ptr<f32> = array_new_f32(n)
+    let bias: f32 = 0.0
+
+    let lr: f32 = 0.01
+    let epochs: i32 = 1000
+
+    for epoch in 0 to epochs {
+        let grad_w: ptr<f32> = array_new_f32(n)
+        let mut grad_b: f32 = 0.0
+
+        for i in 0 to X.rows {
+            let mut pred: f32 = bias
+            for j in 0 to n {
+                pred = pred + weights[j] * matrix_at(X, i, j)
+            }
+            let err: f32 = pred - y[i]
+
+            for j in 0 to n {
+                grad_w[j] = grad_w[j] + err * matrix_at(X, i, j)
+            }
+            grad_b = grad_b + err
+        }
+
+        let inv_n: f32 = 1.0 / (X.rows as f32)
+        for j in 0 to n {
+            grad_w[j] = grad_w[j] * inv_n
+            if penalty.kind == PENALTY_L2 || penalty.kind == PENALTY_ELASTICNET {
+                grad_w[j] = grad_w[j] + penalty.alpha * weights[j] * (1.0 - penalty.l1_ratio)
+            }
+            if penalty.kind == PENALTY_L1 || penalty.kind == PENALTY_ELASTICNET {
+                if weights[j] > 0.0 {
+                    grad_w[j] = grad_w[j] + penalty.alpha * penalty.l1_ratio
+                } else {
+                    grad_w[j] = grad_w[j] - penalty.alpha * penalty.l1_ratio
+                }
+            }
+            weights[j] = weights[j] - lr * grad_w[j]
+        }
+        bias = bias - lr * grad_b * inv_n
+
+        array_free_f32(grad_w)
+    }
+
+    return LinearRegression { weights: weights, bias: bias, n_features: n, penalty: penalty, fitted: true }
+}
+
+export function linear_regression_predict(model: LinearRegression, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut pred: f32 = model.bias
+        for j in 0 to model.n_features {
+            pred = pred + model.weights[j] * matrix_at(X, i, j)
+        }
+        preds[i] = pred
+    }
+    return preds
+}
+
+export function linear_regression_free(model: LinearRegression) -> void {
+    array_free_f32(model.weights)
+}
+
+# ============================================================================
+# LogisticRegression
+# Addresses Issue #28394: predict returns probabilities, decide returns classes
+# Addresses Issue #30909: pos_label handled internally via classes_ array
+# ============================================================================
+
+export struct LogisticRegression {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    classes: ptr<f32>,
+    n_classes: i32,
+    penalty: Penalty,
+    fitted: bool
+}
+
+export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, epochs: i32, lr: f32, penalty: Penalty) -> LogisticRegression {
+    let n: i32 = X.cols
+    let weights: ptr<f32> = array_new_f32(n)
+    let bias: f32 = 0.0
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to X.rows {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    for epoch in 0 to epochs {
+        let grad_w: ptr<f32> = array_new_f32(n)
+        let mut grad_b: f32 = 0.0
+
+        for i in 0 to X.rows {
+            let mut z: f32 = bias
+            for j in 0 to n {
+                z = z + weights[j] * matrix_at(X, i, j)
+            }
+            let p: f32 = sigmoid(z)
+            let label: f32 = 0.0
+            if y[i] == classes[1] {
+                label = 1.0
+            }
+            let err: f32 = p - label
+
+            for j in 0 to n {
+                grad_w[j] = grad_w[j] + err * matrix_at(X, i, j)
+            }
+            grad_b = grad_b + err
+        }
+
+        let inv_n: f32 = 1.0 / (X.rows as f32)
+        for j in 0 to n {
+            grad_w[j] = grad_w[j] * inv_n
+            if penalty.kind == PENALTY_L2 || penalty.kind == PENALTY_ELASTICNET {
+                grad_w[j] = grad_w[j] + penalty.alpha * weights[j] * (1.0 - penalty.l1_ratio)
+            }
+            weights[j] = weights[j] - lr * grad_w[j]
+        }
+        bias = bias - lr * grad_b * inv_n
+
+        if epoch % 100 == 0 {
+            let mut total_loss: f32 = 0.0
+            for i in 0 to X.rows {
+                let mut z: f32 = bias
+                for j in 0 to n {
+                    z = z + weights[j] * matrix_at(X, i, j)
+                }
+                let p: f32 = sigmoid(z)
+                let label: f32 = 0.0
+                if y[i] == classes[1] {
+                    label = 1.0
+                }
+                let mut loss: f32 = 0.0
+                if label > 0.5 {
+                    if p > 1e-10 {
+                        loss = -log(p as f64) as f32
+                    }
+                } else {
+                    if p < 1.0 - 1e-10 {
+                        loss = -log((1.0 - p) as f64) as f32
+                    }
+                }
+                total_loss = total_loss + loss
+            }
+            Progress.on_epoch_start(epoch, epochs, total_loss / (X.rows as f32))
+        }
+
+        array_free_f32(grad_w)
+    }
+
+    return LogisticRegression {
+        weights: weights,
+        bias: bias,
+        n_features: n,
+        classes: classes,
+        n_classes: n_classes,
+        penalty: penalty,
+        fitted: true
+    }
+}
+
+export function logistic_predict_proba(model: LogisticRegression, X: Matrix) -> ptr<f32> {
+    let probs: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut z: f32 = model.bias
+        for j in 0 to model.n_features {
+            z = z + model.weights[j] * matrix_at(X, i, j)
+        }
+        probs[i] = sigmoid(z)
+    }
+    return probs
+}
+
+export function logistic_predict(model: LogisticRegression, X: Matrix) -> ptr<f32> {
+    return logistic_predict_proba(model, X)
+}
+
+export function logistic_decide(model: LogisticRegression, probs: ptr<f32>, n_samples: i32, threshold: f32) -> ptr<f32> {
+    let labels: ptr<f32> = array_new_f32(n_samples)
+    for i in 0 to n_samples {
+        if probs[i] >= threshold {
+            labels[i] = model.classes[1]
+        } else {
+            labels[i] = model.classes[0]
+        }
+    }
+    return labels
+}
+
+export function logistic_decision_function(model: LogisticRegression, X: Matrix) -> ptr<f32> {
+    let scores: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut z: f32 = model.bias
+        for j in 0 to model.n_features {
+            z = z + model.weights[j] * matrix_at(X, i, j)
+        }
+        scores[i] = z
+    }
+    return scores
+}
+
+export function logistic_regression_free(model: LogisticRegression) -> void {
+    array_free_f32(model.weights)
+    array_free_f32(model.classes)
+}
+
+# ============================================================================
+# Ridge Regression (L2-penalized linear regression with closed-form-ish GD)
+# ============================================================================
+
+export struct Ridge {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    alpha: f32,
+    fitted: bool
+}
+
+export function ridge_fit(X: Matrix, y: ptr<f32>, alpha: f32, epochs: i32, lr: f32) -> Ridge {
+    let n: i32 = X.cols
+    let weights: ptr<f32> = array_new_f32(n)
+    let bias: f32 = 0.0
+
+    for epoch in 0 to epochs {
+        let grad_w: ptr<f32> = array_new_f32(n)
+        let mut grad_b: f32 = 0.0
+
+        for i in 0 to X.rows {
+            let mut pred: f32 = bias
+            for j in 0 to n {
+                pred = pred + weights[j] * matrix_at(X, i, j)
+            }
+            let err: f32 = pred - y[i]
+            for j in 0 to n {
+                grad_w[j] = grad_w[j] + err * matrix_at(X, i, j)
+            }
+            grad_b = grad_b + err
+        }
+
+        let inv_n: f32 = 1.0 / (X.rows as f32)
+        for j in 0 to n {
+            grad_w[j] = grad_w[j] * inv_n + alpha * weights[j]
+            weights[j] = weights[j] - lr * grad_w[j]
+        }
+        bias = bias - lr * grad_b * inv_n
+        array_free_f32(grad_w)
+    }
+
+    return Ridge { weights: weights, bias: bias, n_features: n, alpha: alpha, fitted: true }
+}
+
+export function ridge_predict(model: Ridge, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut pred: f32 = model.bias
+        for j in 0 to model.n_features {
+            pred = pred + model.weights[j] * matrix_at(X, i, j)
+        }
+        preds[i] = pred
+    }
+    return preds
+}
+
+export function ridge_free(model: Ridge) -> void {
+    array_free_f32(model.weights)
+}
+
+# ============================================================================
+# Lasso Regression (L1-penalized, uses soft-thresholding)
+# ============================================================================
+
+export struct Lasso {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    alpha: f32,
+    fitted: bool
+}
+
+export function lasso_fit(X: Matrix, y: ptr<f32>, alpha: f32, epochs: i32, lr: f32) -> Lasso {
+    let n: i32 = X.cols
+    let weights: ptr<f32> = array_new_f32(n)
+    let bias: f32 = 0.0
+
+    for epoch in 0 to epochs {
+        let grad_w: ptr<f32> = array_new_f32(n)
+        let mut grad_b: f32 = 0.0
+
+        for i in 0 to X.rows {
+            let mut pred: f32 = bias
+            for j in 0 to n {
+                pred = pred + weights[j] * matrix_at(X, i, j)
+            }
+            let err: f32 = pred - y[i]
+            for j in 0 to n {
+                grad_w[j] = grad_w[j] + err * matrix_at(X, i, j)
+            }
+            grad_b = grad_b + err
+        }
+
+        let inv_n: f32 = 1.0 / (X.rows as f32)
+        for j in 0 to n {
+            grad_w[j] = grad_w[j] * inv_n
+            weights[j] = weights[j] - lr * grad_w[j]
+            if weights[j] > alpha {
+                weights[j] = weights[j] - alpha
+            } elif weights[j] < -alpha {
+                weights[j] = weights[j] + alpha
+            } else {
+                weights[j] = 0.0
+            }
+        }
+        bias = bias - lr * grad_b * inv_n
+        array_free_f32(grad_w)
+    }
+
+    return Lasso { weights: weights, bias: bias, n_features: n, alpha: alpha, fitted: true }
+}
+
+export function lasso_predict(model: Lasso, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut pred: f32 = model.bias
+        for j in 0 to model.n_features {
+            pred = pred + model.weights[j] * matrix_at(X, i, j)
+        }
+        preds[i] = pred
+    }
+    return preds
+}
+
+export function lasso_free(model: Lasso) -> void {
+    array_free_f32(model.weights)
+}
+
+# ============================================================================
+# SGDClassifier (linear classifier with SGD, supports log/hinge loss)
+# Addresses Issue #28394: predict returns probabilities, decide returns classes
+# ============================================================================
+
+export const SGD_LOSS_LOG: i32 = 0
+export const SGD_LOSS_HINGE: i32 = 1
+export const SGD_LOSS_MODIFIED_HUBER: i32 = 2
+
+export struct SGDClassifier {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    classes: ptr<f32>,
+    n_classes: i32,
+    loss: i32,
+    alpha: f32,
+    fitted: bool
+}
+
+export function sgd_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, loss: i32, alpha: f32, epochs: i32, lr: f32) -> SGDClassifier {
+    let n: i32 = X.cols
+    let weights: ptr<f32> = array_new_f32(n)
+    let bias: f32 = 0.0
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to X.rows {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    for epoch in 0 to epochs {
+        for i in 0 to X.rows {
+            let mut z: f32 = bias
+            for j in 0 to n {
+                z = z + weights[j] * matrix_at(X, i, j)
+            }
+
+            let label: f32 = 0.0
+            if y[i] == classes[1] {
+                label = 1.0
+            }
+
+            let mut grad_z: f32 = 0.0
+            if loss == SGD_LOSS_LOG {
+                let p: f32 = sigmoid(z)
+                grad_z = p - label
+            } elif loss == SGD_LOSS_HINGE {
+                let margin: f32 = label * 2.0 - 1.0
+                if margin * z < 1.0 {
+                    grad_z = -margin
+                }
+            } elif loss == SGD_LOSS_MODIFIED_HUBER {
+                let margin: f32 = label * 2.0 - 1.0
+                if margin * z < -1.0 {
+                    grad_z = -4.0 * margin
+                } elif margin * z < 1.0 {
+                    grad_z = -2.0 * margin * (1.0 - margin * z)
+                }
+            }
+
+            for j in 0 to n {
+                weights[j] = weights[j] - lr * (grad_z * matrix_at(X, i, j) + alpha * weights[j])
+            }
+            bias = bias - lr * grad_z
+        }
+    }
+
+    return SGDClassifier {
+        weights: weights,
+        bias: bias,
+        n_features: n,
+        classes: classes,
+        n_classes: n_classes,
+        loss: loss,
+        alpha: alpha,
+        fitted: true
+    }
+}
+
+export function sgd_classifier_predict(model: SGDClassifier, X: Matrix) -> ptr<f32> {
+    let probs: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut z: f32 = model.bias
+        for j in 0 to model.n_features {
+            z = z + model.weights[j] * matrix_at(X, i, j)
+        }
+        probs[i] = sigmoid(z)
+    }
+    return probs
+}
+
+export function sgd_classifier_decide(model: SGDClassifier, probs: ptr<f32>, n_samples: i32, threshold: f32) -> ptr<f32> {
+    let labels: ptr<f32> = array_new_f32(n_samples)
+    for i in 0 to n_samples {
+        if probs[i] >= threshold {
+            labels[i] = model.classes[1]
+        } else {
+            labels[i] = model.classes[0]
+        }
+    }
+    return labels
+}
+
+export function sgd_classifier_free(model: SGDClassifier) -> void {
+    array_free_f32(model.weights)
+    array_free_f32(model.classes)
+}
+
+# ============================================================================
+# SGDRegressor (linear regression with SGD, supports squared/epsilon-insensitive)
+# ============================================================================
+
+export const SGD_REG_LOSS_SQUARED: i32 = 0
+export const SGD_REG_LOSS_HUBER: i32 = 1
+export const SGD_REG_LOSS_EPSILON_INSENSITIVE: i32 = 2
+
+export struct SGDRegressor {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    alpha: f32,
+    epsilon: f32,
+    loss: i32,
+    fitted: bool
+}
+
+export function sgd_regressor_fit(X: Matrix, y: ptr<f32>, loss: i32, alpha: f32, epsilon: f32, epochs: i32, lr: f32) -> SGDRegressor {
+    let n: i32 = X.cols
+    let weights: ptr<f32> = array_new_f32(n)
+    let bias: f32 = 0.0
+
+    for epoch in 0 to epochs {
+        for i in 0 to X.rows {
+            let mut pred: f32 = bias
+            for j in 0 to n {
+                pred = pred + weights[j] * matrix_at(X, i, j)
+            }
+            let err: f32 = pred - y[i]
+
+            let mut grad_z: f32 = 0.0
+            if loss == SGD_REG_LOSS_SQUARED {
+                grad_z = err
+            } elif loss == SGD_REG_LOSS_HUBER {
+                if err > epsilon {
+                    grad_z = 1.0
+                } elif err < -epsilon {
+                    grad_z = -1.0
+                } else {
+                    grad_z = err / epsilon
+                }
+            } elif loss == SGD_REG_LOSS_EPSILON_INSENSITIVE {
+                if err > epsilon {
+                    grad_z = 1.0
+                } elif err < -epsilon {
+                    grad_z = -1.0
+                }
+            }
+
+            for j in 0 to n {
+                weights[j] = weights[j] - lr * (grad_z * matrix_at(X, i, j) + alpha * weights[j])
+            }
+            bias = bias - lr * grad_z
+        }
+    }
+
+    return SGDRegressor {
+        weights: weights,
+        bias: bias,
+        n_features: n,
+        alpha: alpha,
+        epsilon: epsilon,
+        loss: loss,
+        fitted: true
+    }
+}
+
+export function sgd_regressor_predict(model: SGDRegressor, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut pred: f32 = model.bias
+        for j in 0 to model.n_features {
+            pred = pred + model.weights[j] * matrix_at(X, i, j)
+        }
+        preds[i] = pred
+    }
+    return preds
+}
+
+export function sgd_regressor_free(model: SGDRegressor) -> void {
+    array_free_f32(model.weights)
+}
+
+# ============================================================================
+# MultiClassLogisticRegression (softmax regression)
+# Handles n_classes > 2 via one-vs-rest softmax.
+# Addresses Issue #28394: predict returns probabilities, decide returns classes.
+# ============================================================================
+
+export struct MultiClassLogisticRegression {
+    weights: ptr<ptr<f32>>,
+    bias: ptr<f32>,
+    n_features: i32,
+    classes: ptr<f32>,
+    n_classes: i32,
+    penalty: Penalty,
+    fitted: bool
+}
+
+export function multiclass_logistic_fit(X: Matrix, y: ptr<f32>, n_classes: i32, epochs: i32, lr: f32, penalty: Penalty) -> MultiClassLogisticRegression {
+    let n: i32 = X.cols
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to X.rows {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let weights: ptr<ptr<f32>> = malloc((n_classes as i64) * 8) as ptr<ptr<f32>>
+    let bias: ptr<f32> = array_new_f32(n_classes)
+
+    for c in 0 to n_classes {
+        weights[c] = array_new_f32(n)
+    }
+
+    for epoch in 0 to epochs {
+        let grads: ptr<ptr<f32>> = malloc((n_classes as i64) * 8) as ptr<ptr<f32>>
+        let grad_b: ptr<f32> = array_new_f32(n_classes)
+        for c in 0 to n_classes {
+            grads[c] = array_new_f32(n)
+        }
+
+        for i in 0 to X.rows {
+            let logits: ptr<f32> = array_new_f32(n_classes)
+            for c in 0 to n_classes {
+                let mut z: f32 = bias[c]
+                for j in 0 to n {
+                    z = z + weights[c][j] * matrix_at(X, i, j)
+                }
+                logits[c] = z
+            }
+
+            let probs: ptr<f32> = _softmax(logits, n_classes)
+
+            let true_c: i32 = 0
+            for c in 0 to n_classes {
+                if classes[c] == y[i] {
+                    true_c = c
+                }
+            }
+
+            for c in 0 to n_classes {
+                let err: f32 = probs[c]
+                if c == true_c {
+                    err = err - 1.0
+                }
+                for j in 0 to n {
+                    grads[c][j] = grads[c][j] + err * matrix_at(X, i, j)
+                }
+                grad_b[c] = grad_b[c] + err
+            }
+
+            array_free_f32(logits)
+            array_free_f32(probs)
+        }
+
+        let inv_n: f32 = 1.0 / (X.rows as f32)
+        for c in 0 to n_classes {
+            for j in 0 to n {
+                let g: f32 = grads[c][j] * inv_n
+                if penalty.kind == PENALTY_L2 || penalty.kind == PENALTY_ELASTICNET {
+                    g = g + penalty.alpha * weights[c][j] * (1.0 - penalty.l1_ratio)
+                }
+                weights[c][j] = weights[c][j] - lr * g
+            }
+            bias[c] = bias[c] - lr * grad_b[c] * inv_n
+            array_free_f32(grads[c])
+        }
+        free(grads as ptr<void>)
+        array_free_f32(grad_b)
+    }
+
+    return MultiClassLogisticRegression {
+        weights: weights,
+        bias: bias,
+        n_features: n,
+        classes: classes,
+        n_classes: n_classes,
+        penalty: penalty,
+        fitted: true
+    }
+}
+
+function _softmax(logits: ptr<f32>, n: i32) -> ptr<f32> {
+    let mut max_val: f32 = logits[0]
+    for i in 1 to n {
+        if logits[i] > max_val {
+            max_val = logits[i]
+        }
+    }
+
+    let probs: ptr<f32> = array_new_f32(n)
+    let mut sum: f32 = 0.0
+    for i in 0 to n {
+        probs[i] = exp((logits[i] - max_val) as f64) as f32
+        sum = sum + probs[i]
+    }
+    for i in 0 to n {
+        probs[i] = probs[i] / sum
+    }
+    return probs
+}
+
+export function multiclass_logistic_predict(model: MultiClassLogisticRegression, X: Matrix) -> Matrix {
+    let probs: Matrix = matrix_new(X.rows, model.n_classes)
+    for i in 0 to X.rows {
+        let logits: ptr<f32> = array_new_f32(model.n_classes)
+        for c in 0 to model.n_classes {
+            let mut z: f32 = model.bias[c]
+            for j in 0 to model.n_features {
+                z = z + model.weights[c][j] * matrix_at(X, i, j)
+            }
+            logits[c] = z
+        }
+        let p: ptr<f32> = _softmax(logits, model.n_classes)
+        for c in 0 to model.n_classes {
+            matrix_set(probs, i, c, p[c])
+        }
+        array_free_f32(logits)
+        array_free_f32(p)
+    }
+    return probs
+}
+
+export function multiclass_logistic_decide(model: MultiClassLogisticRegression, probs: Matrix) -> ptr<f32> {
+    let labels: ptr<f32> = array_new_f32(probs.rows)
+    for i in 0 to probs.rows {
+        let mut best_c: i32 = 0
+        let mut best_p: f32 = matrix_at(probs, i, 0)
+        for c in 1 to model.n_classes {
+            let p: f32 = matrix_at(probs, i, c)
+            if p > best_p {
+                best_p = p
+                best_c = c
+            }
+        }
+        labels[i] = model.classes[best_c]
+    }
+    return labels
+}
+
+export function multiclass_logistic_free(model: MultiClassLogisticRegression) -> void {
+    for c in 0 to model.n_classes {
+        array_free_f32(model.weights[c])
+    }
+    free(model.weights as ptr<void>)
+    array_free_f32(model.bias)
+    array_free_f32(model.classes)
+}
+
+# ============================================================================
+# ElasticNet (L1 + L2 penalized regression)
+# ============================================================================
+
+export struct ElasticNet {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    alpha: f32,
+    l1_ratio: f32,
+    fitted: bool
+}
+
+export function elastic_net_fit(X: Matrix, y: ptr<f32>, alpha: f32, l1_ratio: f32, epochs: i32, lr: f32) -> ElasticNet {
+    let n: i32 = X.cols
+    let weights: ptr<f32> = array_new_f32(n)
+    let bias: f32 = 0.0
+
+    let l1: f32 = alpha * l1_ratio
+    let l2: f32 = alpha * (1.0 - l1_ratio)
+
+    for epoch in 0 to epochs {
+        let grad_w: ptr<f32> = array_new_f32(n)
+        let mut grad_b: f32 = 0.0
+
+        for i in 0 to X.rows {
+            let mut pred: f32 = bias
+            for j in 0 to n {
+                pred = pred + weights[j] * matrix_at(X, i, j)
+            }
+            let err: f32 = pred - y[i]
+            for j in 0 to n {
+                grad_w[j] = grad_w[j] + err * matrix_at(X, i, j)
+            }
+            grad_b = grad_b + err
+        }
+
+        let inv_n: f32 = 1.0 / (X.rows as f32)
+        for j in 0 to n {
+            grad_w[j] = grad_w[j] * inv_n + l2 * weights[j]
+            weights[j] = weights[j] - lr * grad_w[j]
+            if weights[j] > l1 {
+                weights[j] = weights[j] - l1
+            } elif weights[j] < -l1 {
+                weights[j] = weights[j] + l1
+            } else {
+                weights[j] = 0.0
+            }
+        }
+        bias = bias - lr * grad_b * inv_n
+        array_free_f32(grad_w)
+    }
+
+    return ElasticNet {
+        weights: weights,
+        bias: bias,
+        n_features: n,
+        alpha: alpha,
+        l1_ratio: l1_ratio,
+        fitted: true
+    }
+}
+
+export function elastic_net_predict(model: ElasticNet, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut pred: f32 = model.bias
+        for j in 0 to model.n_features {
+            pred = pred + model.weights[j] * matrix_at(X, i, j)
+        }
+        preds[i] = pred
+    }
+    return preds
+}
+
+export function elastic_net_free(model: ElasticNet) -> void {
+    array_free_f32(model.weights)
+}

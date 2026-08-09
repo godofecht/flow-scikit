@@ -1,0 +1,225 @@
+# Matrix type and operations for flow-scikit.
+# Uses flat row-major storage with ptr<f32> for dynamic allocation.
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function calloc(n: i64, size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function memcpy(dst: ptr<void>, src: ptr<void>, n: i64) -> ptr<void>
+    function memset(p: ptr<void>, val: i32, n: i64) -> ptr<void>
+    function sqrt(x: f64) -> f64
+    function exp(x: f64) -> f64
+    function log(x: f64) -> f64
+    function fabs(x: f64) -> f64
+    function printf(fmt: string, ...) -> i32
+}
+
+export struct Matrix {
+    data: ptr<f32>,
+    rows: i32,
+    cols: i32
+}
+
+export struct Dataset {
+    X: Matrix,
+    y: ptr<f32>,
+    n_samples: i32,
+    n_features: i32,
+    n_classes: i32,
+    is_classification: bool
+}
+
+export function matrix_new(rows: i32, cols: i32) -> Matrix {
+    let n: i64 = (rows as i64) * (cols as i64) * 4
+    let p: ptr<void> = calloc(n, 1)
+    return Matrix { data: p as ptr<f32>, rows: rows, cols: cols }
+}
+
+export function matrix_free(m: Matrix) -> void {
+    free(m.data as ptr<void>)
+}
+
+export function matrix_at(m: Matrix, row: i32, col: i32) -> f32 {
+    let idx: i32 = row * m.cols + col
+    return m.data[idx]
+}
+
+export function matrix_set(m: Matrix, row: i32, col: i32, val: f32) -> void {
+    let idx: i32 = row * m.cols + col
+    m.data[idx] = val
+}
+
+export function matrix_row(m: Matrix, row: i32, out: ptr<f32>) -> void {
+    let start: i32 = row * m.cols
+    for j in 0 to m.cols {
+        out[j] = m.data[start + j]
+    }
+}
+
+export function matrix_copy(m: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(m.rows, m.cols)
+    let n: i64 = (m.rows as i64) * (m.cols as i64) * 4
+    memcpy(result.data as ptr<void>, m.data as ptr<void>, n)
+    return result
+}
+
+export function matrix_transpose(m: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(m.cols, m.rows)
+    for i in 0 to m.rows {
+        for j in 0 to m.cols {
+            matrix_set(result, j, i, matrix_at(m, i, j))
+        }
+    }
+    return result
+}
+
+export function matrix_multiply(a: Matrix, b: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(a.rows, b.cols)
+    for i in 0 to a.rows {
+        for j in 0 to b.cols {
+            let mut sum: f32 = 0.0
+            for k in 0 to a.cols {
+                sum = sum + matrix_at(a, i, k) * matrix_at(b, k, j)
+            }
+            matrix_set(result, i, j, sum)
+        }
+    }
+    return result
+}
+
+export function matrix_multiply_vec(a: Matrix, v: ptr<f32>, out: ptr<f32>) -> void {
+    for i in 0 to a.rows {
+        let mut sum: f32 = 0.0
+        for j in 0 to a.cols {
+            sum = sum + matrix_at(a, i, j) * v[j]
+        }
+        out[i] = sum
+    }
+}
+
+export function matrix_add_bias_col(m: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(m.rows, m.cols + 1)
+    for i in 0 to m.rows {
+        matrix_set(result, i, 0, 1.0)
+        for j in 0 to m.cols {
+            matrix_set(result, i, j + 1, matrix_at(m, i, j))
+        }
+    }
+    return result
+}
+
+export function matrix_fill(m: Matrix, val: f32) -> void {
+    let n: i32 = m.rows * m.cols
+    for i in 0 to n {
+        m.data[i] = val
+    }
+}
+
+export function matrix_print(m: Matrix) -> void {
+    for i in 0 to m.rows {
+        print("  [")
+        for j in 0 to m.cols {
+            printf("%.4f", matrix_at(m, i, j))
+            if j < m.cols - 1 {
+                print(", ")
+            }
+        }
+        println("]")
+    }
+}
+
+export function array_new_f32(n: i32) -> ptr<f32> {
+    let p: ptr<void> = calloc((n as i64) * 4, 1)
+    return p as ptr<f32>
+}
+
+export function array_free_f32(p: ptr<f32>) -> void {
+    free(p as ptr<void>)
+}
+
+export function array_copy_f32(src: ptr<f32>, n: i32) -> ptr<f32> {
+    let dst: ptr<f32> = array_new_f32(n)
+    memcpy(dst as ptr<void>, src as ptr<void>, (n as i64) * 4)
+    return dst
+}
+
+export function array_mean(a: ptr<f32>, n: i32) -> f32 {
+    let mut sum: f32 = 0.0
+    for i in 0 to n {
+        sum = sum + a[i]
+    }
+    return sum / (n as f32)
+}
+
+export function array_std(a: ptr<f32>, n: i32, mean: f32) -> f32 {
+    let mut sum_sq: f32 = 0.0
+    for i in 0 to n {
+        let d: f32 = a[i] - mean
+        sum_sq = sum_sq + d * d
+    }
+    return sqrt((sum_sq / (n as f32)) as f64) as f32
+}
+
+export function array_min_val(a: ptr<f32>, n: i32) -> f32 {
+    let mut m: f32 = a[0]
+    for i in 1 to n {
+        if a[i] < m {
+            m = a[i]
+        }
+    }
+    return m
+}
+
+export function array_max_val(a: ptr<f32>, n: i32) -> f32 {
+    let mut m: f32 = a[0]
+    for i in 1 to n {
+        if a[i] > m {
+            m = a[i]
+        }
+    }
+    return m
+}
+
+export function array_argmax(a: ptr<f32>, n: i32) -> i32 {
+    let mut best_idx: i32 = 0
+    let mut best_val: f32 = a[0]
+    for i in 1 to n {
+        if a[i] > best_val {
+            best_val = a[i]
+            best_idx = i
+        }
+    }
+    return best_idx
+}
+
+export function array_dot(a: ptr<f32>, b: ptr<f32>, n: i32) -> f32 {
+    let mut sum: f32 = 0.0
+    for i in 0 to n {
+        sum = sum + a[i] * b[i]
+    }
+    return sum
+}
+
+export function array_scale(a: ptr<f32>, n: i32, factor: f32) -> void {
+    for i in 0 to n {
+        a[i] = a[i] * factor
+    }
+}
+
+export function array_axpy(a: ptr<f32>, b: ptr<f32>, n: i32, alpha: f32) -> void {
+    for i in 0 to n {
+        b[i] = b[i] + alpha * a[i]
+    }
+}
+
+export function sigmoid(x: f32) -> f32 {
+    return 1.0 / (1.0 + exp((0.0 - x) as f64) as f32)
+}
+
+export function dot_product(a: ptr<f32>, b: ptr<f32>, n: i32) -> f32 {
+    let mut sum: f32 = 0.0
+    for i in 0 to n {
+        sum = sum + a[i] * b[i]
+    }
+    return sum
+}

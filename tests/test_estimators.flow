@@ -1,0 +1,370 @@
+# Tests for tree, ensemble, naive_bayes, cluster, decomposition modules.
+# Run: ./flow run tests/test_estimators.flow
+
+import "lib/scikit/scikit.flow"
+
+function make_classification_data() -> Dataset {
+    let n: i32 = 40
+    let X: Matrix = matrix_new(n, 2)
+    let y: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to 20 {
+        matrix_set(X, i, 0, 1.0 + _noise(i))
+        matrix_set(X, i, 1, 1.0 + _noise(i + 100))
+        y[i] = 0.0
+    }
+    for i in 0 to 20 {
+        matrix_set(X, 20 + i, 0, -1.0 + _noise(i + 200))
+        matrix_set(X, 20 + i, 1, -1.0 + _noise(i + 300))
+        y[20 + i] = 1.0
+    }
+
+    return Dataset { X: X, y: y, n_samples: n, n_features: 2, n_classes: 2, is_classification: true }
+}
+
+function _noise(seed: i32) -> f32 {
+    let s: i32 = seed * 1103515245 + 12345
+    let n: i32 = (s % 100 + 100) % 100
+    return ((n as f32) / 100.0 - 0.5) * 0.3
+}
+
+function test_decision_tree() -> i32 {
+    println("Test: DecisionTreeClassifier")
+    let data: Dataset = make_classification_data()
+
+    let tree: DecisionTreeClassifier = decision_tree_classifier_fit(data.X, data.y, 2, 5, CRITERION_GINI)
+    let preds: ptr<f32> = decision_tree_classifier_predict(tree, data.X)
+
+    let acc: f32 = accuracy_score(data.y, preds, data.n_samples)
+    if acc < 0.7 {
+        println("  FAIL: accuracy should be > 0.7 for linearly separable data")
+        return 1
+    }
+
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+
+    decision_tree_classifier_free(tree)
+    array_free_f32(preds)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+    return 0
+}
+
+function test_random_forest() -> i32 {
+    println("Test: RandomForestClassifier")
+    let data: Dataset = make_classification_data()
+
+    let rf: RandomForestClassifier = random_forest_classifier_fit(data.X, data.y, 2, 10, 5, 42)
+    let preds: ptr<f32> = random_forest_classifier_predict(rf, data.X)
+
+    let acc: f32 = accuracy_score(data.y, preds, data.n_samples)
+    if acc < 0.7 {
+        println("  FAIL: accuracy should be > 0.7")
+        return 1
+    }
+
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+
+    random_forest_classifier_free(rf)
+    array_free_f32(preds)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+    return 0
+}
+
+function test_gaussian_nb() -> i32 {
+    println("Test: GaussianNB")
+    let data: Dataset = make_classification_data()
+
+    let nb: GaussianNB = gaussian_nb_fit(data.X, data.y, 2, 1e-9)
+    let preds: ptr<f32> = gaussian_nb_predict(nb, data.X)
+
+    let acc: f32 = accuracy_score(data.y, preds, data.n_samples)
+    if acc < 0.6 {
+        println("  FAIL: accuracy should be > 0.6")
+        return 1
+    }
+
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+
+    gaussian_nb_free(nb)
+    array_free_f32(preds)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+    return 0
+}
+
+function test_kmeans() -> i32 {
+    println("Test: KMeans")
+    let data: Dataset = make_classification_data()
+
+    let km: KMeans = kmeans_fit(data.X, 2, 100, 1e-4, 42)
+
+    let mut cluster0_label0: i32 = 0
+    let mut cluster0_label1: i32 = 0
+    for i in 0 to data.n_samples {
+        if km.labels[i] == 0 {
+            if data.y[i] == 0.0 {
+                cluster0_label0 = cluster0_label0 + 1
+            } else {
+                cluster0_label1 = cluster0_label1 + 1
+            }
+        }
+    }
+
+    let dominated: bool = (cluster0_label0 > 15 && cluster0_label1 < 5) || (cluster0_label1 > 15 && cluster0_label0 < 5)
+    if not dominated {
+        println("  FAIL: clusters should align with classes")
+        return 1
+    }
+
+    print("  OK: clusters align with true classes (cluster 0: ")
+    print(cluster0_label0)
+    print(" class0, ")
+    print(cluster0_label1)
+    println(" class1)")
+
+    kmeans_free(km)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+    return 0
+}
+
+function test_pca() -> i32 {
+    println("Test: PCA")
+    let X: Matrix = matrix_new(6, 3)
+    matrix_set(X, 0, 0, 1.0); matrix_set(X, 0, 1, 2.0); matrix_set(X, 0, 2, 3.0)
+    matrix_set(X, 1, 0, 2.0); matrix_set(X, 1, 1, 4.0); matrix_set(X, 1, 2, 6.0)
+    matrix_set(X, 2, 0, 3.0); matrix_set(X, 2, 1, 6.0); matrix_set(X, 2, 2, 9.0)
+    matrix_set(X, 3, 0, 4.0); matrix_set(X, 3, 1, 8.0); matrix_set(X, 3, 2, 12.0)
+    matrix_set(X, 4, 0, 5.0); matrix_set(X, 4, 1, 10.0); matrix_set(X, 4, 2, 15.0)
+    matrix_set(X, 5, 0, 6.0); matrix_set(X, 5, 1, 12.0); matrix_set(X, 5, 2, 18.0)
+
+    let pca: PCA = pca_fit(X, 1)
+
+    if pca.explained_variance_ratio[0] < 0.99 {
+        println("  FAIL: first PC should explain >99% variance for collinear data")
+        return 1
+    }
+
+    print("  OK: first PC explains ")
+    printf("%.4f", pca.explained_variance_ratio[0])
+    println(" of variance (collinear data)")
+
+    pca_free(pca)
+    matrix_free(X)
+    return 0
+}
+
+function test_ridge_lasso() -> i32 {
+    println("Test: Ridge and Lasso")
+    let X: Matrix = matrix_new(10, 2)
+    let y: ptr<f32> = array_new_f32(10)
+
+    for i in 0 to 10 {
+        let x: f32 = (i as f32)
+        matrix_set(X, i, 0, x)
+        matrix_set(X, i, 1, x * 2.0)
+        y[i] = 3.0 * x + 1.0
+    }
+
+    let ridge: Ridge = ridge_fit(X, y, 0.1, 500, 0.001)
+    let ridge_preds: ptr<f32> = ridge_predict(ridge, X)
+    let ridge_r2: f32 = r2_score(y, ridge_preds, 10)
+
+    if ridge_r2 < 0.9 {
+        println("  FAIL: Ridge R2 should be > 0.9")
+        return 1
+    }
+
+    let lasso: Lasso = lasso_fit(X, y, 0.01, 500, 0.001)
+    let lasso_preds: ptr<f32> = lasso_predict(lasso, X)
+    let lasso_r2: f32 = r2_score(y, lasso_preds, 10)
+
+    if lasso_r2 < 0.9 {
+        println("  FAIL: Lasso R2 should be > 0.9")
+        return 1
+    }
+
+    print("  OK: Ridge R2 = ")
+    printf("%.4f", ridge_r2)
+    print(", Lasso R2 = ")
+    printf("%.4f", lasso_r2)
+    println("")
+
+    ridge_free(ridge)
+    lasso_free(lasso)
+    array_free_f32(ridge_preds)
+    array_free_f32(lasso_preds)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
+function test_label_encoder() -> i32 {
+    println("Test: LabelEncoder")
+    let y: ptr<f32> = array_new_f32(6)
+    y[0] = 10.0; y[1] = 20.0; y[2] = 10.0; y[3] = 30.0; y[4] = 20.0; y[5] = 10.0
+
+    let encoder: LabelEncoder = label_encoder_fit(y, 6)
+    let encoded: ptr<f32> = label_encoder_transform(encoder, y, 6)
+
+    if encoder.n_classes != 3 {
+        println("  FAIL: should have 3 classes")
+        return 1
+    }
+
+    let decoded: ptr<f32> = label_encoder_inverse_transform(encoder, encoded, 6)
+    let mut all_match: bool = true
+    for i in 0 to 6 {
+        if decoded[i] != y[i] {
+            all_match = false
+        }
+    }
+
+    if not all_match {
+        println("  FAIL: inverse transform should recover original labels")
+        return 1
+    }
+
+    println("  OK: 3 classes found, round-trip encoding correct")
+
+    label_encoder_free(encoder)
+    array_free_f32(encoded)
+    array_free_f32(decoded)
+    array_free_f32(y)
+    return 0
+}
+
+function test_confusion_matrix() -> i32 {
+    println("Test: confusion_matrix")
+    let y_true: ptr<f32> = array_new_f32(5)
+    let y_pred: ptr<f32> = array_new_f32(5)
+    y_true[0] = 0.0; y_pred[0] = 0.0
+    y_true[1] = 0.0; y_pred[1] = 1.0
+    y_true[2] = 1.0; y_pred[2] = 1.0
+    y_true[3] = 1.0; y_pred[3] = 1.0
+    y_true[4] = 0.0; y_pred[4] = 0.0
+
+    let classes: ptr<f32> = array_new_f32(2)
+    classes[0] = 0.0; classes[1] = 1.0
+
+    let cm: ConfusionMatrix = confusion_matrix(y_true, y_pred, 5, classes, 2)
+
+    let tp: i32 = cm.matrix[1 * 2 + 1]
+    let tn: i32 = cm.matrix[0 * 2 + 0]
+    let fp: i32 = cm.matrix[0 * 2 + 1]
+    let fn: i32 = cm.matrix[1 * 2 + 0]
+
+    if tp != 2 || tn != 2 || fp != 1 || fn != 0 {
+        println("  FAIL: confusion matrix values incorrect")
+        return 1
+    }
+
+    println("  OK: TP=2, TN=2, FP=1, FN=0")
+
+    confusion_matrix_free(cm)
+    array_free_f32(y_true)
+    array_free_f32(y_pred)
+    array_free_f32(classes)
+    return 0
+}
+
+function test_roc_curve() -> i32 {
+    println("Test: roc_curve")
+    let y_true: ptr<f32> = array_new_f32(4)
+    let y_score: ptr<f32> = array_new_f32(4)
+    y_true[0] = 0.0; y_score[0] = 0.1
+    y_true[1] = 1.0; y_score[1] = 0.9
+    y_true[2] = 0.0; y_score[2] = 0.4
+    y_true[3] = 1.0; y_score[3] = 0.8
+
+    let curve: ROCCurve = roc_curve(y_true, y_score, 4, 1.0)
+
+    if curve.auc < 0.99 {
+        println("  FAIL: AUC should be 1.0 for perfect separation")
+        return 1
+    }
+
+    print("  OK: AUC = ")
+    printf("%.4f", curve.auc)
+    println("")
+
+    roc_curve_free(curve)
+    array_free_f32(y_true)
+    array_free_f32(y_score)
+    return 0
+}
+
+function test_select_k_best() -> i32 {
+    println("Test: SelectKBest")
+    let X: Matrix = matrix_new(10, 3)
+    let y: ptr<f32> = array_new_f32(10)
+
+    for i in 0 to 10 {
+        matrix_set(X, i, 0, (i as f32))
+        matrix_set(X, i, 1, 0.0)
+        matrix_set(X, i, 2, (i as f32) * 2.0)
+        y[i] = (i as f32)
+    }
+
+    let selector: SelectKBest = select_k_best_fit(X, y, 1, SCORE_F_REGRESSION)
+
+    if selector.selected_indices[0] == 1 {
+        println("  FAIL: feature 1 (constant) should not be selected")
+        return 1
+    }
+
+    print("  OK: selected feature ")
+    print(selector.selected_indices[0])
+    println(" (non-constant)")
+
+    select_k_best_free(selector)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
+function main() -> i32 {
+    println("Running estimator and extended metrics tests...")
+    println("================================================")
+    println("")
+
+    let mut failures: i32 = 0
+
+    if test_decision_tree() != 0 { failures = failures + 1 }
+    println("")
+    if test_random_forest() != 0 { failures = failures + 1 }
+    println("")
+    if test_gaussian_nb() != 0 { failures = failures + 1 }
+    println("")
+    if test_kmeans() != 0 { failures = failures + 1 }
+    println("")
+    if test_pca() != 0 { failures = failures + 1 }
+    println("")
+    if test_ridge_lasso() != 0 { failures = failures + 1 }
+    println("")
+    if test_label_encoder() != 0 { failures = failures + 1 }
+    println("")
+    if test_confusion_matrix() != 0 { failures = failures + 1 }
+    println("")
+    if test_roc_curve() != 0 { failures = failures + 1 }
+    println("")
+    if test_select_k_best() != 0 { failures = failures + 1 }
+
+    println("")
+    if failures == 0 {
+        println("All estimator tests passed!")
+        return 0
+    }
+    print("FAILED: ")
+    print(failures)
+    println(" tests")
+    return 1
+}

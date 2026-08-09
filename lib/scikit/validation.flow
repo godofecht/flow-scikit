@@ -1,0 +1,105 @@
+# Validation utilities for flow-scikit.
+# Addresses Issue #29262: force_all_finite → ensure_all_finite naming consistency.
+# All validation functions use the ensure_xxx naming convention.
+
+import "lib/scikit/matrix.flow"
+
+export const ENSURE_OK: i32 = 0
+export const ENSURE_ERR_NOT_FINITE: i32 = 1
+export const ENSURE_ERR_NOT_2D: i32 = 2
+export const ENSURE_ERR_TOO_FEW_SAMPLES: i32 = 3
+export const ENSURE_ERR_EMPTY: i32 = 4
+export const ENSURE_ERR_NEGATIVE: i32 = 5
+export const ENSURE_ERR_NAN: i32 = 6
+
+export struct ValidationResult {
+    ok: bool,
+    code: i32,
+    message: string
+}
+
+export function ensure_all_finite(m: Matrix) -> ValidationResult {
+    let n: i32 = m.rows * m.cols
+    for i in 0 to n {
+        let val: f32 = m.data[i]
+        let d: f64 = val as f64
+        if d != d {
+            return ValidationResult { ok: false, code: ENSURE_ERR_NAN, message: "NaN found in matrix" }
+        }
+        if d > 1e30 || d < -1e30 {
+            if d == d {
+                return ValidationResult { ok: false, code: ENSURE_ERR_NOT_FINITE, message: "Inf or very large value found in matrix" }
+            }
+        }
+    }
+    return ValidationResult { ok: true, code: ENSURE_OK, message: "" }
+}
+
+export function ensure_2d(m: Matrix) -> ValidationResult {
+    if m.rows < 1 {
+        return ValidationResult { ok: false, code: ENSURE_ERR_NOT_2D, message: "Matrix has 0 rows, expected 2D" }
+    }
+    if m.cols < 1 {
+        return ValidationResult { ok: false, code: ENSURE_ERR_NOT_2D, message: "Matrix has 0 columns, expected 2D" }
+    }
+    return ValidationResult { ok: true, code: ENSURE_OK, message: "" }
+}
+
+export function ensure_min_samples(m: Matrix, min_samples: i32) -> ValidationResult {
+    if m.rows < min_samples {
+        return ValidationResult { ok: false, code: ENSURE_ERR_TOO_FEW_SAMPLES, message: "Too few samples" }
+    }
+    return ValidationResult { ok: true, code: ENSURE_OK, message: "" }
+}
+
+export function ensure_non_negative(a: ptr<f32>, n: i32) -> ValidationResult {
+    for i in 0 to n {
+        if a[i] < 0.0 {
+            return ValidationResult { ok: false, code: ENSURE_ERR_NEGATIVE, message: "Negative value found" }
+        }
+    }
+    return ValidationResult { ok: true, code: ENSURE_OK, message: "" }
+}
+
+export function ensure_non_empty(m: Matrix) -> ValidationResult {
+    if m.rows == 0 || m.cols == 0 {
+        return ValidationResult { ok: false, code: ENSURE_ERR_EMPTY, message: "Matrix is empty" }
+    }
+    return ValidationResult { ok: true, code: ENSURE_OK, message: "" }
+}
+
+export function ensure_consistent_samples(X: Matrix, y: ptr<f32>, n_y: i32) -> ValidationResult {
+    if X.rows != n_y {
+        return ValidationResult { ok: false, code: ENSURE_ERR_TOO_FEW_SAMPLES, message: "X and y have different number of samples" }
+    }
+    return ValidationResult { ok: true, code: ENSURE_OK, message: "" }
+}
+
+export function validate_dataset(X: Matrix, y: ptr<f32>, n_y: i32, is_classification: bool) -> ValidationResult {
+    let r1: ValidationResult = ensure_non_empty(X)
+    if not r1.ok {
+        return r1
+    }
+    let r2: ValidationResult = ensure_2d(X)
+    if not r2.ok {
+        return r2
+    }
+    let r3: ValidationResult = ensure_all_finite(X)
+    if not r3.ok {
+        return r3
+    }
+    let r4: ValidationResult = ensure_consistent_samples(X, y, n_y)
+    if not r4.ok {
+        return r4
+    }
+    return ValidationResult { ok: true, code: ENSURE_OK, message: "" }
+}
+
+export function check_validated(result: ValidationResult) -> bool {
+    if not result.ok {
+        print("[flow-scikit] Validation error: ")
+        println(result.message)
+        return false
+    }
+    return true
+}

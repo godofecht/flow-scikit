@@ -1,0 +1,187 @@
+# K-Nearest Neighbors for flow-scikit.
+# Addresses Issue #28394: predict returns probabilities, decide returns classes.
+
+import "lib/scikit/matrix.flow"
+
+export struct KNNClassifier {
+    X_train: Matrix,
+    y_train: ptr<f32>,
+    classes: ptr<f32>,
+    n_classes: i32,
+    k: i32,
+    fitted: bool
+}
+
+export struct KNNRegressor {
+    X_train: Matrix,
+    y_train: ptr<f32>,
+    k: i32,
+    fitted: bool
+}
+
+export struct Neighbor {
+    distance: f32,
+    label: f32
+}
+
+export function knn_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, k: i32) -> KNNClassifier {
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to X.rows {
+        let mut found: bool = false
+        for c in 0 to n_found {
+            if classes[c] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    return KNNClassifier {
+        X_train: matrix_copy(X),
+        y_train: array_copy_f32(y, X.rows),
+        classes: classes,
+        n_classes: n_classes,
+        k: k,
+        fitted: true
+    }
+}
+
+export function knn_classifier_predict_proba(model: KNNClassifier, X: Matrix) -> Matrix {
+    let probs: Matrix = matrix_new(X.rows, model.n_classes)
+    let neighbors: ptr<Neighbor> = malloc((model.k as i64) * 12) as ptr<Neighbor>
+
+    for i in 0 to X.rows {
+        for c in 0 to model.n_classes {
+            matrix_set(probs, i, c, 0.0)
+        }
+
+        for j in 0 to model.k {
+            (neighbors + j).distance = 1e30
+            (neighbors + j).label = 0.0
+        }
+
+        for j in 0 to model.X_train.rows {
+            let mut dist: f32 = 0.0
+            for f in 0 to X.cols {
+                let d: f32 = matrix_at(X, i, f) - matrix_at(model.X_train, j, f)
+                dist = dist + d * d
+            }
+
+            let mut worst_idx: i32 = 0
+            for n in 1 to model.k {
+                if (neighbors + n).distance > (neighbors + worst_idx).distance {
+                    worst_idx = n
+                }
+            }
+
+            if dist < (neighbors + worst_idx).distance {
+                (neighbors + worst_idx).distance = dist
+                (neighbors + worst_idx).label = model.y_train[j]
+            }
+        }
+
+        for n in 0 to model.k {
+            let label: f32 = (neighbors + n).label
+            for c in 0 to model.n_classes {
+                if model.classes[c] == label {
+                    let cur: f32 = matrix_at(probs, i, c)
+                    matrix_set(probs, i, c, cur + 1.0)
+                }
+            }
+        }
+
+        for c in 0 to model.n_classes {
+            let v: f32 = matrix_at(probs, i, c) / (model.k as f32)
+            matrix_set(probs, i, c, v)
+        }
+    }
+
+    free(neighbors as ptr<void>)
+    return probs
+}
+
+export function knn_classifier_predict(model: KNNClassifier, X: Matrix) -> Matrix {
+    return knn_classifier_predict_proba(model, X)
+}
+
+export function knn_classifier_decide(model: KNNClassifier, probs: Matrix, threshold: f32) -> ptr<f32> {
+    let labels: ptr<f32> = array_new_f32(probs.rows)
+    for i in 0 to probs.rows {
+        let best_idx: i32 = 0
+        let best_val: f32 = matrix_at(probs, i, 0)
+        for c in 1 to model.n_classes {
+            let val: f32 = matrix_at(probs, i, c)
+            if val > best_val {
+                best_val = val
+                best_idx = c
+            }
+        }
+        labels[i] = model.classes[best_idx]
+    }
+    return labels
+}
+
+export function knn_classifier_free(model: KNNClassifier) -> void {
+    matrix_free(model.X_train)
+    array_free_f32(model.y_train)
+    array_free_f32(model.classes)
+}
+
+export function knn_regressor_fit(X: Matrix, y: ptr<f32>, k: i32) -> KNNRegressor {
+    return KNNRegressor {
+        X_train: matrix_copy(X),
+        y_train: array_copy_f32(y, X.rows),
+        k: k,
+        fitted: true
+    }
+}
+
+export function knn_regressor_predict(model: KNNRegressor, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    let neighbors: ptr<Neighbor> = malloc((model.k as i64) * 12) as ptr<Neighbor>
+
+    for i in 0 to X.rows {
+        for j in 0 to model.k {
+            (neighbors + j).distance = 1e30
+            (neighbors + j).label = 0.0
+        }
+
+        for j in 0 to model.X_train.rows {
+            let mut dist: f32 = 0.0
+            for f in 0 to X.cols {
+                let d: f32 = matrix_at(X, i, f) - matrix_at(model.X_train, j, f)
+                dist = dist + d * d
+            }
+
+            let mut worst_idx: i32 = 0
+            for n in 1 to model.k {
+                if (neighbors + n).distance > (neighbors + worst_idx).distance {
+                    worst_idx = n
+                }
+            }
+
+            if dist < (neighbors + worst_idx).distance {
+                (neighbors + worst_idx).distance = dist
+                (neighbors + worst_idx).label = model.y_train[j]
+            }
+        }
+
+        let mut sum: f32 = 0.0
+        for n in 0 to model.k {
+            sum = sum + (neighbors + n).label
+        }
+        preds[i] = sum / (model.k as f32)
+    }
+
+    free(neighbors as ptr<void>)
+    return preds
+}
+
+export function knn_regressor_free(model: KNNRegressor) -> void {
+    matrix_free(model.X_train)
+    array_free_f32(model.y_train)
+}

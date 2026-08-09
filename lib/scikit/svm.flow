@@ -1,0 +1,403 @@
+# SVM module for flow-scikit.
+# Implements SVC (linear kernel) and SVR (epsilon-insensitive) via SGD.
+# Uses simplified SMO-like updates for the dual formulation.
+
+import "lib/scikit/matrix.flow"
+
+# ============================================================================
+# LinearSVC (linear SVM classifier via SGD on hinge loss)
+# Addresses Issue #28394: predict returns scores, decide returns classes
+# ============================================================================
+
+export struct LinearSVC {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    classes: ptr<f32>,
+    n_classes: i32,
+    C: f32,
+    fitted: bool
+}
+
+export function linear_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, epochs: i32, lr: f32) -> LinearSVC {
+    let n: i32 = X.cols
+    let weights: ptr<f32> = array_new_f32(n)
+    let bias: f32 = 0.0
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to X.rows {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    for epoch in 0 to epochs {
+        for i in 0 to X.rows {
+            let mut z: f32 = bias
+            for j in 0 to n {
+                z = z + weights[j] * matrix_at(X, i, j)
+            }
+
+            let label: f32 = -1.0
+            if y[i] == classes[1] {
+                label = 1.0
+            }
+
+            let margin: f32 = label * z
+            if margin < 1.0 {
+                for j in 0 to n {
+                    let grad: f32 = lr * (C * -label * matrix_at(X, i, j) + weights[j] / (X.rows as f32))
+                    weights[j] = weights[j] - grad
+                }
+                bias = bias + lr * C * label
+            } else {
+                for j in 0 to n {
+                    weights[j] = weights[j] - lr * weights[j] / (X.rows as f32)
+                }
+            }
+        }
+    }
+
+    return LinearSVC {
+        weights: weights,
+        bias: bias,
+        n_features: n,
+        classes: classes,
+        n_classes: n_classes,
+        C: C,
+        fitted: true
+    }
+}
+
+export function linear_svc_decision_function(model: LinearSVC, X: Matrix) -> ptr<f32> {
+    let scores: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut z: f32 = model.bias
+        for j in 0 to model.n_features {
+            z = z + model.weights[j] * matrix_at(X, i, j)
+        }
+        scores[i] = z
+    }
+    return scores
+}
+
+export function linear_svc_predict(model: LinearSVC, X: Matrix) -> ptr<f32> {
+    return linear_svc_decision_function(model, X)
+}
+
+export function linear_svc_decide(model: LinearSVC, scores: ptr<f32>, n_samples: i32) -> ptr<f32> {
+    let labels: ptr<f32> = array_new_f32(n_samples)
+    for i in 0 to n_samples {
+        if scores[i] >= 0.0 {
+            labels[i] = model.classes[1]
+        } else {
+            labels[i] = model.classes[0]
+        }
+    }
+    return labels
+}
+
+export function linear_svc_free(model: LinearSVC) -> void {
+    array_free_f32(model.weights)
+    array_free_f32(model.classes)
+}
+
+# ============================================================================
+# LinearSVR (epsilon-insensitive SVR via SGD)
+# ============================================================================
+
+export struct LinearSVR {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    C: f32,
+    epsilon: f32,
+    fitted: bool
+}
+
+export function linear_svr_fit(X: Matrix, y: ptr<f32>, C: f32, epsilon: f32, epochs: i32, lr: f32) -> LinearSVR {
+    let n: i32 = X.cols
+    let weights: ptr<f32> = array_new_f32(n)
+    let bias: f32 = 0.0
+
+    for epoch in 0 to epochs {
+        for i in 0 to X.rows {
+            let mut pred: f32 = bias
+            for j in 0 to n {
+                pred = pred + weights[j] * matrix_at(X, i, j)
+            }
+            let err: f32 = pred - y[i]
+
+            if err > epsilon {
+                for j in 0 to n {
+                    weights[j] = weights[j] - lr * (C * matrix_at(X, i, j) + weights[j] / (X.rows as f32))
+                }
+                bias = bias - lr * C
+            } elif err < -epsilon {
+                for j in 0 to n {
+                    weights[j] = weights[j] - lr * (C * -matrix_at(X, i, j) + weights[j] / (X.rows as f32))
+                }
+                bias = bias + lr * C
+            } else {
+                for j in 0 to n {
+                    weights[j] = weights[j] - lr * weights[j] / (X.rows as f32)
+                }
+            }
+        }
+    }
+
+    return LinearSVR {
+        weights: weights,
+        bias: bias,
+        n_features: n,
+        C: C,
+        epsilon: epsilon,
+        fitted: true
+    }
+}
+
+export function linear_svr_predict(model: LinearSVR, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut pred: f32 = model.bias
+        for j in 0 to model.n_features {
+            pred = pred + model.weights[j] * matrix_at(X, i, j)
+        }
+        preds[i] = pred
+    }
+    return preds
+}
+
+export function linear_svr_free(model: LinearSVR) -> void {
+    array_free_f32(model.weights)
+}
+
+# ============================================================================
+# KernelSVC (kernel SVM via precomputed kernel matrix approximation)
+# Uses RBF kernel. Implements simplified SMO.
+# ============================================================================
+
+export struct KernelSVC {
+    X_train: Matrix,
+    y_train_dual: ptr<f32>,
+    alphas: ptr<f32>,
+    b: f32,
+    n_samples: i32,
+    n_features: i32,
+    classes: ptr<f32>,
+    n_classes: i32,
+    gamma: f32,
+    C: f32,
+    fitted: bool
+}
+
+export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, gamma: f32, max_iter: i32) -> KernelSVC {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let y_dual: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        if y[i] == classes[1] {
+            y_dual[i] = 1.0
+        } else {
+            y_dual[i] = -1.0
+        }
+    }
+
+    let kernel: Matrix = _rbf_kernel(X, X, gamma)
+
+    let alphas: ptr<f32> = array_new_f32(n)
+    let mut b: f32 = 0.0
+
+    let tol: f32 = 1e-3
+    let mut iter: i32 = 0
+
+    while iter < max_iter {
+        let mut num_changed: i32 = 0
+
+        for i in 0 to n {
+            let mut ei: f32 = 0.0
+            for j in 0 to n {
+                ei = ei + alphas[j] * y_dual[j] * matrix_at(kernel, i, j)
+            }
+            ei = ei + b - y_dual[i]
+
+            let yi_ei: f32 = y_dual[i] * ei
+            if (yi_ei < -tol && alphas[i] < C) || (yi_ei > tol && alphas[i] > 0.0) {
+                let j: i32 = (iter * 7 + i * 13 + 3) % n
+                if j == i {
+                    j = (j + 1) % n
+                }
+
+                let mut ej: f32 = 0.0
+                for k in 0 to n {
+                    ej = ej + alphas[k] * y_dual[k] * matrix_at(kernel, j, k)
+                }
+                ej = ej + b - y_dual[j]
+
+                let alpha_i_old: f32 = alphas[i]
+                let alpha_j_old: f32 = alphas[j]
+
+                let mut L: f32 = 0.0
+                let mut H: f32 = C
+                if y_dual[i] == y_dual[j] {
+                    L = alpha_i_old + alpha_j_old - C
+                    H = alpha_i_old + alpha_j_old
+                    if L < 0.0 {
+                        L = 0.0
+                    }
+                    if H > C {
+                        H = C
+                    }
+                } else {
+                    L = alpha_i_old - alpha_j_old
+                    H = alpha_i_old - alpha_j_old + C
+                    if L < 0.0 {
+                        L = 0.0
+                    }
+                    if H > C {
+                        H = C
+                    }
+                }
+
+                if L == H {
+                    continue
+                }
+
+                let eta: f32 = 2.0 * matrix_at(kernel, i, j) - matrix_at(kernel, i, i) - matrix_at(kernel, j, j)
+                if eta >= 0.0 {
+                    continue
+                }
+
+                let mut alpha_j_new: f32 = alpha_j_old - y_dual[j] * (ei - ej) / eta
+                if alpha_j_new < L {
+                    alpha_j_new = L
+                }
+                if alpha_j_new > H {
+                    alpha_j_new = H
+                }
+
+                let alpha_i_new: f32 = alpha_i_old + y_dual[i] * y_dual[j] * (alpha_j_old - alpha_j_new)
+
+                alphas[i] = alpha_i_new
+                alphas[j] = alpha_j_new
+
+                let b1: f32 = b - ei - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, i) - y_dual[j] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, i, j)
+                let b2: f32 = b - ej - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, j) - y_dual[j] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, j, j)
+
+                if alpha_i_new > 0.0 && alpha_i_new < C {
+                    b = b1
+                } elif alpha_j_new > 0.0 && alpha_j_new < C {
+                    b = b2
+                } else {
+                    b = (b1 + b2) / 2.0
+                }
+
+                num_changed = num_changed + 1
+            }
+        }
+
+        iter = iter + 1
+        if num_changed == 0 {
+            break
+        }
+    }
+
+    matrix_free(kernel)
+
+    return KernelSVC {
+        X_train: matrix_copy(X),
+        y_train_dual: y_dual,
+        alphas: alphas,
+        b: b,
+        n_samples: n,
+        n_features: n_features,
+        classes: classes,
+        n_classes: n_classes,
+        gamma: gamma,
+        C: C,
+        fitted: true
+    }
+}
+
+function _rbf_kernel(X1: Matrix, X2: Matrix, gamma: f32) -> Matrix {
+    let result: Matrix = matrix_new(X1.rows, X2.rows)
+    for i in 0 to X1.rows {
+        for j in 0 to X2.rows {
+            let mut sum: f32 = 0.0
+            for k in 0 to X1.cols {
+                let d: f32 = matrix_at(X1, i, k) - matrix_at(X2, j, k)
+                sum = sum + d * d
+            }
+            let val: f32 = exp((0.0 - gamma * sum) as f64) as f32
+            matrix_set(result, i, j, val)
+        }
+    }
+    return result
+}
+
+export function kernel_svc_decision_function(model: KernelSVC, X: Matrix) -> ptr<f32> {
+    let scores: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut sum: f32 = model.b
+        for j in 0 to model.n_samples {
+            if model.alphas[j] > 0.0 {
+                let mut k_val: f32 = 0.0
+                for f in 0 to model.n_features {
+                    let d: f32 = matrix_at(X, i, f) - matrix_at(model.X_train, j, f)
+                    k_val = k_val + d * d
+                }
+                k_val = exp((0.0 - model.gamma * k_val) as f64) as f32
+                sum = sum + model.alphas[j] * model.y_train_dual[j] * k_val
+            }
+        }
+        scores[i] = sum
+    }
+    return scores
+}
+
+export function kernel_svc_predict(model: KernelSVC, X: Matrix) -> ptr<f32> {
+    return kernel_svc_decision_function(model, X)
+}
+
+export function kernel_svc_decide(model: KernelSVC, scores: ptr<f32>, n_samples: i32) -> ptr<f32> {
+    let labels: ptr<f32> = array_new_f32(n_samples)
+    for i in 0 to n_samples {
+        if scores[i] >= 0.0 {
+            labels[i] = model.classes[1]
+        } else {
+            labels[i] = model.classes[0]
+        }
+    }
+    return labels
+}
+
+export function kernel_svc_free(model: KernelSVC) -> void {
+    matrix_free(model.X_train)
+    array_free_f32(model.y_train_dual)
+    array_free_f32(model.alphas)
+    array_free_f32(model.classes)
+}

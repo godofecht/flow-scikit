@@ -1,0 +1,148 @@
+# Iris classification demo for flow-scikit.
+# Demonstrates:
+#   - train_test_split with auto-stratify (Issue #28394)
+#   - StandardScaler preprocessing
+#   - LogisticRegression with predict/decide split (Issue #28394)
+#   - classification_report with structured output (Issue #29205)
+#   - Pipeline with clone-in-init (Issue #28394)
+#   - Progress effect system (Issue #30852)
+#
+# Run: ./flow run examples/iris_classification.flow
+
+import "lib/scikit/scikit.flow"
+
+function make_iris_data() -> Dataset {
+    let n: i32 = 30
+    let n_features: i32 = 4
+    let X: Matrix = matrix_new(n, n_features)
+
+    let data: array<f32, 120> = [
+        5.1, 3.5, 1.4, 0.2,
+        4.9, 3.0, 1.4, 0.2,
+        4.7, 3.2, 1.3, 0.2,
+        4.6, 3.1, 1.5, 0.2,
+        5.0, 3.6, 1.4, 0.2,
+        5.4, 3.9, 1.7, 0.4,
+        4.6, 3.4, 1.4, 0.3,
+        5.0, 3.4, 1.5, 0.2,
+        4.4, 2.9, 1.4, 0.2,
+        4.9, 3.1, 1.5, 0.1,
+        7.0, 3.2, 4.7, 1.4,
+        6.4, 3.2, 4.5, 1.5,
+        6.9, 3.1, 4.9, 1.5,
+        5.5, 2.3, 4.0, 1.3,
+        6.5, 2.8, 4.6, 1.5,
+        5.7, 2.8, 4.5, 1.3,
+        6.3, 3.3, 4.7, 1.6,
+        4.9, 2.4, 3.3, 1.0,
+        6.6, 2.9, 4.6, 1.3,
+        5.2, 2.7, 3.9, 1.4,
+        6.3, 3.3, 6.0, 2.5,
+        5.8, 2.7, 5.1, 1.9,
+        7.1, 3.0, 5.9, 2.1,
+        6.3, 2.9, 5.6, 1.8,
+        6.5, 3.0, 5.8, 2.2,
+        7.6, 3.0, 6.6, 2.1,
+        4.9, 2.5, 4.5, 1.7,
+        7.3, 2.9, 6.3, 1.8,
+        6.7, 2.5, 5.8, 1.8,
+        6.9, 3.1, 5.4, 2.1
+    ]
+
+    let labels: array<f32, 30> = [
+        0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0,
+        1.0, 1.0, 1.0, 1.0, 1.0,
+        1.0, 1.0, 1.0, 1.0, 1.0,
+        1.0, 1.0, 1.0, 1.0, 1.0,
+        1.0, 1.0, 1.0, 1.0, 1.0
+    ]
+
+    for i in 0 to n {
+        for j in 0 to n_features {
+            matrix_set(X, i, j, data[i * n_features + j])
+        }
+    }
+
+    let y: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        y[i] = labels[i]
+    }
+
+    return Dataset {
+        X: X,
+        y: y,
+        n_samples: n,
+        n_features: n_features,
+        n_classes: 2,
+        is_classification: true
+    }
+}
+
+function main() -> i32 {
+    println("flow-scikit: Iris Classification Demo")
+    println("=====================================")
+    println("")
+
+    let data: Dataset = make_iris_data()
+    println("Dataset: 30 samples, 4 features, 2 classes")
+
+    let split: TrainTestSplit = train_test_split(data.X, data.y, 0.2, STRATIFY_AUTO)
+    print("Split: ")
+    print(split.n_train)
+    print(" train, ")
+    print(split.n_test)
+    println(" test (auto-stratified)")
+    println("")
+
+    println("Building pipeline (clone-in-init)...")
+    let steps: array<PipelineStep, 2> = [
+        step_standard_scaler("scaler"),
+        step_logistic_regression("classifier", 2, 500, 0.1, penalty_l2(0.01))
+    ]
+    let pipeline: Pipeline = pipeline_new(steps, 2)
+
+    println("Fitting pipeline...")
+    handle Progress with ConsoleProgress {
+        pipeline_fit(pipeline, split.X_train, split.y_train)
+    }
+
+    println("")
+    println("Predicting (predict = probabilities, decide = classes)...")
+    let probs: ptr<f32> = pipeline_predict(pipeline, split.X_test)
+    let labels: ptr<f32> = pipeline_decide(pipeline, split.X_test, 0.5)
+
+    println("")
+    println("Probabilities vs. decisions:")
+    for i in 0 to split.n_test {
+        print("  sample ")
+        print(i)
+        print(": prob=")
+        printf("%.4f", probs[i])
+        print(" -> class ")
+        print(labels[i])
+        print(" (true: ")
+        print(split.y_test[i])
+        println(")")
+    }
+
+    println("")
+    let report: ClassificationReport = classification_report(split.y_test, labels, split.n_test, pipeline.steps[1].logistic_reg.classes, 2)
+    print_classification_report(report)
+
+    println("")
+    println("Calibration curve with Clopper-Pearson CI:")
+    let calib: CalibrationResult = calibration_curve(split.y_test, probs, split.n_test, 5, 3, 0)
+    print_calibration_result(calib)
+
+    array_free_f32(probs)
+    array_free_f32(labels)
+    classification_report_free(report)
+    calibration_result_free(calib)
+    pipeline_free(pipeline)
+    train_test_split_free(split)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+
+    return 0
+}

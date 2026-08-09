@@ -1,0 +1,177 @@
+# Naive Bayes module for flow-scikit.
+# Implements GaussianNB for continuous features.
+
+import "lib/scikit/matrix.flow"
+
+export struct GaussianNB {
+    classes: ptr<f32>,
+    n_classes: i32,
+    means: ptr<ptr<f32>>,
+    variances: ptr<ptr<f32>>,
+    priors: ptr<f32>,
+    n_features: i32,
+    var_smoothing: f32,
+    fitted: bool
+}
+
+export function gaussian_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, var_smoothing: f32) -> GaussianNB {
+    let n_features: i32 = X.cols
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+
+    for i in 0 to X.rows {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let means: ptr<ptr<f32>> = malloc((n_classes as i64) * 8) as ptr<ptr<f32>>
+    let variances: ptr<ptr<f32>> = malloc((n_classes as i64) * 8) as ptr<ptr<f32>>
+    let priors: ptr<f32> = array_new_f32(n_classes)
+
+    let global_var: ptr<f32> = array_new_f32(n_features)
+    for j in 0 to n_features {
+        let col: ptr<f32> = array_new_f32(X.rows)
+        for i in 0 to X.rows {
+            col[i] = matrix_at(X, i, j)
+        }
+        let mean: f32 = array_mean(col, X.rows)
+        global_var[j] = array_std(col, X.rows, mean)
+        global_var[j] = global_var[j] * global_var[j]
+        array_free_f32(col)
+    }
+
+    let max_var: f32 = array_max_val(global_var, n_features)
+
+    for c in 0 to n_classes {
+        means[c] = array_new_f32(n_features)
+        variances[c] = array_new_f32(n_features)
+
+        let mut count: i32 = 0
+        for i in 0 to X.rows {
+            if y[i] == classes[c] {
+                count = count + 1
+            }
+        }
+
+        priors[c] = (count as f32) / (X.rows as f32)
+
+        for j in 0 to n_features {
+            let vals: ptr<f32> = array_new_f32(count)
+            let mut idx: i32 = 0
+            for i in 0 to X.rows {
+                if y[i] == classes[c] {
+                    vals[idx] = matrix_at(X, i, j)
+                    idx = idx + 1
+                }
+            }
+            means[c][j] = array_mean(vals, count)
+            let v: f32 = array_std(vals, count, means[c][j])
+            variances[c][j] = v * v + var_smoothing * max_var
+            array_free_f32(vals)
+        }
+    }
+
+    array_free_f32(global_var)
+
+    return GaussianNB {
+        classes: classes,
+        n_classes: n_classes,
+        means: means,
+        variances: variances,
+        priors: priors,
+        n_features: n_features,
+        var_smoothing: var_smoothing,
+        fitted: true
+    }
+}
+
+export function gaussian_nb_predict(model: GaussianNB, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+
+    for i in 0 to X.rows {
+        let mut best_class: i32 = 0
+        let mut best_log_prob: f32 = -1e30
+
+        for c in 0 to model.n_classes {
+            let mut log_prob: f32 = log(model.priors[c] as f64) as f32
+
+            for j in 0 to model.n_features {
+                let val: f32 = matrix_at(X, i, j)
+                let mean: f32 = model.means[c][j]
+                let var: f32 = model.variances[c][j]
+                let diff: f32 = val - mean
+                let log_lik: f32 = -0.5 * log((2.0 * 3.14159265358979) as f64) as f32 - 0.5 * log(var as f64) as f32 - diff * diff / (2.0 * var)
+                log_prob = log_prob + log_lik
+            }
+
+            if log_prob > best_log_prob {
+                best_log_prob = log_prob
+                best_class = c
+            }
+        }
+
+        preds[i] = model.classes[best_class]
+    }
+
+    return preds
+}
+
+export function gaussian_nb_predict_proba(model: GaussianNB, X: Matrix) -> Matrix {
+    let probs: Matrix = matrix_new(X.rows, model.n_classes)
+
+    for i in 0 to X.rows {
+        let log_probs: ptr<f32> = array_new_f32(model.n_classes)
+        let mut max_lp: f32 = -1e30
+
+        for c in 0 to model.n_classes {
+            let mut lp: f32 = log(model.priors[c] as f64) as f32
+            for j in 0 to model.n_features {
+                let val: f32 = matrix_at(X, i, j)
+                let mean: f32 = model.means[c][j]
+                let var: f32 = model.variances[c][j]
+                let diff: f32 = val - mean
+                lp = lp - 0.5 * log((2.0 * 3.14159265358979) as f64) as f32 - 0.5 * log(var as f64) as f32 - diff * diff / (2.0 * var)
+            }
+            log_probs[c] = lp
+            if lp > max_lp {
+                max_lp = lp
+            }
+        }
+
+        let mut sum: f32 = 0.0
+        for c in 0 to model.n_classes {
+            log_probs[c] = log_probs[c] - max_lp
+            let p: f32 = exp(log_probs[c] as f64) as f32
+            matrix_set(probs, i, c, p)
+            sum = sum + p
+        }
+
+        for c in 0 to model.n_classes {
+            let p: f32 = matrix_at(probs, i, c) / sum
+            matrix_set(probs, i, c, p)
+        }
+
+        array_free_f32(log_probs)
+    }
+
+    return probs
+}
+
+export function gaussian_nb_free(model: GaussianNB) -> void {
+    for c in 0 to model.n_classes {
+        array_free_f32(model.means[c])
+        array_free_f32(model.variances[c])
+    }
+    free(model.means as ptr<void>)
+    free(model.variances as ptr<void>)
+    array_free_f32(model.classes)
+    array_free_f32(model.priors)
+}

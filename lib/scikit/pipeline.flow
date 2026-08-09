@@ -1,0 +1,268 @@
+# Pipeline module for flow-scikit.
+# Addresses Issue #28394: Pipeline should clone in __init__.
+# All step parameters are cloned at construction time, preventing shared-state bugs.
+
+import "lib/scikit/matrix.flow"
+import "lib/scikit/preprocessing.flow"
+import "lib/scikit/linear.flow"
+
+# ============================================================================
+# Step types
+# ============================================================================
+
+export const STEP_SCALER: i32 = 0
+export const STEP_MINMAX: i32 = 1
+export const STEP_ONEHOT: i32 = 2
+export const STEP_IMPUTER: i32 = 3
+export const STEP_LINEAR_REG: i32 = 4
+export const STEP_LOGISTIC_REG: i32 = 5
+
+export struct PipelineStep {
+    kind: i32,
+    name: string,
+    scaler: StandardScaler,
+    minmax: MinMaxScaler,
+    onehot: OneHotEncoder,
+    imputer: SimpleImputer,
+    linear_reg: LinearRegression,
+    logistic_reg: LogisticRegression,
+    handle_unknown: i32,
+    impute_strategy: i32,
+    impute_constant: f32,
+    n_classes: i32,
+    epochs: i32,
+    lr: f32,
+    penalty: Penalty,
+    is_transformer: bool,
+    is_estimator: bool,
+    fitted: bool
+}
+
+export struct Pipeline {
+    steps: ptr<PipelineStep>,
+    n_steps: i32,
+    cloned: bool
+}
+
+# ============================================================================
+# Step constructors — each clones its parameters at construction time
+# ============================================================================
+
+export function step_standard_scaler(name: string) -> PipelineStep {
+    return PipelineStep {
+        kind: STEP_SCALER,
+        name: name,
+        scaler: StandardScaler { mean: null as ptr<f32>, std: null as ptr<f32>, n_features: 0, fitted: false },
+        minmax: MinMaxScaler { min_vals: null as ptr<f32>, max_vals: null as ptr<f32>, n_features: 0, fitted: false },
+        onehot: OneHotEncoder { categories: null as ptr<ptr<f32>>, n_categories: null as ptr<i32>, n_features: 0, total_output_cols: 0, handle_unknown: HANDLE_UNKNOWN_WARN, fitted: false },
+        imputer: SimpleImputer { fill_values: null as ptr<f32>, n_features: 0, strategy: IMPUTE_STRATEGY_MEAN, constant_value: 0.0, fitted: false },
+        linear_reg: LinearRegression { weights: null as ptr<f32>, bias: 0.0, n_features: 0, penalty: penalty_none(), fitted: false },
+        logistic_reg: LogisticRegression { weights: null as ptr<f32>, bias: 0.0, n_features: 0, classes: null as ptr<f32>, n_classes: 0, penalty: penalty_none(), fitted: false },
+        handle_unknown: HANDLE_UNKNOWN_WARN,
+        impute_strategy: IMPUTE_STRATEGY_MEAN,
+        impute_constant: 0.0,
+        n_classes: 0,
+        epochs: 0,
+        lr: 0.0,
+        penalty: penalty_none(),
+        is_transformer: true,
+        is_estimator: false,
+        fitted: false
+    }
+}
+
+export function step_minmax_scaler(name: string) -> PipelineStep {
+    let step: PipelineStep = step_standard_scaler(name)
+    step.kind = STEP_MINMAX
+    return step
+}
+
+export function step_onehot_encoder(name: string, handle_unknown: i32) -> PipelineStep {
+    let step: PipelineStep = step_standard_scaler(name)
+    step.kind = STEP_ONEHOT
+    step.handle_unknown = handle_unknown
+    return step
+}
+
+export function step_simple_imputer(name: string, strategy: i32, constant_value: f32) -> PipelineStep {
+    let step: PipelineStep = step_standard_scaler(name)
+    step.kind = STEP_IMPUTER
+    step.impute_strategy = strategy
+    step.impute_constant = constant_value
+    return step
+}
+
+export function step_linear_regression(name: string, penalty: Penalty) -> PipelineStep {
+    let step: PipelineStep = step_standard_scaler(name)
+    step.kind = STEP_LINEAR_REG
+    step.penalty = penalty
+    step.is_transformer = false
+    step.is_estimator = true
+    return step
+}
+
+export function step_logistic_regression(name: string, n_classes: i32, epochs: i32, lr: f32, penalty: Penalty) -> PipelineStep {
+    let step: PipelineStep = step_standard_scaler(name)
+    step.kind = STEP_LOGISTIC_REG
+    step.n_classes = n_classes
+    step.epochs = epochs
+    step.lr = lr
+    step.penalty = penalty
+    step.is_transformer = false
+    step.is_estimator = true
+    return step
+}
+
+# ============================================================================
+# Pipeline construction — clones all steps (Issue #28394)
+# ============================================================================
+
+export function pipeline_new(steps: ptr<PipelineStep>, n_steps: i32) -> Pipeline {
+    let cloned_steps: ptr<PipelineStep> = malloc((n_steps as i64) * 128) as ptr<PipelineStep>
+
+    for i in 0 to n_steps {
+        (cloned_steps + i).kind = steps[i].kind
+        (cloned_steps + i).name = steps[i].name
+        (cloned_steps + i).handle_unknown = steps[i].handle_unknown
+        (cloned_steps + i).impute_strategy = steps[i].impute_strategy
+        (cloned_steps + i).impute_constant = steps[i].impute_constant
+        (cloned_steps + i).n_classes = steps[i].n_classes
+        (cloned_steps + i).epochs = steps[i].epochs
+        (cloned_steps + i).lr = steps[i].lr
+        (cloned_steps + i).penalty = steps[i].penalty
+        (cloned_steps + i).is_transformer = steps[i].is_transformer
+        (cloned_steps + i).is_estimator = steps[i].is_estimator
+        (cloned_steps + i).fitted = false
+        (cloned_steps + i).scaler = StandardScaler { mean: null as ptr<f32>, std: null as ptr<f32>, n_features: 0, fitted: false }
+        (cloned_steps + i).minmax = MinMaxScaler { min_vals: null as ptr<f32>, max_vals: null as ptr<f32>, n_features: 0, fitted: false }
+        (cloned_steps + i).onehot = OneHotEncoder { categories: null as ptr<ptr<f32>>, n_categories: null as ptr<i32>, n_features: 0, total_output_cols: 0, handle_unknown: HANDLE_UNKNOWN_WARN, fitted: false }
+        (cloned_steps + i).imputer = SimpleImputer { fill_values: null as ptr<f32>, n_features: 0, strategy: IMPUTE_STRATEGY_MEAN, constant_value: 0.0, fitted: false }
+        (cloned_steps + i).linear_reg = LinearRegression { weights: null as ptr<f32>, bias: 0.0, n_features: 0, penalty: penalty_none(), fitted: false }
+        (cloned_steps + i).logistic_reg = LogisticRegression { weights: null as ptr<f32>, bias: 0.0, n_features: 0, classes: null as ptr<f32>, n_classes: 0, penalty: penalty_none(), fitted: false }
+    }
+
+    return Pipeline { steps: cloned_steps, n_steps: n_steps, cloned: true }
+}
+
+# ============================================================================
+# Pipeline fit / transform / predict
+# ============================================================================
+
+export function pipeline_fit(pipeline: Pipeline, X: Matrix, y: ptr<f32>) -> void {
+    let mut current_X: Matrix = matrix_copy(X)
+
+    for i in 0 to pipeline.n_steps {
+        let step: ptr<PipelineStep> = pipeline.steps + i
+
+        if step.kind == STEP_SCALER {
+            step.scaler = standard_scaler_fit(current_X)
+            let transformed: Matrix = standard_scaler_transform(step.scaler, current_X)
+            matrix_free(current_X)
+            current_X = transformed
+        } elif step.kind == STEP_MINMAX {
+            step.minmax = minmax_scaler_fit(current_X)
+            let transformed: Matrix = minmax_scaler_transform(step.minmax, current_X)
+            matrix_free(current_X)
+            current_X = transformed
+        } elif step.kind == STEP_ONEHOT {
+            step.onehot = onehot_encoder_fit(current_X, step.handle_unknown)
+            let transformed: Matrix = onehot_encoder_transform(step.onehot, current_X)
+            matrix_free(current_X)
+            current_X = transformed
+        } elif step.kind == STEP_IMPUTER {
+            step.imputer = simple_imputer_fit(current_X, step.impute_strategy, step.impute_constant)
+            let transformed: Matrix = simple_imputer_transform(step.imputer, current_X)
+            matrix_free(current_X)
+            current_X = transformed
+        } elif step.kind == STEP_LINEAR_REG {
+            step.linear_reg = linear_regression_fit(current_X, y, step.penalty)
+        } elif step.kind == STEP_LOGISTIC_REG {
+            step.logistic_reg = logistic_regression_fit(current_X, y, step.n_classes, step.epochs, step.lr, step.penalty)
+        }
+
+        step.fitted = true
+    }
+
+    matrix_free(current_X)
+}
+
+export function pipeline_predict_proba(pipeline: Pipeline, X: Matrix) -> ptr<f32> {
+    let mut current_X: Matrix = matrix_copy(X)
+
+    for i in 0 to pipeline.n_steps {
+        let step: ptr<PipelineStep> = pipeline.steps + i
+
+        if step.kind == STEP_SCALER {
+            let transformed: Matrix = standard_scaler_transform(step.scaler, current_X)
+            matrix_free(current_X)
+            current_X = transformed
+        } elif step.kind == STEP_MINMAX {
+            let transformed: Matrix = minmax_scaler_transform(step.minmax, current_X)
+            matrix_free(current_X)
+            current_X = transformed
+        } elif step.kind == STEP_ONEHOT {
+            let transformed: Matrix = onehot_encoder_transform(step.onehot, current_X)
+            matrix_free(current_X)
+            current_X = transformed
+        } elif step.kind == STEP_IMPUTER {
+            let transformed: Matrix = simple_imputer_transform(step.imputer, current_X)
+            matrix_free(current_X)
+            current_X = transformed
+        } elif step.kind == STEP_LINEAR_REG {
+            let preds: ptr<f32> = linear_regression_predict(step.linear_reg, current_X)
+            matrix_free(current_X)
+            return preds
+        } elif step.kind == STEP_LOGISTIC_REG {
+            let probs: ptr<f32> = logistic_predict(step.logistic_reg, current_X)
+            matrix_free(current_X)
+            return probs
+        }
+    }
+
+    matrix_free(current_X)
+    return null as ptr<f32>
+}
+
+export function pipeline_predict(pipeline: Pipeline, X: Matrix) -> ptr<f32> {
+    return pipeline_predict_proba(pipeline, X)
+}
+
+export function pipeline_decide(pipeline: Pipeline, X: Matrix, threshold: f32) -> ptr<f32> {
+    let probs: ptr<f32> = pipeline_predict_proba(pipeline, X)
+
+    for i in 0 to pipeline.n_steps {
+        let step: ptr<PipelineStep> = pipeline.steps + i
+        if step.kind == STEP_LOGISTIC_REG {
+            let labels: ptr<f32> = logistic_decide(step.logistic_reg, probs, X.rows, threshold)
+            array_free_f32(probs)
+            return labels
+        }
+    }
+
+    return probs
+}
+
+export function pipeline_free(pipeline: Pipeline) -> void {
+    for i in 0 to pipeline.n_steps {
+        let step: ptr<PipelineStep> = pipeline.steps + i
+        if step.kind == STEP_SCALER && step.scaler.fitted {
+            standard_scaler_free(step.scaler)
+        }
+        if step.kind == STEP_MINMAX && step.minmax.fitted {
+            minmax_scaler_free(step.minmax)
+        }
+        if step.kind == STEP_ONEHOT && step.onehot.fitted {
+            onehot_encoder_free(step.onehot)
+        }
+        if step.kind == STEP_IMPUTER && step.imputer.fitted {
+            simple_imputer_free(step.imputer)
+        }
+        if step.kind == STEP_LINEAR_REG && step.linear_reg.fitted {
+            linear_regression_free(step.linear_reg)
+        }
+        if step.kind == STEP_LOGISTIC_REG && step.logistic_reg.fitted {
+            logistic_regression_free(step.logistic_reg)
+        }
+    }
+    free(pipeline.steps as ptr<void>)
+}

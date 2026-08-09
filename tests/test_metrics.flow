@@ -1,0 +1,171 @@
+# Tests for metrics module.
+# Run: ./flow run tests/test_metrics.flow
+
+import "lib/scikit/scikit.flow"
+
+function test_accuracy_score() -> i32 {
+    println("Test: accuracy_score")
+    let y_true: ptr<f32> = array_new_f32(5)
+    let y_pred: ptr<f32> = array_new_f32(5)
+    y_true[0] = 0.0; y_pred[0] = 0.0
+    y_true[1] = 1.0; y_pred[1] = 1.0
+    y_true[2] = 0.0; y_pred[2] = 1.0
+    y_true[3] = 1.0; y_pred[3] = 1.0
+    y_true[4] = 0.0; y_pred[4] = 0.0
+
+    let acc: f32 = accuracy_score(y_true, y_pred, 5)
+    if acc < 0.79 || acc > 0.81 {
+        println("  FAIL: expected 0.8")
+        return 1
+    }
+    println("  OK: accuracy = 0.8")
+    array_free_f32(y_true)
+    array_free_f32(y_pred)
+    return 0
+}
+
+function test_classification_report_structured() -> i32 {
+    println("Test: classification_report structured output (no key collisions)")
+    let y_true: ptr<f32> = array_new_f32(6)
+    let y_pred: ptr<f32> = array_new_f32(6)
+    y_true[0] = 0.0; y_pred[0] = 0.0
+    y_true[1] = 0.0; y_pred[1] = 0.0
+    y_true[2] = 1.0; y_pred[2] = 1.0
+    y_true[3] = 1.0; y_pred[3] = 0.0
+    y_true[4] = 1.0; y_pred[4] = 1.0
+    y_true[5] = 0.0; y_pred[5] = 1.0
+
+    let classes: ptr<f32> = array_new_f32(2)
+    classes[0] = 0.0
+    classes[1] = 1.0
+
+    let report: ClassificationReport = classification_report(y_true, y_pred, 6, classes, 2)
+
+    if report.n_classes != 2 {
+        println("  FAIL: should have 2 classes")
+        return 1
+    }
+
+    let class0: PrecisionRecall = report.class_metrics[0]
+    let class1: PrecisionRecall = report.class_metrics[1]
+
+    if class0.support != 3 {
+        println("  FAIL: class 0 support should be 3")
+        return 1
+    }
+    if class1.support != 3 {
+        println("  FAIL: class 1 support should be 3")
+        return 1
+    }
+
+    if report.accuracy < 0.65 || report.accuracy > 0.68 {
+        println("  FAIL: accuracy should be ~0.667")
+        return 1
+    }
+
+    println("  OK: structured report has separate class_metrics and average fields")
+    print_classification_report(report)
+
+    classification_report_free(report)
+    array_free_f32(y_true)
+    array_free_f32(y_pred)
+    array_free_f32(classes)
+    return 0
+}
+
+function test_regression_metrics() -> i32 {
+    println("Test: regression metrics (MSE, RMSE, MAE, R2)")
+    let y_true: ptr<f32> = array_new_f32(4)
+    let y_pred: ptr<f32> = array_new_f32(4)
+    y_true[0] = 3.0; y_pred[0] = 2.5
+    y_true[1] = -0.5; y_pred[1] = 0.0
+    y_true[2] = 2.0; y_pred[2] = 2.0
+    y_true[3] = 7.0; y_pred[3] = 8.0
+
+    let mse: f32 = mean_squared_error(y_true, y_pred, 4)
+    if mse < 0.37 || mse > 0.39 {
+        println("  FAIL: MSE should be ~0.375")
+        return 1
+    }
+
+    let mae: f32 = mean_absolute_error(y_true, y_pred, 4)
+    if mae < 0.49 || mae > 0.51 {
+        println("  FAIL: MAE should be ~0.5")
+        return 1
+    }
+
+    let r2: f32 = r2_score(y_true, y_pred, 4)
+    if r2 < 0.94 || r2 > 0.96 {
+        println("  FAIL: R2 should be ~0.948")
+        return 1
+    }
+
+    println("  OK: MSE, MAE, R2 all correct")
+    array_free_f32(y_true)
+    array_free_f32(y_pred)
+    return 0
+}
+
+function test_pos_label_metrics() -> i32 {
+    println("Test: pos_label-aware metrics (Issue #30909)")
+    let y_true: ptr<f32> = array_new_f32(4)
+    let y_score: ptr<f32> = array_new_f32(4)
+    y_true[0] = 0.0; y_score[0] = 0.1
+    y_true[1] = 1.0; y_score[1] = 0.9
+    y_true[2] = 0.0; y_score[2] = 0.4
+    y_true[3] = 1.0; y_score[3] = 0.8
+
+    let classes: ptr<f32> = array_new_f32(2)
+    classes[0] = 0.0
+    classes[1] = 1.0
+
+    let auc: f32 = roc_auc_score(y_true, y_score, 4, classes, 1.0)
+    if auc < 0.99 || auc > 1.01 {
+        println("  FAIL: AUC should be 1.0 for perfect separation")
+        return 1
+    }
+
+    let prec: f32 = precision_at_threshold(y_true, y_score, 4, 1.0, 0.5)
+    if prec < 0.99 || prec > 1.01 {
+        println("  FAIL: precision at 0.5 should be 1.0")
+        return 1
+    }
+
+    let rec: f32 = recall_at_threshold(y_true, y_score, 4, 1.0, 0.5)
+    if rec < 0.99 || rec > 1.01 {
+        println("  FAIL: recall at 0.5 should be 1.0")
+        return 1
+    }
+
+    println("  OK: pos_label handled internally, no manual column switching needed")
+    array_free_f32(y_true)
+    array_free_f32(y_score)
+    array_free_f32(classes)
+    return 0
+}
+
+function main() -> i32 {
+    println("Running metrics tests...")
+    println("=======================")
+    println("")
+
+    let mut failures: i32 = 0
+
+    if test_accuracy_score() != 0 { failures = failures + 1 }
+    println("")
+    if test_classification_report_structured() != 0 { failures = failures + 1 }
+    println("")
+    if test_regression_metrics() != 0 { failures = failures + 1 }
+    println("")
+    if test_pos_label_metrics() != 0 { failures = failures + 1 }
+
+    println("")
+    if failures == 0 {
+        println("All metrics tests passed!")
+        return 0
+    }
+    print("FAILED: ")
+    print(failures)
+    println(" tests")
+    return 1
+}
