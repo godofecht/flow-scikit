@@ -387,7 +387,7 @@ function test_count_vectorizer() -> i32 {
     ]
 
     let cv: CountVectorizer = count_vectorizer_fit(docs, 4, 50)
-    let counts: Matrix = count_vectorizer_transform(cv, docs)
+    let counts: Matrix = count_vectorizer_transform(cv, docs, 4)
 
     if cv.n_features < 3 {
         println("  FAIL: should find at least 3 unique words")
@@ -427,7 +427,7 @@ function test_tfidf_vectorizer() -> i32 {
     ]
 
     let tfidf: TfidfVectorizer = tfidf_vectorizer_fit(docs, 4, 50)
-    let result: Matrix = tfidf_vectorizer_transform(tfidf, docs)
+    let result: Matrix = tfidf_vectorizer_transform(tfidf, docs, 4)
 
     for i in 0 to 4 {
         let mut norm: f32 = 0.0
