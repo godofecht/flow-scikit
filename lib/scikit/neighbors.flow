@@ -105,7 +105,8 @@ export function knn_classifier_predict_proba(model: KNNClassifier, X: Matrix) ->
 }
 
 export function knn_classifier_predict(model: KNNClassifier, X: Matrix) -> Matrix {
-    return knn_classifier_predict_proba(model, X)
+    let result: Matrix = knn_classifier_predict_proba(model, X)
+    return result
 }
 
 export function knn_classifier_decide(model: KNNClassifier, probs: Matrix, threshold: f32) -> ptr<f32> {

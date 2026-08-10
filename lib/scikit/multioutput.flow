@@ -30,7 +30,7 @@ export function multi_output_classifier_fit(
         for i in 0 to X.rows {
             y_col[i] = matrix_at(Y, i, o)
         }
-        models[o] = logistic_fit(X, y_col, epochs, lr)
+        models[o] = logistic_regression_fit(X, y_col, 2, epochs, lr, penalty_none())
         array_free_f32(y_col)
     }
 
@@ -46,16 +46,16 @@ export function multi_output_classifier_predict(model: MultiOutputClassifier, X:
     let result: Matrix = matrix_new(X.rows, model.n_outputs)
 
     for o in 0 to model.n_outputs {
-        let probs: Matrix = logistic_predict(model.models[o], X)
+        let probs: ptr<f32> = logistic_predict(model.models[o], X)
         for i in 0 to X.rows {
-            let p: f32 = matrix_at(probs, i, 0)
+            let p: f32 = probs[i]
             if p > 0.5 {
                 matrix_set(result, i, o, 1.0)
             } else {
                 matrix_set(result, i, o, 0.0)
             }
         }
-        matrix_free(probs)
+        array_free_f32(probs)
     }
 
     return result
@@ -63,7 +63,7 @@ export function multi_output_classifier_predict(model: MultiOutputClassifier, X:
 
 export function multi_output_classifier_free(model: MultiOutputClassifier) -> void {
     for o in 0 to model.n_outputs {
-        logistic_free(model.models[o])
+        logistic_regression_free(model.models[o])
     }
     free(model.models as ptr<void>)
 }
@@ -82,7 +82,7 @@ export function multi_output_regressor_fit(X: Matrix, Y: Matrix, n_outputs: i32)
         for i in 0 to X.rows {
             y_col[i] = matrix_at(Y, i, o)
         }
-        models[o] = linear_regression_fit(X, y_col)
+        models[o] = linear_regression_fit(X, y_col, penalty_none())
         array_free_f32(y_col)
     }
 
@@ -139,8 +139,12 @@ export function classifier_chain_fit(X: Matrix, Y: ptr<ptr<f32> >, n_samples: i3
     }
 
     for o in 0 to n_outputs {
-        let y: ptr<f32> = Y[order[o]]
-        models[o] = logistic_regression_fit(current_X, y, lr, n_iter)
+        let y: ptr<f32> = array_new_f32(n_samples)
+        let col_idx: i32 = order[o]
+        for i in 0 to n_samples {
+            y[i] = Y[col_idx][i]
+        }
+        models[o] = logistic_regression_fit(current_X, y, 2, n_iter, lr, penalty_none())
 
         let augmented: Matrix = matrix_new(n_samples, current_X.cols + 1)
         for i in 0 to n_samples {
@@ -177,7 +181,7 @@ export function classifier_chain_predict(model: ClassifierChain, X: Matrix) -> p
     }
 
     for o in 0 to model.n_outputs {
-        let preds: ptr<f32> = logistic_regression_predict(model.models[o], current_X)
+        let preds: ptr<f32> = logistic_predict(model.models[o], current_X)
         for i in 0 to n {
             result[i][o] = preds[i]
         }
@@ -231,8 +235,12 @@ export function regressor_chain_fit(X: Matrix, Y: ptr<ptr<f32> >, n_samples: i32
     }
 
     for o in 0 to n_outputs {
-        let y: ptr<f32> = Y[order[o]]
-        models[o] = linear_regression_fit(current_X, y)
+        let y: ptr<f32> = array_new_f32(n_samples)
+        let col_idx: i32 = order[o]
+        for i in 0 to n_samples {
+            y[i] = Y[col_idx][i]
+        }
+        models[o] = linear_regression_fit(current_X, y, penalty_none())
 
         let augmented: Matrix = matrix_new(n_samples, current_X.cols + 1)
         for i in 0 to n_samples {

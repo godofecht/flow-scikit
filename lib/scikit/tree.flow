@@ -156,16 +156,19 @@ export function decision_tree_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: 
 
     let max_nodes: i32 = 2 * X.rows + 1
     let nodes: ptr<TreeNode> = malloc((max_nodes as i64) * 36) as ptr<TreeNode>
-    let mut n_nodes: i32 = 0
+    let n_nodes_ptr: ptr<i32> = malloc(4) as ptr<i32>
+    n_nodes_ptr[0] = 0
 
     let indices: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
     for i in 0 to X.rows {
         indices[i] = i
     }
 
-    _build_classifier_tree(nodes, n_nodes, X, y, indices, X.rows, 0, max_depth, criterion, classes, n_classes)
+    let final_n_nodes: i32 = _build_classifier_tree(nodes, n_nodes_ptr, X, y, indices, X.rows, 0, max_depth, criterion, classes, n_classes)
 
     free(indices as ptr<void>)
+    let n_nodes: i32 = n_nodes_ptr[0]
+    free(n_nodes_ptr as ptr<void>)
 
     return DecisionTreeClassifier {
         nodes: nodes,
@@ -365,7 +368,7 @@ export function decision_tree_classifier_feature_importances(model: DecisionTree
     for f in 0 to n_features {
         importances[f] = 0.0
     }
-    let root_samples: f32 = (model.nodes + 0).n_samples as f32
+    let root_samples: f32 = model.nodes[0].n_samples as f32
     if root_samples < 1.0 {
         return importances
     }
@@ -395,16 +398,19 @@ export function decision_tree_classifier_feature_importances(model: DecisionTree
 export function decision_tree_regressor_fit(X: Matrix, y: ptr<f32>, max_depth: i32, criterion: i32) -> DecisionTreeRegressor {
     let max_nodes: i32 = 2 * X.rows + 1
     let nodes: ptr<TreeNode> = malloc((max_nodes as i64) * 36) as ptr<TreeNode>
-    let mut n_nodes: i32 = 0
+    let n_nodes_ptr: ptr<i32> = malloc(4) as ptr<i32>
+    n_nodes_ptr[0] = 0
 
     let indices: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
     for i in 0 to X.rows {
         indices[i] = i
     }
 
-    _build_regressor_tree(nodes, n_nodes, X, y, indices, X.rows, 0, max_depth, criterion)
+    let final_n_nodes: i32 = _build_regressor_tree(nodes, n_nodes_ptr, X, y, indices, X.rows, 0, max_depth, criterion)
 
     free(indices as ptr<void>)
+    let n_nodes: i32 = n_nodes_ptr[0]
+    free(n_nodes_ptr as ptr<void>)
 
     return DecisionTreeRegressor {
         nodes: nodes,
@@ -588,7 +594,7 @@ export function decision_tree_regressor_feature_importances(model: DecisionTreeR
     for f in 0 to n_features {
         importances[f] = 0.0
     }
-    let root_samples: f32 = (model.nodes + 0).n_samples as f32
+    let root_samples: f32 = model.nodes[0].n_samples as f32
     if root_samples < 1.0 {
         return importances
     }

@@ -5,6 +5,14 @@
 import "lib/scikit/matrix.flow"
 import "lib/scikit/validation.flow"
 
+function __pow_f32(base: f32, exp: i32) -> f32 {
+    let mut result: f32 = 1.0
+    for i in 0 to exp {
+        result = result * base
+    }
+    return result
+}
+
 # ============================================================================
 # StandardScaler
 # ============================================================================
@@ -1144,12 +1152,12 @@ function _yeo_johnson(x: f32, lambda: f32) -> f32 {
         if (fabs((lambda) as f64) as f32) < 1e-10 {
             return log((x + 1.0) as f64) as f32
         }
-        return (pow_f32(x + 1.0, lambda) - 1.0) / lambda
+        return (pow((x + 1.0) as f64, lambda as f64) as f32 - 1.0) / lambda
     } else {
         if (fabs((lambda - 2.0) as f64) as f32) < 1e-10 {
             return 0.0 - log((1.0 - x) as f64) as f32
         }
-        return 0.0 - ((pow_f32(1.0 - x, 2.0 - lambda) - 1.0) / (2.0 - lambda))
+        return 0.0 - ((pow((1.0 - x) as f64, (2.0 - lambda) as f64) as f32 - 1.0) / (2.0 - lambda))
     }
 }
 

@@ -11,6 +11,25 @@ extern {
     function log(x: f64) -> f64
     function sqrt(x: f64) -> f64
     function printf(fmt: string, ...) -> i32
+    function strlen(s: string) -> i32
+    function memcpy(dst: ptr<void>, src: ptr<void>, n: i64) -> ptr<void>
+}
+
+# String helpers (flow runtime does not provide these).
+function _string_length(s: string) -> i32 {
+    return strlen(s)
+}
+
+function _string_substring(s: string, start: i32, length: i32) -> string {
+    let buf: ptr<u8> = malloc((length as i64) + 1) as ptr<u8>
+    memcpy(buf as ptr<void>, s + start, length as i64)
+    buf[length] = 0
+    return buf as string
+}
+
+function _string_char_at(s: string, i: i32) -> i32 {
+    let p: ptr<u8> = s as ptr<u8>
+    return p[i] as i32
 }
 
 export struct CountVectorizer {
@@ -24,9 +43,9 @@ export struct CountVectorizer {
 
 function _hash_string(s: string) -> i32 {
     let h: i32 = 5381
-    let len: i32 = string_length(s)
+    let len: i32 = _string_length(s)
     for i in 0 to len {
-        let c: i32 = string_char_at(s, i)
+        let c: i32 = _string_char_at(s, i)
         h = ((h << 5) + h) + c
     }
     if h < 0 { h = 0 - h }
@@ -34,19 +53,19 @@ function _hash_string(s: string) -> i32 {
 }
 
 function _tokenize(doc: string, out_tokens: ptr<string>, max_tokens: i32) -> i32 {
-    let len: i32 = string_length(doc)
+    let len: i32 = _string_length(doc)
     let mut n_tokens: i32 = 0
     let mut start: i32 = 0
     let mut in_token: bool = false
 
     for i in 0 to len {
-        let c: i32 = string_char_at(doc, i)
+        let c: i32 = _string_char_at(doc, i)
         let is_space: bool = c == 32 || c == 9 || c == 10 || c == 13
 
         if is_space {
             if in_token {
                 if n_tokens < max_tokens {
-                    out_tokens[n_tokens] = string_substring(doc, start, i - start)
+                    out_tokens[n_tokens] = _string_substring(doc, start, i - start)
                     n_tokens = n_tokens + 1
                 }
                 in_token = false
@@ -60,7 +79,7 @@ function _tokenize(doc: string, out_tokens: ptr<string>, max_tokens: i32) -> i32
     }
 
     if in_token && n_tokens < max_tokens {
-        out_tokens[n_tokens] = string_substring(doc, start, len - start)
+        out_tokens[n_tokens] = _string_substring(doc, start, len - start)
         n_tokens = n_tokens + 1
     }
 

@@ -52,9 +52,10 @@ function compute_joint_probabilities(dist: ptr<f32>, n: i32, perplexity: f32) ->
         beta = 1.0
         beta_min = 0.01
         beta_max = 1000.0
+        let mut sum_p: f32 = 0.0
 
         for _ in 0 to max_iter {
-            let mut sum_p: f32 = 0.0
+            sum_p = 0.0
             for j in 0 to n {
                 if i != j {
                     let d: f32 = dist[i * n + j]
