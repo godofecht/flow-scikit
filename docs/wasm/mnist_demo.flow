@@ -1,13 +1,14 @@
-# A small browser-friendly digit confidence function.
-# It is compiled to WebAssembly for docs/demos.html.
+# Distance kernel for the browser MNIST demo.
+# The browser loads ten centroids trained from the real MNIST training set,
+# then calls this Flow-built WASM function once per digit class.
 
-export function mnist_confidence(digit: i32, noise_percent: i32) -> i32 {
-    let mut base: i32 = 96
-    if digit == 1 || digit == 7 { base = 98 }
-    if digit == 5 || digit == 8 { base = 94 }
-    let mut confidence: i32 = base - noise_percent
-    if confidence < 55 { confidence = 55 }
-    return confidence
+export function mnist_squared_distance(input: ptr<f32>, prototype: ptr<f32>, n: i32) -> f32 {
+    let mut total: f32 = 0.0
+    for i in 0 to n {
+        let delta: f32 = input[i] - prototype[i]
+        total = total + delta * delta
+    }
+    return total
 }
 
 function main() -> i32 {
