@@ -100,16 +100,17 @@ lib/scikit/
 ├── ensemble.flow          # RandomForestClassifier/Regressor,
 │                          #   BaggingClassifier, VotingClassifier,
 │                          #   GradientBoostingClassifier/Regressor,
-│                          #   AdaBoostClassifier
+│                          #   AdaBoostClassifier, ExtraTreesClassifier/Regressor
 ├── cluster.flow           # KMeans, MiniBatchKMeans, DBSCAN,
-│                          #   AgglomerativeClustering
+│                          #   AgglomerativeClustering, MeanShift, Birch
 ├── decomposition.flow     # PCA, TruncatedSVD, NMF
 ├── metrics.flow           # accuracy, precision/recall/f1, classification_report,
 │                          #   MSE, RMSE, MAE, R2, roc_auc, roc_curve,
 │                          #   precision_recall_curve, log_loss, cohen_kappa,
 │                          #   matthews_corrcoef, hinge_loss,
 │                          #   explained_variance, balanced_accuracy,
-│                          #   fbeta_score, confusion_matrix
+│                          #   fbeta_score, confusion_matrix,
+│                          #   multiclass OvR/OvO precision/recall/f1
 ├── calibration.flow       # Calibration curve with CI (Issue #30664)
 ├── model_selection.flow   # train_test_split, cross_validate, GridSearchCV,
 │                          #   RandomizedSearchCV, KFold, StratifiedKFold,
@@ -120,14 +121,27 @@ lib/scikit/
 ├── manifold.flow          # TSNE (t-SNE with binary search for perplexity)
 ├── kernel_ridge.flow      # KernelRidge (linear, poly, RBF, sigmoid kernels)
 ├── cross_decomposition.flow # PLSRegression (NIPALS algorithm)
-└── inspection.flow         # permutation_importance for feature evaluation
+├── inspection.flow         # permutation_importance for feature evaluation
+├── datasets.flow          # make_classification, make_regression, make_blobs,
+│                          #   make_moons, make_circles
+├── neural_network.flow    # MLPClassifier, MLPRegressor
+├── mixture.flow           # GaussianMixture (EM, diagonal covariance)
+├── dummy.flow             # DummyClassifier, DummyRegressor
+├── compose.flow           # ColumnTransformer
+├── feature_extraction.flow # CountVectorizer, TfidfVectorizer
+├── gaussian_process.flow  # GaussianProcessRegressor (RBF, linear kernels)
+└── multioutput.flow       # MultiOutputClassifier, MultiOutputRegressor
 
 examples/
 ├── iris_classification.flow
 ├── regression_demo.flow
 ├── grid_search_demo.flow
-└── full_demo.flow
-└── new_modules_demo.flow
+├── full_demo.flow
+├── new_modules_demo.flow
+├── clustering_demo.flow
+├── ensemble_comparison.flow
+├── svm_demo.flow
+└── preprocessing_demo.flow
 
 tests/
 ├── test_preprocessing.flow
@@ -135,7 +149,9 @@ tests/
 ├── test_model_selection.flow
 ├── test_estimators.flow
 ├── test_advanced_estimators.flow
-└── test_new_modules.flow
+├── test_new_modules.flow
+├── test_extended_modules.flow
+└── test_new_modules_v2.flow
 ```
 
 ## API Coverage
@@ -145,10 +161,12 @@ tests/
 | `preprocessing`           | StandardScaler, MinMaxScaler, RobustScaler, MaxAbsScaler,    |
 |                           | Normalizer, Binarizer, OneHotEncoder, OrdinalEncoder,        |
 |                           | LabelEncoder, SimpleImputer, KBinsDiscretizer,               |
-|                           | PolynomialFeatures, FunctionTransformer                      |
+|                           | PolynomialFeatures, FunctionTransformer,                     |
+|                           | PowerTransformer, QuantileTransformer                        |
 | `linear_model`            | LinearRegression, LogisticRegression, Ridge, Lasso,          |
 |                           | ElasticNet, RidgeClassifier, SGDClassifier,                 |
-|                           | SGDRegressor, MultiClassLogisticRegression                 |
+|                           | SGDRegressor, MultiClassLogisticRegression,                |
+|                           | HuberRegressor, BayesianRidge                                |
 | `neighbors`               | KNNClassifier, KNNRegressor, NearestNeighbors                |
 | `svm`                     | LinearSVC, LinearSVR, KernelSVC                              |
 | `tree`                    | DecisionTreeClassifier, DecisionTreeRegressor                |
@@ -156,8 +174,10 @@ tests/
 | `ensemble`                | RandomForestClassifier, RandomForestRegressor,               |
 |                           | BaggingClassifier, VotingClassifier,                         |
 |                           | GradientBoostingClassifier, GradientBoostingRegressor,       |
-|                           | AdaBoostClassifier                                           |
-| `cluster`                 | KMeans, MiniBatchKMeans, DBSCAN, AgglomerativeClustering      |
+|                           | AdaBoostClassifier, ExtraTreesClassifier,                   |
+|                           | ExtraTreesRegressor                                          |
+| `cluster`                 | KMeans, MiniBatchKMeans, DBSCAN, AgglomerativeClustering,    |
+|                           | MeanShift, Birch                                             |
 | `decomposition`           | PCA, TruncatedSVD, NMF                                      |
 | `metrics`                 | accuracy_score, precision_recall_fscore,                     |
 |                           | classification_report, confusion_matrix,                     |
@@ -179,6 +199,15 @@ tests/
 | `kernel_ridge`           | KernelRidge (linear, poly, RBF, sigmoid)                     |
 | `cross_decomposition`    | PLSRegression (NIPALS)                                       |
 | `inspection`             | permutation_importance                                       |
+| `datasets`               | make_classification, make_regression, make_blobs,           |
+|                           | make_moons, make_circles                                    |
+| `neural_network`         | MLPClassifier, MLPRegressor                                  |
+| `mixture`                | GaussianMixture                                              |
+| `dummy`                  | DummyClassifier, DummyRegressor                              |
+| `compose`                | ColumnTransformer                                            |
+| `feature_extraction`     | CountVectorizer, TfidfVectorizer                             |
+| `gaussian_process`       | GaussianProcessRegressor (RBF, linear kernels)               |
+| `multioutput`            | MultiOutputClassifier, MultiOutputRegressor                  |
 
 ## Usage
 
@@ -222,6 +251,8 @@ function main() -> i32 {
 ./flow run tests/test_estimators.flow
 ./flow run tests/test_advanced_estimators.flow
 ./flow run tests/test_new_modules.flow
+./flow run tests/test_extended_modules.flow
+./flow run tests/test_new_modules_v2.flow
 ```
 
 ## Running Examples
@@ -232,4 +263,10 @@ function main() -> i32 {
 ./flow run examples/grid_search_demo.flow
 ./flow run examples/full_demo.flow
 ./flow run examples/new_modules_demo.flow
+./flow run examples/clustering_demo.flow
+./flow run examples/ensemble_comparison.flow
+./flow run examples/svm_demo.flow
+./flow run examples/preprocessing_demo.flow
 ```
+
+See [DEMOS.md](DEMOS.md) for gif recordings of each demo.
