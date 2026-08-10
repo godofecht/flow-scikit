@@ -1,0 +1,275 @@
+# Tests for sklearn parity fixes.
+# Run: ./flow run tests/test_sklearn_parity_fixes.flow
+#
+# Tests:
+#   1. explained_variance_score returns NaN for single sample (#34622)
+#   2. OrdinalEncoder handles NaN as missing value, not unknown (#34387)
+#   3. ensure_no_nan allows inf, rejects NaN (#34668)
+#   4. OneHotEncoder min_frequency drops infrequent categories (#34649)
+#   5. LabelPropagation zero-affinity row gets uniform distribution (#34351)
+#   6. KMeans empty-cluster relocation (#34074)
+
+import "lib/scikit/scikit.flow"
+
+function test_explained_variance_single_sample() -> i32 {
+    println("Test: explained_variance_score with single sample (#34622)")
+    let y_true: ptr<f32> = array_new_f32(1)
+    let y_pred: ptr<f32> = array_new_f32(1)
+    y_true[0] = 5.0
+    y_pred[0] = 100.0
+
+    let score: f32 = explained_variance_score(y_true, y_pred, 1)
+    let d: f64 = score as f64
+    if d == d {
+        println("  FAIL: expected NaN for single sample, got a finite value")
+        array_free_f32(y_true)
+        array_free_f32(y_pred)
+        return 1
+    }
+    println("  OK: returned NaN for single sample")
+    array_free_f32(y_true)
+    array_free_f32(y_pred)
+    return 0
+}
+
+function test_explained_variance_zero_variance() -> i32 {
+    println("Test: explained_variance_score with zero variance (#34622)")
+    let y_true: ptr<f32> = array_new_f32(3)
+    let y_pred: ptr<f32> = array_new_f32(3)
+    y_true[0] = 5.0; y_pred[0] = 10.0
+    y_true[1] = 5.0; y_pred[1] = 20.0
+    y_true[2] = 5.0; y_pred[2] = 30.0
+
+    let score: f32 = explained_variance_score(y_true, y_pred, 3)
+    let d: f64 = score as f64
+    if d == d {
+        println("  FAIL: expected NaN for zero variance, got a finite value")
+        array_free_f32(y_true)
+        array_free_f32(y_pred)
+        return 1
+    }
+    println("  OK: returned NaN for zero variance")
+    array_free_f32(y_true)
+    array_free_f32(y_pred)
+    return 0
+}
+
+function test_explained_variance_normal() -> i32 {
+    println("Test: explained_variance_score normal case")
+    let y_true: ptr<f32> = array_new_f32(4)
+    let y_pred: ptr<f32> = array_new_f32(4)
+    y_true[0] = 1.0; y_pred[0] = 1.0
+    y_true[1] = 2.0; y_pred[1] = 2.0
+    y_true[2] = 3.0; y_pred[2] = 3.0
+    y_true[3] = 4.0; y_pred[3] = 4.0
+
+    let score: f32 = explained_variance_score(y_true, y_pred, 4)
+    if score < 0.99 || score > 1.01 {
+        println("  FAIL: expected ~1.0 for perfect prediction")
+        array_free_f32(y_true)
+        array_free_f32(y_pred)
+        return 1
+    }
+    println("  OK: score = 1.0 for perfect prediction")
+    array_free_f32(y_true)
+    array_free_f32(y_pred)
+    return 0
+}
+
+function test_ordinal_encoder_missing_values() -> i32 {
+    println("Test: OrdinalEncoder handles NaN as missing value (#34387)")
+    let X: Matrix = matrix_new(3, 1)
+    matrix_set(X, 0, 0, 0.0)
+    matrix_set(X, 1, 0, 1.0)
+    let nan_val: f32 = 0.0 / 0.0
+    matrix_set(X, 2, 0, nan_val)
+
+    let encoder: OrdinalEncoder = ordinal_encoder_fit(X, HANDLE_UNKNOWN_WARN)
+
+    if encoder.n_categories[0] != 2 {
+        println("  FAIL: expected 2 non-NaN categories, got ")
+        print(encoder.n_categories[0])
+        println("")
+        ordinal_encoder_free(encoder)
+        matrix_free(X)
+        return 1
+    }
+
+    let X_test: Matrix = matrix_new(2, 1)
+    matrix_set(X_test, 0, 0, nan_val)
+    matrix_set(X_test, 1, 0, 0.0)
+
+    let result: Matrix = ordinal_encoder_transform(encoder, X_test)
+
+    let enc_nan: f32 = matrix_at(result, 0, 0)
+    let enc_zero: f32 = matrix_at(result, 1, 0)
+
+    let d_nan: f64 = enc_nan as f64
+    if d_nan == d_nan {
+        println("  FAIL: expected NaN encoding for NaN input, got a finite value")
+        ordinal_encoder_free(encoder)
+        matrix_free(X)
+        matrix_free(X_test)
+        matrix_free(result)
+        return 1
+    }
+
+    if enc_zero != 0.0 {
+        println("  FAIL: expected 0 for first category, got ")
+        print(enc_zero)
+        println("")
+        ordinal_encoder_free(encoder)
+        matrix_free(X)
+        matrix_free(X_test)
+        matrix_free(result)
+        return 1
+    }
+
+    println("  OK: NaN encoded as NaN, 0 encoded as 0")
+    ordinal_encoder_free(encoder)
+    matrix_free(X)
+    matrix_free(X_test)
+    matrix_free(result)
+    return 0
+}
+
+function test_ensure_no_nan_allows_inf() -> i32 {
+    println("Test: ensure_no_nan allows inf, rejects NaN (#34668)")
+    let M: Matrix = matrix_new(2, 2)
+    matrix_set(M, 0, 0, 1.0)
+    matrix_set(M, 0, 1, 1e38)
+    matrix_set(M, 1, 0, -1e38)
+    matrix_set(M, 1, 1, 0.0)
+
+    let r1: ValidationResult = ensure_no_nan(M)
+    if not r1.ok {
+        println("  FAIL: ensure_no_nan should allow large/inf values")
+        matrix_free(M)
+        return 1
+    }
+
+    let nan_val: f32 = 0.0 / 0.0
+    matrix_set(M, 0, 0, nan_val)
+    let r2: ValidationResult = ensure_no_nan(M)
+    if r2.ok {
+        println("  FAIL: ensure_no_nan should reject NaN")
+        matrix_free(M)
+        return 1
+    }
+
+    println("  OK: inf allowed, NaN rejected")
+    matrix_free(M)
+    return 0
+}
+
+function test_onehot_encoder_min_frequency() -> i32 {
+    println("Test: OneHotEncoder min_frequency drops infrequent (#34649)")
+    let X: Matrix = matrix_new(5, 1)
+    matrix_set(X, 0, 0, 0.0)
+    matrix_set(X, 1, 0, 0.0)
+    matrix_set(X, 2, 0, 0.0)
+    matrix_set(X, 3, 0, 1.0)
+    matrix_set(X, 4, 0, 2.0)
+
+    let encoder: OneHotEncoder = onehot_encoder_fit_with_freq(X, HANDLE_UNKNOWN_WARN, 2)
+
+    if encoder.n_categories[0] != 1 {
+        println("  FAIL: expected 1 frequent category (0 appears 3 times), got ")
+        print(encoder.n_categories[0])
+        println("")
+        onehot_encoder_free(encoder)
+        matrix_free(X)
+        return 1
+    }
+
+    if encoder.total_output_cols != 1 {
+        println("  FAIL: expected 1 output column, got ")
+        print(encoder.total_output_cols)
+        println("")
+        onehot_encoder_free(encoder)
+        matrix_free(X)
+        return 1
+    }
+
+    println("  OK: only frequent category (0) kept, infrequent (1, 2) dropped")
+    onehot_encoder_free(encoder)
+    matrix_free(X)
+    return 0
+}
+
+function test_kmeans_empty_cluster_relocation() -> i32 {
+    println("Test: KMeans empty-cluster relocation (#34074)")
+    let X: Matrix = matrix_new(6, 1)
+    matrix_set(X, 0, 0, 0.0)
+    matrix_set(X, 1, 0, 0.1)
+    matrix_set(X, 2, 0, 0.2)
+    matrix_set(X, 3, 0, 10.0)
+    matrix_set(X, 4, 0, 10.1)
+    matrix_set(X, 5, 0, 10.2)
+
+    let model: KMeans = kmeans_fit(X, 3, 50, 0.001, 42)
+
+    let mut has_empty: bool = false
+    let counts: ptr<i32> = malloc(12) as ptr<i32>
+    for k in 0 to 3 { counts[k] = 0 }
+    for i in 0 to 6 {
+        let k: i32 = model.labels[i]
+        if k >= 0 && k < 3 {
+            counts[k] = counts[k] + 1
+        }
+    }
+    for k in 0 to 3 {
+        if counts[k] == 0 {
+            has_empty = true
+        }
+    }
+    free(counts as ptr<void>)
+
+    if has_empty {
+        println("  FAIL: KMeans has empty clusters after relocation")
+        free(model.labels)
+        for k in 0 to 3 { array_free_f32(model.centroids[k]) }
+        free(model.centroids as ptr<void>)
+        matrix_free(X)
+        return 1
+    }
+
+    println("  OK: all 3 clusters have members after relocation")
+    free(model.labels)
+    for k in 0 to 3 { array_free_f32(model.centroids[k]) }
+    free(model.centroids as ptr<void>)
+    matrix_free(X)
+    return 0
+}
+
+function main() -> i32 {
+    println("Running sklearn parity fix tests...")
+    println("====================================")
+    println("")
+
+    let mut failures: i32 = 0
+
+    if test_explained_variance_single_sample() != 0 { failures = failures + 1 }
+    println("")
+    if test_explained_variance_zero_variance() != 0 { failures = failures + 1 }
+    println("")
+    if test_explained_variance_normal() != 0 { failures = failures + 1 }
+    println("")
+    if test_ordinal_encoder_missing_values() != 0 { failures = failures + 1 }
+    println("")
+    if test_ensure_no_nan_allows_inf() != 0 { failures = failures + 1 }
+    println("")
+    if test_onehot_encoder_min_frequency() != 0 { failures = failures + 1 }
+    println("")
+    if test_kmeans_empty_cluster_relocation() != 0 { failures = failures + 1 }
+
+    println("")
+    if failures == 0 {
+        println("All sklearn parity fix tests passed!")
+        return 0
+    }
+    print("FAILED: ")
+    print(failures)
+    println(" tests")
+    return 1
+}

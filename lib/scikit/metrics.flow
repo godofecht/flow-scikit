@@ -660,6 +660,12 @@ export function hinge_loss(y_true: ptr<f32>, y_decision: ptr<f32>, n: i32, pos_l
 # ============================================================================
 
 export function explained_variance_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
+    if n < 2 {
+        print("[flow-scikit] WARNING: explained_variance_score ill-defined with ")
+        print(n)
+        println(" samples, returning NaN")
+        return 0.0 / 0.0
+    }
     let mean_true: f32 = array_mean(y_true, n)
     let mut var_diff: f32 = 0.0
     let mut var_true: f32 = 0.0
@@ -670,7 +676,8 @@ export function explained_variance_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: 
         var_true = var_true + d_true * d_true
     }
     if var_true < 1e-10 {
-        return 0.0
+        print("[flow-scikit] WARNING: explained_variance_score ill-defined (zero variance in y_true), returning NaN")
+        return 0.0 / 0.0
     }
     return 1.0 - var_diff / var_true
 }

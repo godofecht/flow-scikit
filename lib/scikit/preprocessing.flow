@@ -123,6 +123,7 @@ export struct OneHotEncoder {
     n_features: i32,
     total_output_cols: i32,
     handle_unknown: i32,
+    min_frequency: i32,
     fitted: bool
 }
 
@@ -138,6 +139,7 @@ export function onehot_encoder_init(n_features: i32, handle_unknown: i32) -> One
         n_features: n_features,
         total_output_cols: 0,
         handle_unknown: handle_unknown,
+        min_frequency: 0,
         fitted: false
     }
 }
@@ -169,6 +171,60 @@ export function onehot_encoder_fit(X: Matrix, handle_unknown: i32) -> OneHotEnco
         encoder.categories[j] = unique
         encoder.n_categories[j] = n_unique
         total_cols = total_cols + n_unique
+    }
+
+    encoder.total_output_cols = total_cols
+    encoder.fitted = true
+    return encoder
+}
+
+# Fit with min_frequency: categories appearing fewer than min_frequency
+# times are dropped from the encoding.
+# Addresses sklearn #34649: Add option to drop infrequent categories.
+export function onehot_encoder_fit_with_freq(X: Matrix, handle_unknown: i32, min_frequency: i32) -> OneHotEncoder {
+    let n_features: i32 = X.cols
+    let encoder: OneHotEncoder = onehot_encoder_init(n_features, handle_unknown)
+    encoder.min_frequency = min_frequency
+
+    let mut total_cols: i32 = 0
+
+    for j in 0 to n_features {
+        let mut unique: ptr<f32> = array_new_f32(X.rows)
+        let mut counts: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
+        let mut n_unique: i32 = 0
+
+        for i in 0 to X.rows {
+            let val: f32 = matrix_at(X, i, j)
+            let mut found: bool = false
+            for k in 0 to n_unique {
+                if unique[k] == val {
+                    found = true
+                    counts[k] = counts[k] + 1
+                }
+            }
+            if not found {
+                unique[n_unique] = val
+                counts[n_unique] = 1
+                n_unique = n_unique + 1
+            }
+        }
+
+        # Filter to frequent categories
+        let filtered: ptr<f32> = array_new_f32(n_unique)
+        let mut n_frequent: i32 = 0
+        for k in 0 to n_unique {
+            if counts[k] >= min_frequency {
+                filtered[n_frequent] = unique[k]
+                n_frequent = n_frequent + 1
+            }
+        }
+
+        array_free_f32(unique)
+        free(counts as ptr<void>)
+
+        encoder.categories[j] = filtered
+        encoder.n_categories[j] = n_frequent
+        total_cols = total_cols + n_frequent
     }
 
     encoder.total_output_cols = total_cols
@@ -627,6 +683,8 @@ export struct OrdinalEncoder {
     n_categories: ptr<i32>,
     n_features: i32,
     handle_unknown: i32,
+    encoded_missing_value: f32,
+    has_missing: ptr<bool>,
     fitted: bool
 }
 
@@ -634,28 +692,36 @@ export function ordinal_encoder_fit(X: Matrix, handle_unknown: i32) -> OrdinalEn
     let n_features: i32 = X.cols
     let cats: ptr<ptr<f32> > = malloc((n_features as i64) * 8) as ptr<ptr<f32> >
     let n_cats: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    let has_missing: ptr<bool> = malloc((n_features as i64) * 1) as ptr<bool>
 
     for j in 0 to n_features {
         let unique: ptr<f32> = array_new_f32(X.rows)
         let mut n_unique: i32 = 0
+        let mut found_nan: bool = false
 
         for i in 0 to X.rows {
             let val: f32 = matrix_at(X, i, j)
-            let mut found: bool = false
-            for k in 0 to n_unique {
-                if unique[k] == val {
-                    found = true
+            let d: f64 = val as f64
+            if d != d {
+                found_nan = true
+            } else {
+                let mut found: bool = false
+                for k in 0 to n_unique {
+                    if unique[k] == val {
+                        found = true
+                    }
                 }
-            }
-            if not found {
-                unique[n_unique] = val
-                n_unique = n_unique + 1
+                if not found {
+                    unique[n_unique] = val
+                    n_unique = n_unique + 1
+                }
             }
         }
 
         _insertion_sort(unique, n_unique)
         cats[j] = unique
         n_cats[j] = n_unique
+        has_missing[j] = found_nan
     }
 
     return OrdinalEncoder {
@@ -663,6 +729,8 @@ export function ordinal_encoder_fit(X: Matrix, handle_unknown: i32) -> OrdinalEn
         n_categories: n_cats,
         n_features: n_features,
         handle_unknown: handle_unknown,
+        encoded_missing_value: 0.0 / 0.0,
+        has_missing: has_missing,
         fitted: true
     }
 }
@@ -676,22 +744,28 @@ export function ordinal_encoder_transform(encoder: OrdinalEncoder, X: Matrix) ->
 
         for i in 0 to X.rows {
             let val: f32 = matrix_at(X, i, j)
-            let mut found_idx: i32 = -1
-            for k in 0 to n_cats {
-                if cats[k] == val {
-                    found_idx = k
-                }
-            }
+            let d: f64 = val as f64
 
-            if found_idx >= 0 {
-                matrix_set(result, i, j, (found_idx as f32))
+            if d != d {
+                matrix_set(result, i, j, encoder.encoded_missing_value)
             } else {
-                if encoder.handle_unknown == HANDLE_UNKNOWN_WARN {
-                    print("[flow-scikit] WARNING: Unknown category in feature ")
-                    print(j)
-                    println(", encoding as -1")
+                let mut found_idx: i32 = -1
+                for k in 0 to n_cats {
+                    if cats[k] == val {
+                        found_idx = k
+                    }
                 }
-                matrix_set(result, i, j, -1.0)
+
+                if found_idx >= 0 {
+                    matrix_set(result, i, j, (found_idx as f32))
+                } else {
+                    if encoder.handle_unknown == HANDLE_UNKNOWN_WARN {
+                        print("[flow-scikit] WARNING: Unknown category in feature ")
+                        print(j)
+                        println(", encoding as -1")
+                    }
+                    matrix_set(result, i, j, -1.0)
+                }
             }
         }
     }
@@ -705,6 +779,7 @@ export function ordinal_encoder_free(encoder: OrdinalEncoder) -> void {
     }
     free(encoder.categories as ptr<void>)
     free(encoder.n_categories as ptr<void>)
+    free(encoder.has_missing as ptr<void>)
 }
 
 # ============================================================================

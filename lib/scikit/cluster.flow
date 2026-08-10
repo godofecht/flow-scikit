@@ -87,6 +87,40 @@ export function kmeans_fit(X: Matrix, n_clusters: i32, max_iter: i32, tol: f32, 
                     }
                     centroids[k][j] = new_val
                 }
+            } else {
+                # Empty cluster: relocate centroid to the point with the
+                # largest distance to its assigned centroid.
+                # Addresses sklearn #34074: KMeans can skip final label
+                # reassignment after empty-cluster relocation.
+                let mut farthest_idx: i32 = 0
+                let mut farthest_dist: f32 = -1.0
+                for i in 0 to X.rows {
+                    let kk: i32 = labels[i]
+                    let mut dist: f32 = 0.0
+                    for j in 0 to n_features {
+                        let d: f32 = matrix_at(X, i, j) - centroids[kk][j]
+                        dist = dist + d * d
+                    }
+                    if dist > farthest_dist {
+                        farthest_dist = dist
+                        farthest_idx = i
+                    }
+                }
+                for j in 0 to n_features {
+                    let new_val: f32 = matrix_at(X, farthest_idx, j)
+                    let shift: f32 = new_val - centroids[k][j]
+                    if shift < 0.0 {
+                        let abs_shift: f32 = 0.0 - shift
+                        if abs_shift > max_shift {
+                            max_shift = abs_shift
+                        }
+                    } else {
+                        if shift > max_shift {
+                            max_shift = shift
+                        }
+                    }
+                    centroids[k][j] = new_val
+                }
             }
             array_free_f32(sums[k])
         }
