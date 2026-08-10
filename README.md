@@ -126,8 +126,12 @@ examples/
 ├── iris_classification.flow
 ├── regression_demo.flow
 ├── grid_search_demo.flow
-└── full_demo.flow
-└── new_modules_demo.flow
+├── full_demo.flow
+├── new_modules_demo.flow
+├── clustering_demo.flow
+├── ensemble_comparison.flow
+├── svm_demo.flow
+└── preprocessing_demo.flow
 
 tests/
 ├── test_preprocessing.flow
@@ -135,7 +139,8 @@ tests/
 ├── test_model_selection.flow
 ├── test_estimators.flow
 ├── test_advanced_estimators.flow
-└── test_new_modules.flow
+├── test_new_modules.flow
+└── test_extended_modules.flow
 ```
 
 ## API Coverage
@@ -167,7 +172,10 @@ tests/
 |                           | mean_squared_error, root_mean_squared_error,                 |
 |                           | mean_absolute_error, median_absolute_error,                 |
 |                           | max_error, mean_squared_log_error, r2_score,                |
-|                           | explained_variance_score, silhouette_score                  |
+|                           | explained_variance_score, silhouette_score,                 |
+|                           | multiclass_precision_ovr, multiclass_recall_ovr,             |
+|                           | multiclass_f1_ovr, multiclass_precision_ovo,                 |
+|                           | multiclass_recall_ovo                                       |
 | `model_selection`         | train_test_split, cross_validate_score, GridSearchCV,        |
 |                           | RandomizedSearchCV, KFold, StratifiedKFold,                  |
 |                           | ShuffleSplit, learning_curve, validation_curve               |
@@ -222,6 +230,7 @@ function main() -> i32 {
 ./flow run tests/test_estimators.flow
 ./flow run tests/test_advanced_estimators.flow
 ./flow run tests/test_new_modules.flow
+./flow run tests/test_extended_modules.flow
 ```
 
 ## Running Examples
@@ -232,4 +241,10 @@ function main() -> i32 {
 ./flow run examples/grid_search_demo.flow
 ./flow run examples/full_demo.flow
 ./flow run examples/new_modules_demo.flow
+./flow run examples/clustering_demo.flow
+./flow run examples/ensemble_comparison.flow
+./flow run examples/svm_demo.flow
+./flow run examples/preprocessing_demo.flow
 ```
+
+See [DEMOS.md](DEMOS.md) for gif recordings of each demo.
