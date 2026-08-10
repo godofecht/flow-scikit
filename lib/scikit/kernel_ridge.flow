@@ -31,17 +31,20 @@ export const KERNEL_TYPE_SIGMOID: i32 = 3
 function kernel_compute(x1: ptr<f32>, x2: ptr<f32>, n: i32, kernel_type: i32, gamma: f32, degree: i32, coef0: f32) -> f32 {
     if kernel_type == KERNEL_LINEAR {
         return dot_product(x1, x2, n)
-    } else if kernel_type == KERNEL_POLY {
+    }
+    if kernel_type == KERNEL_POLY {
         let dot: f32 = dot_product(x1, x2, n)
         return pow_f32(gamma * dot + coef0, degree)
-    } else if kernel_type == KERNEL_RBF {
+    }
+    if kernel_type == KERNEL_RBF {
         let mut sum: f32 = 0.0
         for i in 0 to n {
             let d: f32 = x1[i] - x2[i]
             sum = sum + d * d
         }
         return exp((0.0 - gamma * sum) as f64) as f32
-    } else if kernel_type == KERNEL_SIGMOID {
+    }
+    if kernel_type == KERNEL_SIGMOID {
         let dot: f32 = dot_product(x1, x2, n)
         return tanh_f32(gamma * dot + coef0)
     }

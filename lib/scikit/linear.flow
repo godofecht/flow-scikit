@@ -681,7 +681,7 @@ export function sgd_regressor_free(model: SGDRegressor) -> void {
 # ============================================================================
 
 export struct MultiClassLogisticRegression {
-    weights: ptr<ptr<f32>>,
+    weights: ptr<ptr<f32> >,
     bias: ptr<f32>,
     n_features: i32,
     classes: ptr<f32>,
@@ -708,7 +708,7 @@ export function multiclass_logistic_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
         }
     }
 
-    let weights: ptr<ptr<f32>> = malloc((n_classes as i64) * 8) as ptr<ptr<f32>>
+    let weights: ptr<ptr<f32> > = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
     let bias: ptr<f32> = array_new_f32(n_classes)
 
     for c in 0 to n_classes {
@@ -716,7 +716,7 @@ export function multiclass_logistic_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
     }
 
     for epoch in 0 to epochs {
-        let grads: ptr<ptr<f32>> = malloc((n_classes as i64) * 8) as ptr<ptr<f32>>
+        let grads: ptr<ptr<f32> > = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
         let grad_b: ptr<f32> = array_new_f32(n_classes)
         for c in 0 to n_classes {
             grads[c] = array_new_f32(n)
@@ -1012,4 +1012,792 @@ export function ridge_classifier_decision_function(model: RidgeClassifier, X: Ma
 
 export function ridge_classifier_free(model: RidgeClassifier) -> void {
     array_free_f32(model.weights)
+}
+
+# ============================================================================
+# HuberRegressor
+# ============================================================================
+
+export struct HuberRegressor {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    epsilon: f32,
+    n_iter: i32,
+    fitted: bool
+}
+
+export function huber_regressor_fit(X: Matrix, y: ptr<f32>, epsilon: f32, max_iter: i32, lr: f32) -> HuberRegressor {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let weights: ptr<f32> = array_new_f32(p)
+    let mut bias: f32 = 0.0
+
+    let mut delta: f32 = 1.0
+
+    for iter in 0 to max_iter {
+        let residuals: ptr<f32> = array_new_f32(n)
+        for i in 0 to n {
+            let mut pred: f32 = bias
+            for j in 0 to p {
+                pred = pred + weights[j] * matrix_at(X, i, j)
+            }
+            residuals[i] = y[i] - pred
+        }
+
+        let mut abs_resid: ptr<f32> = array_copy_f32(residuals, n)
+        for i in 0 to n {
+            abs_resid[i] = fabs((abs_resid[i]) as f64) as f32
+        }
+
+        for i in 1 to n {
+            let key: f32 = abs_resid[i]
+            let mut j: i32 = i - 1
+            while j >= 0 && abs_resid[j] > key {
+                abs_resid[j + 1] = abs_resid[j]
+                j = j - 1
+            }
+            abs_resid[j + 1] = key
+        }
+
+        let q: f32 = abs_resid[n / 2]
+        delta = q * epsilon
+
+        array_free_f32(abs_resid)
+
+        let grad_w: ptr<f32> = array_new_f32(p)
+        let mut grad_b: f32 = 0.0
+
+        for i in 0 to n {
+            let r: f32 = residuals[i]
+            let ar: f32 = fabs((r) as f64) as f32
+            let mut scale: f32 = 1.0
+            if ar > delta {
+                scale = delta / ar
+            }
+            for j in 0 to p {
+                grad_w[j] = grad_w[j] - r * scale * matrix_at(X, i, j)
+            }
+            grad_b = grad_b - r * scale
+        }
+
+        for j in 0 to p {
+            weights[j] = weights[j] - lr * grad_w[j] / (n as f32)
+        }
+        bias = bias - lr * grad_b / (n as f32)
+
+        array_free_f32(grad_w)
+        array_free_f32(residuals)
+    }
+
+    return HuberRegressor {
+        weights: weights, bias: bias,
+        n_features: p, epsilon: epsilon,
+        n_iter: max_iter, fitted: true
+    }
+}
+
+export function huber_regressor_predict(model: HuberRegressor, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut pred: f32 = model.bias
+        for j in 0 to model.n_features {
+            pred = pred + model.weights[j] * matrix_at(X, i, j)
+        }
+        result[i] = pred
+    }
+    return result
+}
+
+export function huber_regressor_free(model: HuberRegressor) -> void {
+    array_free_f32(model.weights)
+}
+
+# ============================================================================
+# BayesianRidge
+# ============================================================================
+
+export struct BayesianRidge {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    alpha: f32,
+    beta: f32,
+    n_iter: i32,
+    fitted: bool
+}
+
+export function bayesian_ridge_fit(X: Matrix, y: ptr<f32>, max_iter: i32, tol: f32) -> BayesianRidge {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let weights: ptr<f32> = array_new_f32(p)
+    let mut bias: f32 = 0.0
+
+    let y_mean: f32 = array_mean(y, n)
+    let mut alpha: f32 = 1.0
+    let mut beta: f32 = 1.0
+
+    for iter in 0 to max_iter {
+        let grad_w: ptr<f32> = array_new_f32(p)
+        let mut grad_b: f32 = 0.0
+
+        for i in 0 to n {
+            let mut pred: f32 = bias
+            for j in 0 to p {
+                pred = pred + weights[j] * matrix_at(X, i, j)
+            }
+            let error: f32 = y[i] - pred
+            for j in 0 to p {
+                grad_w[j] = grad_w[j] + error * matrix_at(X, i, j)
+            }
+            grad_b = grad_b + error
+        }
+
+        let lr: f32 = beta / (n as f32 * beta + alpha)
+        for j in 0 to p {
+            weights[j] = weights[j] + lr * (grad_w[j] - alpha * weights[j])
+        }
+        bias = bias + lr * grad_b
+
+        array_free_f32(grad_w)
+
+        let mut ss_res: f32 = 0.0
+        for i in 0 to n {
+            let mut pred: f32 = bias
+            for j in 0 to p {
+                pred = pred + weights[j] * matrix_at(X, i, j)
+            }
+            let d: f32 = y[i] - pred
+            ss_res = ss_res + d * d
+        }
+
+        let mut w_sq: f32 = 0.0
+        for j in 0 to p {
+            w_sq = w_sq + weights[j] * weights[j]
+        }
+
+        let new_beta: f32 = (n as f32) / (ss_res + 1e-10)
+        let new_alpha: f32 = (p as f32) / (w_sq + 1e-10)
+
+        if (fabs((alpha - new_alpha) as f64) as f32) < tol && (fabs((beta - new_beta) as f64) as f32) < tol {
+            alpha = new_alpha
+            beta = new_beta
+            break
+        }
+
+        alpha = new_alpha
+        beta = new_beta
+    }
+
+    return BayesianRidge {
+        weights: weights, bias: bias,
+        n_features: p,
+        alpha: alpha, beta: beta,
+        n_iter: max_iter, fitted: true
+    }
+}
+
+export function bayesian_ridge_predict(model: BayesianRidge, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut pred: f32 = model.bias
+        for j in 0 to model.n_features {
+            pred = pred + model.weights[j] * matrix_at(X, i, j)
+        }
+        result[i] = pred
+    }
+    return result
+}
+
+export function bayesian_ridge_free(model: BayesianRidge) -> void {
+    array_free_f32(model.weights)
+}
+
+# ============================================================================
+# RANSACRegressor
+# ============================================================================
+
+export struct RANSACRegressor {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    n_inliers: i32,
+    inlier_mask: ptr<bool>,
+    n_iter: i32,
+    fitted: bool
+}
+
+export function ransac_regressor_fit(X: Matrix, y: ptr<f32>, min_samples: i32, max_trials: i32, residual_threshold: f32, seed: i32) -> RANSACRegressor {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    srand(seed)
+
+    let best_weights: ptr<f32> = array_new_f32(p)
+    let best_bias: f32 = 0.0
+    let mut best_inliers: i32 = 0
+    let best_mask: ptr<bool> = calloc((n as i64), 1) as ptr<bool>
+    let mut best_iter: i32 = 0
+
+    for trial in 0 to max_trials {
+        let sample_indices: ptr<i32> = malloc((min_samples as i64) * 4) as ptr<i32>
+        for i in 0 to min_samples {
+            sample_indices[i] = rand() % n
+        }
+
+        let sub_X: Matrix = matrix_new(min_samples, p)
+        let sub_y: ptr<f32> = array_new_f32(min_samples)
+        for i in 0 to min_samples {
+            for j in 0 to p {
+                matrix_set(sub_X, i, j, matrix_at(X, sample_indices[i], j))
+            }
+            sub_y[i] = y[sample_indices[i]]
+        }
+
+        let model: LinearRegression = linear_regression_fit(sub_X, sub_y)
+        let preds: ptr<f32> = linear_regression_predict(model, X)
+
+        let mask: ptr<bool> = calloc((n as i64), 1) as ptr<bool>
+        let mut n_inliers: i32 = 0
+        for i in 0 to n {
+            let residual: f32 = fabs((y[i] - preds[i]) as f64) as f32
+            if residual < residual_threshold {
+                mask[i] = true
+                n_inliers = n_inliers + 1
+            }
+        }
+
+        if n_inliers > best_inliers {
+            best_inliers = n_inliers
+            for j in 0 to p { best_weights[j] = model.weights[j] }
+            best_bias = model.bias
+            for i in 0 to n { best_mask[i] = mask[i] }
+            best_iter = trial + 1
+        }
+
+        free(sample_indices as ptr<void>)
+        matrix_free(sub_X)
+        array_free_f32(sub_y)
+        linear_regression_free(model)
+        array_free_f32(preds)
+        free(mask as ptr<void>)
+    }
+
+    let inlier_X: Matrix = matrix_new(best_inliers, p)
+    let inlier_y: ptr<f32> = array_new_f32(best_inliers)
+    let mut idx: i32 = 0
+    for i in 0 to n {
+        if best_mask[i] {
+            for j in 0 to p {
+                matrix_set(inlier_X, idx, j, matrix_at(X, i, j))
+            }
+            inlier_y[idx] = y[i]
+            idx = idx + 1
+        }
+    }
+
+    let final_model: LinearRegression = linear_regression_fit(inlier_X, inlier_y)
+    for j in 0 to p { best_weights[j] = final_model.weights[j] }
+    best_bias = final_model.bias
+
+    matrix_free(inlier_X)
+    array_free_f32(inlier_y)
+    linear_regression_free(final_model)
+
+    return RANSACRegressor {
+        weights: best_weights,
+        bias: best_bias,
+        n_features: p,
+        n_inliers: best_inliers,
+        inlier_mask: best_mask,
+        n_iter: best_iter,
+        fitted: true
+    }
+}
+
+export function ransac_regressor_predict(model: RANSACRegressor, X: Matrix) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut s: f32 = model.bias
+        for j in 0 to model.n_features {
+            s = s + model.weights[j] * matrix_at(X, i, j)
+        }
+        result[i] = s
+    }
+    return result
+}
+
+export function ransac_regressor_free(model: RANSACRegressor) -> void {
+    array_free_f32(model.weights)
+    free(model.inlier_mask as ptr<void>)
+}
+
+# ============================================================================
+# TheilSenRegressor
+# ============================================================================
+
+export struct TheilSenRegressor {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function theil_sen_regressor_fit(X: Matrix, y: ptr<f32>, n_subsamples: i32, max_iter: i32, seed: i32) -> TheilSenRegressor {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    srand(seed)
+
+    let slopes: ptr<ptr<f32> > = malloc((max_iter as i64) * 8) as ptr<ptr<f32> >
+    let intercepts: ptr<f32> = array_new_f32(max_iter)
+    let mut n_estimates: i32 = 0
+
+    for trial in 0 to max_iter {
+        let indices: ptr<i32> = malloc((n_subsamples as i64) * 4) as ptr<i32>
+        for i in 0 to n_subsamples {
+            indices[i] = rand() % n
+        }
+
+        let sub_X: Matrix = matrix_new(n_subsamples, p)
+        let sub_y: ptr<f32> = array_new_f32(n_subsamples)
+        for i in 0 to n_subsamples {
+            for j in 0 to p {
+                matrix_set(sub_X, i, j, matrix_at(X, indices[i], j))
+            }
+            sub_y[i] = y[indices[i]]
+        }
+
+        let model: LinearRegression = linear_regression_fit(sub_X, sub_y)
+        slopes[n_estimates] = array_copy_f32(model.weights, p)
+        intercepts[n_estimates] = model.bias
+        n_estimates = n_estimates + 1
+
+        free(indices as ptr<void>)
+        matrix_free(sub_X)
+        array_free_f32(sub_y)
+        linear_regression_free(model)
+    }
+
+    let weights: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let vals: ptr<f32> = array_new_f32(n_estimates)
+        for i in 0 to n_estimates { vals[i] = slopes[i][j] }
+        for a in 0 to n_estimates {
+            for b in 0 to n_estimates - 1 - a {
+                if vals[b] > vals[b + 1] {
+                    let t: f32 = vals[b]
+                    vals[b] = vals[b + 1]
+                    vals[b + 1] = t
+                }
+            }
+        }
+        weights[j] = vals[n_estimates / 2]
+        array_free_f32(vals)
+    }
+
+    let sorted_intercepts: ptr<f32> = array_copy_f32(intercepts, n_estimates)
+    for a in 0 to n_estimates {
+        for b in 0 to n_estimates - 1 - a {
+            if sorted_intercepts[b] > sorted_intercepts[b + 1] {
+                let t: f32 = sorted_intercepts[b]
+                sorted_intercepts[b] = sorted_intercepts[b + 1]
+                sorted_intercepts[b + 1] = t
+            }
+        }
+    }
+    let bias: f32 = sorted_intercepts[n_estimates / 2]
+
+    for i in 0 to n_estimates { array_free_f32(slopes[i]) }
+    free(slopes as ptr<void>)
+    array_free_f32(intercepts)
+    array_free_f32(sorted_intercepts)
+
+    return TheilSenRegressor {
+        weights: weights,
+        bias: bias,
+        n_features: p,
+        fitted: true
+    }
+}
+
+export function theil_sen_regressor_predict(model: TheilSenRegressor, X: Matrix) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut s: f32 = model.bias
+        for j in 0 to model.n_features {
+            s = s + model.weights[j] * matrix_at(X, i, j)
+        }
+        result[i] = s
+    }
+    return result
+}
+
+export function theil_sen_regressor_free(model: TheilSenRegressor) -> void {
+    array_free_f32(model.weights)
+}
+
+# ============================================================================
+# Perceptron
+# ============================================================================
+
+export struct Perceptron {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    n_iter: i32,
+    fitted: bool
+}
+
+export function perceptron_fit(X: Matrix, y: ptr<f32>, n_iter: i32, lr: f32, seed: i32) -> Perceptron {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let weights: ptr<f32> = array_new_f32(p)
+    let mut bias: f32 = 0.0
+
+    for iter in 0 to n_iter {
+        for i in 0 to n {
+            let mut z: f32 = bias
+            for j in 0 to p {
+                z = z + weights[j] * matrix_at(X, i, j)
+            }
+            let pred: f32 = 1.0
+            if z <= 0.0 { pred = -1.0 }
+            let target: f32 = y[i]
+            if target == 0.0 { target = -1.0 }
+
+            if pred != target {
+                for j in 0 to p {
+                    weights[j] = weights[j] + lr * target * matrix_at(X, i, j)
+                }
+                bias = bias + lr * target
+            }
+        }
+    }
+
+    return Perceptron {
+        weights: weights,
+        bias: bias,
+        n_features: p,
+        n_iter: n_iter,
+        fitted: true
+    }
+}
+
+export function perceptron_predict(model: Perceptron, X: Matrix) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut z: f32 = model.bias
+        for j in 0 to model.n_features {
+            z = z + model.weights[j] * matrix_at(X, i, j)
+        }
+        if z > 0.0 { result[i] = 1.0 } else { result[i] = 0.0 }
+    }
+    return result
+}
+
+export function perceptron_free(model: Perceptron) -> void {
+    array_free_f32(model.weights)
+}
+
+# ============================================================================
+# PassiveAggressiveClassifier
+# ============================================================================
+
+export struct PassiveAggressiveClassifier {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    n_iter: i32,
+    C: f32,
+    fitted: bool
+}
+
+export function passive_aggressive_classifier_fit(X: Matrix, y: ptr<f32>, n_iter: i32, C: f32) -> PassiveAggressiveClassifier {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let weights: ptr<f32> = array_new_f32(p)
+    let mut bias: f32 = 0.0
+
+    for iter in 0 to n_iter {
+        for i in 0 to n {
+            let mut z: f32 = bias
+            for j in 0 to p {
+                z = z + weights[j] * matrix_at(X, i, j)
+            }
+            let target: f32 = y[i]
+            if target == 0.0 { target = -1.0 }
+            let loss: f32 = 1.0 - target * z
+            if loss > 0.0 {
+                let norm_sq: f32 = 1.0
+                for j in 0 to p {
+                    norm_sq = norm_sq + matrix_at(X, i, j) * matrix_at(X, i, j)
+                }
+                let tau: f32 = loss / norm_sq
+                if C < tau { tau = C }
+                for j in 0 to p {
+                    weights[j] = weights[j] + tau * target * matrix_at(X, i, j)
+                }
+                bias = bias + tau * target
+            }
+        }
+    }
+
+    return PassiveAggressiveClassifier {
+        weights: weights,
+        bias: bias,
+        n_features: p,
+        n_iter: n_iter,
+        C: C,
+        fitted: true
+    }
+}
+
+export function passive_aggressive_classifier_predict(model: PassiveAggressiveClassifier, X: Matrix) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut z: f32 = model.bias
+        for j in 0 to model.n_features {
+            z = z + model.weights[j] * matrix_at(X, i, j)
+        }
+        if z > 0.0 { result[i] = 1.0 } else { result[i] = 0.0 }
+    }
+    return result
+}
+
+export function passive_aggressive_classifier_free(model: PassiveAggressiveClassifier) -> void {
+    array_free_f32(model.weights)
+}
+
+# ============================================================================
+# Lars (Least Angle Regression)
+# ============================================================================
+
+export struct Lars {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    n_active: i32,
+    active_features: ptr<i32>,
+    fitted: bool
+}
+
+export function lars_fit(X: Matrix, y: ptr<f32>, n_features_to_select: i32) -> Lars {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let mean_x: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let mut s: f32 = 0.0
+        for i in 0 to n { s = s + matrix_at(X, i, j) }
+        mean_x[j] = s / (n as f32)
+    }
+    let mean_y: f32 = 0.0
+    for i in 0 to n { mean_y = mean_y + y[i] }
+    mean_y = mean_y / (n as f32)
+
+    let Xc: Matrix = matrix_new(n, p)
+    for i in 0 to n {
+        for j in 0 to p {
+            matrix_set(Xc, i, j, matrix_at(X, i, j) - mean_x[j])
+        }
+    }
+    let yc: ptr<f32> = array_new_f32(n)
+    for i in 0 to n { yc[i] = y[i] - mean_y }
+
+    let active: ptr<i32> = malloc((n_features_to_select as i64) * 4) as ptr<i32>
+    let inactive: ptr<bool> = calloc((p as i64), 1) as ptr<bool>
+    for j in 0 to p { inactive[j] = true }
+
+    let weights: ptr<f32> = array_new_f32(p)
+    for j in 0 to p { weights[j] = 0.0 }
+
+    for step in 0 to n_features_to_select {
+        let mut best_j: i32 = -1
+        let mut best_corr: f32 = 0.0
+        for j in 0 to p {
+            if not inactive[j] { continue }
+            let mut corr: f32 = 0.0
+            for i in 0 to n {
+                corr = corr + matrix_at(Xc, i, j) * yc[i]
+            }
+            corr = fabs((corr) as f64) as f32
+            if corr > best_corr {
+                best_corr = corr
+                best_j = j
+            }
+        }
+
+        if best_j < 0 { break }
+        active[step] = best_j
+        inactive[best_j] = false
+
+        let mut dot_xx: f32 = 0.0
+        let mut dot_xy: f32 = 0.0
+        for i in 0 to n {
+            dot_xx = dot_xx + matrix_at(Xc, i, best_j) * matrix_at(Xc, i, best_j)
+            dot_xy = dot_xy + matrix_at(Xc, i, best_j) * yc[i]
+        }
+        if dot_xx > 1e-10 {
+            let coef: f32 = dot_xy / dot_xx
+            weights[best_j] = coef
+            for i in 0 to n {
+                yc[i] = yc[i] - coef * matrix_at(Xc, i, best_j)
+            }
+        }
+    }
+
+    let bias: f32 = mean_y
+    for j in 0 to p {
+        bias = bias - weights[j] * mean_x[j]
+    }
+
+    matrix_free(Xc)
+    array_free_f32(yc)
+    array_free_f32(mean_x)
+    free(inactive as ptr<void>)
+
+    return Lars {
+        weights: weights,
+        bias: bias,
+        n_features: p,
+        n_active: n_features_to_select,
+        active_features: active,
+        fitted: true
+    }
+}
+
+export function lars_predict(model: Lars, X: Matrix) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut s: f32 = model.bias
+        for j in 0 to model.n_features {
+            s = s + model.weights[j] * matrix_at(X, i, j)
+        }
+        result[i] = s
+    }
+    return result
+}
+
+export function lars_free(model: Lars) -> void {
+    array_free_f32(model.weights)
+    free(model.active_features as ptr<void>)
+}
+
+# ============================================================================
+# ARDRegression (Automatic Relevance Determination)
+# ============================================================================
+
+export struct ARDRegression {
+    weights: ptr<f32>,
+    bias: f32,
+    alpha: ptr<f32>,
+    beta: f32,
+    n_features: i32,
+    n_iter: i32,
+    fitted: bool
+}
+
+export function ard_regression_fit(X: Matrix, y: ptr<f32>, max_iter: i32, tol: f32) -> ARDRegression {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let mean_x: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let mut s: f32 = 0.0
+        for i in 0 to n { s = s + matrix_at(X, i, j) }
+        mean_x[j] = s / (n as f32)
+    }
+    let mean_y: f32 = 0.0
+    for i in 0 to n { mean_y = mean_y + y[i] }
+    mean_y = mean_y / (n as f32)
+
+    let Xc: Matrix = matrix_new(n, p)
+    for i in 0 to n {
+        for j in 0 to p {
+            matrix_set(Xc, i, j, matrix_at(X, i, j) - mean_x[j])
+        }
+    }
+    let yc: ptr<f32> = array_new_f32(n)
+    for i in 0 to n { yc[i] = y[i] - mean_y }
+
+    let alpha: ptr<f32> = array_new_f32(p)
+    let mut beta: f32 = 1.0
+    for j in 0 to p { alpha[j] = 1.0 }
+
+    let weights: ptr<f32> = array_new_f32(p)
+    for j in 0 to p { weights[j] = 0.0 }
+
+    let mut n_iter: i32 = 0
+    for iter in 0 to max_iter {
+        n_iter = iter + 1
+
+        for j in 0 to p {
+            let mut dot_xy: f32 = 0.0
+            let mut dot_xx: f32 = 0.0
+            for i in 0 to n {
+                dot_xy = dot_xy + matrix_at(Xc, i, j) * yc[i]
+                dot_xx = dot_xx + matrix_at(Xc, i, j) * matrix_at(Xc, i, j)
+            }
+            let gamma: f32 = beta * dot_xx / (beta * dot_xx + alpha[j])
+            weights[j] = gamma * dot_xy / (dot_xx + alpha[j] / beta)
+
+            let mut residual_sq: f32 = 0.0
+            for i in 0 to n {
+                let pred: f32 = weights[j] * matrix_at(Xc, i, j)
+                residual_sq = residual_sq + (yc[i] - pred) * (yc[i] - pred)
+            }
+            alpha[j] = gamma / (weights[j] * weights[j] + 1e-10)
+        }
+
+        let mut ss_res: f32 = 0.0
+        for i in 0 to n {
+            let mut pred: f32 = 0.0
+            for j in 0 to p {
+                pred = pred + weights[j] * matrix_at(Xc, i, j)
+            }
+            ss_res = ss_res + (yc[i] - pred) * (yc[i] - pred)
+        }
+        beta = (n as f32 - p as f32) / (ss_res + 1e-10)
+
+        if ss_res / (n as f32) < tol { break }
+    }
+
+    let bias: f32 = mean_y
+    for j in 0 to p {
+        bias = bias - weights[j] * mean_x[j]
+    }
+
+    matrix_free(Xc)
+    array_free_f32(yc)
+    array_free_f32(mean_x)
+
+    return ARDRegression {
+        weights: weights,
+        bias: bias,
+        alpha: alpha,
+        beta: beta,
+        n_features: p,
+        n_iter: n_iter,
+        fitted: true
+    }
+}
+
+export function ard_regression_predict(model: ARDRegression, X: Matrix) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut s: f32 = model.bias
+        for j in 0 to model.n_features {
+            s = s + model.weights[j] * matrix_at(X, i, j)
+        }
+        result[i] = s
+    }
+    return result
+}
+
+export function ard_regression_free(model: ARDRegression) -> void {
+    array_free_f32(model.weights)
+    array_free_f32(model.alpha)
 }

@@ -1,0 +1,197 @@
+# Dummy estimators for flow-scikit.
+# Implements DummyClassifier and DummyRegressor for baselines.
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function calloc(n: i64, size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function rand() -> i32
+    function srand(seed: i32) -> void
+    function printf(fmt: string, ...) -> i32
+}
+
+export const DUMMY_STRATEGY_PRIOR: i32 = 0
+export const DUMMY_STRATEGY_MOST_FREQUENT: i32 = 1
+export const DUMMY_STRATEGY_STRATIFIED: i32 = 2
+export const DUMMY_STRATEGY_UNIFORM: i32 = 3
+export const DUMMY_STRATEGY_CONSTANT: i32 = 4
+
+export struct DummyClassifier {
+    strategy: i32,
+    class_prior: ptr<f32>,
+    classes: ptr<f32>,
+    n_classes: i32,
+    constant_label: f32,
+    seed: i32,
+    fitted: bool
+}
+
+export function dummy_classifier_fit(
+    y: ptr<f32>, n: i32, n_classes: i32,
+    strategy: i32, constant_label: f32, seed: i32
+) -> DummyClassifier {
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    for c in 0 to n_classes {
+        class_counts[c] = 0
+    }
+
+    let mut class_idx: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for c in 0 to class_idx {
+            if classes[c] == y[i] {
+                class_counts[c] = class_counts[c] + 1
+                found = true
+                break
+            }
+        }
+        if not found {
+            classes[class_idx] = y[i]
+            class_counts[class_idx] = 1
+            class_idx = class_idx + 1
+        }
+    }
+
+    let class_prior: ptr<f32> = array_new_f32(n_classes)
+    for c in 0 to n_classes {
+        class_prior[c] = (class_counts[c] as f32) / (n as f32)
+    }
+
+    free(class_counts as ptr<void>)
+
+    return DummyClassifier {
+        strategy: strategy,
+        class_prior: class_prior,
+        classes: classes,
+        n_classes: n_classes,
+        constant_label: constant_label,
+        seed: seed,
+        fitted: true
+    }
+}
+
+export function dummy_classifier_predict(model: DummyClassifier, n_samples: i32) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(n_samples)
+    srand(model.seed)
+
+    if model.strategy == DUMMY_STRATEGY_PRIOR || model.strategy == DUMMY_STRATEGY_MOST_FREQUENT {
+        let best_c: i32 = 0
+        let mut best_prior: f32 = model.class_prior[0]
+        for c in 1 to model.n_classes {
+            if model.class_prior[c] > best_prior {
+                best_prior = model.class_prior[c]
+                best_c = c
+            }
+        }
+        for i in 0 to n_samples {
+            preds[i] = model.classes[best_c]
+        }
+    } else {
+        if model.strategy == DUMMY_STRATEGY_CONSTANT {
+            for i in 0 to n_samples {
+                preds[i] = model.constant_label
+            }
+        } else {
+            if model.strategy == DUMMY_STRATEGY_UNIFORM {
+                for i in 0 to n_samples {
+                    let c: i32 = rand() % model.n_classes
+                    preds[i] = model.classes[c]
+                }
+            } else {
+                for i in 0 to n_samples {
+                    let r: f32 = ((rand() % 10000) as f32) / 10000.0
+                    let mut cum: f32 = 0.0
+                    let mut chosen: i32 = 0
+                    for c in 0 to model.n_classes {
+                        cum = cum + model.class_prior[c]
+                        if r <= cum {
+                            chosen = c
+                            break
+                        }
+                    }
+                    preds[i] = model.classes[chosen]
+                }
+            }
+        }
+    }
+
+    return preds
+}
+
+export function dummy_classifier_predict_proba(model: DummyClassifier, n_samples: i32) -> Matrix {
+    let result: Matrix = matrix_new(n_samples, model.n_classes)
+    for i in 0 to n_samples {
+        for c in 0 to model.n_classes {
+            matrix_set(result, i, c, model.class_prior[c])
+        }
+    }
+    return result
+}
+
+export function dummy_classifier_free(model: DummyClassifier) -> void {
+    array_free_f32(model.class_prior)
+    array_free_f32(model.classes)
+}
+
+export const DUMMY_REG_MEAN: i32 = 0
+export const DUMMY_REG_MEDIAN: i32 = 1
+export const DUMMY_REG_CONSTANT: i32 = 2
+export const DUMMY_REG_QUANTILE: i32 = 3
+
+export struct DummyRegressor {
+    strategy: i32,
+    constant_value: f32,
+    fitted: bool
+}
+
+export function dummy_regressor_fit(y: ptr<f32>, n: i32, strategy: i32, constant_value: f32) -> DummyRegressor {
+    let mut value: f32 = constant_value
+
+    if strategy == DUMMY_REG_MEAN {
+        let mut sum: f32 = 0.0
+        for i in 0 to n {
+            sum = sum + y[i]
+        }
+        value = sum / (n as f32)
+    } else {
+        if strategy == DUMMY_REG_MEDIAN {
+            let sorted: ptr<f32> = array_copy_f32(y, n)
+            for i in 1 to n {
+                let key: f32 = sorted[i]
+                let mut j: i32 = i - 1
+                while j >= 0 && sorted[j] > key {
+                    sorted[j + 1] = sorted[j]
+                    j = j - 1
+                }
+                sorted[j + 1] = key
+            }
+            if n % 2 == 0 {
+                value = (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+            } else {
+                value = sorted[n / 2]
+            }
+            array_free_f32(sorted)
+        }
+    }
+
+    return DummyRegressor {
+        strategy: strategy,
+        constant_value: value,
+        fitted: true
+    }
+}
+
+export function dummy_regressor_predict(model: DummyRegressor, n_samples: i32) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(n_samples)
+    for i in 0 to n_samples {
+        preds[i] = model.constant_value
+    }
+    return preds
+}
+
+export function dummy_regressor_free(model: DummyRegressor) -> void {
+    # No heap allocations
+}

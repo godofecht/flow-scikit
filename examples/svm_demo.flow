@@ -1,0 +1,141 @@
+# SVM demo for flow-scikit.
+# Demonstrates LinearSVC, KernelSVC with RBF kernel, and LinearSVR.
+#
+# Run: ./flow run examples/svm_demo.flow
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function rand() -> i32
+    function srand(seed: i32) -> void
+}
+
+function make_binary_data() -> Dataset {
+    let n: i32 = 60
+    let X: Matrix = matrix_new(n, 2)
+    let y: ptr<f32> = array_new_f32(n)
+
+    srand(42)
+
+    for i in 0 to 30 {
+        let x0: f32 = 2.0 + ((rand() % 100) as f32) / 50.0 - 1.0
+        let x1: f32 = 2.0 + ((rand() % 100) as f32) / 50.0 - 1.0
+        matrix_set(X, i, 0, x0)
+        matrix_set(X, i, 1, x1)
+        y[i] = 0.0
+    }
+    for i in 0 to 30 {
+        let x0: f32 = -2.0 + ((rand() % 100) as f32) / 50.0 - 1.0
+        let x1: f32 = -2.0 + ((rand() % 100) as f32) / 50.0 - 1.0
+        matrix_set(X, 30 + i, 0, x0)
+        matrix_set(X, 30 + i, 1, x1)
+        y[30 + i] = 1.0
+    }
+
+    return Dataset { X: X, y: y, n_samples: n, n_features: 2, n_classes: 2, is_classification: true }
+}
+
+function make_regression_data() -> Dataset {
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 1)
+    let y: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let x: f32 = (i as f32) * 0.3
+        matrix_set(X, i, 0, x)
+        y[i] = 1.5 * x + 0.5 + ((i % 5) as f32) * 0.02
+    }
+
+    return Dataset { X: X, y: y, n_samples: n, n_features: 1, n_classes: 0, is_classification: false }
+}
+
+function main() -> i32 {
+    println("=== flow-scikit SVM Demo ===")
+    println("")
+
+    # Classification
+    let data: Dataset = make_binary_data()
+    let split: TrainTestSplit = train_test_split(data.X, data.y, 0.25, STRATIFY_AUTO)
+
+    println("--- LinearSVC ---")
+    let svc: LinearSVC = linear_svc_fit(split.X_train, split.y_train, 2, 1.0, 500, 0.01)
+    let svc_scores: ptr<f32> = linear_svc_predict(svc, split.X_test)
+    let svc_preds: ptr<f32> = linear_svc_decide(svc, svc_scores, split.n_test)
+    let svc_acc: f32 = accuracy_score(split.y_test, svc_preds, split.n_test)
+    print("  Accuracy = ")
+    printf("%.4f", svc_acc)
+    println("")
+    print("  Weights = [")
+    for j in 0 to svc.n_features {
+        printf("%.4f", svc.weights[j])
+        if j < svc.n_features - 1 { print(", ") }
+    }
+    print("], bias = ")
+    printf("%.4f", svc.bias)
+    println("")
+    println("")
+
+    println("--- KernelSVC (RBF) ---")
+    let ksvc: KernelSVC = kernel_svc_fit(split.X_train, split.y_train, 2, 1.0, 0.5, 100)
+    let ksvc_scores: ptr<f32> = kernel_svc_predict(ksvc, split.X_test)
+    let ksvc_preds: ptr<f32> = kernel_svc_decide(ksvc, ksvc_scores, split.n_test)
+    let ksvc_acc: f32 = accuracy_score(split.y_test, ksvc_preds, split.n_test)
+    print("  Accuracy = ")
+    printf("%.4f", ksvc_acc)
+    println("")
+
+    let mut n_sv: i32 = 0
+    for i in 0 to ksvc.n_samples {
+        if ksvc.alphas[i] > 1e-6 {
+            n_sv = n_sv + 1
+        }
+    }
+    print("  Support vectors = ")
+    print(n_sv)
+    print(" / ")
+    print(ksvc.n_samples)
+    println(" training samples")
+    println("")
+
+    # Regression
+    let reg: Dataset = make_regression_data()
+    println("--- LinearSVR ---")
+    let svr: LinearSVR = linear_svr_fit(reg.X, reg.y, 1.0, 0.1, 500, 0.001)
+    let svr_preds: ptr<f32> = linear_svr_predict(svr, reg.X)
+    let svr_r2: f32 = r2_score(reg.y, svr_preds, reg.n_samples)
+    print("  R2 = ")
+    printf("%.4f", svr_r2)
+    println("")
+    print("  Weight = ")
+    printf("%.4f", svr.weights[0])
+    print(", bias = ")
+    printf("%.4f", svr.bias)
+    println("")
+    println("")
+
+    # Hinge loss
+    println("--- Hinge Loss ---")
+    let hl: f32 = hinge_loss(split.y_test, svc_scores, split.n_test, 1.0)
+    print("  LinearSVC hinge loss = ")
+    printf("%.4f", hl)
+    println("")
+
+    # Cleanup
+    linear_svc_free(svc)
+    array_free_f32(svc_scores)
+    array_free_f32(svc_preds)
+    kernel_svc_free(ksvc)
+    array_free_f32(ksvc_scores)
+    array_free_f32(ksvc_preds)
+    linear_svr_free(svr)
+    array_free_f32(svr_preds)
+    train_test_split_free(split)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+    matrix_free(reg.X)
+    array_free_f32(reg.y)
+
+    println("")
+    println("=== Done ===")
+    return 0
+}

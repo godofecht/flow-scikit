@@ -1,0 +1,31 @@
+name: Flow
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax-and-imports:
+    name: FLOW syntax and imports
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: flooooooooooow/flow
+          ref: 635f3830a1211065ddd05682a710d70404365141
+          path: .flow-toolchain
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Parse sources and validate imports
+        env:
+          PYTHONPATH: ${{ github.workspace }}/.flow-toolchain/src
+        run: python .github/scripts/verify_flow_sources.py

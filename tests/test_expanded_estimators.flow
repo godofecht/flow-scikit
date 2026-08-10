@@ -1,0 +1,915 @@
+# Tests for expanded estimators across all modules.
+# Tests manifold, neighbors, svm, tree, naive_bayes, feature_selection,
+# gaussian_process, mixture, multioutput, compose, metrics,
+# model_selection, cross_decomposition, and datasets additions.
+#
+# Run: ./flow run tests/test_expanded_estimators.flow
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function rand() -> i32
+    function srand(seed: i32) -> void
+}
+
+function _make_simple_data(n: i32, p: i32, seed: i32) -> Matrix {
+    srand(seed)
+    let X: Matrix = matrix_new(n, p)
+    for i in 0 to n {
+        for j in 0 to p {
+            matrix_set(X, i, j, ((rand() % 1000) as f32) / 100.0)
+        }
+    }
+    return X
+}
+
+function _make_labels(n: i32, n_classes: i32, seed: i32) -> ptr<f32> {
+    srand(seed)
+    let y: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        y[i] = ((rand() % n_classes) as f32)
+    }
+    return y
+}
+
+# ============================================================================
+# Manifold tests
+# ============================================================================
+
+function test_isomap() -> i32 {
+    println("Test: Isomap")
+    let X: Matrix = _make_simple_data(20, 3, 42)
+    let model: Isomap = isomap_fit(X, 2, 5)
+    let result: Matrix = isomap_embedding(model)
+
+    if result.rows != 20 {
+        println("  FAIL: embedding rows should be 20")
+        isomap_free(model)
+        matrix_free(result)
+        return 1
+    }
+    if result.cols != 2 {
+        println("  FAIL: embedding cols should be 2")
+        isomap_free(model)
+        matrix_free(result)
+        return 1
+    }
+    println("  PASS")
+    isomap_free(model)
+    matrix_free(result)
+    return 0
+}
+
+function test_lle() -> i32 {
+    println("Test: LLE")
+    let X: Matrix = _make_simple_data(20, 3, 42)
+    let model: LLE = lle_fit(X, 2, 5)
+    let result: Matrix = lle_embedding(model)
+
+    if result.rows != 20 {
+        println("  FAIL: embedding rows should be 20")
+        lle_free(model)
+        matrix_free(result)
+        return 1
+    }
+    if result.cols != 2 {
+        println("  FAIL: embedding cols should be 2")
+        lle_free(model)
+        matrix_free(result)
+        return 1
+    }
+    println("  PASS")
+    lle_free(model)
+    matrix_free(result)
+    return 0
+}
+
+function test_spectral_embedding() -> i32 {
+    println("Test: SpectralEmbedding")
+    let X: Matrix = _make_simple_data(15, 3, 42)
+    let model: SpectralEmbedding = spectral_embedding_fit(X, 2, 0.5)
+    let result: Matrix = spectral_embedding_get(model)
+
+    if result.rows != 15 {
+        println("  FAIL: embedding rows should be 15")
+        spectral_embedding_free(model)
+        matrix_free(result)
+        return 1
+    }
+    if result.cols != 2 {
+        println("  FAIL: embedding cols should be 2")
+        spectral_embedding_free(model)
+        matrix_free(result)
+        return 1
+    }
+    println("  PASS")
+    spectral_embedding_free(model)
+    matrix_free(result)
+    return 0
+}
+
+function test_mds() -> i32 {
+    println("Test: MDS")
+    let X: Matrix = _make_simple_data(15, 3, 42)
+    let model: MDS = mds_fit(X, 2, 50, 0.01, 42)
+    let result: Matrix = mds_embedding(model)
+
+    if result.rows != 15 {
+        println("  FAIL: embedding rows should be 15")
+        mds_free(model)
+        matrix_free(result)
+        return 1
+    }
+    if result.cols != 2 {
+        println("  FAIL: embedding cols should be 2")
+        mds_free(model)
+        matrix_free(result)
+        return 1
+    }
+    if model.stress < 0.0 {
+        println("  FAIL: stress should be non-negative")
+        mds_free(model)
+        matrix_free(result)
+        return 1
+    }
+    println("  PASS")
+    mds_free(model)
+    matrix_free(result)
+    return 0
+}
+
+# ============================================================================
+# Neighbors tests
+# ============================================================================
+
+function test_radius_neighbors_classifier() -> i32 {
+    println("Test: RadiusNeighborsClassifier")
+    let X: Matrix = _make_simple_data(30, 4, 42)
+    let y: ptr<f32> = _make_labels(30, 2, 42)
+    let model: RadiusNeighborsClassifier = radius_neighbors_classifier_fit(X, y, 10.0, 2, -1.0)
+    let preds: ptr<f32> = radius_neighbors_classifier_predict(model, X)
+
+    if preds[0] < 0.0 {
+        println("  FAIL: predictions should be non-negative for in-sample")
+        radius_neighbors_classifier_free(model)
+        array_free_f32(preds)
+        return 1
+    }
+    println("  PASS")
+    radius_neighbors_classifier_free(model)
+    array_free_f32(preds)
+    return 0
+}
+
+function test_nearest_centroid() -> i32 {
+    println("Test: NearestCentroid")
+    let X: Matrix = _make_simple_data(30, 4, 42)
+    let y: ptr<f32> = _make_labels(30, 3, 42)
+    let model: NearestCentroid = nearest_centroid_fit(X, y, 3)
+    let preds: ptr<f32> = nearest_centroid_predict(model, X)
+
+    let mut ok: bool = true
+    for i in 0 to 30 {
+        if preds[i] < 0.0 || preds[i] >= 3.0 { ok = false }
+    }
+    if not ok {
+        println("  FAIL: predictions out of range")
+        nearest_centroid_free(model)
+        array_free_f32(preds)
+        return 1
+    }
+    println("  PASS")
+    nearest_centroid_free(model)
+    array_free_f32(preds)
+    return 0
+}
+
+function test_local_outlier_factor() -> i32 {
+    println("Test: LocalOutlierFactor")
+    let X: Matrix = _make_simple_data(20, 3, 42)
+    let model: LocalOutlierFactor = local_outlier_factor_fit(X, 5)
+    let preds: ptr<i32> = local_outlier_factor_predict(model)
+
+    let mut has_outlier: bool = false
+    let mut has_inlier: bool = false
+    for i in 0 to 20 {
+        if preds[i] == -1 { has_outlier = true }
+        if preds[i] == 1 { has_inlier = true }
+    }
+    if not has_inlier {
+        println("  FAIL: should have at least one inlier")
+        local_outlier_factor_free(model)
+        free(preds as ptr<void>)
+        return 1
+    }
+    println("  PASS")
+    local_outlier_factor_free(model)
+    free(preds as ptr<void>)
+    return 0
+}
+
+# ============================================================================
+# SVM tests
+# ============================================================================
+
+function test_nu_svc() -> i32 {
+    println("Test: NuSVC")
+    let X: Matrix = _make_simple_data(30, 4, 42)
+    let y: ptr<f32> = _make_labels(30, 2, 42)
+    let model: NuSVC = nu_svc_fit(X, y, 0.5, 0.1, 50, 1.0)
+    let preds: ptr<f32> = nu_svc_predict(model, X)
+
+    let mut ok: bool = true
+    for i in 0 to 30 {
+        if preds[i] != 0.0 && preds[i] != 1.0 { ok = false }
+    }
+    if not ok {
+        println("  FAIL: predictions should be 0 or 1")
+        nu_svc_free(model)
+        array_free_f32(preds)
+        return 1
+    }
+    println("  PASS")
+    nu_svc_free(model)
+    array_free_f32(preds)
+    return 0
+}
+
+function test_nu_svr() -> i32 {
+    println("Test: NuSVR")
+    let X: Matrix = _make_simple_data(30, 4, 42)
+    let y: ptr<f32> = array_new_f32(30)
+    for i in 0 to 30 { y[i] = (i as f32) * 0.1 }
+    let model: NuSVR = nu_svr_fit(X, y, 0.5, 1.0, 0.1, 50)
+    let preds: ptr<f32> = nu_svr_predict(model, X)
+
+    if preds[0] == preds[1] && preds[1] == preds[2] {
+        println("  FAIL: predictions should vary")
+        nu_svr_free(model)
+        array_free_f32(preds)
+        return 1
+    }
+    println("  PASS")
+    nu_svr_free(model)
+    array_free_f32(preds)
+    return 0
+}
+
+function test_one_class_svm() -> i32 {
+    println("Test: OneClassSVM")
+    let X: Matrix = _make_simple_data(20, 3, 42)
+    let model: OneClassSVM = one_class_svm_fit(X, 0.1, 0.1, 50)
+    let preds: ptr<i32> = one_class_svm_predict(model, X)
+
+    let mut has_pos: bool = false
+    for i in 0 to 20 {
+        if preds[i] == 1 { has_pos = true }
+    }
+    if not has_pos {
+        println("  FAIL: should have at least one positive prediction")
+        one_class_svm_free(model)
+        free(preds as ptr<void>)
+        return 1
+    }
+    println("  PASS")
+    one_class_svm_free(model)
+    free(preds as ptr<void>)
+    return 0
+}
+
+# ============================================================================
+# Tree tests
+# ============================================================================
+
+function test_extra_tree_classifier() -> i32 {
+    println("Test: ExtraTreeClassifier")
+    let X: Matrix = _make_simple_data(30, 4, 42)
+    let y: ptr<f32> = _make_labels(30, 2, 42)
+    let model: ExtraTreeClassifier = extra_tree_classifier_fit(X, y, 30, 4, 2, 5, 42)
+    let preds: ptr<f32> = extra_tree_classifier_predict(model, X)
+
+    let mut ok: bool = true
+    for i in 0 to 30 {
+        if preds[i] != 0.0 && preds[i] != 1.0 { ok = false }
+    }
+    if not ok {
+        println("  FAIL: predictions should be 0 or 1")
+        extra_tree_classifier_free(model)
+        array_free_f32(preds)
+        return 1
+    }
+    println("  PASS")
+    extra_tree_classifier_free(model)
+    array_free_f32(preds)
+    return 0
+}
+
+function test_extra_tree_regressor() -> i32 {
+    println("Test: ExtraTreeRegressor")
+    let X: Matrix = _make_simple_data(30, 4, 42)
+    let y: ptr<f32> = array_new_f32(30)
+    for i in 0 to 30 { y[i] = (i as f32) * 0.1 }
+    let model: ExtraTreeRegressor = extra_tree_regressor_fit(X, y, 30, 4, 5, 42)
+    let preds: ptr<f32> = extra_tree_regressor_predict(model, X)
+
+    if preds[0] < 0.0 {
+        println("  FAIL: predictions should be non-negative")
+        extra_tree_regressor_free(model)
+        array_free_f32(preds)
+        return 1
+    }
+    println("  PASS")
+    extra_tree_regressor_free(model)
+    array_free_f32(preds)
+    return 0
+}
+
+# ============================================================================
+# Naive Bayes tests
+# ============================================================================
+
+function test_complement_nb() -> i32 {
+    println("Test: ComplementNB")
+    let X: Matrix = matrix_new(20, 5)
+    srand(42)
+    for i in 0 to 20 {
+        for j in 0 to 5 {
+            matrix_set(X, i, j, ((rand() % 10) as f32))
+        }
+    }
+    let y: ptr<f32> = _make_labels(20, 2, 42)
+    let model: ComplementNB = complement_nb_fit(X, y, 2, 1.0)
+    let preds: ptr<f32> = complement_nb_predict(model, X)
+
+    let mut ok: bool = true
+    for i in 0 to 20 {
+        if preds[i] != 0.0 && preds[i] != 1.0 { ok = false }
+    }
+    if not ok {
+        println("  FAIL: predictions should be 0 or 1")
+        complement_nb_free(model)
+        array_free_f32(preds)
+        return 1
+    }
+    println("  PASS")
+    complement_nb_free(model)
+    array_free_f32(preds)
+    return 0
+}
+
+function test_categorical_nb() -> i32 {
+    println("Test: CategoricalNB")
+    let X: Matrix = matrix_new(20, 3)
+    srand(42)
+    for i in 0 to 20 {
+        for j in 0 to 3 {
+            matrix_set(X, i, j, ((rand() % 4) as f32))
+        }
+    }
+    let y: ptr<f32> = _make_labels(20, 2, 42)
+    let n_cats: ptr<i32> = malloc((3 as i64) * 4) as ptr<i32>
+    n_cats[0] = 4; n_cats[1] = 4; n_cats[2] = 4
+    let model: CategoricalNB = categorical_nb_fit(X, y, 2, n_cats, 1.0)
+    let preds: ptr<f32> = categorical_nb_predict(model, X)
+
+    let mut ok: bool = true
+    for i in 0 to 20 {
+        if preds[i] != 0.0 && preds[i] != 1.0 { ok = false }
+    }
+    if not ok {
+        println("  FAIL: predictions should be 0 or 1")
+        categorical_nb_free(model)
+        array_free_f32(preds)
+        free(n_cats as ptr<void>)
+        return 1
+    }
+    println("  PASS")
+    categorical_nb_free(model)
+    array_free_f32(preds)
+    free(n_cats as ptr<void>)
+    return 0
+}
+
+# ============================================================================
+# Feature selection tests
+# ============================================================================
+
+function test_rfe() -> i32 {
+    println("Test: RFE")
+    let X: Matrix = _make_simple_data(30, 6, 42)
+    let y: ptr<f32> = _make_labels(30, 2, 42)
+    let model: RFE = rfe_fit(X, y, 3, nil, 30, 6)
+
+    if model.n_selected != 3 {
+        println("  FAIL: should select 3 features")
+        rfe_free(model)
+        return 1
+    }
+    println("  PASS")
+    rfe_free(model)
+    return 0
+}
+
+function test_sequential_feature_selector() -> i32 {
+    println("Test: SequentialFeatureSelector")
+    let X: Matrix = _make_simple_data(20, 5, 42)
+    let y: ptr<f32> = _make_labels(20, 2, 42)
+    let model: SequentialFeatureSelector = sequential_feature_selector_fit(X, y, 3, SFS_FORWARD, 20, 5)
+
+    if model.n_selected != 3 {
+        println("  FAIL: should select 3 features")
+        sequential_feature_selector_free(model)
+        return 1
+    }
+    println("  PASS")
+    sequential_feature_selector_free(model)
+    return 0
+}
+
+# ============================================================================
+# Gaussian process test
+# ============================================================================
+
+function test_gaussian_process_classifier() -> i32 {
+    println("Test: GaussianProcessClassifier")
+    let X: Matrix = _make_simple_data(20, 3, 42)
+    let y: ptr<f32> = _make_labels(20, 2, 42)
+    let model: GaussianProcessClassifier = gaussian_process_classifier_fit(X, y, 0.5, 10)
+    let preds: ptr<f32> = gaussian_process_classifier_predict(model, X)
+
+    let mut ok: bool = true
+    for i in 0 to 20 {
+        if preds[i] != 0.0 && preds[i] != 1.0 { ok = false }
+    }
+    if not ok {
+        println("  FAIL: predictions should be 0 or 1")
+        gaussian_process_classifier_free(model)
+        array_free_f32(preds)
+        return 1
+    }
+    println("  PASS")
+    gaussian_process_classifier_free(model)
+    array_free_f32(preds)
+    return 0
+}
+
+# ============================================================================
+# Mixture test
+# ============================================================================
+
+function test_bayesian_gaussian_mixture() -> i32 {
+    println("Test: BayesianGaussianMixture")
+    let X: Matrix = _make_simple_data(30, 3, 42)
+    let model: BayesianGaussianMixture = bayesian_gaussian_mixture_fit(X, 3, 50, 0.01, 42)
+    let preds: ptr<f32> = bayesian_gaussian_mixture_predict(model, X)
+
+    let mut ok: bool = true
+    for i in 0 to 30 {
+        if preds[i] < 0.0 || preds[i] >= 3.0 { ok = false }
+    }
+    if not ok {
+        println("  FAIL: predictions should be in [0, 3)")
+        bayesian_gaussian_mixture_free(model)
+        array_free_f32(preds)
+        return 1
+    }
+    println("  PASS")
+    bayesian_gaussian_mixture_free(model)
+    array_free_f32(preds)
+    return 0
+}
+
+# ============================================================================
+# Compose test
+# ============================================================================
+
+function test_transformed_target_regressor() -> i32 {
+    println("Test: TransformedTargetRegressor")
+    let X: Matrix = _make_simple_data(30, 4, 42)
+    let y: ptr<f32> = array_new_f32(30)
+    for i in 0 to 30 { y[i] = ((i + 1) as f32) * 0.5 }
+    let model: TransformedTargetRegressor = transformed_target_regressor_fit(X, y, TTR_STANDARD)
+    let preds: ptr<f32> = transformed_target_regressor_predict(model, X)
+
+    if preds[0] < 0.0 {
+        println("  FAIL: predictions should be reasonable")
+        transformed_target_regressor_free(model)
+        array_free_f32(preds)
+        return 1
+    }
+    println("  PASS")
+    transformed_target_regressor_free(model)
+    array_free_f32(preds)
+    return 0
+}
+
+# ============================================================================
+# Metrics tests
+# ============================================================================
+
+function test_ari() -> i32 {
+    println("Test: AdjustedRandIndex")
+    let y_true: ptr<f32> = array_new_f32(10)
+    let y_pred: ptr<f32> = array_new_f32(10)
+    for i in 0 to 5 { y_true[i] = 0.0; y_pred[i] = 0.0 }
+    for i in 5 to 10 { y_true[i] = 1.0; y_pred[i] = 1.0 }
+
+    let score: f32 = adjusted_rand_index(y_true, y_pred, 10)
+    if score < 0.99 {
+        println("  FAIL: ARI should be 1.0 for perfect clustering")
+        array_free_f32(y_true)
+        array_free_f32(y_pred)
+        return 1
+    }
+    println("  PASS")
+    array_free_f32(y_true)
+    array_free_f32(y_pred)
+    return 0
+}
+
+function test_nmi() -> i32 {
+    println("Test: NormalizedMutualInfo")
+    let y_true: ptr<f32> = array_new_f32(10)
+    let y_pred: ptr<f32> = array_new_f32(10)
+    for i in 0 to 5 { y_true[i] = 0.0; y_pred[i] = 0.0 }
+    for i in 5 to 10 { y_true[i] = 1.0; y_pred[i] = 1.0 }
+
+    let score: f32 = normalized_mutual_info(y_true, y_pred, 10)
+    if score < 0.99 {
+        println("  FAIL: NMI should be 1.0 for perfect clustering")
+        array_free_f32(y_true)
+        array_free_f32(y_pred)
+        return 1
+    }
+    println("  PASS")
+    array_free_f32(y_true)
+    array_free_f32(y_pred)
+    return 0
+}
+
+function test_jaccard_score() -> i32 {
+    println("Test: JaccardScore")
+    let y_true: ptr<f32> = array_new_f32(6)
+    let y_pred: ptr<f32> = array_new_f32(6)
+    y_true[0] = 1.0; y_pred[0] = 1.0
+    y_true[1] = 1.0; y_pred[1] = 1.0
+    y_true[2] = 1.0; y_pred[2] = 0.0
+    y_true[3] = 0.0; y_pred[3] = 1.0
+    y_true[4] = 0.0; y_pred[4] = 0.0
+    y_true[5] = 0.0; y_pred[5] = 0.0
+
+    let score: f32 = jaccard_score(y_true, y_pred, 6)
+    if score < 0.01 || score > 0.99 {
+        println("  FAIL: jaccard should be between 0 and 1")
+        array_free_f32(y_true)
+        array_free_f32(y_pred)
+        return 1
+    }
+    println("  PASS")
+    array_free_f32(y_true)
+    array_free_f32(y_pred)
+    return 0
+}
+
+function test_brier_score() -> i32 {
+    println("Test: BrierScoreLoss")
+    let y_true: ptr<f32> = array_new_f32(5)
+    let y_prob: ptr<f32> = array_new_f32(5)
+    y_true[0] = 1.0; y_prob[0] = 0.9
+    y_true[1] = 0.0; y_prob[1] = 0.1
+    y_true[2] = 1.0; y_prob[2] = 0.8
+    y_true[3] = 0.0; y_prob[3] = 0.2
+    y_true[4] = 1.0; y_prob[4] = 0.7
+
+    let score: f32 = brier_score_loss(y_true, y_prob, 5)
+    if score < 0.0 {
+        println("  FAIL: brier score should be non-negative")
+        array_free_f32(y_true)
+        array_free_f32(y_prob)
+        return 1
+    }
+    println("  PASS")
+    array_free_f32(y_true)
+    array_free_f32(y_prob)
+    return 0
+}
+
+function test_pairwise_distances() -> i32 {
+    println("Test: PairwiseDistances")
+    let X: Matrix = _make_simple_data(10, 3, 42)
+    let D_euc: Matrix = euclidean_distances(X, X)
+    let D_man: Matrix = manhattan_distances(X, X)
+    let D_cos: Matrix = cosine_distances(X, X)
+
+    if D_euc.rows != 10 || D_euc.cols != 10 {
+        println("  FAIL: euclidean distances shape wrong")
+        matrix_free(D_euc); matrix_free(D_man); matrix_free(D_cos)
+        return 1
+    }
+    let diag0: f32 = matrix_at(D_euc, 0, 0)
+    if diag0 > 0.01 {
+        println("  FAIL: diagonal of euclidean distances should be ~0")
+        matrix_free(D_euc); matrix_free(D_man); matrix_free(D_cos)
+        return 1
+    }
+    println("  PASS")
+    matrix_free(D_euc)
+    matrix_free(D_man)
+    matrix_free(D_cos)
+    return 0
+}
+
+# ============================================================================
+# Model selection tests
+# ============================================================================
+
+function test_time_series_split() -> i32 {
+    println("Test: TimeSeriesSplit")
+    let fold: FoldIndices = time_series_split(30, 5, 0)
+
+    if fold.n_train <= 0 || fold.n_test <= 0 {
+        println("  FAIL: split sizes should be positive")
+        free(fold.train_indices as ptr<void>)
+        free(fold.test_indices as ptr<void>)
+        return 1
+    }
+    println("  PASS")
+    free(fold.train_indices as ptr<void>)
+    free(fold.test_indices as ptr<void>)
+    return 0
+}
+
+function test_leave_one_out() -> i32 {
+    println("Test: LeaveOneOut")
+    let fold: FoldIndices = leave_one_out(10, 0)
+
+    if fold.n_train != 9 || fold.n_test != 1 {
+        println("  FAIL: LOO should have 9 train, 1 test for n=10")
+        free(fold.train_indices as ptr<void>)
+        free(fold.test_indices as ptr<void>)
+        return 1
+    }
+    println("  PASS")
+    free(fold.train_indices as ptr<void>)
+    free(fold.test_indices as ptr<void>)
+    return 0
+}
+
+function test_cross_val_predict() -> i32 {
+    println("Test: cross_val_predict")
+    let X: Matrix = _make_simple_data(20, 3, 42)
+    let y: ptr<f32> = array_new_f32(20)
+    for i in 0 to 20 { y[i] = (i as f32) * 0.1 }
+    let preds: ptr<f32> = cross_val_predict(X, y, 5, nil, 20, 3)
+
+    let mut ok: bool = true
+    for i in 0 to 20 {
+        if preds[i] != preds[i] { ok = false }
+    }
+    if not ok {
+        println("  FAIL: predictions contain NaN")
+        array_free_f32(preds)
+        return 1
+    }
+    println("  PASS")
+    array_free_f32(preds)
+    return 0
+}
+
+# ============================================================================
+# Cross decomposition tests
+# ============================================================================
+
+function test_cca() -> i32 {
+    println("Test: CCA")
+    let X: Matrix = _make_simple_data(20, 4, 42)
+    let Y: Matrix = _make_simple_data(20, 3, 43)
+    let model: CCA = cca_fit(X, Y, 2, 100, 0.001)
+    let result: Matrix = cca_transform(model, X)
+
+    if result.rows != 20 || result.cols != 2 {
+        println("  FAIL: transform shape wrong")
+        cca_free(model)
+        matrix_free(result)
+        return 1
+    }
+    println("  PASS")
+    cca_free(model)
+    matrix_free(result)
+    return 0
+}
+
+function test_pls_canonical() -> i32 {
+    println("Test: PLSCanonical")
+    let X: Matrix = _make_simple_data(20, 4, 42)
+    let Y: Matrix = _make_simple_data(20, 3, 43)
+    let model: PLSCanonical = pls_canonical_fit(X, Y, 2)
+    let result: Matrix = pls_canonical_transform(model, X)
+
+    if result.rows != 20 || result.cols != 2 {
+        println("  FAIL: transform shape wrong")
+        pls_canonical_free(model)
+        matrix_free(result)
+        return 1
+    }
+    println("  PASS")
+    pls_canonical_free(model)
+    matrix_free(result)
+    return 0
+}
+
+function test_pls_svd() -> i32 {
+    println("Test: PLSSVD")
+    let X: Matrix = _make_simple_data(20, 4, 42)
+    let Y: Matrix = _make_simple_data(20, 3, 43)
+    let model: PLSSVD = pls_svd_fit(X, Y, 2)
+    let result: Matrix = pls_svd_transform(model, X)
+
+    if result.rows != 20 || result.cols != 2 {
+        println("  FAIL: transform shape wrong")
+        pls_svd_free(model)
+        matrix_free(result)
+        return 1
+    }
+    println("  PASS")
+    pls_svd_free(model)
+    matrix_free(result)
+    return 0
+}
+
+# ============================================================================
+# Datasets tests
+# ============================================================================
+
+function test_load_iris() -> i32 {
+    println("Test: load_iris")
+    let ds: Dataset = load_iris()
+
+    if ds.n_samples != 150 {
+        println("  FAIL: iris should have 150 samples")
+        dataset_free(ds)
+        return 1
+    }
+    if ds.n_features != 4 {
+        println("  FAIL: iris should have 4 features")
+        dataset_free(ds)
+        return 1
+    }
+    if ds.n_classes != 3 {
+        println("  FAIL: iris should have 3 classes")
+        dataset_free(ds)
+        return 1
+    }
+    println("  PASS")
+    dataset_free(ds)
+    return 0
+}
+
+function test_make_s_curve() -> i32 {
+    println("Test: make_s_curve")
+    let ds: Dataset = make_s_curve(50, 0.1, 42)
+
+    if ds.n_samples != 50 {
+        println("  FAIL: should have 50 samples")
+        dataset_free(ds)
+        return 1
+    }
+    if ds.n_features != 3 {
+        println("  FAIL: should have 3 features")
+        dataset_free(ds)
+        return 1
+    }
+    println("  PASS")
+    dataset_free(ds)
+    return 0
+}
+
+function test_make_swiss_roll() -> i32 {
+    println("Test: make_swiss_roll")
+    let ds: Dataset = make_swiss_roll(50, 0.1, 42)
+
+    if ds.n_samples != 50 {
+        println("  FAIL: should have 50 samples")
+        dataset_free(ds)
+        return 1
+    }
+    if ds.n_features != 3 {
+        println("  FAIL: should have 3 features")
+        dataset_free(ds)
+        return 1
+    }
+    println("  PASS")
+    dataset_free(ds)
+    return 0
+}
+
+# ============================================================================
+# Main
+# ============================================================================
+
+function main() -> i32 {
+    println("Running expanded estimator tests...")
+    println("")
+    let mut failures: i32 = 0
+
+    println("--- Manifold ---")
+    if test_isomap() != 0 { failures = failures + 1 }
+    println("")
+    if test_lle() != 0 { failures = failures + 1 }
+    println("")
+    if test_spectral_embedding() != 0 { failures = failures + 1 }
+    println("")
+    if test_mds() != 0 { failures = failures + 1 }
+
+    println("")
+    println("--- Neighbors ---")
+    if test_radius_neighbors_classifier() != 0 { failures = failures + 1 }
+    println("")
+    if test_nearest_centroid() != 0 { failures = failures + 1 }
+    println("")
+    if test_local_outlier_factor() != 0 { failures = failures + 1 }
+
+    println("")
+    println("--- SVM ---")
+    if test_nu_svc() != 0 { failures = failures + 1 }
+    println("")
+    if test_nu_svr() != 0 { failures = failures + 1 }
+    println("")
+    if test_one_class_svm() != 0 { failures = failures + 1 }
+
+    println("")
+    println("--- Tree ---")
+    if test_extra_tree_classifier() != 0 { failures = failures + 1 }
+    println("")
+    if test_extra_tree_regressor() != 0 { failures = failures + 1 }
+
+    println("")
+    println("--- Naive Bayes ---")
+    if test_complement_nb() != 0 { failures = failures + 1 }
+    println("")
+    if test_categorical_nb() != 0 { failures = failures + 1 }
+
+    println("")
+    println("--- Feature Selection ---")
+    if test_rfe() != 0 { failures = failures + 1 }
+    println("")
+    if test_sequential_feature_selector() != 0 { failures = failures + 1 }
+
+    println("")
+    println("--- Gaussian Process ---")
+    if test_gaussian_process_classifier() != 0 { failures = failures + 1 }
+
+    println("")
+    println("--- Mixture ---")
+    if test_bayesian_gaussian_mixture() != 0 { failures = failures + 1 }
+
+    println("")
+    println("--- Compose ---")
+    if test_transformed_target_regressor() != 0 { failures = failures + 1 }
+
+    println("")
+    println("--- Metrics ---")
+    if test_ari() != 0 { failures = failures + 1 }
+    println("")
+    if test_nmi() != 0 { failures = failures + 1 }
+    println("")
+    if test_jaccard_score() != 0 { failures = failures + 1 }
+    println("")
+    if test_brier_score() != 0 { failures = failures + 1 }
+    println("")
+    if test_pairwise_distances() != 0 { failures = failures + 1 }
+
+    println("")
+    println("--- Model Selection ---")
+    if test_time_series_split() != 0 { failures = failures + 1 }
+    println("")
+    if test_leave_one_out() != 0 { failures = failures + 1 }
+    println("")
+    if test_cross_val_predict() != 0 { failures = failures + 1 }
+
+    println("")
+    println("--- Cross Decomposition ---")
+    if test_cca() != 0 { failures = failures + 1 }
+    println("")
+    if test_pls_canonical() != 0 { failures = failures + 1 }
+    println("")
+    if test_pls_svd() != 0 { failures = failures + 1 }
+
+    println("")
+    println("--- Datasets ---")
+    if test_load_iris() != 0 { failures = failures + 1 }
+    println("")
+    if test_make_s_curve() != 0 { failures = failures + 1 }
+    println("")
+    if test_make_swiss_roll() != 0 { failures = failures + 1 }
+
+    println("")
+    if failures == 0 {
+        println("All expanded estimator tests passed!")
+        return 0
+    }
+    print("FAILED: ")
+    print(failures)
+    println(" tests")
+    return 1
+}

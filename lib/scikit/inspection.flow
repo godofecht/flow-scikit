@@ -49,11 +49,13 @@ export function permutation_importance_regression(
             for i in 0 to n {
                 perm[i] = i
             }
-            for i in n - 1 down to 1 {
+            let mut i: i32 = n - 1
+            while i > 0 {
                 let j_idx: i32 = rand() % (i + 1)
                 let tmp: i32 = perm[i]
                 perm[i] = perm[j_idx]
                 perm[j_idx] = tmp
+                i = i - 1
             }
 
             let orig_col: ptr<f32> = array_new_f32(n)

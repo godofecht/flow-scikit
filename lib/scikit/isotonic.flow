@@ -132,28 +132,30 @@ export function isotonic_predict(model: IsotonicRegression, X: ptr<f32>, n: i32)
         let x: f32 = X[i]
         if x <= model.x_min {
             result[i] = model.y_values[0]
-        } else if x >= model.x_max {
-            result[i] = model.y_values[model.n_thresholds - 1]
         } else {
-            let mut lo: i32 = 0
-            let mut hi: i32 = model.n_thresholds - 1
-            while hi - lo > 1 {
-                let mid: i32 = (lo + hi) / 2
-                if model.x_thresholds[mid] <= x {
-                    lo = mid
-                } else {
-                    hi = mid
-                }
-            }
-            let x0: f32 = model.x_thresholds[lo]
-            let x1: f32 = model.x_thresholds[hi]
-            let y0: f32 = model.y_values[lo]
-            let y1: f32 = model.y_values[hi]
-            if x1 - x0 < 1e-10 {
-                result[i] = y0
+            if x >= model.x_max {
+                result[i] = model.y_values[model.n_thresholds - 1]
             } else {
-                let t: f32 = (x - x0) / (x1 - x0)
-                result[i] = y0 + t * (y1 - y0)
+                let mut lo: i32 = 0
+                let mut hi: i32 = model.n_thresholds - 1
+                while hi - lo > 1 {
+                    let mid: i32 = (lo + hi) / 2
+                    if model.x_thresholds[mid] <= x {
+                        lo = mid
+                    } else {
+                        hi = mid
+                    }
+                }
+                let x0: f32 = model.x_thresholds[lo]
+                let x1: f32 = model.x_thresholds[hi]
+                let y0: f32 = model.y_values[lo]
+                let y1: f32 = model.y_values[hi]
+                if x1 - x0 < 1e-10 {
+                    result[i] = y0
+                } else {
+                    let t: f32 = (x - x0) / (x1 - x0)
+                    result[i] = y0 + t * (y1 - y0)
+                }
             }
         }
     }

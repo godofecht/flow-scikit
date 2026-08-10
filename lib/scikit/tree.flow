@@ -530,3 +530,290 @@ export function decision_tree_regressor_predict(model: DecisionTreeRegressor, X:
 export function decision_tree_regressor_free(model: DecisionTreeRegressor) -> void {
     free(model.nodes as ptr<void>)
 }
+
+# ============================================================================
+# ExtraTreeClassifier (randomized splitting)
+# ============================================================================
+
+export struct ExtraTreeClassifier {
+    nodes: ptr<DTNode>,
+    n_nodes: i32,
+    max_depth: i32,
+    n_features: i32,
+    n_classes: i32,
+    fitted: bool
+}
+
+export function extra_tree_classifier_fit(X: Matrix, y: ptr<f32>, n_samples: i32, n_features: i32, n_classes: i32, max_depth: i32, seed: i32) -> ExtraTreeClassifier {
+    srand(seed)
+    let nodes: ptr<DTNode> = malloc((1024 as i64) * 48) as ptr<DTNode>
+    let mut n_nodes: i32 = 0
+
+    n_nodes = _extra_tree_clf_build(nodes, n_nodes, X, y, n_samples, n_features, n_classes, 0, max_depth, seed)
+
+    return ExtraTreeClassifier {
+        nodes: nodes,
+        n_nodes: n_nodes,
+        max_depth: max_depth,
+        n_features: n_features,
+        n_classes: n_classes,
+        fitted: true
+    }
+}
+
+function _extra_tree_clf_build(nodes: ptr<DTNode>, node_idx: i32, X: Matrix, y: ptr<f32>, n: i32, p: i32, n_classes: i32, depth: i32, max_depth: i32, seed: i32) -> i32 {
+    let mut idx: i32 = node_idx
+
+    let mut class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    for c in 0 to n_classes { class_counts[c] = 0 }
+    for i in 0 to n {
+        let c: i32 = y[i] as i32
+        if c >= 0 && c < n_classes { class_counts[c] = class_counts[c] + 1 }
+    }
+
+    let mut best_class: i32 = 0
+    let mut best_count: i32 = 0
+    for c in 0 to n_classes {
+        if class_counts[c] > best_count {
+            best_count = class_counts[c]
+            best_class = c
+        }
+    }
+
+    let pure: bool = best_count == n
+    if pure || depth >= max_depth || n < 2 {
+        nodes[idx].is_leaf = true
+        nodes[idx].prediction = best_class as f32
+        nodes[idx].feature = -1
+        nodes[idx].threshold = 0.0
+        nodes[idx].left = -1
+        nodes[idx].right = -1
+        free(class_counts as ptr<void>)
+        return idx + 1
+    }
+
+    let feature: i32 = rand() % p
+    let r1: i32 = rand() % n
+    let r2: i32 = rand() % n
+    if r1 == r2 {
+        nodes[idx].is_leaf = true
+        nodes[idx].prediction = best_class as f32
+        nodes[idx].feature = -1
+        nodes[idx].threshold = 0.0
+        nodes[idx].left = -1
+        nodes[idx].right = -1
+        free(class_counts as ptr<void>)
+        return idx + 1
+    }
+    let threshold: f32 = (matrix_at(X, r1, feature) + matrix_at(X, r2, feature)) / 2.0
+
+    let left_y: ptr<f32> = array_new_f32(n)
+    let right_y: ptr<f32> = array_new_f32(n)
+    let left_X: Matrix = matrix_new(n, p)
+    let right_X: Matrix = matrix_new(n, p)
+    let mut n_left: i32 = 0
+    let mut n_right: i32 = 0
+
+    for i in 0 to n {
+        if matrix_at(X, i, feature) <= threshold {
+            for j in 0 to p { matrix_set(left_X, n_left, j, matrix_at(X, i, j)) }
+            left_y[n_left] = y[i]
+            n_left = n_left + 1
+        } else {
+            for j in 0 to p { matrix_set(right_X, n_right, j, matrix_at(X, i, j)) }
+            right_y[n_right] = y[i]
+            n_right = n_right + 1
+        }
+    }
+
+    nodes[idx].is_leaf = false
+    nodes[idx].feature = feature
+    nodes[idx].threshold = threshold
+    nodes[idx].left = idx + 1
+    free(class_counts as ptr<void>)
+
+    if n_left == 0 || n_right == 0 {
+        nodes[idx].is_leaf = true
+        nodes[idx].prediction = best_class as f32
+        nodes[idx].feature = -1
+        nodes[idx].left = -1
+        nodes[idx].right = -1
+        matrix_free(left_X)
+        matrix_free(right_X)
+        array_free_f32(left_y)
+        array_free_f32(right_y)
+        return idx + 1
+    }
+
+    let left_idx: i32 = idx + 1
+    let next_idx: i32 = _extra_tree_clf_build(nodes, left_idx, left_X, left_y, n_left, p, n_classes, depth + 1, max_depth, seed + 1)
+    nodes[idx].right = next_idx
+
+    let right_idx: i32 = next_idx
+    let final_idx: i32 = _extra_tree_clf_build(nodes, right_idx, right_X, right_y, n_right, p, n_classes, depth + 1, max_depth, seed + 2)
+
+    matrix_free(left_X)
+    matrix_free(right_X)
+    array_free_f32(left_y)
+    array_free_f32(right_y)
+
+    return final_idx
+}
+
+export function extra_tree_classifier_predict(model: ExtraTreeClassifier, X: Matrix) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(X.rows)
+    let row: ptr<f32> = array_new_f32(X.cols)
+    for i in 0 to X.rows {
+        matrix_row(X, i, row)
+        let mut node: i32 = 0
+        while not model.nodes[node].is_leaf {
+            if row[model.nodes[node].feature] <= model.nodes[node].threshold {
+                node = model.nodes[node].left
+            } else {
+                node = model.nodes[node].right
+            }
+        }
+        result[i] = model.nodes[node].prediction
+    }
+    array_free_f32(row)
+    return result
+}
+
+export function extra_tree_classifier_free(model: ExtraTreeClassifier) -> void {
+    free(model.nodes as ptr<void>)
+}
+
+# ============================================================================
+# ExtraTreeRegressor (randomized splitting)
+# ============================================================================
+
+export struct ExtraTreeRegressor {
+    nodes: ptr<DTRegNode>,
+    n_nodes: i32,
+    max_depth: i32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function extra_tree_regressor_fit(X: Matrix, y: ptr<f32>, n_samples: i32, n_features: i32, max_depth: i32, seed: i32) -> ExtraTreeRegressor {
+    srand(seed)
+    let nodes: ptr<DTRegNode> = malloc((1024 as i64) * 32) as ptr<DTRegNode>
+    let mut n_nodes: i32 = 0
+
+    n_nodes = _extra_tree_reg_build(nodes, n_nodes, X, y, n_samples, n_features, 0, max_depth, seed)
+
+    return ExtraTreeRegressor {
+        nodes: nodes,
+        n_nodes: n_nodes,
+        max_depth: max_depth,
+        n_features: n_features,
+        fitted: true
+    }
+}
+
+function _extra_tree_reg_build(nodes: ptr<DTRegNode>, node_idx: i32, X: Matrix, y: ptr<f32>, n: i32, p: i32, depth: i32, max_depth: i32, seed: i32) -> i32 {
+    let mut idx: i32 = node_idx
+
+    let mut mean: f32 = 0.0
+    for i in 0 to n { mean = mean + y[i] }
+    mean = mean / (n as f32)
+
+    if n < 2 || depth >= max_depth {
+        nodes[idx].is_leaf = true
+        nodes[idx].prediction = mean
+        nodes[idx].feature = -1
+        nodes[idx].threshold = 0.0
+        nodes[idx].left = -1
+        nodes[idx].right = -1
+        return idx + 1
+    }
+
+    let feature: i32 = rand() % p
+    let r1: i32 = rand() % n
+    let r2: i32 = rand() % n
+    if r1 == r2 {
+        nodes[idx].is_leaf = true
+        nodes[idx].prediction = mean
+        nodes[idx].feature = -1
+        nodes[idx].threshold = 0.0
+        nodes[idx].left = -1
+        nodes[idx].right = -1
+        return idx + 1
+    }
+    let threshold: f32 = (matrix_at(X, r1, feature) + matrix_at(X, r2, feature)) / 2.0
+
+    let left_y: ptr<f32> = array_new_f32(n)
+    let right_y: ptr<f32> = array_new_f32(n)
+    let left_X: Matrix = matrix_new(n, p)
+    let right_X: Matrix = matrix_new(n, p)
+    let mut n_left: i32 = 0
+    let mut n_right: i32 = 0
+
+    for i in 0 to n {
+        if matrix_at(X, i, feature) <= threshold {
+            for j in 0 to p { matrix_set(left_X, n_left, j, matrix_at(X, i, j)) }
+            left_y[n_left] = y[i]
+            n_left = n_left + 1
+        } else {
+            for j in 0 to p { matrix_set(right_X, n_right, j, matrix_at(X, i, j)) }
+            right_y[n_right] = y[i]
+            n_right = n_right + 1
+        }
+    }
+
+    if n_left == 0 || n_right == 0 {
+        nodes[idx].is_leaf = true
+        nodes[idx].prediction = mean
+        nodes[idx].feature = -1
+        nodes[idx].threshold = 0.0
+        nodes[idx].left = -1
+        nodes[idx].right = -1
+        matrix_free(left_X)
+        matrix_free(right_X)
+        array_free_f32(left_y)
+        array_free_f32(right_y)
+        return idx + 1
+    }
+
+    nodes[idx].is_leaf = false
+    nodes[idx].feature = feature
+    nodes[idx].threshold = threshold
+    nodes[idx].left = idx + 1
+
+    let left_idx: i32 = idx + 1
+    let next_idx: i32 = _extra_tree_reg_build(nodes, left_idx, left_X, left_y, n_left, p, depth + 1, max_depth, seed + 1)
+    nodes[idx].right = next_idx
+
+    let right_idx: i32 = next_idx
+    let final_idx: i32 = _extra_tree_reg_build(nodes, right_idx, right_X, right_y, n_right, p, depth + 1, max_depth, seed + 2)
+
+    matrix_free(left_X)
+    matrix_free(right_X)
+    array_free_f32(left_y)
+    array_free_f32(right_y)
+
+    return final_idx
+}
+
+export function extra_tree_regressor_predict(model: ExtraTreeRegressor, X: Matrix) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(X.rows)
+    let row: ptr<f32> = array_new_f32(X.cols)
+    for i in 0 to X.rows {
+        matrix_row(X, i, row)
+        let mut node: i32 = 0
+        while not model.nodes[node].is_leaf {
+            if row[model.nodes[node].feature] <= model.nodes[node].threshold {
+                node = model.nodes[node].left
+            } else {
+                node = model.nodes[node].right
+            }
+        }
+        result[i] = model.nodes[node].prediction
+    }
+    array_free_f32(row)
+    return result
+}
+
+export function extra_tree_regressor_free(model: ExtraTreeRegressor) -> void {
+    free(model.nodes as ptr<void>)
+}

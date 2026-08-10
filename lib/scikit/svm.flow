@@ -401,3 +401,319 @@ export function kernel_svc_free(model: KernelSVC) -> void {
     array_free_f32(model.alphas)
     array_free_f32(model.classes)
 }
+
+# ============================================================================
+# NuSVC
+# ============================================================================
+
+export struct NuSVC {
+    X_train: Matrix,
+    y_train_dual: ptr<f32>,
+    alphas: ptr<f32>,
+    b: f32,
+    classes: ptr<f32>,
+    n_classes: i32,
+    n_support: i32,
+    gamma: f32,
+    nu: f32,
+    fitted: bool
+}
+
+export function nu_svc_fit(X: Matrix, y: ptr<f32>, nu: f32, gamma: f32, max_iter: i32, C: f32) -> NuSVC {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let classes: ptr<f32> = array_new_f32(2)
+    classes[0] = 0.0
+    classes[1] = 1.0
+
+    let y_dual: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        if y[i] == 0.0 { y_dual[i] = -1.0 }
+        else { y_dual[i] = 1.0 }
+    }
+
+    let alphas: ptr<f32> = array_new_f32(n)
+    for i in 0 to n { alphas[i] = 0.0 }
+
+    let mut b: f32 = 0.0
+    let n_upper: f32 = nu * (n as f32) / 2.0
+
+    for iter in 0 to max_iter {
+        for i in 0 to n {
+            let mut g_i: f32 = -b
+            for j in 0 to n {
+                if alphas[j] < 1e-10 { continue }
+                let mut s: f32 = 0.0
+                for k in 0 to p {
+                    let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                    s = s + d * d
+                }
+                g_i = g_i + alphas[j] * y_dual[j] * exp((-gamma * s) as f64) as f32
+            }
+            let viol: f32 = y_dual[i] * g_i
+            if viol > 0 && alphas[i] < n_upper {
+                alphas[i] = alphas[i] + 0.01
+            } else {
+                if viol < 0 && alphas[i] > 0 {
+                    alphas[i] = alphas[i] - 0.01
+                    if alphas[i] < 0 { alphas[i] = 0.0 }
+                }
+            }
+        }
+    }
+
+    let mut n_support: i32 = 0
+    for i in 0 to n {
+        if alphas[i] > 1e-6 { n_support = n_support + 1 }
+    }
+
+    return NuSVC {
+        X_train: X,
+        y_train_dual: y_dual,
+        alphas: alphas,
+        b: b,
+        classes: classes,
+        n_classes: 2,
+        n_support: n_support,
+        gamma: gamma,
+        nu: nu,
+        fitted: true
+    }
+}
+
+export function nu_svc_predict(model: NuSVC, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let p: i32 = model.X_train.cols
+    let result: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut decision: f32 = -model.b
+        for j in 0 to model.X_train.rows {
+            if model.alphas[j] < 1e-10 { continue }
+            let mut s: f32 = 0.0
+            for k in 0 to p {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(model.X_train, j, k)
+                s = s + d * d
+            }
+            decision = decision + model.alphas[j] * model.y_train_dual[j] * exp((-model.gamma * s) as f64) as f32
+        }
+        if decision > 0 {
+            result[i] = model.classes[1]
+        } else {
+            result[i] = model.classes[0]
+        }
+    }
+    return result
+}
+
+export function nu_svc_free(model: NuSVC) -> void {
+    matrix_free(model.X_train)
+    array_free_f32(model.y_train_dual)
+    array_free_f32(model.alphas)
+    array_free_f32(model.classes)
+}
+
+# ============================================================================
+# NuSVR
+# ============================================================================
+
+export struct NuSVR {
+    X_train: Matrix,
+    y_train: ptr<f32>,
+    alphas: ptr<f32>,
+    b: f32,
+    gamma: f32,
+    nu: f32,
+    C: f32,
+    n_support: i32,
+    fitted: bool
+}
+
+export function nu_svr_fit(X: Matrix, y: ptr<f32>, nu: f32, C: f32, gamma: f32, max_iter: i32) -> NuSVR {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let alphas: ptr<f32> = array_new_f32(n)
+    for i in 0 to n { alphas[i] = 0.0 }
+    let mut b: f32 = 0.0
+
+    let alpha_max: f32 = C / (nu * (n as f32))
+
+    for iter in 0 to max_iter {
+        for i in 0 to n {
+            let mut g_i: f32 = y[i] - b
+            for j in 0 to n {
+                if (fabs((alphas[j]) as f64) as f32) < 1e-10 { continue }
+                let mut s: f32 = 0.0
+                for k in 0 to p {
+                    let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                    s = s + d * d
+                }
+                g_i = g_i - alphas[j] * exp((-gamma * s) as f64) as f32
+            }
+
+            if g_i > 0 && alphas[i] < alpha_max {
+                alphas[i] = alphas[i] + 0.01
+            } else {
+                if g_i < 0 && alphas[i] > -alpha_max {
+                    alphas[i] = alphas[i] - 0.01
+                }
+            }
+        }
+    }
+
+    let mut n_support: i32 = 0
+    for i in 0 to n {
+        if (fabs((alphas[i]) as f64) as f32) > 1e-6 { n_support = n_support + 1 }
+    }
+
+    return NuSVR {
+        X_train: X,
+        y_train: y,
+        alphas: alphas,
+        b: b,
+        gamma: gamma,
+        nu: nu,
+        C: C,
+        n_support: n_support,
+        fitted: true
+    }
+}
+
+export function nu_svr_predict(model: NuSVR, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let p: i32 = model.X_train.cols
+    let result: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut pred: f32 = model.b
+        for j in 0 to model.X_train.rows {
+            if (fabs((model.alphas[j]) as f64) as f32) < 1e-10 { continue }
+            let mut s: f32 = 0.0
+            for k in 0 to p {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(model.X_train, j, k)
+                s = s + d * d
+            }
+            pred = pred + model.alphas[j] * exp((-model.gamma * s) as f64) as f32
+        }
+        result[i] = pred
+    }
+    return result
+}
+
+export function nu_svr_free(model: NuSVR) -> void {
+    matrix_free(model.X_train)
+    array_free_f32(model.y_train)
+    array_free_f32(model.alphas)
+}
+
+# ============================================================================
+# OneClassSVM
+# ============================================================================
+
+export struct OneClassSVM {
+    X_train: Matrix,
+    alphas: ptr<f32>,
+    b: f32,
+    gamma: f32,
+    nu: f32,
+    n_support: i32,
+    threshold: f32,
+    fitted: bool
+}
+
+export function one_class_svm_fit(X: Matrix, nu: f32, gamma: f32, max_iter: i32) -> OneClassSVM {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let alphas: ptr<f32> = array_new_f32(n)
+    let alpha_max: f32 = 1.0 / (nu * (n as f32))
+    for i in 0 to n { alphas[i] = alpha_max / 2.0 }
+
+    let mut b: f32 = 0.0
+
+    for iter in 0 to max_iter {
+        for i in 0 to n {
+            let mut g_i: f32 = -b
+            for j in 0 to n {
+                let mut s: f32 = 0.0
+                for k in 0 to p {
+                    let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                    s = s + d * d
+                }
+                g_i = g_i + alphas[j] * exp((-gamma * s) as f64) as f32
+            }
+
+            if g_i > 0 && alphas[i] < alpha_max {
+                alphas[i] = alphas[i] + 0.001
+            } else {
+                if g_i < 0 && alphas[i] > 0 {
+                    alphas[i] = alphas[i] - 0.001
+                    if alphas[i] < 0 { alphas[i] = 0.0 }
+                }
+            }
+        }
+    }
+
+    let mut threshold: f32 = 0.0
+    for i in 0 to n {
+        let mut g_i: f32 = -b
+        for j in 0 to n {
+            let mut s: f32 = 0.0
+            for k in 0 to p {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                s = s + d * d
+            }
+            g_i = g_i + alphas[j] * exp((-gamma * s) as f64) as f32
+        }
+        threshold = threshold + g_i
+    }
+    threshold = threshold / (n as f32)
+
+    let mut n_support: i32 = 0
+    for i in 0 to n {
+        if alphas[i] > 1e-6 { n_support = n_support + 1 }
+    }
+
+    return OneClassSVM {
+        X_train: X,
+        alphas: alphas,
+        b: b,
+        gamma: gamma,
+        nu: nu,
+        n_support: n_support,
+        threshold: threshold,
+        fitted: true
+    }
+}
+
+export function one_class_svm_predict(model: OneClassSVM, X: Matrix) -> ptr<i32> {
+    let n: i32 = X.rows
+    let p: i32 = model.X_train.cols
+    let result: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+
+    for i in 0 to n {
+        let mut score: f32 = -model.b
+        for j in 0 to model.X_train.rows {
+            if model.alphas[j] < 1e-10 { continue }
+            let mut s: f32 = 0.0
+            for k in 0 to p {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(model.X_train, j, k)
+                s = s + d * d
+            }
+            score = score + model.alphas[j] * exp((-model.gamma * s) as f64) as f32
+        }
+        if score < model.threshold {
+            result[i] = -1
+        } else {
+            result[i] = 1
+        }
+    }
+    return result
+}
+
+export function one_class_svm_free(model: OneClassSVM) -> void {
+    matrix_free(model.X_train)
+    array_free_f32(model.alphas)
+}

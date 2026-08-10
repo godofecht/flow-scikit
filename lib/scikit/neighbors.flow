@@ -277,3 +277,283 @@ export function nearest_neighbors_free_results(results: ptr<NeighborResult>, n: 
 export function nearest_neighbors_free(model: NearestNeighbors) -> void {
     matrix_free(model.X_train)
 }
+
+# ============================================================================
+# RadiusNeighborsClassifier
+# ============================================================================
+
+export struct RadiusNeighborsClassifier {
+    X_train: Matrix,
+    y_train: ptr<f32>,
+    radius: f32,
+    n_features: i32,
+    n_classes: i32,
+    outlier_label: f32,
+    fitted: bool
+}
+
+export function radius_neighbors_classifier_fit(X: Matrix, y: ptr<f32>, radius: f32, n_classes: i32, outlier_label: f32) -> RadiusNeighborsClassifier {
+    return RadiusNeighborsClassifier {
+        X_train: X,
+        y_train: y,
+        radius: radius,
+        n_features: X.cols,
+        n_classes: n_classes,
+        outlier_label: outlier_label,
+        fitted: true
+    }
+}
+
+export function radius_neighbors_classifier_predict(model: RadiusNeighborsClassifier, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut best_class: f32 = model.outlier_label
+        let mut best_count: i32 = 0
+
+        for c in 0 to model.n_classes {
+            let mut count: i32 = 0
+            for j in 0 to model.X_train.rows {
+                if model.y_train[j] as i32 != c { continue }
+                let mut s: f32 = 0.0
+                for k in 0 to model.n_features {
+                    let d: f32 = matrix_at(X, i, k) - matrix_at(model.X_train, j, k)
+                    s = s + d * d
+                }
+                if (sqrt((s as f64)) as f32) <= model.radius {
+                    count = count + 1
+                }
+            }
+            if count > best_count {
+                best_count = count
+                best_class = c as f32
+            }
+        }
+
+        result[i] = best_class
+    }
+
+    return result
+}
+
+export function radius_neighbors_classifier_free(model: RadiusNeighborsClassifier) -> void {
+    matrix_free(model.X_train)
+    array_free_f32(model.y_train)
+}
+
+# ============================================================================
+# NearestCentroid
+# ============================================================================
+
+export struct NearestCentroid {
+    centroids: ptr<ptr<f32> >,
+    n_classes: i32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function nearest_centroid_fit(X: Matrix, y: ptr<f32>, n_classes: i32) -> NearestCentroid {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let centroids: ptr<ptr<f32> > = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
+    let counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+
+    for c in 0 to n_classes {
+        centroids[c] = array_new_f32(p)
+        counts[c] = 0
+        for j in 0 to p { centroids[c][j] = 0.0 }
+    }
+
+    for i in 0 to n {
+        let c: i32 = y[i] as i32
+        if c >= 0 && c < n_classes {
+            for j in 0 to p {
+                centroids[c][j] = centroids[c][j] + matrix_at(X, i, j)
+            }
+            counts[c] = counts[c] + 1
+        }
+    }
+
+    for c in 0 to n_classes {
+        if counts[c] > 0 {
+            for j in 0 to p {
+                centroids[c][j] = centroids[c][j] / (counts[c] as f32)
+            }
+        }
+    }
+
+    free(counts as ptr<void>)
+
+    return NearestCentroid {
+        centroids: centroids,
+        n_classes: n_classes,
+        n_features: p,
+        fitted: true
+    }
+}
+
+export function nearest_centroid_predict(model: NearestCentroid, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best_dist: f32 = 1e30
+        for c in 0 to model.n_classes {
+            let mut s: f32 = 0.0
+            for j in 0 to model.n_features {
+                let d: f32 = matrix_at(X, i, j) - model.centroids[c][j]
+                s = s + d * d
+            }
+            if s < best_dist {
+                best_dist = s
+                best_c = c
+            }
+        }
+        result[i] = best_c as f32
+    }
+
+    return result
+}
+
+export function nearest_centroid_free(model: NearestCentroid) -> void {
+    for c in 0 to model.n_classes {
+        array_free_f32(model.centroids[c])
+    }
+    free(model.centroids as ptr<void>)
+}
+
+# ============================================================================
+# LocalOutlierFactor
+# ============================================================================
+
+export struct LocalOutlierFactor {
+    X_train: Matrix,
+    lrd: ptr<f32>,
+    lof: ptr<f32>,
+    n_neighbors: i32,
+    n_features: i32,
+    n_samples: i32,
+    threshold: f32,
+    fitted: bool
+}
+
+export function local_outlier_factor_fit(X: Matrix, n_neighbors: i32) -> LocalOutlierFactor {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let k: i32 = n_neighbors
+    if k > n - 1 { k = n - 1 }
+
+    let dists: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        dists[i] = array_new_f32(n)
+        for j in 0 to n {
+            let mut s: f32 = 0.0
+            for m in 0 to p {
+                let d: f32 = matrix_at(X, i, m) - matrix_at(X, j, m)
+                s = s + d * d
+            }
+            dists[i][j] = sqrt((s as f64)) as f32
+        }
+    }
+
+    let k_dist: ptr<f32> = array_new_f32(n)
+    let lrd: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let sorted: ptr<f32> = array_copy_f32(dists[i], n)
+        for a in 0 to n {
+            for b in 0 to n - 1 - a {
+                if sorted[b] > sorted[b + 1] {
+                    let t: f32 = sorted[b]
+                    sorted[b] = sorted[b + 1]
+                    sorted[b + 1] = t
+                }
+            }
+        }
+        k_dist[i] = sorted[k]
+
+        let mut reach_sum: f32 = 0.0
+        for j in 0 to n {
+            if i == j { continue }
+            let reach: f32 = dists[i][j]
+            if k_dist[j] > reach { reach = k_dist[j] }
+            reach_sum = reach_sum + reach
+        }
+        lrd[i] = (k as f32) / (reach_sum + 1e-10)
+        array_free_f32(sorted)
+    }
+
+    let lof: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut sum_lrd: f32 = 0.0
+        let sorted: ptr<f32> = array_copy_f32(dists[i], n)
+        let indices: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+        for j in 0 to n { indices[j] = j }
+        for a in 0 to n {
+            for b in 0 to n - 1 - a {
+                if sorted[b] > sorted[b + 1] {
+                    let t: f32 = sorted[b]
+                    sorted[b] = sorted[b + 1]
+                    sorted[b + 1] = t
+                    let ti: i32 = indices[b]
+                    indices[b] = indices[b + 1]
+                    indices[b + 1] = ti
+                }
+            }
+        }
+        for j in 1 to k + 1 {
+            sum_lrd = sum_lrd + lrd[indices[j]]
+        }
+        lof[i] = sum_lrd / (k as f32) / (lrd[i] + 1e-10)
+        array_free_f32(sorted)
+        free(indices as ptr<void>)
+    }
+
+    let mut mean_lof: f32 = 0.0
+    for i in 0 to n { mean_lof = mean_lof + lof[i] }
+    mean_lof = mean_lof / (n as f32)
+
+    let mut std_lof: f32 = 0.0
+    for i in 0 to n {
+        let d: f32 = lof[i] - mean_lof
+        std_lof = std_lof + d * d
+    }
+    std_lof = sqrt((std_lof / (n as f32)) as f64) as f32
+    let threshold: f32 = mean_lof + 2.0 * std_lof
+
+    for i in 0 to n { array_free_f32(dists[i]) }
+    free(dists as ptr<void>)
+    array_free_f32(k_dist)
+
+    return LocalOutlierFactor {
+        X_train: X,
+        lrd: lrd,
+        lof: lof,
+        n_neighbors: k,
+        n_features: p,
+        n_samples: n,
+        threshold: threshold,
+        fitted: true
+    }
+}
+
+export function local_outlier_factor_predict(model: LocalOutlierFactor) -> ptr<i32> {
+    let result: ptr<i32> = malloc((model.n_samples as i64) * 4) as ptr<i32>
+    for i in 0 to model.n_samples {
+        if model.lof[i] > model.threshold {
+            result[i] = -1
+        } else {
+            result[i] = 1
+        }
+    }
+    return result
+}
+
+export function local_outlier_factor_free(model: LocalOutlierFactor) -> void {
+    matrix_free(model.X_train)
+    array_free_f32(model.lrd)
+    array_free_f32(model.lof)
+}

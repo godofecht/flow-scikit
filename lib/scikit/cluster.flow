@@ -4,7 +4,7 @@
 import "lib/scikit/matrix.flow"
 
 export struct KMeans {
-    centroids: ptr<ptr<f32>>,
+    centroids: ptr<ptr<f32> >,
     n_clusters: i32,
     n_features: i32,
     labels: ptr<i32>,
@@ -17,7 +17,7 @@ export struct KMeans {
 
 export function kmeans_fit(X: Matrix, n_clusters: i32, max_iter: i32, tol: f32, seed: i32) -> KMeans {
     let n_features: i32 = X.cols
-    let centroids: ptr<ptr<f32>> = malloc((n_clusters as i64) * 8) as ptr<ptr<f32>>
+    let centroids: ptr<ptr<f32> > = malloc((n_clusters as i64) * 8) as ptr<ptr<f32> >
 
     srand(seed)
     for k in 0 to n_clusters {
@@ -54,7 +54,7 @@ export function kmeans_fit(X: Matrix, n_clusters: i32, max_iter: i32, tol: f32, 
             new_inertia = new_inertia + best_dist
         }
 
-        let sums: ptr<ptr<f32>> = malloc((n_clusters as i64) * 8) as ptr<ptr<f32>>
+        let sums: ptr<ptr<f32> > = malloc((n_clusters as i64) * 8) as ptr<ptr<f32> >
         let counts: ptr<i32> = malloc((n_clusters as i64) * 4) as ptr<i32>
         for k in 0 to n_clusters {
             sums[k] = array_new_f32(n_features)
@@ -415,7 +415,7 @@ export function agglomerative_clustering_free(model: AgglomerativeClustering) ->
 }
 
 export struct MiniBatchKMeans {
-    centroids: ptr<ptr<f32>>,
+    centroids: ptr<ptr<f32> >,
     n_clusters: i32,
     n_features: i32,
     inertia: f32,
@@ -426,7 +426,7 @@ export struct MiniBatchKMeans {
 export function minibatch_kmeans_fit(X: Matrix, n_clusters: i32, batch_size: i32, max_iter: i32, tol: f32, seed: i32) -> MiniBatchKMeans {
     let n: i32 = X.rows
     let n_features: i32 = X.cols
-    let centroids: ptr<ptr<f32>> = malloc((n_clusters as i64) * 8) as ptr<ptr<f32>>
+    let centroids: ptr<ptr<f32> > = malloc((n_clusters as i64) * 8) as ptr<ptr<f32> >
 
     srand(seed)
     for k in 0 to n_clusters {
@@ -478,7 +478,7 @@ export function minibatch_kmeans_fit(X: Matrix, n_clusters: i32, batch_size: i32
         free(batch_indices as ptr<void>)
         free(counts as ptr<void>)
 
-        if fabs((prev_inertia - inertia) as f64) as f32 < tol {
+        if (fabs((prev_inertia - inertia) as f64) as f32) < tol {
             break
         }
         prev_inertia = inertia
@@ -520,4 +520,856 @@ export function minibatch_kmeans_free(model: MiniBatchKMeans) -> void {
         array_free_f32(model.centroids[k])
     }
     free(model.centroids as ptr<void>)
+}
+
+# ============================================================================
+# MeanShift
+# ============================================================================
+
+export struct MeanShift {
+    centroids: ptr<ptr<f32> >,
+    n_clusters: i32,
+    n_features: i32,
+    labels: ptr<i32>,
+    bandwidth: f32,
+    n_iter: i32,
+    fitted: bool
+}
+
+export function mean_shift_fit(X: Matrix, bandwidth: f32, max_iter: i32) -> MeanShift {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    let shifted: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        shifted[i] = array_new_f32(n_features)
+        for j in 0 to n_features {
+            shifted[i][j] = matrix_at(X, i, j)
+        }
+    }
+
+    let bw_sq: f32 = bandwidth * bandwidth
+
+    for iter in 0 to max_iter {
+        let mut max_shift: f32 = 0.0
+
+        for i in 0 to n {
+            let mut new_pos: ptr<f32> = array_new_f32(n_features)
+            let mut total_weight: f32 = 0.0
+
+            for j in 0 to n {
+                let mut dist_sq: f32 = 0.0
+                for k in 0 to n_features {
+                    let d: f32 = shifted[i][k] - matrix_at(X, j, k)
+                    dist_sq = dist_sq + d * d
+                }
+
+                if dist_sq < bw_sq {
+                    let weight: f32 = 1.0
+                    for k in 0 to n_features {
+                        new_pos[k] = new_pos[k] + matrix_at(X, j, k) * weight
+                    }
+                    total_weight = total_weight + weight
+                }
+            }
+
+            if total_weight > 0.0 {
+                for k in 0 to n_features {
+                    new_pos[k] = new_pos[k] / total_weight
+                }
+            }
+
+            let mut shift_dist: f32 = 0.0
+            for k in 0 to n_features {
+                let d: f32 = new_pos[k] - shifted[i][k]
+                shift_dist = shift_dist + d * d
+                shifted[i][k] = new_pos[k]
+            }
+            shift_dist = sqrt((shift_dist as f64)) as f32
+            if shift_dist > max_shift { max_shift = shift_dist }
+
+            array_free_f32(new_pos)
+        }
+
+        if max_shift < 1e-4 { break }
+    }
+
+    let mut n_clusters: i32 = 0
+    let centroids: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+
+    for i in 0 to n {
+        let mut found: bool = false
+        for c in 0 to n_clusters {
+            let mut dist_sq: f32 = 0.0
+            for k in 0 to n_features {
+                let d: f32 = shifted[i][k] - centroids[c][k]
+                dist_sq = dist_sq + d * d
+            }
+            if (sqrt((dist_sq as f64)) as f32) < bandwidth {
+                labels[i] = c
+                found = true
+                break
+            }
+        }
+        if not found {
+            centroids[n_clusters] = array_new_f32(n_features)
+            for k in 0 to n_features {
+                centroids[n_clusters][k] = shifted[i][k]
+            }
+            labels[i] = n_clusters
+            n_clusters = n_clusters + 1
+        }
+    }
+
+    for i in 0 to n {
+        array_free_f32(shifted[i])
+    }
+    free(shifted as ptr<void>)
+
+    return MeanShift {
+        centroids: centroids, n_clusters: n_clusters,
+        n_features: n_features, labels: labels,
+        bandwidth: bandwidth, n_iter: max_iter,
+        fitted: true
+    }
+}
+
+export function mean_shift_predict(model: MeanShift, X: Matrix) -> ptr<i32> {
+    let n: i32 = X.rows
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best_dist: f32 = 1e10
+        for c in 0 to model.n_clusters {
+            let mut dist_sq: f32 = 0.0
+            for k in 0 to model.n_features {
+                let d: f32 = matrix_at(X, i, k) - model.centroids[c][k]
+                dist_sq = dist_sq + d * d
+            }
+            if dist_sq < best_dist {
+                best_dist = dist_sq
+                best_c = c
+            }
+        }
+        labels[i] = best_c
+    }
+
+    return labels
+}
+
+export function mean_shift_free(model: MeanShift) -> void {
+    for c in 0 to model.n_clusters {
+        array_free_f32(model.centroids[c])
+    }
+    free(model.centroids as ptr<void>)
+    free(model.labels as ptr<void>)
+}
+
+# ============================================================================
+# Birch
+# ============================================================================
+
+export struct Birch {
+    centroids: ptr<ptr<f32> >,
+    n_clusters: i32,
+    n_features: i32,
+    labels: ptr<i32>,
+    threshold: f32,
+    branching_factor: i32,
+    fitted: bool
+}
+
+export function birch_fit(X: Matrix, threshold: f32, branching_factor: i32) -> Birch {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    let max_clusters: i32 = n
+    let centroids: ptr<ptr<f32> > = malloc((max_clusters as i64) * 8) as ptr<ptr<f32> >
+    let cluster_counts: ptr<i32> = malloc((max_clusters as i64) * 4) as ptr<i32>
+    let n_clusters: i32 = 0
+
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+
+    for i in 0 to n {
+        let mut best_c: i32 = -1
+        let mut best_dist: f32 = 1e10
+
+        for c in 0 to n_clusters {
+            let mut dist_sq: f32 = 0.0
+            for k in 0 to n_features {
+                let d: f32 = matrix_at(X, i, k) - centroids[c][k]
+                dist_sq = dist_sq + d * d
+            }
+            if dist_sq < best_dist {
+                best_dist = dist_sq
+                best_c = c
+            }
+        }
+
+        if best_c >= 0 && best_dist < threshold * threshold {
+            let count: f32 = (cluster_counts[best_c] as f32)
+            for k in 0 to n_features {
+                let new_val: f32 = (centroids[best_c][k] * count + matrix_at(X, i, k)) / (count + 1.0)
+                centroids[best_c][k] = new_val
+            }
+            cluster_counts[best_c] = cluster_counts[best_c] + 1
+            labels[i] = best_c
+        } else {
+            centroids[n_clusters] = array_new_f32(n_features)
+            for k in 0 to n_features {
+                centroids[n_clusters][k] = matrix_at(X, i, k)
+            }
+            cluster_counts[n_clusters] = 1
+            labels[i] = n_clusters
+            n_clusters = n_clusters + 1
+        }
+    }
+
+    free(cluster_counts as ptr<void>)
+
+    return Birch {
+        centroids: centroids, n_clusters: n_clusters,
+        n_features: n_features, labels: labels,
+        threshold: threshold,
+        branching_factor: branching_factor,
+        fitted: true
+    }
+}
+
+export function birch_predict(model: Birch, X: Matrix) -> ptr<i32> {
+    let n: i32 = X.rows
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best_dist: f32 = 1e10
+        for c in 0 to model.n_clusters {
+            let mut dist_sq: f32 = 0.0
+            for k in 0 to model.n_features {
+                let d: f32 = matrix_at(X, i, k) - model.centroids[c][k]
+                dist_sq = dist_sq + d * d
+            }
+            if dist_sq < best_dist {
+                best_dist = dist_sq
+                best_c = c
+            }
+        }
+        labels[i] = best_c
+    }
+
+    return labels
+}
+
+export function birch_free(model: Birch) -> void {
+    for c in 0 to model.n_clusters {
+        array_free_f32(model.centroids[c])
+    }
+    free(model.centroids as ptr<void>)
+    free(model.labels as ptr<void>)
+}
+
+# ============================================================================
+# SpectralClustering
+# ============================================================================
+
+export struct SpectralClustering {
+    labels: ptr<i32>,
+    n_clusters: i32,
+    n_samples: i32,
+    n_features: i32,
+    affinity: ptr<ptr<f32> >,
+    fitted: bool
+}
+
+function _build_rbf_affinity(X: Matrix, gamma: f32) -> ptr<ptr<f32> > {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let W: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        W[i] = array_new_f32(n)
+        for j in 0 to n {
+            let mut s: f32 = 0.0
+            for k in 0 to p {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                s = s + d * d
+            }
+            W[i][j] = exp((-gamma * s) as f64) as f32
+        }
+    }
+    return W
+}
+
+export function spectral_clustering_fit(X: Matrix, n_clusters: i32, gamma: f32, seed: i32) -> SpectralClustering {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let W: ptr<ptr<f32> > = _build_rbf_affinity(X, gamma)
+
+    let deg: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        for j in 0 to n {
+            deg[i] = deg[i] + W[i][j]
+        }
+        if deg[i] < 1e-10 { deg[i] = 1e-10 }
+    }
+
+    let L: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        L[i] = array_new_f32(n)
+        for j in 0 to n {
+            if i == j {
+                L[i][j] = 1.0
+            } else {
+                L[i][j] = -W[i][j] / sqrt((deg[i] * deg[j]) as f64) as f32
+            }
+        }
+    }
+
+    let eigvecs: ptr<ptr<f32> > = malloc((n_clusters as i64) * 8) as ptr<ptr<f32> >
+    for c in 0 to n_clusters {
+        eigvecs[c] = array_new_f32(n)
+        srand(seed + c)
+        for i in 0 to n {
+            eigvecs[c][i] = ((rand() % 1000) as f32) / 500.0 - 1.0
+        }
+
+        for iter in 0 to 100 {
+            let Av: ptr<f32> = array_new_f32(n)
+            for i in 0 to n {
+                let mut s: f32 = 0.0
+                for j in 0 to n {
+                    s = s + L[i][j] * eigvecs[c][j]
+                }
+                Av[i] = s
+            }
+
+            if c > 0 {
+                for prev in 0 to c {
+                    let mut dot: f32 = 0.0
+                    for i in 0 to n {
+                        dot = dot + Av[i] * eigvecs[prev][i]
+                    }
+                    for i in 0 to n {
+                        Av[i] = Av[i] - dot * eigvecs[prev][i]
+                    }
+                }
+            }
+
+            let mut norm: f32 = 0.0
+            for i in 0 to n {
+                norm = norm + Av[i] * Av[i]
+            }
+            norm = sqrt((norm as f64)) as f32
+            if norm < 1e-10 { norm = 1e-10 }
+
+            let mut change: f32 = 0.0
+            for i in 0 to n {
+                let new_val: f32 = Av[i] / norm
+                let d: f32 = fabs((new_val - eigvecs[c][i]) as f64) as f32
+                if d > change { change = d }
+                eigvecs[c][i] = new_val
+            }
+            array_free_f32(Av)
+            if change < 1e-6 { break }
+        }
+    }
+
+    let features: Matrix = matrix_new(n, n_clusters)
+    for i in 0 to n {
+        for c in 0 to n_clusters {
+            matrix_set(features, i, c, eigvecs[c][i])
+        }
+    }
+
+    let km: KMeans = kmeans_fit(features, n_clusters, 100, 1e-4, seed)
+
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        labels[i] = km.labels[i]
+    }
+
+    for i in 0 to n {
+        array_free_f32(L[i])
+    }
+    free(L as ptr<void>)
+    for c in 0 to n_clusters {
+        array_free_f32(eigvecs[c])
+    }
+    free(eigvecs as ptr<void>)
+    array_free_f32(deg)
+    matrix_free(features)
+    kmeans_free(km)
+
+    return SpectralClustering {
+        labels: labels,
+        n_clusters: n_clusters,
+        n_samples: n,
+        n_features: p,
+        affinity: W,
+        fitted: true
+    }
+}
+
+export function spectral_clustering_free(model: SpectralClustering) -> void {
+    for i in 0 to model.n_samples {
+        array_free_f32(model.affinity[i])
+    }
+    free(model.affinity as ptr<void>)
+    free(model.labels as ptr<void>)
+}
+
+# ============================================================================
+# AffinityPropagation
+# ============================================================================
+
+export struct AffinityPropagation {
+    cluster_centers_indices: ptr<i32>,
+    labels: ptr<i32>,
+    n_clusters: i32,
+    n_samples: i32,
+    n_iter: i32,
+    fitted: bool
+}
+
+export function affinity_propagation_fit(X: Matrix, damping: f32, max_iter: i32, convergence_iter: i32) -> AffinityPropagation {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let S: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        S[i] = array_new_f32(n)
+        for j in 0 to n {
+            let mut s: f32 = 0.0
+            for k in 0 to p {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                s = s + d * d
+            }
+            S[i][j] = -s
+        }
+    }
+
+    let mut pref: f32 = 0.0
+    let mut count: i32 = 0
+    for i in 0 to n {
+        for j in 0 to n {
+            if i != j {
+                pref = pref + S[i][j]
+                count = count + 1
+            }
+        }
+    }
+    pref = pref / (count as f32)
+    for i in 0 to n {
+        S[i][i] = pref
+    }
+
+    let R: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    let A: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        R[i] = array_new_f32(n)
+        A[i] = array_new_f32(n)
+    }
+
+    let mut n_iter: i32 = 0
+    let mut conv_count: i32 = 0
+    let mut old_labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n { old_labels[i] = -1 }
+
+    for iter in 0 to max_iter {
+        n_iter = iter + 1
+
+        for i in 0 to n {
+            for k in 0 to n {
+                let mut max_other: f32 = -1e30
+                for kk in 0 to n {
+                    if kk == k { continue }
+                    let val: f32 = A[i][kk] + S[i][kk]
+                    if val > max_other { max_other = val }
+                }
+                R[i][k] = (1.0 - damping) * (S[i][k] - max_other) + damping * R[i][k]
+            }
+        }
+
+        for k in 0 to n {
+            let mut sum_pos: f32 = 0.0
+            for i in 0 to n {
+                if i == k { continue }
+                if R[i][k] > 0.0 { sum_pos = sum_pos + R[i][k] }
+            }
+            for i in 0 to n {
+                if i == k {
+                    A[i][k] = (1.0 - damping) * (sum_pos + R[k][k]) + damping * A[i][k]
+                } else {
+                    let r_ik: f32 = R[i][k]
+                    let val: f32 = sum_pos + R[k][k]
+                    if r_ik > 0.0 { val = val - r_ik }
+                    if val > 0.0 { val = 0.0 }
+                    A[i][k] = (1.0 - damping) * val + damping * A[i][k]
+                }
+            }
+        }
+
+        let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+        for i in 0 to n {
+            let mut best_k: i32 = 0
+            let mut best_val: f32 = -1e30
+            for k in 0 to n {
+                let val: f32 = A[i][k] + R[i][k]
+                if val > best_val {
+                    best_val = val
+                    best_k = k
+                }
+            }
+            labels[i] = best_k
+        }
+
+        let mut changed: i32 = 0
+        for i in 0 to n {
+            if labels[i] != old_labels[i] { changed = changed + 1 }
+            old_labels[i] = labels[i]
+        }
+        free(labels as ptr<void>)
+
+        if changed == 0 {
+            conv_count = conv_count + 1
+            if conv_count >= convergence_iter { break }
+        } else {
+            conv_count = 0
+        }
+    }
+
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let exemplars: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let mut n_exemplars: i32 = 0
+
+    for k in 0 to n {
+        if A[k][k] + R[k][k] > 0.0 {
+            exemplars[n_exemplars] = k
+            n_exemplars = n_exemplars + 1
+        }
+    }
+
+    for i in 0 to n {
+        let mut best_e: i32 = 0
+        let mut best_sim: f32 = -1e30
+        for e in 0 to n_exemplars {
+            let k: i32 = exemplars[e]
+            if S[i][k] > best_sim {
+                best_sim = S[i][k]
+                best_e = e
+            }
+        }
+        labels[i] = best_e
+    }
+
+    free(old_labels as ptr<void>)
+    for i in 0 to n {
+        array_free_f32(S[i])
+        array_free_f32(R[i])
+        array_free_f32(A[i])
+    }
+    free(S as ptr<void>)
+    free(R as ptr<void>)
+    free(A as ptr<void>)
+
+    let result: AffinityPropagation = AffinityPropagation {
+        cluster_centers_indices: exemplars,
+        labels: labels,
+        n_clusters: n_exemplars,
+        n_samples: n,
+        n_iter: n_iter,
+        fitted: true
+    }
+    return result
+}
+
+export function affinity_propagation_free(model: AffinityPropagation) -> void {
+    free(model.cluster_centers_indices as ptr<void>)
+    free(model.labels as ptr<void>)
+}
+
+# ============================================================================
+# OPTICS
+# ============================================================================
+
+export struct OPTICS {
+    labels: ptr<i32>,
+    core_distances: ptr<f32>,
+    reachability: ptr<f32>,
+    ordering: ptr<i32>,
+    n_samples: i32,
+    n_clusters: i32,
+    n_features: i32,
+    eps: f32,
+    min_samples: i32,
+    fitted: bool
+}
+
+export function optics_fit(X: Matrix, eps: f32, min_samples: i32) -> OPTICS {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let core_dist: ptr<f32> = array_new_f32(n)
+    let reachability: ptr<f32> = array_new_f32(n)
+    let ordering: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let processed: ptr<bool> = calloc((n as i64), 1) as ptr<bool>
+
+    for i in 0 to n {
+        reachability[i] = 1e30
+        ordering[i] = 0
+    }
+
+    for i in 0 to n {
+        let dists: ptr<f32> = array_new_f32(n)
+        for j in 0 to n {
+            let mut s: f32 = 0.0
+            for k in 0 to p {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                s = s + d * d
+            }
+            dists[j] = sqrt((s as f64)) as f32
+        }
+
+        let sorted: ptr<f32> = array_copy_f32(dists, n)
+        for a in 0 to n {
+            for b in 0 to n - 1 - a {
+                if sorted[b] > sorted[b + 1] {
+                    let t: f32 = sorted[b]
+                    sorted[b] = sorted[b + 1]
+                    sorted[b + 1] = t
+                }
+            }
+        }
+        if min_samples < n {
+            core_dist[i] = sorted[min_samples]
+        } else {
+            core_dist[i] = sorted[n - 1]
+        }
+        array_free_f32(sorted)
+        array_free_f32(dists)
+    }
+
+    let mut order_idx: i32 = 0
+    for start in 0 to n {
+        if processed[start] { continue }
+
+        processed[start] = true
+        reachability[start] = 0.0
+        ordering[order_idx] = start
+        order_idx = order_idx + 1
+
+        let mut current: i32 = start
+        for step in 0 to n {
+            let neighbors: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+            let mut n_neighbors: i32 = 0
+            for j in 0 to n {
+                if processed[j] { continue }
+                let mut s: f32 = 0.0
+                for k in 0 to p {
+                    let d: f32 = matrix_at(X, current, k) - matrix_at(X, j, k)
+                    s = s + d * d
+                }
+                let dist: f32 = sqrt((s as f64)) as f32
+                if dist <= eps {
+                    neighbors[n_neighbors] = j
+                    n_neighbors = n_neighbors + 1
+                    let reach: f32 = core_dist[current]
+                    if dist > reach { reach = dist }
+                    if reach < reachability[j] {
+                        reachability[j] = reach
+                    }
+                }
+            }
+
+            let mut best_j: i32 = -1
+            let mut best_reach: f32 = 1e30
+            for j in 0 to n_neighbors {
+                if reachability[neighbors[j]] < best_reach {
+                    best_reach = reachability[neighbors[j]]
+                    best_j = neighbors[j]
+                }
+            }
+            free(neighbors as ptr<void>)
+
+            if best_j < 0 { break }
+            processed[best_j] = true
+            ordering[order_idx] = best_j
+            order_idx = order_idx + 1
+            current = best_j
+        }
+    }
+
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let mut cluster_id: i32 = 0
+    let mut in_cluster: bool = false
+
+    for idx in 0 to n {
+        let i: i32 = ordering[idx]
+        if reachability[i] > eps {
+            in_cluster = false
+            labels[i] = -1
+        } else {
+            if not in_cluster {
+                cluster_id = cluster_id + 1
+                in_cluster = true
+            }
+            labels[i] = cluster_id - 1
+        }
+    }
+
+    free(processed as ptr<void>)
+
+    return OPTICS {
+        labels: labels,
+        core_distances: core_dist,
+        reachability: reachability,
+        ordering: ordering,
+        n_samples: n,
+        n_clusters: cluster_id,
+        n_features: p,
+        eps: eps,
+        min_samples: min_samples,
+        fitted: true
+    }
+}
+
+export function optics_free(model: OPTICS) -> void {
+    free(model.labels as ptr<void>)
+    array_free_f32(model.core_distances)
+    array_free_f32(model.reachability)
+    free(model.ordering as ptr<void>)
+}
+
+# ============================================================================
+# BisectingKMeans
+# ============================================================================
+
+export struct BisectingKMeans {
+    centroids: ptr<ptr<f32> >,
+    labels: ptr<i32>,
+    n_clusters: i32,
+    n_features: i32,
+    n_samples: i32,
+    n_iter: i32,
+    fitted: bool
+}
+
+export function bisecting_kmeans_fit(X: Matrix, n_clusters: i32, max_iter: i32, seed: i32) -> BisectingKMeans {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let centroids: ptr<ptr<f32> > = malloc((n_clusters as i64) * 8) as ptr<ptr<f32> >
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+
+    for i in 0 to n {
+        labels[i] = 0
+    }
+
+    let mut n_current: i32 = 1
+    let mean: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let mut s: f32 = 0.0
+        for i in 0 to n {
+            s = s + matrix_at(X, i, j)
+        }
+        mean[j] = s / (n as f32)
+    }
+    centroids[0] = array_copy_f32(mean, p)
+    array_free_f32(mean)
+
+    let cluster_members: ptr<ptr<i32> > = malloc((n_clusters as i64) * 8) as ptr<ptr<i32> >
+    let cluster_sizes: ptr<i32> = malloc((n_clusters as i64) * 4) as ptr<i32>
+    for c in 0 to n_clusters {
+        cluster_members[c] = malloc((n as i64) * 4) as ptr<i32>
+        cluster_sizes[c] = 0
+    }
+    for i in 0 to n {
+        cluster_members[0][i] = i
+        cluster_sizes[0] = n
+    }
+
+    while n_current < n_clusters {
+        let mut worst: i32 = 0
+        let mut worst_sse: f32 = -1.0
+        for c in 0 to n_current {
+            if cluster_sizes[c] < 2 { continue }
+            let mut sse: f32 = 0.0
+            for idx in 0 to cluster_sizes[c] {
+                let i: i32 = cluster_members[c][idx]
+                for j in 0 to p {
+                    let d: f32 = matrix_at(X, i, j) - centroids[c][j]
+                    sse = sse + d * d
+                }
+            }
+            if sse > worst_sse {
+                worst_sse = sse
+                worst = c
+            }
+        }
+
+        if cluster_sizes[worst] < 2 { break }
+
+        let sub_X: Matrix = matrix_new(cluster_sizes[worst], p)
+        for idx in 0 to cluster_sizes[worst] {
+            let i: i32 = cluster_members[worst][idx]
+            for j in 0 to p {
+                matrix_set(sub_X, idx, j, matrix_at(X, i, j))
+            }
+        }
+
+        let km: KMeans = kmeans_fit(sub_X, 2, max_iter, 1e-4, seed + n_current)
+
+        let new_cluster: i32 = n_current
+        centroids[n_current] = array_copy_f32(km.centroids[1], p)
+        for j in 0 to p {
+            centroids[worst][j] = km.centroids[0][j]
+        }
+
+        let mut size0: i32 = 0
+        let mut size1: i32 = 0
+        for idx in 0 to cluster_sizes[worst] {
+            let i: i32 = cluster_members[worst][idx]
+            if km.labels[idx] == 0 {
+                labels[i] = worst
+                cluster_members[worst][size0] = i
+                size0 = size0 + 1
+            } else {
+                labels[i] = new_cluster
+                cluster_members[new_cluster][size1] = i
+                size1 = size1 + 1
+            }
+        }
+        cluster_sizes[worst] = size0
+        cluster_sizes[new_cluster] = size1
+
+        kmeans_free(km)
+        matrix_free(sub_X)
+        n_current = n_current + 1
+    }
+
+    for c in 0 to n_clusters {
+        free(cluster_members[c] as ptr<void>)
+    }
+    free(cluster_members as ptr<void>)
+    free(cluster_sizes as ptr<void>)
+
+    return BisectingKMeans {
+        centroids: centroids,
+        labels: labels,
+        n_clusters: n_current,
+        n_features: p,
+        n_samples: n,
+        n_iter: n_current,
+        fitted: true
+    }
+}
+
+export function bisecting_kmeans_free(model: BisectingKMeans) -> void {
+    for c in 0 to model.n_clusters {
+        array_free_f32(model.centroids[c])
+    }
+    free(model.centroids as ptr<void>)
+    free(model.labels as ptr<void>)
 }

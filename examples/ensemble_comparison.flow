@@ -1,0 +1,160 @@
+# Ensemble comparison demo for flow-scikit.
+# Trains RandomForest, GradientBoosting, AdaBoost, and VotingClassifier
+# on the same dataset and compares accuracy.
+#
+# Run: ./flow run examples/ensemble_comparison.flow
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function rand() -> i32
+    function srand(seed: i32) -> void
+}
+
+function make_classification_data() -> Dataset {
+    let n: i32 = 80
+    let X: Matrix = matrix_new(n, 4)
+    let y: ptr<f32> = array_new_f32(n)
+
+    srand(42)
+
+    for i in 0 to 40 {
+        let x0: f32 = ((rand() % 100) as f32) / 20.0
+        let x1: f32 = ((rand() % 100) as f32) / 20.0
+        let x2: f32 = ((rand() % 100) as f32) / 20.0
+        let x3: f32 = ((rand() % 100) as f32) / 20.0
+        matrix_set(X, i, 0, x0 + 3.0)
+        matrix_set(X, i, 1, x1 + 3.0)
+        matrix_set(X, i, 2, x2 + 1.0)
+        matrix_set(X, i, 3, x3 + 1.0)
+        y[i] = 0.0
+    }
+    for i in 0 to 40 {
+        let x0: f32 = ((rand() % 100) as f32) / 20.0
+        let x1: f32 = ((rand() % 100) as f32) / 20.0
+        let x2: f32 = ((rand() % 100) as f32) / 20.0
+        let x3: f32 = ((rand() % 100) as f32) / 20.0
+        matrix_set(X, 40 + i, 0, x0 - 3.0)
+        matrix_set(X, 40 + i, 1, x1 - 3.0)
+        matrix_set(X, 40 + i, 2, x2 - 1.0)
+        matrix_set(X, 40 + i, 3, x3 - 1.0)
+        y[40 + i] = 1.0
+    }
+
+    return Dataset { X: X, y: y, n_samples: n, n_features: 4, n_classes: 2, is_classification: true }
+}
+
+function main() -> i32 {
+    println("=== flow-scikit Ensemble Comparison ===")
+    println("")
+
+    let data: Dataset = make_classification_data()
+
+    let split: TrainTestSplit = train_test_split(data.X, data.y, 0.25, STRATIFY_AUTO)
+    print("Train/test split: ")
+    print(split.n_train)
+    print(" train, ")
+    print(split.n_test)
+    println(" test")
+    println("")
+
+    # 1. Decision Tree (baseline)
+    println("--- DecisionTree (baseline) ---")
+    let tree: DecisionTreeClassifier = decision_tree_classifier_fit(split.X_train, split.y_train, 2, 5, CRITERION_GINI)
+    let tree_preds: ptr<f32> = decision_tree_classifier_predict(tree, split.X_test)
+    let tree_acc: f32 = accuracy_score(split.y_test, tree_preds, split.n_test)
+    print("  Accuracy = ")
+    printf("%.4f", tree_acc)
+    println("")
+    decision_tree_classifier_free(tree)
+    array_free_f32(tree_preds)
+    println("")
+
+    # 2. RandomForest
+    println("--- RandomForest ---")
+    let rf: RandomForestClassifier = random_forest_classifier_fit(split.X_train, split.y_train, 2, 30, 5, 42)
+    let rf_preds: ptr<f32> = random_forest_classifier_predict(rf, split.X_test)
+    let rf_acc: f32 = accuracy_score(split.y_test, rf_preds, split.n_test)
+    print("  Accuracy = ")
+    printf("%.4f", rf_acc)
+    println("")
+    random_forest_classifier_free(rf)
+    array_free_f32(rf_preds)
+    println("")
+
+    # 3. GradientBoosting
+    println("--- GradientBoosting ---")
+    let gb: GradientBoostingClassifier = gradient_boosting_classifier_fit(split.X_train, split.y_train, 2, 50, 0.1, 3, 42)
+    let gb_preds: ptr<f32> = gradient_boosting_classifier_predict(gb, split.X_test)
+    let gb_acc: f32 = accuracy_score(split.y_test, gb_preds, split.n_test)
+    print("  Accuracy = ")
+    printf("%.4f", gb_acc)
+    println("")
+    gradient_boosting_classifier_free(gb)
+    array_free_f32(gb_preds)
+    println("")
+
+    # 4. AdaBoost
+    println("--- AdaBoost ---")
+    let ada: AdaBoostClassifier = adaboost_classifier_fit(split.X_train, split.y_train, 2, 30, 3, 42)
+    let ada_preds: ptr<f32> = adaboost_classifier_predict(ada, split.X_test)
+    let ada_acc: f32 = accuracy_score(split.y_test, ada_preds, split.n_test)
+    print("  Accuracy = ")
+    printf("%.4f", ada_acc)
+    println("")
+    adaboost_classifier_free(ada)
+    array_free_f32(ada_preds)
+    println("")
+
+    # 5. Bagging
+    println("--- Bagging ---")
+    let bag: BaggingClassifier = bagging_classifier_fit(split.X_train, split.y_train, 2, 20, 5, 42)
+    let bag_preds: ptr<f32> = bagging_classifier_predict(bag, split.X_test)
+    let bag_acc: f32 = accuracy_score(split.y_test, bag_preds, split.n_test)
+    print("  Accuracy = ")
+    printf("%.4f", bag_acc)
+    println("")
+    bagging_classifier_free(bag)
+    array_free_f32(bag_preds)
+    println("")
+
+    # 6. VotingClassifier
+    println("--- VotingClassifier ---")
+    let voting: VotingClassifier = voting_classifier_fit(split.X_train, split.y_train, 2, 5, 42)
+    let vote_preds: ptr<f32> = voting_classifier_predict(voting, split.X_test)
+    let vote_acc: f32 = accuracy_score(split.y_test, vote_preds, split.n_test)
+    print("  Accuracy = ")
+    printf("%.4f", vote_acc)
+    println("")
+    voting_classifier_free(voting)
+    array_free_f32(vote_preds)
+    println("")
+
+    # Summary table
+    println("=== Summary ===")
+    println("Model               Accuracy")
+    println("------------------- --------")
+    print("DecisionTree        ")
+    printf("%.4f", tree_acc)
+    println("")
+    print("RandomForest        ")
+    printf("%.4f", rf_acc)
+    println("")
+    print("GradientBoosting    ")
+    printf("%.4f", gb_acc)
+    println("")
+    print("AdaBoost            ")
+    printf("%.4f", ada_acc)
+    println("")
+    print("Bagging             ")
+    printf("%.4f", bag_acc)
+    println("")
+    print("VotingClassifier    ")
+    printf("%.4f", vote_acc)
+    println("")
+
+    train_test_split_free(split)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+    return 0
+}

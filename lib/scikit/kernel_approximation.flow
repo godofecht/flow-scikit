@@ -1,0 +1,268 @@
+# Kernel approximation for flow-scikit.
+# Implements RBFSampler, Nystroem, AdditiveChi2Sampler.
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function calloc(n: i64, size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function sqrt(x: f64) -> f64
+    function exp(x: f64) -> f64
+    function fabs(x: f64) -> f64
+    function rand() -> i32
+    function srand(seed: i32) -> void
+    function printf(fmt: string, ...) -> i32
+}
+
+# ============================================================================
+# RBFSampler
+# ============================================================================
+
+export struct RBFSampler {
+    random_weights: ptr<ptr<f32> >,
+    offset: ptr<f32>,
+    gamma: f32,
+    n_components: i32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function rbf_sampler_fit(n_features: i32, gamma: f32, n_components: i32, seed: i32) -> RBFSampler {
+    srand(seed)
+
+    let weights: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+    for c in 0 to n_components {
+        weights[c] = array_new_f32(n_features)
+        for j in 0 to n_features {
+            let r1: f32 = ((rand() % 10000) as f32) / 10000.0
+            let r2: f32 = ((rand() % 10000) as f32) / 10000.0
+            let u1: f32 = r1
+            if u1 < 1e-10 { u1 = 1e-10 }
+            let z: f32 = sqrt((-2.0 * log((u1) as f64)) as f64) as f32 * cos((6.28318 * r2) as f64) as f32
+            weights[c][j] = z * sqrt((2.0 * gamma) as f64) as f32
+        }
+    }
+
+    let offset: ptr<f32> = array_new_f32(n_components)
+    for c in 0 to n_components {
+        offset[c] = ((rand() % 10000) as f32) / 10000.0 * 6.28318
+    }
+
+    return RBFSampler {
+        random_weights: weights,
+        offset: offset,
+        gamma: gamma,
+        n_components: n_components,
+        n_features: n_features,
+        fitted: true
+    }
+}
+
+export function rbf_sampler_transform(model: RBFSampler, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let result: Matrix = matrix_new(n, model.n_components)
+    let scale: f32 = sqrt((2.0 / (model.n_components as f32)) as f64) as f32
+
+    for i in 0 to n {
+        for c in 0 to model.n_components {
+            let mut dot: f32 = 0.0
+            for j in 0 to model.n_features {
+                dot = dot + matrix_at(X, i, j) * model.random_weights[c][j]
+            }
+            matrix_set(result, i, c, scale * cos((dot + model.offset[c]) as f64) as f32)
+        }
+    }
+
+    return result
+}
+
+export function rbf_sampler_free(model: RBFSampler) -> void {
+    for c in 0 to model.n_components {
+        array_free_f32(model.random_weights[c])
+    }
+    free(model.random_weights as ptr<void>)
+    array_free_f32(model.offset)
+}
+
+# ============================================================================
+# Nystroem
+# ============================================================================
+
+export struct Nystroem {
+    components: Matrix,
+    component_indices: ptr<i32>,
+    n_components: i32,
+    n_features: i32,
+    gamma: f32,
+    kernel: i32,
+    normalization: ptr<f32>,
+    fitted: bool
+}
+
+export const KERNEL_RBF: i32 = 0
+export const KERNEL_LINEAR: i32 = 1
+
+function _kernel_func(x1: ptr<f32>, x2: ptr<f32>, n: i32, kernel: i32, gamma: f32) -> f32 {
+    if kernel == KERNEL_LINEAR {
+        let mut s: f32 = 0.0
+        for i in 0 to n {
+            s = s + x1[i] * x2[i]
+        }
+        return s
+    }
+    let mut s: f32 = 0.0
+    for i in 0 to n {
+        let d: f32 = x1[i] - x2[i]
+        s = s + d * d
+    }
+    return exp((-gamma * s) as f64) as f32
+}
+
+export function nystroem_fit(X: Matrix, n_components: i32, gamma: f32, kernel: i32, seed: i32) -> Nystroem {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    srand(seed)
+
+    let n_comp: i32 = n_components
+    if n_comp > n { n_comp = n }
+
+    let indices: ptr<i32> = malloc((n_comp as i64) * 4) as ptr<i32>
+    for i in 0 to n_comp {
+        indices[i] = rand() % n
+    }
+
+    let components: Matrix = matrix_new(n_comp, p)
+    for i in 0 to n_comp {
+        for j in 0 to p {
+            matrix_set(components, i, j, matrix_at(X, indices[i], j))
+        }
+    }
+
+    let K: Matrix = matrix_new(n_comp, n_comp)
+    for i in 0 to n_comp {
+        for j in 0 to n_comp {
+            let xi: ptr<f32> = array_new_f32(p)
+            let xj: ptr<f32> = array_new_f32(p)
+            for k in 0 to p {
+                xi[k] = matrix_at(components, i, k)
+                xj[k] = matrix_at(components, j, k)
+            }
+            matrix_set(K, i, j, _kernel_func(xi, xj, p, kernel, gamma))
+            array_free_f32(xi)
+            array_free_f32(xj)
+        }
+    }
+
+    let eigvals: ptr<f32> = array_new_f32(n_comp)
+    for i in 0 to n_comp {
+        eigvals[i] = K.data[i * n_comp + i]
+        if eigvals[i] < 1e-10 { eigvals[i] = 1e-10 }
+    }
+
+    let normalization: ptr<f32> = array_new_f32(n_comp)
+    for i in 0 to n_comp {
+        normalization[i] = 1.0 / sqrt((eigvals[i]) as f64) as f32
+    }
+
+    matrix_free(K)
+    array_free_f32(eigvals)
+
+    return Nystroem {
+        components: components,
+        component_indices: indices,
+        n_components: n_comp,
+        n_features: p,
+        gamma: gamma,
+        kernel: kernel,
+        normalization: normalization,
+        fitted: true
+    }
+}
+
+export function nystroem_transform(model: Nystroem, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let result: Matrix = matrix_new(n, model.n_components)
+
+    for i in 0 to n {
+        let xi: ptr<f32> = array_new_f32(model.n_features)
+        for j in 0 to model.n_features {
+            xi[j] = matrix_at(X, i, j)
+        }
+
+        for c in 0 to model.n_components {
+            let xc: ptr<f32> = array_new_f32(model.n_features)
+            for j in 0 to model.n_features {
+                xc[j] = matrix_at(model.components, c, j)
+            }
+            let k_val: f32 = _kernel_func(xi, xc, model.n_features, model.kernel, model.gamma)
+            matrix_set(result, i, c, k_val * model.normalization[c])
+            array_free_f32(xc)
+        }
+        array_free_f32(xi)
+    }
+
+    return result
+}
+
+export function nystroem_free(model: Nystroem) -> void {
+    matrix_free(model.components)
+    free(model.component_indices as ptr<void>)
+    array_free_f32(model.normalization)
+}
+
+# ============================================================================
+# AdditiveChi2Sampler
+# ============================================================================
+
+export struct AdditiveChi2Sampler {
+    n_samples: i32,
+    n_features: i32,
+    sample_steps: i32,
+    fitted: bool
+}
+
+export function additive_chi2_sampler_fit(n_samples: i32, n_features: i32, sample_steps: i32) -> AdditiveChi2Sampler {
+    return AdditiveChi2Sampler {
+        n_samples: n_samples,
+        n_features: n_features,
+        sample_steps: sample_steps,
+        fitted: true
+    }
+}
+
+export function additive_chi2_sampler_transform(model: AdditiveChi2Sampler, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let n_out: i32 = p * (model.sample_steps + 1) / 2
+    let result: Matrix = matrix_new(n, n_out)
+
+    let intervals: ptr<f32> = array_new_f32(model.sample_steps + 1)
+    for i in 0 to model.sample_steps + 1 {
+        intervals[i] = 0.0
+    }
+
+    for i in 0 to n {
+        let mut col: i32 = 0
+        for j in 0 to p {
+            let x: f32 = matrix_at(X, i, j)
+            if x < 0.0 {
+                matrix_set(result, i, col, 0.0)
+                col = col + 1
+                continue
+            }
+            for k in 0 to model.sample_steps {
+                let t: f32 = (4.0 * (k as f32) + 2.0) * 3.14159 / (4.0 * (model.sample_steps as f32))
+                matrix_set(result, i, col, x * cos((t) as f64) as f32 / sqrt((x + 1e-10) as f64) as f32)
+                col = col + 1
+            }
+        }
+    }
+
+    array_free_f32(intervals)
+    return result
+}
+
+export function additive_chi2_sampler_free(model: AdditiveChi2Sampler) -> void {
+}

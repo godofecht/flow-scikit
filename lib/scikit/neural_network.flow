@@ -1,0 +1,508 @@
+# Neural network models for flow-scikit.
+# Implements MLPClassifier and MLPRegressor with configurable hidden layers,
+# sigmoid/tanh/relu activations, and SGD with momentum.
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function calloc(n: i64, size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function exp(x: f64) -> f64
+    function log(x: f64) -> f64
+    function sqrt(x: f64) -> f64
+    function fabs(x: f64) -> f64
+    function tanh(x: f64) -> f64
+    function rand() -> i32
+    function srand(seed: i32) -> void
+    function printf(fmt: string, ...) -> i32
+}
+
+export const MLP_ACT_SIGMOID: i32 = 0
+export const MLP_ACT_TANH: i32 = 1
+export const MLP_ACT_RELU: i32 = 2
+
+export const MLP_LOSS_MSE: i32 = 0
+export const MLP_LOSS_LOG: i32 = 1
+
+function _act_sigmoid(x: f32) -> f32 {
+    return 1.0 / (1.0 + exp((0.0 - x) as f64) as f32)
+}
+
+function _act_sigmoid_deriv(s: f32) -> f32 {
+    return s * (1.0 - s)
+}
+
+function _act_tanh(x: f32) -> f32 {
+    return tanh(x as f64) as f32
+}
+
+function _act_tanh_deriv(s: f32) -> f32 {
+    return 1.0 - s * s
+}
+
+function _act_relu(x: f32) -> f32 {
+    if x > 0.0 { return x }
+    return 0.0
+}
+
+function _act_relu_deriv(s: f32) -> f32 {
+    if s > 0.0 { return 1.0 }
+    return 0.0
+}
+
+function _activate(x: f32, activation: i32) -> f32 {
+    if activation == MLP_ACT_SIGMOID { return _act_sigmoid(x) }
+    if activation == MLP_ACT_TANH { return _act_tanh(x) }
+    return _act_relu(x)
+}
+
+function _activate_deriv(s: f32, activation: i32) -> f32 {
+    if activation == MLP_ACT_SIGMOID { return _act_sigmoid_deriv(s) }
+    if activation == MLP_ACT_TANH { return _act_tanh_deriv(s) }
+    return _act_relu_deriv(s)
+}
+
+function _softmax(arr: ptr<f32>, n: i32) -> void {
+    let mut max_val: f32 = arr[0]
+    for i in 1 to n {
+        if arr[i] > max_val { max_val = arr[i] }
+    }
+    let mut sum: f32 = 0.0
+    for i in 0 to n {
+        arr[i] = exp((arr[i] - max_val) as f64) as f32
+        sum = sum + arr[i]
+    }
+    for i in 0 to n {
+        arr[i] = arr[i] / sum
+    }
+}
+
+export struct MLPClassifier {
+    weights: ptr<ptr<f32> >,
+    biases: ptr<ptr<f32> >,
+    layer_sizes: ptr<i32>,
+    n_layers: i32,
+    n_classes: i32,
+    classes: ptr<f32>,
+    activation: i32,
+    learning_rate: f32,
+    momentum: f32,
+    v_weights: ptr<ptr<f32> >,
+    v_biases: ptr<ptr<f32> >,
+    fitted: bool
+}
+
+export function mlp_classifier_fit(
+    X: Matrix, y: ptr<f32>, n_classes: i32,
+    hidden_sizes: ptr<i32>, n_hidden: i32,
+    activation: i32, epochs: i32, lr: f32, momentum: f32, seed: i32
+) -> MLPClassifier {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    let n_layers: i32 = n_hidden + 2
+    let layer_sizes: ptr<i32> = malloc((n_layers as i64) * 4) as ptr<i32>
+    layer_sizes[0] = n_features
+    for i in 0 to n_hidden {
+        layer_sizes[i + 1] = hidden_sizes[i]
+    }
+    layer_sizes[n_layers - 1] = n_classes
+
+    srand(seed)
+
+    let weights: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let biases: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let v_weights: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let v_biases: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+
+    for l in 1 to n_layers {
+        let fan_in: i32 = layer_sizes[l - 1]
+        let fan_out: i32 = layer_sizes[l]
+        let n_w: i32 = fan_in * fan_out
+        let limit: f32 = sqrt((2.0 / (fan_in as f64)) as f64) as f32
+
+        weights[l] = array_new_f32(n_w)
+        biases[l] = array_new_f32(fan_out)
+        v_weights[l] = array_new_f32(n_w)
+        v_biases[l] = array_new_f32(fan_out)
+
+        for i in 0 to n_w {
+            let r: f32 = ((rand() % 10000) as f32) / 5000.0 - 1.0
+            weights[l][i] = r * limit
+        }
+    }
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut class_idx: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for c in 0 to class_idx {
+            if classes[c] == y[i] { found = true; break }
+        }
+        if not found {
+            classes[class_idx] = y[i]
+            class_idx = class_idx + 1
+        }
+    }
+
+    let activations: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let zs: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    for l in 0 to n_layers {
+        activations[l] = array_new_f32(layer_sizes[l])
+        zs[l] = array_new_f32(layer_sizes[l])
+    }
+
+    let deltas: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let grad_w: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let grad_b: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    for l in 0 to n_layers {
+        deltas[l] = array_new_f32(layer_sizes[l])
+        grad_w[l] = array_new_f32(layer_sizes[l - 1] * layer_sizes[l])
+        grad_b[l] = array_new_f32(layer_sizes[l])
+    }
+
+    for epoch in 0 to epochs {
+        for sample in 0 to n {
+            for j in 0 to n_features {
+                activations[0][j] = matrix_at(X, sample, j)
+            }
+
+            for l in 1 to n_layers {
+                for j in 0 to layer_sizes[l] {
+                    let mut z: f32 = biases[l][j]
+                    for k in 0 to layer_sizes[l - 1] {
+                        z = z + weights[l][k * layer_sizes[l] + j] * activations[l - 1][k]
+                    }
+                    zs[l][j] = z
+                    if l < n_layers - 1 {
+                        activations[l][j] = _activate(z, activation)
+                    } else {
+                        activations[l][j] = z
+                    }
+                }
+            }
+
+            _softmax(activations[n_layers - 1], n_classes)
+
+            let true_c: i32 = 0
+            for c in 0 to n_classes {
+                if classes[c] == y[sample] { true_c = c; break }
+            }
+
+            for j in 0 to n_classes {
+                let target: f32 = 0.0
+                if j == true_c { target = 1.0 }
+                deltas[n_layers - 1][j] = activations[n_layers - 1][j] - target
+            }
+
+            for l in n_layers - 2 to 1 {
+                for j in 0 to layer_sizes[l] {
+                    let mut sum: f32 = 0.0
+                    for k in 0 to layer_sizes[l + 1] {
+                        sum = sum + weights[l + 1][j * layer_sizes[l + 1] + k] * deltas[l + 1][k]
+                    }
+                    deltas[l][j] = sum * _activate_deriv(activations[l][j], activation)
+                }
+            }
+
+            for l in 1 to n_layers {
+                for j in 0 to layer_sizes[l] {
+                    for k in 0 to layer_sizes[l - 1] {
+                        let idx: i32 = k * layer_sizes[l] + j
+                        let grad: f32 = deltas[l][j] * activations[l - 1][k]
+                        v_weights[l][idx] = momentum * v_weights[l][idx] - lr * grad
+                        weights[l][idx] = weights[l][idx] + v_weights[l][idx]
+                    }
+                    v_biases[l][j] = momentum * v_biases[l][j] - lr * deltas[l][j]
+                    biases[l][j] = biases[l][j] + v_biases[l][j]
+                }
+            }
+        }
+    }
+
+    for l in 0 to n_layers {
+        array_free_f32(activations[l])
+        array_free_f32(zs[l])
+        array_free_f32(deltas[l])
+        array_free_f32(grad_w[l])
+        array_free_f32(grad_b[l])
+    }
+    free(activations as ptr<void>)
+    free(zs as ptr<void>)
+    free(deltas as ptr<void>)
+    free(grad_w as ptr<void>)
+    free(grad_b as ptr<void>)
+
+    return MLPClassifier {
+        weights: weights, biases: biases,
+        layer_sizes: layer_sizes, n_layers: n_layers,
+        n_classes: n_classes, classes: classes,
+        activation: activation,
+        learning_rate: lr, momentum: momentum,
+        v_weights: v_weights, v_biases: v_biases,
+        fitted: true
+    }
+}
+
+export function mlp_classifier_predict(model: MLPClassifier, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let result: Matrix = matrix_new(n, model.n_classes)
+
+    let act: ptr<ptr<f32> > = malloc((model.n_layers as i64) * 8) as ptr<ptr<f32> >
+    for l in 0 to model.n_layers {
+        act[l] = array_new_f32(model.layer_sizes[l])
+    }
+
+    for i in 0 to n {
+        for j in 0 to X.cols {
+            act[0][j] = matrix_at(X, i, j)
+        }
+
+        for l in 1 to model.n_layers {
+            for j in 0 to model.layer_sizes[l] {
+                let mut z: f32 = model.biases[l][j]
+                for k in 0 to model.layer_sizes[l - 1] {
+                    z = z + model.weights[l][k * model.layer_sizes[l] + j] * act[l - 1][k]
+                }
+                if l < model.n_layers - 1 {
+                    act[l][j] = _activate(z, model.activation)
+                } else {
+                    act[l][j] = z
+                }
+            }
+        }
+
+        _softmax(act[model.n_layers - 1], model.n_classes)
+
+        for c in 0 to model.n_classes {
+            matrix_set(result, i, c, act[model.n_layers - 1][c])
+        }
+    }
+
+    for l in 0 to model.n_layers {
+        array_free_f32(act[l])
+    }
+    free(act as ptr<void>)
+
+    return result
+}
+
+export function mlp_classifier_decide(model: MLPClassifier, probs: Matrix) -> ptr<f32> {
+    let n: i32 = probs.rows
+    let preds: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let best_c: i32 = 0
+        let mut best_p: f32 = matrix_at(probs, i, 0)
+        for c in 1 to model.n_classes {
+            let p: f32 = matrix_at(probs, i, c)
+            if p > best_p {
+                best_p = p
+                best_c = c
+            }
+        }
+        preds[i] = model.classes[best_c]
+    }
+    return preds
+}
+
+export function mlp_classifier_free(model: MLPClassifier) -> void {
+    for l in 1 to model.n_layers {
+        array_free_f32(model.weights[l])
+        array_free_f32(model.biases[l])
+        array_free_f32(model.v_weights[l])
+        array_free_f32(model.v_biases[l])
+    }
+    free(model.weights as ptr<void>)
+    free(model.biases as ptr<void>)
+    free(model.v_weights as ptr<void>)
+    free(model.v_biases as ptr<void>)
+    free(model.layer_sizes as ptr<void>)
+    array_free_f32(model.classes)
+}
+
+export struct MLPRegressor {
+    weights: ptr<ptr<f32> >,
+    biases: ptr<ptr<f32> >,
+    layer_sizes: ptr<i32>,
+    n_layers: i32,
+    n_outputs: i32,
+    activation: i32,
+    learning_rate: f32,
+    momentum: f32,
+    v_weights: ptr<ptr<f32> >,
+    v_biases: ptr<ptr<f32> >,
+    fitted: bool
+}
+
+export function mlp_regressor_fit(
+    X: Matrix, y: ptr<f32>,
+    hidden_sizes: ptr<i32>, n_hidden: i32,
+    activation: i32, epochs: i32, lr: f32, momentum: f32, seed: i32
+) -> MLPRegressor {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+    let n_outputs: i32 = 1
+
+    let n_layers: i32 = n_hidden + 2
+    let layer_sizes: ptr<i32> = malloc((n_layers as i64) * 4) as ptr<i32>
+    layer_sizes[0] = n_features
+    for i in 0 to n_hidden {
+        layer_sizes[i + 1] = hidden_sizes[i]
+    }
+    layer_sizes[n_layers - 1] = n_outputs
+
+    srand(seed)
+
+    let weights: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let biases: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let v_weights: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let v_biases: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+
+    for l in 1 to n_layers {
+        let fan_in: i32 = layer_sizes[l - 1]
+        let fan_out: i32 = layer_sizes[l]
+        let n_w: i32 = fan_in * fan_out
+        let limit: f32 = sqrt((2.0 / (fan_in as f64)) as f64) as f32
+
+        weights[l] = array_new_f32(n_w)
+        biases[l] = array_new_f32(fan_out)
+        v_weights[l] = array_new_f32(n_w)
+        v_biases[l] = array_new_f32(fan_out)
+
+        for i in 0 to n_w {
+            let r: f32 = ((rand() % 10000) as f32) / 5000.0 - 1.0
+            weights[l][i] = r * limit
+        }
+    }
+
+    let activations: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let zs: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let deltas: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    for l in 0 to n_layers {
+        activations[l] = array_new_f32(layer_sizes[l])
+        zs[l] = array_new_f32(layer_sizes[l])
+        deltas[l] = array_new_f32(layer_sizes[l])
+    }
+
+    for epoch in 0 to epochs {
+        for sample in 0 to n {
+            for j in 0 to n_features {
+                activations[0][j] = matrix_at(X, sample, j)
+            }
+
+            for l in 1 to n_layers {
+                for j in 0 to layer_sizes[l] {
+                    let mut z: f32 = biases[l][j]
+                    for k in 0 to layer_sizes[l - 1] {
+                        z = z + weights[l][k * layer_sizes[l] + j] * activations[l - 1][k]
+                    }
+                    zs[l][j] = z
+                    if l < n_layers - 1 {
+                        activations[l][j] = _activate(z, activation)
+                    } else {
+                        activations[l][j] = z
+                    }
+                }
+            }
+
+            let output: f32 = activations[n_layers - 1][0]
+            deltas[n_layers - 1][0] = output - y[sample]
+
+            for l in n_layers - 2 to 1 {
+                for j in 0 to layer_sizes[l] {
+                    let mut sum: f32 = 0.0
+                    for k in 0 to layer_sizes[l + 1] {
+                        sum = sum + weights[l + 1][j * layer_sizes[l + 1] + k] * deltas[l + 1][k]
+                    }
+                    deltas[l][j] = sum * _activate_deriv(activations[l][j], activation)
+                }
+            }
+
+            for l in 1 to n_layers {
+                for j in 0 to layer_sizes[l] {
+                    for k in 0 to layer_sizes[l - 1] {
+                        let idx: i32 = k * layer_sizes[l] + j
+                        let grad: f32 = deltas[l][j] * activations[l - 1][k]
+                        v_weights[l][idx] = momentum * v_weights[l][idx] - lr * grad
+                        weights[l][idx] = weights[l][idx] + v_weights[l][idx]
+                    }
+                    v_biases[l][j] = momentum * v_biases[l][j] - lr * deltas[l][j]
+                    biases[l][j] = biases[l][j] + v_biases[l][j]
+                }
+            }
+        }
+    }
+
+    for l in 0 to n_layers {
+        array_free_f32(activations[l])
+        array_free_f32(zs[l])
+        array_free_f32(deltas[l])
+    }
+    free(activations as ptr<void>)
+    free(zs as ptr<void>)
+    free(deltas as ptr<void>)
+
+    return MLPRegressor {
+        weights: weights, biases: biases,
+        layer_sizes: layer_sizes, n_layers: n_layers,
+        n_outputs: n_outputs,
+        activation: activation,
+        learning_rate: lr, momentum: momentum,
+        v_weights: v_weights, v_biases: v_biases,
+        fitted: true
+    }
+}
+
+export function mlp_regressor_predict(model: MLPRegressor, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+
+    let act: ptr<ptr<f32> > = malloc((model.n_layers as i64) * 8) as ptr<ptr<f32> >
+    for l in 0 to model.n_layers {
+        act[l] = array_new_f32(model.layer_sizes[l])
+    }
+
+    for i in 0 to n {
+        for j in 0 to X.cols {
+            act[0][j] = matrix_at(X, i, j)
+        }
+
+        for l in 1 to model.n_layers {
+            for j in 0 to model.layer_sizes[l] {
+                let mut z: f32 = model.biases[l][j]
+                for k in 0 to model.layer_sizes[l - 1] {
+                    z = z + model.weights[l][k * model.layer_sizes[l] + j] * act[l - 1][k]
+                }
+                if l < model.n_layers - 1 {
+                    act[l][j] = _activate(z, model.activation)
+                } else {
+                    act[l][j] = z
+                }
+            }
+        }
+
+        result[i] = act[model.n_layers - 1][0]
+    }
+
+    for l in 0 to model.n_layers {
+        array_free_f32(act[l])
+    }
+    free(act as ptr<void>)
+
+    return result
+}
+
+export function mlp_regressor_free(model: MLPRegressor) -> void {
+    for l in 1 to model.n_layers {
+        array_free_f32(model.weights[l])
+        array_free_f32(model.biases[l])
+        array_free_f32(model.v_weights[l])
+        array_free_f32(model.v_biases[l])
+    }
+    free(model.weights as ptr<void>)
+    free(model.biases as ptr<void>)
+    free(model.v_weights as ptr<void>)
+    free(model.v_biases as ptr<void>)
+    free(model.layer_sizes as ptr<void>)
+}

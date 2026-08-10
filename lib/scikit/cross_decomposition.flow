@@ -293,3 +293,519 @@ export function pls_free(model: PLSRegression) -> void {
     array_free_f32(model.y_loadings)
     array_free_f32(model.coef)
 }
+
+# ============================================================================
+# CCA (Canonical Correlation Analysis)
+# ============================================================================
+
+export struct CCA {
+    x_weights: ptr<ptr<f32> >,
+    y_weights: ptr<ptr<f32> >,
+    n_components: i32,
+    n_x_features: i32,
+    n_y_features: i32,
+    fitted: bool
+}
+
+export function cca_fit(X: Matrix, Y: Matrix, n_components: i32, max_iter: i32, tol: f32) -> CCA {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let q: i32 = Y.cols
+
+    let x_mean: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let mut s: f32 = 0.0
+        for i in 0 to n { s = s + matrix_at(X, i, j) }
+        x_mean[j] = s / (n as f32)
+    }
+    let y_mean: ptr<f32> = array_new_f32(q)
+    for j in 0 to q {
+        let mut s: f32 = 0.0
+        for i in 0 to n { s = s + matrix_at(Y, i, j) }
+        y_mean[j] = s / (n as f32)
+    }
+
+    let Xc: Matrix = matrix_new(n, p)
+    for i in 0 to n {
+        for j in 0 to p {
+            matrix_set(Xc, i, j, matrix_at(X, i, j) - x_mean[j])
+        }
+    }
+    let Yc: Matrix = matrix_new(n, q)
+    for i in 0 to n {
+        for j in 0 to q {
+            matrix_set(Yc, i, j, matrix_at(Y, i, j) - y_mean[j])
+        }
+    }
+
+    let x_weights: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+    let y_weights: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+
+    for c in 0 to n_components {
+        let u: ptr<f32> = array_new_f32(q)
+        srand(42 + c)
+        for j in 0 to q { u[j] = ((rand() % 1000) as f32) / 500.0 - 1.0 }
+
+        let mut prev_corr: f32 = 0.0
+        for iter in 0 to max_iter {
+            let a: ptr<f32> = array_new_f32(p)
+            for j in 0 to p {
+                let mut s: f32 = 0.0
+                for i in 0 to n {
+                    s = s + matrix_at(Xc, i, j) * 0.0
+                    for k in 0 to q {
+                        a[j] = a[j] + matrix_at(Xc, i, j) * matrix_at(Yc, i, k) * u[k]
+                    }
+                }
+            }
+
+            let mut a_norm: f32 = 0.0
+            for j in 0 to p { a_norm = a_norm + a[j] * a[j] }
+            a_norm = sqrt((a_norm as f64)) as f32
+            if a_norm < 1e-10 { a_norm = 1e-10 }
+            for j in 0 to p { a[j] = a[j] / a_norm }
+
+            let b: ptr<f32> = array_new_f32(q)
+            for j in 0 to q {
+                let mut s: f32 = 0.0
+                for i in 0 to n {
+                    for k in 0 to p {
+                        s = s + matrix_at(Yc, i, j) * matrix_at(Xc, i, k) * a[k]
+                    }
+                }
+                b[j] = s
+            }
+
+            let mut b_norm: f32 = 0.0
+            for j in 0 to q { b_norm = b_norm + b[j] * b[j] }
+            b_norm = sqrt((b_norm as f64)) as f32
+            if b_norm < 1e-10 { b_norm = 1e-10 }
+            for j in 0 to q { b[j] = b[j] / b_norm }
+
+            let mut corr: f32 = 0.0
+            for i in 0 to n {
+                let mut xa: f32 = 0.0
+                let mut yb: f32 = 0.0
+                for j in 0 to p { xa = xa + matrix_at(Xc, i, j) * a[j] }
+                for j in 0 to q { yb = yb + matrix_at(Yc, i, j) * b[j] }
+                corr = corr + xa * yb
+            }
+            corr = corr / (n as f32)
+
+            for j in 0 to q { u[j] = b[j] }
+            array_free_f32(a)
+            array_free_f32(b)
+
+            if (fabs((corr - prev_corr) as f64) as f32) < tol { break }
+            prev_corr = corr
+        }
+
+        x_weights[c] = array_new_f32(p)
+        y_weights[c] = array_new_f32(q)
+        for j in 0 to p {
+            let mut s: f32 = 0.0
+            for i in 0 to n {
+                for k in 0 to q {
+                    s = s + matrix_at(Xc, i, j) * matrix_at(Yc, i, k) * u[k]
+                }
+            }
+            x_weights[c][j] = s
+        }
+        let mut x_norm: f32 = 0.0
+        for j in 0 to p { x_norm = x_norm + x_weights[c][j] * x_weights[c][j] }
+        x_norm = sqrt((x_norm as f64)) as f32
+        if x_norm < 1e-10 { x_norm = 1e-10 }
+        for j in 0 to p { x_weights[c][j] = x_weights[c][j] / x_norm }
+
+        for j in 0 to q {
+            let mut s: f32 = 0.0
+            for i in 0 to n {
+                for k in 0 to p {
+                    s = s + matrix_at(Yc, i, j) * matrix_at(Xc, i, k) * x_weights[c][k]
+                }
+            }
+            y_weights[c][j] = s
+        }
+        let mut y_norm: f32 = 0.0
+        for j in 0 to q { y_norm = y_norm + y_weights[c][j] * y_weights[c][j] }
+        y_norm = sqrt((y_norm as f64)) as f32
+        if y_norm < 1e-10 { y_norm = 1e-10 }
+        for j in 0 to q { y_weights[c][j] = y_weights[c][j] / y_norm }
+
+        for i in 0 to n {
+            let mut score: f32 = 0.0
+            for j in 0 to p { score = score + matrix_at(Xc, i, j) * x_weights[c][j] }
+            for j in 0 to p {
+                matrix_set(Xc, i, j, matrix_at(Xc, i, j) - score * x_weights[c][j])
+            }
+        }
+        for i in 0 to n {
+            let mut score: f32 = 0.0
+            for j in 0 to q { score = score + matrix_at(Yc, i, j) * y_weights[c][j] }
+            for j in 0 to q {
+                matrix_set(Yc, i, j, matrix_at(Yc, i, j) - score * y_weights[c][j])
+            }
+        }
+
+        array_free_f32(u)
+    }
+
+    matrix_free(Xc)
+    matrix_free(Yc)
+    array_free_f32(x_mean)
+    array_free_f32(y_mean)
+
+    return CCA {
+        x_weights: x_weights,
+        y_weights: y_weights,
+        n_components: n_components,
+        n_x_features: p,
+        n_y_features: q,
+        fitted: true
+    }
+}
+
+export function cca_transform(model: CCA, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, model.n_components)
+    for i in 0 to X.rows {
+        for c in 0 to model.n_components {
+            let mut s: f32 = 0.0
+            for j in 0 to model.n_x_features {
+                s = s + matrix_at(X, i, j) * model.x_weights[c][j]
+            }
+            matrix_set(result, i, c, s)
+        }
+    }
+    return result
+}
+
+export function cca_free(model: CCA) -> void {
+    for c in 0 to model.n_components {
+        array_free_f32(model.x_weights[c])
+        array_free_f32(model.y_weights[c])
+    }
+    free(model.x_weights as ptr<void>)
+    free(model.y_weights as ptr<void>)
+}
+
+# ============================================================================
+# PLSCanonical
+# ============================================================================
+
+export struct PLSCanonical {
+    x_weights: ptr<ptr<f32> >,
+    y_weights: ptr<ptr<f32> >,
+    n_components: i32,
+    n_x_features: i32,
+    n_y_features: i32,
+    fitted: bool
+}
+
+export function pls_canonical_fit(X: Matrix, Y: Matrix, n_components: i32) -> PLSCanonical {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let q: i32 = Y.cols
+
+    let x_mean: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let mut s: f32 = 0.0
+        for i in 0 to n { s = s + matrix_at(X, i, j) }
+        x_mean[j] = s / (n as f32)
+    }
+    let y_mean: ptr<f32> = array_new_f32(q)
+    for j in 0 to q {
+        let mut s: f32 = 0.0
+        for i in 0 to n { s = s + matrix_at(Y, i, j) }
+        y_mean[j] = s / (n as f32)
+    }
+
+    let Xc: Matrix = matrix_new(n, p)
+    for i in 0 to n {
+        for j in 0 to p {
+            matrix_set(Xc, i, j, matrix_at(X, i, j) - x_mean[j])
+        }
+    }
+    let Yc: Matrix = matrix_new(n, q)
+    for i in 0 to n {
+        for j in 0 to q {
+            matrix_set(Yc, i, j, matrix_at(Y, i, j) - y_mean[j])
+        }
+    }
+
+    let x_weights: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+    let y_weights: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+
+    for c in 0 to n_components {
+        let mut max_val: f32 = -1e30
+        let mut max_j: i32 = 0
+        for j in 0 to q {
+            let mut s: f32 = 0.0
+            for i in 0 to n { s = s + matrix_at(Yc, i, j) * matrix_at(Yc, i, j) }
+            if s > max_val { max_val = s; max_j = j }
+        }
+
+        let u: ptr<f32> = array_new_f32(n)
+        for i in 0 to n { u[i] = matrix_at(Yc, i, max_j) }
+
+        let w: ptr<f32> = array_new_f32(p)
+        for j in 0 to p {
+            let mut s: f32 = 0.0
+            for i in 0 to n { s = s + matrix_at(Xc, i, j) * u[i] }
+            w[j] = s
+        }
+        let mut w_norm: f32 = 0.0
+        for j in 0 to p { w_norm = w_norm + w[j] * w[j] }
+        w_norm = sqrt((w_norm as f64)) as f32
+        if w_norm < 1e-10 { w_norm = 1e-10 }
+        for j in 0 to p { w[j] = w[j] / w_norm }
+
+        let t: ptr<f32> = array_new_f32(n)
+        for i in 0 to n {
+            let mut s: f32 = 0.0
+            for j in 0 to p { s = s + matrix_at(Xc, i, j) * w[j] }
+            t[i] = s
+        }
+
+        let c: ptr<f32> = array_new_f32(q)
+        for j in 0 to q {
+            let mut s: f32 = 0.0
+            for i in 0 to n { s = s + matrix_at(Yc, i, j) * t[i] }
+            c[j] = s
+        }
+        let mut c_norm: f32 = 0.0
+        for j in 0 to q { c_norm = c_norm + c[j] * c[j] }
+        c_norm = sqrt((c_norm as f64)) as f32
+        if c_norm < 1e-10 { c_norm = 1e-10 }
+        for j in 0 to q { c[j] = c[j] / c_norm }
+
+        x_weights[c] = w
+        y_weights[c] = c
+
+        let p_load: ptr<f32> = array_new_f32(p)
+        for j in 0 to p {
+            let mut s: f32 = 0.0
+            for i in 0 to n { s = s + matrix_at(Xc, i, j) * t[i] }
+            p_load[j] = s
+        }
+        let t_norm: f32 = 0.0
+        for i in 0 to n { t_norm = t_norm + t[i] * t[i] }
+        if t_norm > 1e-10 {
+            for i in 0 to n {
+                for j in 0 to p {
+                    matrix_set(Xc, i, j, matrix_at(Xc, i, j) - t[i] * p_load[j] / t_norm)
+                }
+            }
+        }
+
+        let q_load: ptr<f32> = array_new_f32(q)
+        for j in 0 to q {
+            let mut s: f32 = 0.0
+            for i in 0 to n { s = s + matrix_at(Yc, i, j) * t[i] }
+            q_load[j] = s
+        }
+        if t_norm > 1e-10 {
+            for i in 0 to n {
+                for j in 0 to q {
+                    matrix_set(Yc, i, j, matrix_at(Yc, i, j) - t[i] * q_load[j] / t_norm)
+                }
+            }
+        }
+
+        array_free_f32(u)
+        array_free_f32(t)
+        array_free_f32(p_load)
+        array_free_f32(q_load)
+    }
+
+    matrix_free(Xc)
+    matrix_free(Yc)
+    array_free_f32(x_mean)
+    array_free_f32(y_mean)
+
+    return PLSCanonical {
+        x_weights: x_weights,
+        y_weights: y_weights,
+        n_components: n_components,
+        n_x_features: p,
+        n_y_features: q,
+        fitted: true
+    }
+}
+
+export function pls_canonical_transform(model: PLSCanonical, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, model.n_components)
+    for i in 0 to X.rows {
+        for c in 0 to model.n_components {
+            let mut s: f32 = 0.0
+            for j in 0 to model.n_x_features {
+                s = s + matrix_at(X, i, j) * model.x_weights[c][j]
+            }
+            matrix_set(result, i, c, s)
+        }
+    }
+    return result
+}
+
+export function pls_canonical_free(model: PLSCanonical) -> void {
+    for c in 0 to model.n_components {
+        array_free_f32(model.x_weights[c])
+        array_free_f32(model.y_weights[c])
+    }
+    free(model.x_weights as ptr<void>)
+    free(model.y_weights as ptr<void>)
+}
+
+# ============================================================================
+# PLSSVD
+# ============================================================================
+
+export struct PLSSVD {
+    x_weights: ptr<ptr<f32> >,
+    y_weights: ptr<ptr<f32> >,
+    n_components: i32,
+    n_x_features: i32,
+    n_y_features: i32,
+    fitted: bool
+}
+
+export function pls_svd_fit(X: Matrix, Y: Matrix, n_components: i32) -> PLSSVD {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let q: i32 = Y.cols
+
+    let x_mean: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let mut s: f32 = 0.0
+        for i in 0 to n { s = s + matrix_at(X, i, j) }
+        x_mean[j] = s / (n as f32)
+    }
+    let y_mean: ptr<f32> = array_new_f32(q)
+    for j in 0 to q {
+        let mut s: f32 = 0.0
+        for i in 0 to n { s = s + matrix_at(Y, i, j) }
+        y_mean[j] = s / (n as f32)
+    }
+
+    let Xc: Matrix = matrix_new(n, p)
+    for i in 0 to n {
+        for j in 0 to p {
+            matrix_set(Xc, i, j, matrix_at(X, i, j) - x_mean[j])
+        }
+    }
+    let Yc: Matrix = matrix_new(n, q)
+    for i in 0 to n {
+        for j in 0 to q {
+            matrix_set(Yc, i, j, matrix_at(Y, i, j) - y_mean[j])
+        }
+    }
+
+    let C: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for j in 0 to p {
+        C[j] = array_new_f32(q)
+        for k in 0 to q {
+            let mut s: f32 = 0.0
+            for i in 0 to n {
+                s = s + matrix_at(Xc, i, j) * matrix_at(Yc, i, k)
+            }
+            C[j][k] = s
+        }
+    }
+
+    let x_weights: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+    let y_weights: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+
+    for c in 0 to n_components {
+        let u: ptr<f32> = array_new_f32(p)
+        srand(42 + c)
+        for j in 0 to p { u[j] = ((rand() % 1000) as f32) / 500.0 - 1.0 }
+
+        for iter in 0 to 100 {
+            let Cv: ptr<f32> = array_new_f32(q)
+            for k in 0 to q {
+                let mut s: f32 = 0.0
+                for j in 0 to p { s = s + C[j][k] * u[j] }
+                Cv[k] = s
+            }
+            let mut v_norm: f32 = 0.0
+            for k in 0 to q { v_norm = v_norm + Cv[k] * Cv[k] }
+            v_norm = sqrt((v_norm as f64)) as f32
+            if v_norm < 1e-10 { v_norm = 1e-10 }
+            for k in 0 to q { Cv[k] = Cv[k] / v_norm }
+
+            let CtCv: ptr<f32> = array_new_f32(p)
+            for j in 0 to p {
+                let mut s: f32 = 0.0
+                for k in 0 to q { s = s + C[j][k] * Cv[k] }
+                CtCv[j] = s
+            }
+            let mut u_norm: f32 = 0.0
+            for j in 0 to p { u_norm = u_norm + CtCv[j] * CtCv[j] }
+            u_norm = sqrt((u_norm as f64)) as f32
+            if u_norm < 1e-10 { u_norm = 1e-10 }
+            for j in 0 to p { u[j] = CtCv[j] / u_norm }
+
+            array_free_f32(Cv)
+            array_free_f32(CtCv)
+        }
+
+        let v: ptr<f32> = array_new_f32(q)
+        for k in 0 to q {
+            let mut s: f32 = 0.0
+            for j in 0 to p { s = s + C[j][k] * u[j] }
+            v[k] = s
+        }
+        let mut v_norm: f32 = 0.0
+        for k in 0 to q { v_norm = v_norm + v[k] * v[k] }
+        v_norm = sqrt((v_norm as f64)) as f32
+        if v_norm < 1e-10 { v_norm = 1e-10 }
+        for k in 0 to q { v[k] = v[k] / v_norm }
+
+        x_weights[c] = u
+        y_weights[c] = v
+
+        for j in 0 to p {
+            for k in 0 to q {
+                C[j][k] = C[j][k] - u[j] * v[k]
+            }
+        }
+    }
+
+    for j in 0 to p { array_free_f32(C[j]) }
+    free(C as ptr<void>)
+    matrix_free(Xc)
+    matrix_free(Yc)
+    array_free_f32(x_mean)
+    array_free_f32(y_mean)
+
+    return PLSSVD {
+        x_weights: x_weights,
+        y_weights: y_weights,
+        n_components: n_components,
+        n_x_features: p,
+        n_y_features: q,
+        fitted: true
+    }
+}
+
+export function pls_svd_transform(model: PLSSVD, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, model.n_components)
+    for i in 0 to X.rows {
+        for c in 0 to model.n_components {
+            let mut s: f32 = 0.0
+            for j in 0 to model.n_x_features {
+                s = s + matrix_at(X, i, j) * model.x_weights[c][j]
+            }
+            matrix_set(result, i, c, s)
+        }
+    }
+    return result
+}
+
+export function pls_svd_free(model: PLSSVD) -> void {
+    for c in 0 to model.n_components {
+        array_free_f32(model.x_weights[c])
+        array_free_f32(model.y_weights[c])
+    }
+    free(model.x_weights as ptr<void>)
+    free(model.y_weights as ptr<void>)
+}

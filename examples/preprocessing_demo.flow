@@ -1,0 +1,250 @@
+# Preprocessing pipeline demo for flow-scikit.
+# Demonstrates the full preprocessing chain: StandardScaler, MinMaxScaler,
+# RobustScaler, MaxAbsScaler, Normalizer, Binarizer, KBinsDiscretizer,
+# PolynomialFeatures, LabelEncoder, OneHotEncoder, SimpleImputer.
+#
+# Run: ./flow run examples/preprocessing_demo.flow
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function rand() -> i32
+    function srand(seed: i32) -> void
+}
+
+function main() -> i32 {
+    println("=== flow-scikit Preprocessing Demo ===")
+    println("")
+
+    srand(42)
+
+    let n: i32 = 10
+    let X: Matrix = matrix_new(n, 3)
+    for i in 0 to n {
+        matrix_set(X, i, 0, (i as f32) * 2.0)
+        matrix_set(X, i, 1, (i as f32) * 5.0 + 3.0)
+        matrix_set(X, i, 2, (i as f32) * 0.5 - 1.0)
+    }
+
+    println("Original data (first 5 rows):")
+    for i in 0 to 5 {
+        print("  [")
+        printf("%6.2f", matrix_at(X, i, 0))
+        print(", ")
+        printf("%6.2f", matrix_at(X, i, 1))
+        print(", ")
+        printf("%6.2f", matrix_at(X, i, 2))
+        println("]")
+    }
+    println("")
+
+    # 1. StandardScaler
+    println("--- StandardScaler ---")
+    let scaler: StandardScaler = standard_scaler_fit(X)
+    let X_std: Matrix = standard_scaler_transform(scaler, X)
+    print("  Mean = [")
+    for j in 0 to 3 {
+        printf("%.4f", scaler.mean[j])
+        if j < 2 { print(", ") }
+    }
+    print("], Std = [")
+    for j in 0 to 3 {
+        printf("%.4f", scaler.std[j])
+        if j < 2 { print(", ") }
+    }
+    println("]")
+    print("  Scaled (row 0): [")
+    for j in 0 to 3 {
+        printf("%.4f", matrix_at(X_std, 0, j))
+        if j < 2 { print(", ") }
+    }
+    println("]")
+    standard_scaler_free(scaler)
+    matrix_free(X_std)
+    println("")
+
+    # 2. MinMaxScaler
+    println("--- MinMaxScaler ---")
+    let mms: MinMaxScaler = minmax_scaler_fit(X, 0.0, 1.0)
+    let X_mm: Matrix = minmax_scaler_transform(mms, X)
+    print("  Min = [")
+    for j in 0 to 3 {
+        printf("%.2f", mms.min[j])
+        if j < 2 { print(", ") }
+    }
+    print("], Max = [")
+    for j in 0 to 3 {
+        printf("%.2f", mms.max[j])
+        if j < 2 { print(", ") }
+    }
+    println("]")
+    print("  Scaled (row 0): [")
+    for j in 0 to 3 {
+        printf("%.4f", matrix_at(X_mm, 0, j))
+        if j < 2 { print(", ") }
+    }
+    println("]")
+    minmax_scaler_free(mms)
+    matrix_free(X_mm)
+    println("")
+
+    # 3. RobustScaler
+    println("--- RobustScaler ---")
+    let rs: RobustScaler = robust_scaler_fit(X)
+    let X_rs: Matrix = robust_scaler_transform(rs, X)
+    print("  Median = [")
+    for j in 0 to 3 {
+        printf("%.2f", rs.median[j])
+        if j < 2 { print(", ") }
+    }
+    println("]")
+    print("  Scaled (row 0): [")
+    for j in 0 to 3 {
+        printf("%.4f", matrix_at(X_rs, 0, j))
+        if j < 2 { print(", ") }
+    }
+    println("]")
+    robust_scaler_free(rs)
+    matrix_free(X_rs)
+    println("")
+
+    # 4. MaxAbsScaler
+    println("--- MaxAbsScaler ---")
+    let mas: MaxAbsScaler = maxabs_scaler_fit(X)
+    let X_ma: Matrix = maxabs_scaler_transform(mas, X)
+    print("  MaxAbs = [")
+    for j in 0 to 3 {
+        printf("%.2f", mas.max_abs[j])
+        if j < 2 { print(", ") }
+    }
+    println("]")
+    print("  Scaled (row 0): [")
+    for j in 0 to 3 {
+        printf("%.4f", matrix_at(X_ma, 0, j))
+        if j < 2 { print(", ") }
+    }
+    println("]")
+    maxabs_scaler_free(mas)
+    matrix_free(X_ma)
+    println("")
+
+    # 5. Normalizer
+    println("--- Normalizer (L2) ---")
+    let norm: Normalizer = normalizer_fit(2)
+    let X_norm: Matrix = normalizer_transform(norm, X)
+    let mut row0_norm: f32 = 0.0
+    for j in 0 to 3 {
+        row0_norm = row0_norm + matrix_at(X_norm, 0, j) * matrix_at(X_norm, 0, j)
+    }
+    print("  L2 norm of row 0 = ")
+    printf("%.4f", sqrt(row0_norm as f64) as f32)
+    println("")
+    normalizer_free(norm)
+    matrix_free(X_norm)
+    println("")
+
+    # 6. Binarizer
+    println("--- Binarizer (threshold=5.0) ---")
+    let bin: Binarizer = binarizer_fit(5.0)
+    let X_bin: Matrix = binarizer_transform(bin, X)
+    print("  Binarized (row 3): [")
+    for j in 0 to 3 {
+        print(matrix_at(X_bin, 3, j))
+        if j < 2 { print(", ") }
+    }
+    println("]")
+    binarizer_free(bin)
+    matrix_free(X_bin)
+    println("")
+
+    # 7. KBinsDiscretizer
+    println("--- KBinsDiscretizer (3 bins) ---")
+    let kbd: KBinsDiscretizer = kbins_discretizer_fit(X, 3, KBINS_UNIFORM)
+    let X_kbd: Matrix = kbins_discretizer_transform(kbd, X)
+    print("  Binned (row 0): [")
+    for j in 0 to 3 {
+        print(matrix_at(X_kbd, 0, j))
+        if j < 2 { print(", ") }
+    }
+    print("], (row 5): [")
+    for j in 0 to 3 {
+        print(matrix_at(X_kbd, 5, j))
+        if j < 2 { print(", ") }
+    }
+    println("]")
+    kbins_discretizer_free(kbd)
+    matrix_free(X_kbd)
+    println("")
+
+    # 8. PolynomialFeatures
+    println("--- PolynomialFeatures (degree=2) ---")
+    let pf: PolynomialFeatures = polynomial_features_fit(2, false)
+    let X_poly: Matrix = polynomial_features_transform(pf, X)
+    print("  Input shape: ")
+    print(X.rows)
+    print("x")
+    print(X.cols)
+    print(" -> Output shape: ")
+    print(X_poly.rows)
+    print("x")
+    print(X_poly.cols)
+    println("")
+    polynomial_features_free(pf)
+    matrix_free(X_poly)
+    println("")
+
+    # 9. LabelEncoder
+    println("--- LabelEncoder ---")
+    let labels: ptr<f32> = array_new_f32(6)
+    labels[0] = 3.0; labels[1] = 1.0; labels[2] = 4.0
+    labels[3] = 1.0; labels[4] = 3.0; labels[5] = 4.0
+    let le: LabelEncoder = label_encoder_fit(labels, 6)
+    let encoded: ptr<i32> = label_encoder_transform(le, labels, 6)
+    print("  Original: [3, 1, 4, 1, 3, 4] -> Encoded: [")
+    for i in 0 to 6 {
+        print(encoded[i])
+        if i < 5 { print(", ") }
+    }
+    println("]")
+    label_encoder_free(le)
+    free(encoded as ptr<void>)
+    array_free_f32(labels)
+    println("")
+
+    # 10. SimpleImputer
+    println("--- SimpleImputer (mean) ---")
+    let X_imp: Matrix = matrix_new(4, 3)
+    matrix_set(X_imp, 0, 0, 1.0); matrix_set(X_imp, 0, 1, 2.0); matrix_set(X_imp, 0, 2, 3.0)
+    matrix_set(X_imp, 1, 0, 4.0); matrix_set(X_imp, 1, 1, 0.0); matrix_set(X_imp, 1, 2, 6.0)
+    matrix_set(X_imp, 2, 0, 7.0); matrix_set(X_imp, 2, 1, 8.0); matrix_set(X_imp, 2, 2, 0.0)
+    matrix_set(X_imp, 3, 0, 0.0); matrix_set(X_imp, 3, 1, 11.0); matrix_set(X_imp, 3, 2, 12.0)
+
+    let imputer: SimpleImputer = simple_imputer_fit(X_imp, IMPUTE_MEAN)
+    let X_imputed: Matrix = simple_imputer_transform(imputer, X_imp)
+    println("  Before (with 0 = missing):")
+    for i in 0 to 4 {
+        print("    [")
+        for j in 0 to 3 {
+            printf("%.1f", matrix_at(X_imp, i, j))
+            if j < 2 { print(", ") }
+        }
+        println("]")
+    }
+    println("  After imputation:")
+    for i in 0 to 4 {
+        print("    [")
+        for j in 0 to 3 {
+            printf("%.1f", matrix_at(X_imputed, i, j))
+            if j < 2 { print(", ") }
+        }
+        println("]")
+    }
+    simple_imputer_free(imputer)
+    matrix_free(X_imp)
+    matrix_free(X_imputed)
+    println("")
+
+    println("=== Done ===")
+    matrix_free(X)
+    return 0
+}

@@ -1,0 +1,299 @@
+# Multi-output estimators for flow-scikit.
+# Implements MultiOutputClassifier and MultiOutputRegressor.
+
+import "lib/scikit/matrix.flow"
+import "lib/scikit/linear.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function calloc(n: i64, size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function printf(fmt: string, ...) -> i32
+}
+
+export struct MultiOutputClassifier {
+    models: ptr<LogisticRegression>,
+    n_outputs: i32,
+    n_classes: i32,
+    fitted: bool
+}
+
+export function multi_output_classifier_fit(
+    X: Matrix, Y: Matrix,
+    n_outputs: i32, n_classes: i32,
+    epochs: i32, lr: f32
+) -> MultiOutputClassifier {
+    let models: ptr<LogisticRegression> = malloc((n_outputs as i64) * 8) as ptr<LogisticRegression>
+
+    for o in 0 to n_outputs {
+        let y_col: ptr<f32> = array_new_f32(X.rows)
+        for i in 0 to X.rows {
+            y_col[i] = matrix_at(Y, i, o)
+        }
+        models[o] = logistic_fit(X, y_col, epochs, lr)
+        array_free_f32(y_col)
+    }
+
+    return MultiOutputClassifier {
+        models: models,
+        n_outputs: n_outputs,
+        n_classes: n_classes,
+        fitted: true
+    }
+}
+
+export function multi_output_classifier_predict(model: MultiOutputClassifier, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, model.n_outputs)
+
+    for o in 0 to model.n_outputs {
+        let probs: Matrix = logistic_predict(model.models[o], X)
+        for i in 0 to X.rows {
+            let p: f32 = matrix_at(probs, i, 0)
+            if p > 0.5 {
+                matrix_set(result, i, o, 1.0)
+            } else {
+                matrix_set(result, i, o, 0.0)
+            }
+        }
+        matrix_free(probs)
+    }
+
+    return result
+}
+
+export function multi_output_classifier_free(model: MultiOutputClassifier) -> void {
+    for o in 0 to model.n_outputs {
+        logistic_free(model.models[o])
+    }
+    free(model.models as ptr<void>)
+}
+
+export struct MultiOutputRegressor {
+    models: ptr<LinearRegression>,
+    n_outputs: i32,
+    fitted: bool
+}
+
+export function multi_output_regressor_fit(X: Matrix, Y: Matrix, n_outputs: i32) -> MultiOutputRegressor {
+    let models: ptr<LinearRegression> = malloc((n_outputs as i64) * 8) as ptr<LinearRegression>
+
+    for o in 0 to n_outputs {
+        let y_col: ptr<f32> = array_new_f32(X.rows)
+        for i in 0 to X.rows {
+            y_col[i] = matrix_at(Y, i, o)
+        }
+        models[o] = linear_regression_fit(X, y_col)
+        array_free_f32(y_col)
+    }
+
+    return MultiOutputRegressor {
+        models: models,
+        n_outputs: n_outputs,
+        fitted: true
+    }
+}
+
+export function multi_output_regressor_predict(model: MultiOutputRegressor, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, model.n_outputs)
+
+    for o in 0 to model.n_outputs {
+        let preds: ptr<f32> = linear_regression_predict(model.models[o], X)
+        for i in 0 to X.rows {
+            matrix_set(result, i, o, preds[i])
+        }
+        array_free_f32(preds)
+    }
+
+    return result
+}
+
+export function multi_output_regressor_free(model: MultiOutputRegressor) -> void {
+    for o in 0 to model.n_outputs {
+        linear_regression_free(model.models[o])
+    }
+    free(model.models as ptr<void>)
+}
+
+# ============================================================================
+# ClassifierChain
+# ============================================================================
+
+export struct ClassifierChain {
+    models: ptr<LogisticRegression>,
+    n_outputs: i32,
+    n_features: i32,
+    order: ptr<i32>,
+    fitted: bool
+}
+
+export function classifier_chain_fit(X: Matrix, Y: ptr<ptr<f32> >, n_samples: i32, n_features: i32, n_outputs: i32, lr: f32, n_iter: i32) -> ClassifierChain {
+    let models: ptr<LogisticRegression> = malloc((n_outputs as i64) * 64) as ptr<LogisticRegression>
+    let order: ptr<i32> = malloc((n_outputs as i64) * 4) as ptr<i32>
+    for o in 0 to n_outputs { order[o] = o }
+
+    let mut current_X: Matrix = matrix_new(n_samples, n_features)
+    for i in 0 to n_samples {
+        for j in 0 to n_features {
+            matrix_set(current_X, i, j, matrix_at(X, i, j))
+        }
+    }
+
+    for o in 0 to n_outputs {
+        let y: ptr<f32> = Y[order[o]]
+        models[o] = logistic_regression_fit(current_X, y, lr, n_iter)
+
+        let augmented: Matrix = matrix_new(n_samples, current_X.cols + 1)
+        for i in 0 to n_samples {
+            for j in 0 to current_X.cols {
+                matrix_set(augmented, i, j, matrix_at(current_X, i, j))
+            }
+            matrix_set(augmented, i, current_X.cols, y[i])
+        }
+        matrix_free(current_X)
+        current_X = augmented
+    }
+
+    matrix_free(current_X)
+
+    return ClassifierChain {
+        models: models,
+        n_outputs: n_outputs,
+        n_features: n_features,
+        order: order,
+        fitted: true
+    }
+}
+
+export function classifier_chain_predict(model: ClassifierChain, X: Matrix) -> ptr<ptr<f32> > {
+    let n: i32 = X.rows
+    let result: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n { result[i] = array_new_f32(model.n_outputs) }
+
+    let mut current_X: Matrix = matrix_new(n, model.n_features)
+    for i in 0 to n {
+        for j in 0 to model.n_features {
+            matrix_set(current_X, i, j, matrix_at(X, i, j))
+        }
+    }
+
+    for o in 0 to model.n_outputs {
+        let preds: ptr<f32> = logistic_regression_predict(model.models[o], current_X)
+        for i in 0 to n {
+            result[i][o] = preds[i]
+        }
+
+        let augmented: Matrix = matrix_new(n, current_X.cols + 1)
+        for i in 0 to n {
+            for j in 0 to current_X.cols {
+                matrix_set(augmented, i, j, matrix_at(current_X, i, j))
+            }
+            matrix_set(augmented, i, current_X.cols, preds[i])
+        }
+        matrix_free(current_X)
+        current_X = augmented
+        array_free_f32(preds)
+    }
+
+    matrix_free(current_X)
+    return result
+}
+
+export function classifier_chain_free(model: ClassifierChain) -> void {
+    for o in 0 to model.n_outputs {
+        logistic_regression_free(model.models[o])
+    }
+    free(model.models as ptr<void>)
+    free(model.order as ptr<void>)
+}
+
+# ============================================================================
+# RegressorChain
+# ============================================================================
+
+export struct RegressorChain {
+    models: ptr<LinearRegression>,
+    n_outputs: i32,
+    n_features: i32,
+    order: ptr<i32>,
+    fitted: bool
+}
+
+export function regressor_chain_fit(X: Matrix, Y: ptr<ptr<f32> >, n_samples: i32, n_features: i32, n_outputs: i32) -> RegressorChain {
+    let models: ptr<LinearRegression> = malloc((n_outputs as i64) * 64) as ptr<LinearRegression>
+    let order: ptr<i32> = malloc((n_outputs as i64) * 4) as ptr<i32>
+    for o in 0 to n_outputs { order[o] = o }
+
+    let mut current_X: Matrix = matrix_new(n_samples, n_features)
+    for i in 0 to n_samples {
+        for j in 0 to n_features {
+            matrix_set(current_X, i, j, matrix_at(X, i, j))
+        }
+    }
+
+    for o in 0 to n_outputs {
+        let y: ptr<f32> = Y[order[o]]
+        models[o] = linear_regression_fit(current_X, y)
+
+        let augmented: Matrix = matrix_new(n_samples, current_X.cols + 1)
+        for i in 0 to n_samples {
+            for j in 0 to current_X.cols {
+                matrix_set(augmented, i, j, matrix_at(current_X, i, j))
+            }
+            matrix_set(augmented, i, current_X.cols, y[i])
+        }
+        matrix_free(current_X)
+        current_X = augmented
+    }
+
+    matrix_free(current_X)
+
+    return RegressorChain {
+        models: models,
+        n_outputs: n_outputs,
+        n_features: n_features,
+        order: order,
+        fitted: true
+    }
+}
+
+export function regressor_chain_predict(model: RegressorChain, X: Matrix) -> ptr<ptr<f32> > {
+    let n: i32 = X.rows
+    let result: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n { result[i] = array_new_f32(model.n_outputs) }
+
+    let mut current_X: Matrix = matrix_new(n, model.n_features)
+    for i in 0 to n {
+        for j in 0 to model.n_features {
+            matrix_set(current_X, i, j, matrix_at(X, i, j))
+        }
+    }
+
+    for o in 0 to model.n_outputs {
+        let preds: ptr<f32> = linear_regression_predict(model.models[o], current_X)
+        for i in 0 to n {
+            result[i][o] = preds[i]
+        }
+
+        let augmented: Matrix = matrix_new(n, current_X.cols + 1)
+        for i in 0 to n {
+            for j in 0 to current_X.cols {
+                matrix_set(augmented, i, j, matrix_at(current_X, i, j))
+            }
+            matrix_set(augmented, i, current_X.cols, preds[i])
+        }
+        matrix_free(current_X)
+        current_X = augmented
+        array_free_f32(preds)
+    }
+
+    matrix_free(current_X)
+    return result
+}
+
+export function regressor_chain_free(model: RegressorChain) -> void {
+    for o in 0 to model.n_outputs {
+        linear_regression_free(model.models[o])
+    }
+    free(model.models as ptr<void>)
+    free(model.order as ptr<void>)
+}

@@ -1,0 +1,311 @@
+# Meta-estimators for flow-scikit.
+# Implements ColumnTransformer for applying different transformers to different columns.
+
+import "lib/scikit/matrix.flow"
+import "lib/scikit/preprocessing.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function calloc(n: i64, size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function memcpy(dst: ptr<void>, src: ptr<void>, n: i64) -> ptr<void>
+    function printf(fmt: string, ...) -> i32
+}
+
+export const TRANSFORMER_STANDARD_SCALER: i32 = 0
+export const TRANSFORMER_MINMAX_SCALER: i32 = 1
+export const TRANSFORMER_ONEHOT_ENCODER: i32 = 2
+export const TRANSFORMER_ORDINAL_ENCODER: i32 = 3
+export const TRANSFORMER_PASSTHROUGH: i32 = 4
+export const TRANSFORMER_ROBUST_SCALER: i32 = 5
+export const TRANSFORMER_MAXABS_SCALER: i32 = 6
+
+export struct ColumnTransformerSpec {
+    transformer_type: i32,
+    columns: ptr<i32>,
+    n_columns: i32
+}
+
+export struct ColumnTransformer {
+    specs: ptr<ColumnTransformerSpec>,
+    n_specs: i32,
+    scalers: ptr<StandardScaler>,
+    minmax_scalers: ptr<MinMaxScaler>,
+    robust_scalers: ptr<RobustScaler>,
+    maxabs_scalers: ptr<MaxAbsScaler>,
+    onehot_encoders: ptr<OneHotEncoder>,
+    n_output_features: i32,
+    fitted: bool
+}
+
+export function column_transformer_init(n_specs: i32) -> ColumnTransformer {
+    let specs: ptr<ColumnTransformerSpec> = malloc((n_specs as i64) * 24) as ptr<ColumnTransformerSpec>
+    let scalers: ptr<StandardScaler> = malloc((n_specs as i64) * 32) as ptr<StandardScaler>
+    let minmax_scalers: ptr<MinMaxScaler> = malloc((n_specs as i64) * 32) as ptr<MinMaxScaler>
+    let robust_scalers: ptr<RobustScaler> = malloc((n_specs as i64) * 32) as ptr<RobustScaler>
+    let maxabs_scalers: ptr<MaxAbsScaler> = malloc((n_specs as i64) * 32) as ptr<MaxAbsScaler>
+    let onehot_encoders: ptr<OneHotEncoder> = malloc((n_specs as i64) * 32) as ptr<OneHotEncoder>
+
+    return ColumnTransformer {
+        specs: specs, n_specs: n_specs,
+        scalers: scalers, minmax_scalers: minmax_scalers,
+        robust_scalers: robust_scalers, maxabs_scalers: maxabs_scalers,
+        onehot_encoders: onehot_encoders,
+        n_output_features: 0, fitted: false
+    }
+}
+
+export function column_transformer_set_spec(
+    ct: ColumnTransformer, idx: i32,
+    transformer_type: i32, columns: ptr<i32>, n_columns: i32
+) -> void {
+    ct.specs[idx].transformer_type = transformer_type
+    ct.specs[idx].columns = columns
+    ct.specs[idx].n_columns = n_columns
+}
+
+function _extract_columns(X: Matrix, columns: ptr<i32>, n_columns: i32) -> Matrix {
+    let sub: Matrix = matrix_new(X.rows, n_columns)
+    for i in 0 to X.rows {
+        for j in 0 to n_columns {
+            matrix_set(sub, i, j, matrix_at(X, i, columns[j]))
+        }
+    }
+    return sub
+}
+
+export function column_transformer_fit(ct: ColumnTransformer, X: Matrix) -> void {
+    let mut n_output: i32 = 0
+
+    for s in 0 to ct.n_specs {
+        let spec: ColumnTransformerSpec = ct.specs[s]
+        let sub: Matrix = _extract_columns(X, spec.columns, spec.n_columns)
+
+        if spec.transformer_type == TRANSFORMER_STANDARD_SCALER {
+            ct.scalers[s] = standard_scaler_fit(sub)
+            n_output = n_output + spec.n_columns
+        } elif spec.transformer_type == TRANSFORMER_MINMAX_SCALER {
+            ct.minmax_scalers[s] = minmax_scaler_fit(sub, 0.0, 1.0)
+            n_output = n_output + spec.n_columns
+        } elif spec.transformer_type == TRANSFORMER_ROBUST_SCALER {
+            ct.robust_scalers[s] = robust_scaler_fit(sub)
+            n_output = n_output + spec.n_columns
+        } elif spec.transformer_type == TRANSFORMER_MAXABS_SCALER {
+            ct.maxabs_scalers[s] = maxabs_scaler_fit(sub)
+            n_output = n_output + spec.n_columns
+        } elif spec.transformer_type == TRANSFORMER_PASSTHROUGH {
+            n_output = n_output + spec.n_columns
+        } elif spec.transformer_type == TRANSFORMER_ONEHOT_ENCODER {
+            ct.onehot_encoders[s] = onehot_encoder_fit(sub, spec.n_columns, HANDLE_UNKNOWN_WARN)
+            n_output = n_output + ct.onehot_encoders[s].n_categories_total
+        } elif spec.transformer_type == TRANSFORMER_ORDINAL_ENCODER {
+            n_output = n_output + spec.n_columns
+        }
+
+        matrix_free(sub)
+    }
+
+    ct.n_output_features = n_output
+    ct.fitted = true
+}
+
+export function column_transformer_transform(ct: ColumnTransformer, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, ct.n_output_features)
+
+    let mut out_col: i32 = 0
+
+    for s in 0 to ct.n_specs {
+        let spec: ColumnTransformerSpec = ct.specs[s]
+        let sub: Matrix = _extract_columns(X, spec.columns, spec.n_columns)
+
+        if spec.transformer_type == TRANSFORMER_STANDARD_SCALER {
+            let transformed: Matrix = standard_scaler_transform(ct.scalers[s], sub)
+            for i in 0 to X.rows {
+                for j in 0 to spec.n_columns {
+                    matrix_set(result, i, out_col + j, matrix_at(transformed, i, j))
+                }
+            }
+            matrix_free(transformed)
+            out_col = out_col + spec.n_columns
+        } elif spec.transformer_type == TRANSFORMER_MINMAX_SCALER {
+            let transformed: Matrix = minmax_scaler_transform(ct.minmax_scalers[s], sub)
+            for i in 0 to X.rows {
+                for j in 0 to spec.n_columns {
+                    matrix_set(result, i, out_col + j, matrix_at(transformed, i, j))
+                }
+            }
+            matrix_free(transformed)
+            out_col = out_col + spec.n_columns
+        } elif spec.transformer_type == TRANSFORMER_ROBUST_SCALER {
+            let transformed: Matrix = robust_scaler_transform(ct.robust_scalers[s], sub)
+            for i in 0 to X.rows {
+                for j in 0 to spec.n_columns {
+                    matrix_set(result, i, out_col + j, matrix_at(transformed, i, j))
+                }
+            }
+            matrix_free(transformed)
+            out_col = out_col + spec.n_columns
+        } elif spec.transformer_type == TRANSFORMER_MAXABS_SCALER {
+            let transformed: Matrix = maxabs_scaler_transform(ct.maxabs_scalers[s], sub)
+            for i in 0 to X.rows {
+                for j in 0 to spec.n_columns {
+                    matrix_set(result, i, out_col + j, matrix_at(transformed, i, j))
+                }
+            }
+            matrix_free(transformed)
+            out_col = out_col + spec.n_columns
+        } elif spec.transformer_type == TRANSFORMER_PASSTHROUGH {
+            for i in 0 to X.rows {
+                for j in 0 to spec.n_columns {
+                    matrix_set(result, i, out_col + j, matrix_at(sub, i, j))
+                }
+            }
+            out_col = out_col + spec.n_columns
+        } elif spec.transformer_type == TRANSFORMER_ONEHOT_ENCODER {
+            let transformed: Matrix = onehot_encoder_transform(ct.onehot_encoders[s], sub)
+            let n_enc: i32 = ct.onehot_encoders[s].n_categories_total
+            for i in 0 to X.rows {
+                for j in 0 to n_enc {
+                    matrix_set(result, i, out_col + j, matrix_at(transformed, i, j))
+                }
+            }
+            matrix_free(transformed)
+            out_col = out_col + n_enc
+        } elif spec.transformer_type == TRANSFORMER_ORDINAL_ENCODER {
+            for i in 0 to X.rows {
+                for j in 0 to spec.n_columns {
+                    matrix_set(result, i, out_col + j, matrix_at(sub, i, j))
+                }
+            }
+            out_col = out_col + spec.n_columns
+        }
+
+        matrix_free(sub)
+    }
+
+    return result
+}
+
+export function column_transformer_free(ct: ColumnTransformer) -> void {
+    for s in 0 to ct.n_specs {
+        let spec: ColumnTransformerSpec = ct.specs[s]
+        if spec.transformer_type == TRANSFORMER_STANDARD_SCALER {
+            standard_scaler_free(ct.scalers[s])
+        } elif spec.transformer_type == TRANSFORMER_MINMAX_SCALER {
+            minmax_scaler_free(ct.minmax_scalers[s])
+        } elif spec.transformer_type == TRANSFORMER_ROBUST_SCALER {
+            robust_scaler_free(ct.robust_scalers[s])
+        } elif spec.transformer_type == TRANSFORMER_MAXABS_SCALER {
+            maxabs_scaler_free(ct.maxabs_scalers[s])
+        } elif spec.transformer_type == TRANSFORMER_ONEHOT_ENCODER {
+            onehot_encoder_free(ct.onehot_encoders[s])
+        }
+    }
+    free(ct.specs as ptr<void>)
+    free(ct.scalers as ptr<void>)
+    free(ct.minmax_scalers as ptr<void>)
+    free(ct.robust_scalers as ptr<void>)
+    free(ct.maxabs_scalers as ptr<void>)
+    free(ct.onehot_encoders as ptr<void>)
+}
+
+# ============================================================================
+# TransformedTargetRegressor
+# ============================================================================
+
+export struct TransformedTargetRegressor {
+    model: LinearRegression,
+    transformer_type: i32,
+    mean: f32,
+    std: f32,
+    scale_factor: f32,
+    n_features: i32,
+    fitted: bool
+}
+
+export const TTR_STANDARD: i32 = 0
+export const TTR_LOG: i32 = 1
+export const TTR_SQRT: i32 = 2
+
+export function transformed_target_regressor_fit(X: Matrix, y: ptr<f32>, transformer_type: i32) -> TransformedTargetRegressor {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let y_transformed: ptr<f32> = array_new_f32(n)
+
+    let mut mean: f32 = 0.0
+    let mut std: f32 = 1.0
+    let mut scale_factor: f32 = 1.0
+
+    if transformer_type == TTR_STANDARD {
+        for i in 0 to n { mean = mean + y[i] }
+        mean = mean / (n as f32)
+        for i in 0 to n {
+            let d: f32 = y[i] - mean
+            std = std + d * d
+        }
+        std = sqrt((std / (n as f32)) as f64) as f32
+        if std < 1e-10 { std = 1.0 }
+        for i in 0 to n {
+            y_transformed[i] = (y[i] - mean) / std
+        }
+    } elif transformer_type == TTR_LOG {
+        scale_factor = 0.0
+        for i in 0 to n {
+            let val: f32 = y[i]
+            if val <= 0.0 {
+                y_transformed[i] = 0.0
+            } else {
+                y_transformed[i] = log((val) as f64) as f32
+            }
+        }
+    } elif transformer_type == TTR_SQRT {
+        for i in 0 to n {
+            let val: f32 = y[i]
+            if val < 0.0 {
+                y_transformed[i] = 0.0
+            } else {
+                y_transformed[i] = sqrt((val) as f64) as f32
+            }
+        }
+    } else {
+        for i in 0 to n { y_transformed[i] = y[i] }
+    }
+
+    let model: LinearRegression = linear_regression_fit(X, y_transformed)
+    array_free_f32(y_transformed)
+
+    return TransformedTargetRegressor {
+        model: model,
+        transformer_type: transformer_type,
+        mean: mean,
+        std: std,
+        scale_factor: scale_factor,
+        n_features: p,
+        fitted: true
+    }
+}
+
+export function transformed_target_regressor_predict(model: TransformedTargetRegressor, X: Matrix) -> ptr<f32> {
+    let raw: ptr<f32> = linear_regression_predict(model.model, X)
+    let n: i32 = X.rows
+
+    if model.transformer_type == TTR_STANDARD {
+        for i in 0 to n {
+            raw[i] = raw[i] * model.std + model.mean
+        }
+    } elif model.transformer_type == TTR_LOG {
+        for i in 0 to n {
+            raw[i] = exp((raw[i]) as f64) as f32
+        }
+    } elif model.transformer_type == TTR_SQRT {
+        for i in 0 to n {
+            raw[i] = raw[i] * raw[i]
+        }
+    }
+
+    return raw
+}
+
+export function transformed_target_regressor_free(model: TransformedTargetRegressor) -> void {
+    linear_regression_free(model.model)
+}
