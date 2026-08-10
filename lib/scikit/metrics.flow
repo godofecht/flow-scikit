@@ -70,10 +70,10 @@ export function precision_recall_fscore(y_true: ptr<f32>, y_pred: ptr<f32>, n: i
             f1 = 2.0 * prec * rec / (prec + rec)
         }
 
-        (results + c).precision = prec
-        (results + c).recall = rec
-        (results + c).f1 = f1
-        (results + c).support = support
+        results[c].precision = prec
+        results[c].recall = rec
+        results[c].f1 = f1
+        results[c].support = support
     }
 
     return results
@@ -433,9 +433,9 @@ export function roc_curve(y_true: ptr<f32>, y_score: ptr<f32>, n: i32, pos_label
     let mut tp: i32 = 0
     let mut fp: i32 = 0
 
-    (points + n_points).fpr = 0.0
-    (points + n_points).tpr = 0.0
-    (points + n_points).threshold = y_score[indices[0]] + 1.0
+    points[n_points].fpr = 0.0
+    points[n_points].tpr = 0.0
+    points[n_points].threshold = y_score[indices[0]] + 1.0
     n_points = n_points + 1
 
     for i in 0 to n {
@@ -448,16 +448,16 @@ export function roc_curve(y_true: ptr<f32>, y_score: ptr<f32>, n: i32, pos_label
         let fpr: f32 = (fp as f32) / (n_neg as f32)
         let tpr: f32 = (tp as f32) / (n_pos as f32)
 
-        (points + n_points).fpr = fpr
-        (points + n_points).tpr = tpr
-        (points + n_points).threshold = y_score[indices[i]]
+        points[n_points].fpr = fpr
+        points[n_points].tpr = tpr
+        points[n_points].threshold = y_score[indices[i]]
         n_points = n_points + 1
     }
 
     let auc: f32 = 0.0
     for i in 1 to n_points {
-        let width: f32 = (points + i).fpr - (points + i - 1).fpr
-        let height: f32 = ((points + i).tpr + (points + i - 1).tpr) / 2.0
+        let width: f32 = points[i].fpr - points[i - 1].fpr
+        let height: f32 = (points[i].tpr + points[i - 1].tpr) / 2.0
         auc = auc + width * height
     }
 
@@ -517,9 +517,9 @@ export function precision_recall_curve(y_true: ptr<f32>, y_score: ptr<f32>, n: i
     let mut tp: i32 = 0
     let mut fp: i32 = 0
 
-    (points + n_points).precision = 1.0
-    (points + n_points).recall = 0.0
-    (points + n_points).threshold = y_score[indices[0]] + 1.0
+    points[n_points].precision = 1.0
+    points[n_points].recall = 0.0
+    points[n_points].threshold = y_score[indices[0]] + 1.0
     n_points = n_points + 1
 
     for i in 0 to n {
@@ -532,9 +532,9 @@ export function precision_recall_curve(y_true: ptr<f32>, y_score: ptr<f32>, n: i
         let prec: f32 = (tp as f32) / ((tp + fp) as f32)
         let rec: f32 = (tp as f32) / (n_pos as f32)
 
-        (points + n_points).precision = prec
-        (points + n_points).recall = rec
-        (points + n_points).threshold = y_score[indices[i]]
+        points[n_points].precision = prec
+        points[n_points].recall = rec
+        points[n_points].threshold = y_score[indices[i]]
         n_points = n_points + 1
     }
 

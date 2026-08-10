@@ -5,7 +5,7 @@ import "lib/scikit/matrix.flow"
 
 extern {
     function tanh(x: f64) -> f64
-    function srand(seed: i32) -> void
+    function srand(seed: u32) -> void
     function rand() -> i32
 }
 
@@ -1100,7 +1100,7 @@ export function factor_analysis_fit(X: Matrix, n_components: i32, max_iter: i32,
                 if c < n_components {
                     if c == 0 {
                         for j in 0 to p {
-                            if components[c] == nil {
+                            if components[c] == null {
                                 components[c] = array_new_f32(p)
                             }
                             components[c][j] = w[j]

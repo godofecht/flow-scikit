@@ -121,24 +121,24 @@ export function pipeline_new(steps: ptr<PipelineStep>, n_steps: i32) -> Pipeline
     let cloned_steps: ptr<PipelineStep> = malloc((n_steps as i64) * 128) as ptr<PipelineStep>
 
     for i in 0 to n_steps {
-        (cloned_steps + i).kind = steps[i].kind
-        (cloned_steps + i).name = steps[i].name
-        (cloned_steps + i).handle_unknown = steps[i].handle_unknown
-        (cloned_steps + i).impute_strategy = steps[i].impute_strategy
-        (cloned_steps + i).impute_constant = steps[i].impute_constant
-        (cloned_steps + i).n_classes = steps[i].n_classes
-        (cloned_steps + i).epochs = steps[i].epochs
-        (cloned_steps + i).lr = steps[i].lr
-        (cloned_steps + i).penalty = steps[i].penalty
-        (cloned_steps + i).is_transformer = steps[i].is_transformer
-        (cloned_steps + i).is_estimator = steps[i].is_estimator
-        (cloned_steps + i).fitted = false
-        (cloned_steps + i).scaler = StandardScaler { mean: null as ptr<f32>, std: null as ptr<f32>, n_features: 0, fitted: false }
-        (cloned_steps + i).minmax = MinMaxScaler { min_vals: null as ptr<f32>, max_vals: null as ptr<f32>, n_features: 0, fitted: false }
-        (cloned_steps + i).onehot = OneHotEncoder { categories: null as ptr<ptr<f32> >, n_categories: null as ptr<i32>, n_features: 0, total_output_cols: 0, handle_unknown: HANDLE_UNKNOWN_WARN, fitted: false }
-        (cloned_steps + i).imputer = SimpleImputer { fill_values: null as ptr<f32>, n_features: 0, strategy: IMPUTE_STRATEGY_MEAN, constant_value: 0.0, fitted: false }
-        (cloned_steps + i).linear_reg = LinearRegression { weights: null as ptr<f32>, bias: 0.0, n_features: 0, penalty: penalty_none(), fitted: false }
-        (cloned_steps + i).logistic_reg = LogisticRegression { weights: null as ptr<f32>, bias: 0.0, n_features: 0, classes: null as ptr<f32>, n_classes: 0, penalty: penalty_none(), fitted: false }
+        cloned_steps[i].kind = steps[i].kind
+        cloned_steps[i].name = steps[i].name
+        cloned_steps[i].handle_unknown = steps[i].handle_unknown
+        cloned_steps[i].impute_strategy = steps[i].impute_strategy
+        cloned_steps[i].impute_constant = steps[i].impute_constant
+        cloned_steps[i].n_classes = steps[i].n_classes
+        cloned_steps[i].epochs = steps[i].epochs
+        cloned_steps[i].lr = steps[i].lr
+        cloned_steps[i].penalty = steps[i].penalty
+        cloned_steps[i].is_transformer = steps[i].is_transformer
+        cloned_steps[i].is_estimator = steps[i].is_estimator
+        cloned_steps[i].fitted = false
+        cloned_steps[i].scaler = StandardScaler { mean: null as ptr<f32>, std: null as ptr<f32>, n_features: 0, fitted: false }
+        cloned_steps[i].minmax = MinMaxScaler { min_vals: null as ptr<f32>, max_vals: null as ptr<f32>, n_features: 0, fitted: false }
+        cloned_steps[i].onehot = OneHotEncoder { categories: null as ptr<ptr<f32> >, n_categories: null as ptr<i32>, n_features: 0, total_output_cols: 0, handle_unknown: HANDLE_UNKNOWN_WARN, fitted: false }
+        cloned_steps[i].imputer = SimpleImputer { fill_values: null as ptr<f32>, n_features: 0, strategy: IMPUTE_STRATEGY_MEAN, constant_value: 0.0, fitted: false }
+        cloned_steps[i].linear_reg = LinearRegression { weights: null as ptr<f32>, bias: 0.0, n_features: 0, penalty: penalty_none(), fitted: false }
+        cloned_steps[i].logistic_reg = LogisticRegression { weights: null as ptr<f32>, bias: 0.0, n_features: 0, classes: null as ptr<f32>, n_classes: 0, penalty: penalty_none(), fitted: false }
     }
 
     return Pipeline { steps: cloned_steps, n_steps: n_steps, cloned: true }

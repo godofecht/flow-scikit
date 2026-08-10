@@ -420,7 +420,7 @@ export function rfecv_fit(
     let mut best_score: f32 = -1e30
 
     for n_select in 1 to n_features + 1 {
-        let rfe: RFE = rfe_fit(X, y, n_select, nil, n_samples, n_features)
+        let rfe: RFE = rfe_fit(X, y, n_select, null, n_samples, n_features)
         let X_sel: Matrix = rfe_transform(rfe, X)
 
         let mut mean_score: f32 = 0.0
@@ -462,7 +462,7 @@ export function rfecv_fit(
         matrix_free(X_sel)
     }
 
-    let final_rfe: RFE = rfe_fit(X, y, best_n, nil, n_samples, n_features)
+    let final_rfe: RFE = rfe_fit(X, y, best_n, null, n_samples, n_features)
 
     let selected_indices: ptr<i32> = malloc((best_n as i64) * 4) as ptr<i32>
     for j in 0 to best_n { selected_indices[j] = final_rfe.selected_indices[j] }
