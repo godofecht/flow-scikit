@@ -17,8 +17,8 @@ extern {
 }
 
 export struct GaussianMixture {
-    means: ptr<ptr<f32>>,
-    variances: ptr<ptr<f32>>,
+    means: ptr<ptr<f32> >,
+    variances: ptr<ptr<f32> >,
     weights: ptr<f32>,
     n_components: i32,
     n_features: i32,
@@ -46,8 +46,8 @@ export function gaussian_mixture_fit(X: Matrix, n_components: i32, max_iter: i32
 
     srand(seed)
 
-    let means: ptr<ptr<f32>> = malloc((n_components as i64) * 8) as ptr<ptr<f32>>
-    let variances: ptr<ptr<f32>> = malloc((n_components as i64) * 8) as ptr<ptr<f32>>
+    let means: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+    let variances: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
     let weights: ptr<f32> = array_new_f32(n_components)
 
     for k in 0 to n_components {
@@ -61,7 +61,7 @@ export function gaussian_mixture_fit(X: Matrix, n_components: i32, max_iter: i32
         weights[k] = 1.0 / (n_components as f32)
     }
 
-    let resp: ptr<ptr<f32>> = malloc((n as i64) * 8) as ptr<ptr<f32>>
+    let resp: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
     for i in 0 to n {
         resp[i] = array_new_f32(n_components)
     }
@@ -103,7 +103,7 @@ export function gaussian_mixture_fit(X: Matrix, n_components: i32, max_iter: i32
 
         total_ll = total_ll / (n as f32)
 
-        if fabs((prev_ll - total_ll) as f64) as f32 < tol {
+        if (fabs((prev_ll - total_ll) as f64) as f32) < tol {
             converged = true
             prev_ll = total_ll
             break
@@ -254,4 +254,155 @@ export function gaussian_mixture_free(model: GaussianMixture) -> void {
     free(model.means as ptr<void>)
     free(model.variances as ptr<void>)
     array_free_f32(model.weights)
+}
+
+# ============================================================================
+# BayesianGaussianMixture
+# ============================================================================
+
+export struct BayesianGaussianMixture {
+    means: ptr<ptr<f32> >,
+    variances: ptr<ptr<f32> >,
+    weights: ptr<f32>,
+    alpha: ptr<f32>,
+    n_components: i32,
+    n_features: i32,
+    n_iter: i32,
+    fitted: bool
+}
+
+export function bayesian_gaussian_mixture_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f32, seed: i32) -> BayesianGaussianMixture {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    srand(seed)
+
+    let means: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+    let variances: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+    let weights: ptr<f32> = array_new_f32(n_components)
+    let alpha: ptr<f32> = array_new_f32(n_components)
+
+    for k in 0 to n_components {
+        means[k] = array_new_f32(p)
+        variances[k] = array_new_f32(p)
+        let idx: i32 = rand() % n
+        for j in 0 to p {
+            means[k][j] = matrix_at(X, idx, j)
+            variances[k][j] = 1.0
+        }
+        weights[k] = 1.0 / (n_components as f32)
+        alpha[k] = 1.0
+    }
+
+    let mut n_iter: i32 = 0
+    for iter in 0 to max_iter {
+        n_iter = iter + 1
+
+        let resp: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+        for i in 0 to n {
+            resp[i] = array_new_f32(n_components)
+            let mut total: f32 = 0.0
+            for k in 0 to n_components {
+                let mut log_lik: f32 = log((weights[k]) as f64) as f32
+                for j in 0 to p {
+                    let d: f32 = matrix_at(X, i, j) - means[k][j]
+                    let v: f32 = variances[k][j]
+                    if v < 1e-10 { v = 1e-10 }
+                    log_lik = log_lik - 0.5 * d * d / v - 0.5 * log((v) as f64) as f32
+                }
+                resp[i][k] = exp((log_lik) as f64) as f32
+                total = total + resp[i][k]
+            }
+            if total < 1e-10 { total = 1e-10 }
+            for k in 0 to n_components {
+                resp[i][k] = resp[i][k] / total
+            }
+        }
+
+        let mut max_change: f32 = 0.0
+        for k in 0 to n_components {
+            let mut nk: f32 = 0.0
+            for i in 0 to n { nk = nk + resp[i][k] }
+
+            let alpha_k: f32 = 1.0 + nk
+            let weight_k: f32 = nk / (n as f32 + n_components as f32)
+
+            for j in 0 to p {
+                let mut mean_kj: f32 = 0.0
+                for i in 0 to n {
+                    mean_kj = mean_kj + resp[i][k] * matrix_at(X, i, j)
+                }
+                if nk > 1e-10 { mean_kj = mean_kj / nk }
+
+                let mut var_kj: f32 = 0.0
+                for i in 0 to n {
+                    let d: f32 = matrix_at(X, i, j) - mean_kj
+                    var_kj = var_kj + resp[i][k] * d * d
+                }
+                if nk > 1e-10 { var_kj = var_kj / nk + 1e-3 }
+
+                let change_m: f32 = fabs((mean_kj - means[k][j]) as f64) as f32
+                let change_v: f32 = fabs((var_kj - variances[k][j]) as f64) as f32
+                if change_m > max_change { max_change = change_m }
+                if change_v > max_change { max_change = change_v }
+
+                means[k][j] = mean_kj
+                variances[k][j] = var_kj
+            }
+
+            alpha[k] = alpha_k
+            weights[k] = weight_k
+        }
+
+        for i in 0 to n { array_free_f32(resp[i]) }
+        free(resp as ptr<void>)
+
+        if max_change < tol { break }
+    }
+
+    return BayesianGaussianMixture {
+        means: means,
+        variances: variances,
+        weights: weights,
+        alpha: alpha,
+        n_components: n_components,
+        n_features: p,
+        n_iter: n_iter,
+        fitted: true
+    }
+}
+
+export function bayesian_gaussian_mixture_predict(model: BayesianGaussianMixture, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut best_k: i32 = 0
+        let mut best_lik: f32 = -1e30
+        for k in 0 to model.n_components {
+            let mut lik: f32 = log((model.weights[k]) as f64) as f32
+            for j in 0 to model.n_features {
+                let d: f32 = matrix_at(X, i, j) - model.means[k][j]
+                let v: f32 = model.variances[k][j]
+                if v < 1e-10 { v = 1e-10 }
+                lik = lik - 0.5 * d * d / v
+            }
+            if lik > best_lik {
+                best_lik = lik
+                best_k = k
+            }
+        }
+        result[i] = best_k as f32
+    }
+    return result
+}
+
+export function bayesian_gaussian_mixture_free(model: BayesianGaussianMixture) -> void {
+    for k in 0 to model.n_components {
+        array_free_f32(model.means[k])
+        array_free_f32(model.variances[k])
+    }
+    free(model.means as ptr<void>)
+    free(model.variances as ptr<void>)
+    array_free_f32(model.weights)
+    array_free_f32(model.alpha)
 }

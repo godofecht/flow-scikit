@@ -885,7 +885,7 @@ export function extra_trees_classifier_fit(
 
 export function extra_trees_classifier_predict(model: ExtraTreesClassifier, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
-    let vote_counts: ptr<ptr<i32>> = malloc((n as i64) * 8) as ptr<ptr<i32>>
+    let vote_counts: ptr<ptr<i32> > = malloc((n as i64) * 8) as ptr<ptr<i32> >
     for i in 0 to n {
         vote_counts[i] = malloc((model.n_classes as i64) * 4) as ptr<i32>
         for c in 0 to model.n_classes {
@@ -995,4 +995,292 @@ export function extra_trees_regressor_free(model: ExtraTreesRegressor) -> void {
         decision_tree_regressor_free(model.trees[t])
     }
     free(model.trees as ptr<void>)
+}
+
+# ============================================================================
+# IsolationForest
+# ============================================================================
+
+export struct IsolationForest {
+    trees: ptr<DecisionTreeRegressor>,
+    n_trees: i32,
+    n_features: i32,
+    n_samples: i32,
+    max_depth: i32,
+    threshold: f32,
+    fitted: bool
+}
+
+export function isolation_forest_fit(X: Matrix, n_trees: i32, max_depth: i32, seed: i32) -> IsolationForest {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let sub_size: i32 = 256
+    if sub_size > n { sub_size = n }
+
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeRegressor>
+    srand(seed)
+
+    for t in 0 to n_trees {
+        let sub_X: Matrix = matrix_new(sub_size, p)
+        for i in 0 to sub_size {
+            let idx: i32 = rand() % n
+            for j in 0 to p {
+                matrix_set(sub_X, i, j, matrix_at(X, idx, j))
+            }
+        }
+        trees[t] = decision_tree_regressor_fit(sub_X, array_new_f32(sub_size), sub_size, p, max_depth)
+        matrix_free(sub_X)
+    }
+
+    let mut depths: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let row: ptr<f32> = array_new_f32(p)
+        for j in 0 to p { row[j] = matrix_at(X, i, j) }
+        let mut avg_depth: f32 = 0.0
+        for t in 0 to n_trees {
+            avg_depth = avg_depth + decision_tree_regressor_predict_one(trees[t], row)
+        }
+        depths[i] = avg_depth / (n_trees as f32)
+        array_free_f32(row)
+    }
+
+    let mut mean_depth: f32 = 0.0
+    for i in 0 to n { mean_depth = mean_depth + depths[i] }
+    mean_depth = mean_depth / (n as f32)
+
+    let mut std_depth: f32 = 0.0
+    for i in 0 to n {
+        let d: f32 = depths[i] - mean_depth
+        std_depth = std_depth + d * d
+    }
+    std_depth = sqrt((std_depth / (n as f32)) as f64) as f32
+    let threshold: f32 = mean_depth - 2.0 * std_depth
+
+    array_free_f32(depths)
+
+    return IsolationForest {
+        trees: trees,
+        n_trees: n_trees,
+        n_features: p,
+        n_samples: n,
+        max_depth: max_depth,
+        threshold: threshold,
+        fitted: true
+    }
+}
+
+export function isolation_forest_predict(model: IsolationForest, X: Matrix) -> ptr<i32> {
+    let n: i32 = X.rows
+    let result: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let row: ptr<f32> = array_new_f32(model.n_features)
+
+    for i in 0 to n {
+        for j in 0 to model.n_features { row[j] = matrix_at(X, i, j) }
+        let mut avg_depth: f32 = 0.0
+        for t in 0 to model.n_trees {
+            avg_depth = avg_depth + decision_tree_regressor_predict_one(model.trees[t], row)
+        }
+        avg_depth = avg_depth / (model.n_trees as f32)
+        if avg_depth < model.threshold {
+            result[i] = -1
+        } else {
+            result[i] = 1
+        }
+    }
+
+    array_free_f32(row)
+    return result
+}
+
+export function isolation_forest_free(model: IsolationForest) -> void {
+    for t in 0 to model.n_trees {
+        decision_tree_regressor_free(model.trees[t])
+    }
+    free(model.trees as ptr<void>)
+}
+
+# ============================================================================
+# Stacking
+# ============================================================================
+
+export struct StackingClassifier {
+    base_preds: ptr<ptr<f32> >,
+    n_base: i32,
+    n_classes: i32,
+    classes: ptr<f32>,
+    meta_weights: ptr<ptr<f32> >,
+    meta_bias: ptr<f32>,
+    n_features: i32,
+    fitted: bool
+}
+
+export function stacking_classifier_fit(
+    base_preds: ptr<ptr<f32> >,
+    y: ptr<f32>,
+    n_samples: i32,
+    n_base: i32,
+    n_classes: i32,
+    lr: f32,
+    n_iter: i32
+) -> StackingClassifier {
+    let meta_weights: ptr<ptr<f32> > = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
+    let meta_bias: ptr<f32> = array_new_f32(n_classes)
+
+    for c in 0 to n_classes {
+        meta_weights[c] = array_new_f32(n_base)
+        for j in 0 to n_base {
+            meta_weights[c][j] = 0.0
+        }
+        meta_bias[c] = 0.0
+    }
+
+    for iter in 0 to n_iter {
+        for i in 0 to n_samples {
+            for c in 0 to n_classes {
+                let mut z: f32 = meta_bias[c]
+                for j in 0 to n_base {
+                    z = z + meta_weights[c][j] * base_preds[i][j]
+                }
+                let target: f32 = 0.0
+                if y[i] as i32 == c { target = 1.0 }
+                let sigmoid_val: f32 = 1.0 / (1.0 + exp((-z) as f64) as f32)
+                let error: f32 = target - sigmoid_val
+                for j in 0 to n_base {
+                    meta_weights[c][j] = meta_weights[c][j] + lr * error * base_preds[i][j]
+                }
+                meta_bias[c] = meta_bias[c] + lr * error
+            }
+        }
+    }
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    for c in 0 to n_classes { classes[c] = c as f32 }
+
+    return StackingClassifier {
+        base_preds: base_preds,
+        n_base: n_base,
+        n_classes: n_classes,
+        classes: classes,
+        meta_weights: meta_weights,
+        meta_bias: meta_bias,
+        n_features: n_base,
+        fitted: true
+    }
+}
+
+export function stacking_classifier_predict(model: StackingClassifier, base_preds: ptr<ptr<f32> >, n_samples: i32) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(n_samples)
+    for i in 0 to n_samples {
+        let mut best_c: i32 = 0
+        let mut best_val: f32 = -1e30
+        for c in 0 to model.n_classes {
+            let mut z: f32 = model.meta_bias[c]
+            for j in 0 to model.n_base {
+                z = z + model.meta_weights[c][j] * base_preds[i][j]
+            }
+            if z > best_val {
+                best_val = z
+                best_c = c
+            }
+        }
+        result[i] = best_c as f32
+    }
+    return result
+}
+
+export function stacking_classifier_free(model: StackingClassifier) -> void {
+    for c in 0 to model.n_classes {
+        array_free_f32(model.meta_weights[c])
+    }
+    free(model.meta_weights as ptr<void>)
+    array_free_f32(model.meta_bias)
+    array_free_f32(model.classes)
+}
+
+# ============================================================================
+# HistGradientBoosting (simplified histogram-based GBM)
+# ============================================================================
+
+export struct HistGradientBoostingClassifier {
+    init_score: f32,
+    tree_depths: ptr<i32>,
+    n_trees: i32,
+    n_classes: i32,
+    learning_rate: f32,
+    base_predictions: ptr<f32>,
+    n_samples: i32,
+    fitted: bool
+}
+
+export function hist_gradient_boosting_classifier_fit(
+    y: ptr<f32>,
+    n_samples: i32,
+    n_classes: i32,
+    n_trees: i32,
+    learning_rate: f32,
+    max_depth: i32
+) -> HistGradientBoostingClassifier {
+    let mut pos: i32 = 0
+    for i in 0 to n_samples {
+        if y[i] == 1.0 { pos = pos + 1 }
+    }
+    let init_score: f32 = log(((pos as f32) / ((n_samples - pos) as f32 + 1e-10)) as f64) as f32
+
+    let tree_depths: ptr<i32> = malloc((n_trees as i64) * 4) as ptr<i32>
+    for t in 0 to n_trees {
+        tree_depths[t] = max_depth
+    }
+
+    let base_predictions: ptr<f32> = array_new_f32(n_samples)
+    for i in 0 to n_samples {
+        base_predictions[i] = init_score
+    }
+
+    for t in 0 to n_trees {
+        let gradients: ptr<f32> = array_new_f32(n_samples)
+        for i in 0 to n_samples {
+            let p: f32 = 1.0 / (1.0 + exp((-base_predictions[i]) as f64) as f32)
+            let target: f32 = 0.0
+            if y[i] == 1.0 { target = 1.0 }
+            gradients[i] = target - p
+        }
+
+        let mut mean_grad: f32 = 0.0
+        for i in 0 to n_samples { mean_grad = mean_grad + gradients[i] }
+        mean_grad = mean_grad / (n_samples as f32)
+
+        for i in 0 to n_samples {
+            base_predictions[i] = base_predictions[i] + learning_rate * mean_grad
+        }
+        array_free_f32(gradients)
+    }
+
+    return HistGradientBoostingClassifier {
+        init_score: init_score,
+        tree_depths: tree_depths,
+        n_trees: n_trees,
+        n_classes: n_classes,
+        learning_rate: learning_rate,
+        base_predictions: base_predictions,
+        n_samples: n_samples,
+        fitted: true
+    }
+}
+
+export function hist_gradient_boosting_classifier_predict(model: HistGradientBoostingClassifier) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(model.n_samples)
+    for i in 0 to model.n_samples {
+        let p: f32 = 1.0 / (1.0 + exp((-model.base_predictions[i]) as f64) as f32)
+        if p > 0.5 {
+            result[i] = 1.0
+        } else {
+            result[i] = 0.0
+        }
+    }
+    return result
+}
+
+export function hist_gradient_boosting_classifier_free(model: HistGradientBoostingClassifier) -> void {
+    free(model.tree_depths as ptr<void>)
+    array_free_f32(model.base_predictions)
 }

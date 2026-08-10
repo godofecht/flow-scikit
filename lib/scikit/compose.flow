@@ -84,21 +84,21 @@ export function column_transformer_fit(ct: ColumnTransformer, X: Matrix) -> void
         if spec.transformer_type == TRANSFORMER_STANDARD_SCALER {
             ct.scalers[s] = standard_scaler_fit(sub)
             n_output = n_output + spec.n_columns
-        } else if spec.transformer_type == TRANSFORMER_MINMAX_SCALER {
+        } elif spec.transformer_type == TRANSFORMER_MINMAX_SCALER {
             ct.minmax_scalers[s] = minmax_scaler_fit(sub, 0.0, 1.0)
             n_output = n_output + spec.n_columns
-        } else if spec.transformer_type == TRANSFORMER_ROBUST_SCALER {
+        } elif spec.transformer_type == TRANSFORMER_ROBUST_SCALER {
             ct.robust_scalers[s] = robust_scaler_fit(sub)
             n_output = n_output + spec.n_columns
-        } else if spec.transformer_type == TRANSFORMER_MAXABS_SCALER {
+        } elif spec.transformer_type == TRANSFORMER_MAXABS_SCALER {
             ct.maxabs_scalers[s] = maxabs_scaler_fit(sub)
             n_output = n_output + spec.n_columns
-        } else if spec.transformer_type == TRANSFORMER_PASSTHROUGH {
+        } elif spec.transformer_type == TRANSFORMER_PASSTHROUGH {
             n_output = n_output + spec.n_columns
-        } else if spec.transformer_type == TRANSFORMER_ONEHOT_ENCODER {
+        } elif spec.transformer_type == TRANSFORMER_ONEHOT_ENCODER {
             ct.onehot_encoders[s] = onehot_encoder_fit(sub, spec.n_columns, HANDLE_UNKNOWN_WARN)
             n_output = n_output + ct.onehot_encoders[s].n_categories_total
-        } else if spec.transformer_type == TRANSFORMER_ORDINAL_ENCODER {
+        } elif spec.transformer_type == TRANSFORMER_ORDINAL_ENCODER {
             n_output = n_output + spec.n_columns
         }
 
@@ -127,7 +127,7 @@ export function column_transformer_transform(ct: ColumnTransformer, X: Matrix) -
             }
             matrix_free(transformed)
             out_col = out_col + spec.n_columns
-        } else if spec.transformer_type == TRANSFORMER_MINMAX_SCALER {
+        } elif spec.transformer_type == TRANSFORMER_MINMAX_SCALER {
             let transformed: Matrix = minmax_scaler_transform(ct.minmax_scalers[s], sub)
             for i in 0 to X.rows {
                 for j in 0 to spec.n_columns {
@@ -136,7 +136,7 @@ export function column_transformer_transform(ct: ColumnTransformer, X: Matrix) -
             }
             matrix_free(transformed)
             out_col = out_col + spec.n_columns
-        } else if spec.transformer_type == TRANSFORMER_ROBUST_SCALER {
+        } elif spec.transformer_type == TRANSFORMER_ROBUST_SCALER {
             let transformed: Matrix = robust_scaler_transform(ct.robust_scalers[s], sub)
             for i in 0 to X.rows {
                 for j in 0 to spec.n_columns {
@@ -145,7 +145,7 @@ export function column_transformer_transform(ct: ColumnTransformer, X: Matrix) -
             }
             matrix_free(transformed)
             out_col = out_col + spec.n_columns
-        } else if spec.transformer_type == TRANSFORMER_MAXABS_SCALER {
+        } elif spec.transformer_type == TRANSFORMER_MAXABS_SCALER {
             let transformed: Matrix = maxabs_scaler_transform(ct.maxabs_scalers[s], sub)
             for i in 0 to X.rows {
                 for j in 0 to spec.n_columns {
@@ -154,14 +154,14 @@ export function column_transformer_transform(ct: ColumnTransformer, X: Matrix) -
             }
             matrix_free(transformed)
             out_col = out_col + spec.n_columns
-        } else if spec.transformer_type == TRANSFORMER_PASSTHROUGH {
+        } elif spec.transformer_type == TRANSFORMER_PASSTHROUGH {
             for i in 0 to X.rows {
                 for j in 0 to spec.n_columns {
                     matrix_set(result, i, out_col + j, matrix_at(sub, i, j))
                 }
             }
             out_col = out_col + spec.n_columns
-        } else if spec.transformer_type == TRANSFORMER_ONEHOT_ENCODER {
+        } elif spec.transformer_type == TRANSFORMER_ONEHOT_ENCODER {
             let transformed: Matrix = onehot_encoder_transform(ct.onehot_encoders[s], sub)
             let n_enc: i32 = ct.onehot_encoders[s].n_categories_total
             for i in 0 to X.rows {
@@ -171,7 +171,7 @@ export function column_transformer_transform(ct: ColumnTransformer, X: Matrix) -
             }
             matrix_free(transformed)
             out_col = out_col + n_enc
-        } else if spec.transformer_type == TRANSFORMER_ORDINAL_ENCODER {
+        } elif spec.transformer_type == TRANSFORMER_ORDINAL_ENCODER {
             for i in 0 to X.rows {
                 for j in 0 to spec.n_columns {
                     matrix_set(result, i, out_col + j, matrix_at(sub, i, j))
@@ -191,13 +191,13 @@ export function column_transformer_free(ct: ColumnTransformer) -> void {
         let spec: ColumnTransformerSpec = ct.specs[s]
         if spec.transformer_type == TRANSFORMER_STANDARD_SCALER {
             standard_scaler_free(ct.scalers[s])
-        } else if spec.transformer_type == TRANSFORMER_MINMAX_SCALER {
+        } elif spec.transformer_type == TRANSFORMER_MINMAX_SCALER {
             minmax_scaler_free(ct.minmax_scalers[s])
-        } else if spec.transformer_type == TRANSFORMER_ROBUST_SCALER {
+        } elif spec.transformer_type == TRANSFORMER_ROBUST_SCALER {
             robust_scaler_free(ct.robust_scalers[s])
-        } else if spec.transformer_type == TRANSFORMER_MAXABS_SCALER {
+        } elif spec.transformer_type == TRANSFORMER_MAXABS_SCALER {
             maxabs_scaler_free(ct.maxabs_scalers[s])
-        } else if spec.transformer_type == TRANSFORMER_ONEHOT_ENCODER {
+        } elif spec.transformer_type == TRANSFORMER_ONEHOT_ENCODER {
             onehot_encoder_free(ct.onehot_encoders[s])
         }
     }
@@ -207,4 +207,105 @@ export function column_transformer_free(ct: ColumnTransformer) -> void {
     free(ct.robust_scalers as ptr<void>)
     free(ct.maxabs_scalers as ptr<void>)
     free(ct.onehot_encoders as ptr<void>)
+}
+
+# ============================================================================
+# TransformedTargetRegressor
+# ============================================================================
+
+export struct TransformedTargetRegressor {
+    model: LinearRegression,
+    transformer_type: i32,
+    mean: f32,
+    std: f32,
+    scale_factor: f32,
+    n_features: i32,
+    fitted: bool
+}
+
+export const TTR_STANDARD: i32 = 0
+export const TTR_LOG: i32 = 1
+export const TTR_SQRT: i32 = 2
+
+export function transformed_target_regressor_fit(X: Matrix, y: ptr<f32>, transformer_type: i32) -> TransformedTargetRegressor {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let y_transformed: ptr<f32> = array_new_f32(n)
+
+    let mut mean: f32 = 0.0
+    let mut std: f32 = 1.0
+    let mut scale_factor: f32 = 1.0
+
+    if transformer_type == TTR_STANDARD {
+        for i in 0 to n { mean = mean + y[i] }
+        mean = mean / (n as f32)
+        for i in 0 to n {
+            let d: f32 = y[i] - mean
+            std = std + d * d
+        }
+        std = sqrt((std / (n as f32)) as f64) as f32
+        if std < 1e-10 { std = 1.0 }
+        for i in 0 to n {
+            y_transformed[i] = (y[i] - mean) / std
+        }
+    } elif transformer_type == TTR_LOG {
+        scale_factor = 0.0
+        for i in 0 to n {
+            let val: f32 = y[i]
+            if val <= 0.0 {
+                y_transformed[i] = 0.0
+            } else {
+                y_transformed[i] = log((val) as f64) as f32
+            }
+        }
+    } elif transformer_type == TTR_SQRT {
+        for i in 0 to n {
+            let val: f32 = y[i]
+            if val < 0.0 {
+                y_transformed[i] = 0.0
+            } else {
+                y_transformed[i] = sqrt((val) as f64) as f32
+            }
+        }
+    } else {
+        for i in 0 to n { y_transformed[i] = y[i] }
+    }
+
+    let model: LinearRegression = linear_regression_fit(X, y_transformed)
+    array_free_f32(y_transformed)
+
+    return TransformedTargetRegressor {
+        model: model,
+        transformer_type: transformer_type,
+        mean: mean,
+        std: std,
+        scale_factor: scale_factor,
+        n_features: p,
+        fitted: true
+    }
+}
+
+export function transformed_target_regressor_predict(model: TransformedTargetRegressor, X: Matrix) -> ptr<f32> {
+    let raw: ptr<f32> = linear_regression_predict(model.model, X)
+    let n: i32 = X.rows
+
+    if model.transformer_type == TTR_STANDARD {
+        for i in 0 to n {
+            raw[i] = raw[i] * model.std + model.mean
+        }
+    } elif model.transformer_type == TTR_LOG {
+        for i in 0 to n {
+            raw[i] = exp((raw[i]) as f64) as f32
+        }
+    } elif model.transformer_type == TTR_SQRT {
+        for i in 0 to n {
+            raw[i] = raw[i] * raw[i]
+        }
+    }
+
+    return raw
+}
+
+export function transformed_target_regressor_free(model: TransformedTargetRegressor) -> void {
+    linear_regression_free(model.model)
 }

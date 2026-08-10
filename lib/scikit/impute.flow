@@ -1,0 +1,331 @@
+# Imputation module for flow-scikit.
+# Implements KNNImputer and IterativeImputer.
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function calloc(n: i64, size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function sqrt(x: f64) -> f64
+    function fabs(x: f64) -> f64
+    function rand() -> i32
+    function srand(seed: i32) -> void
+    function printf(fmt: string, ...) -> i32
+}
+
+const NAN_SENTINEL: f32 = -999999.0
+
+# ============================================================================
+# KNNImputer
+# ============================================================================
+
+export struct KNNImputer {
+    n_neighbors: i32,
+    weights: i32,
+    X_filled: Matrix,
+    n_features: i32,
+    fitted: bool
+}
+
+export const KNN_WEIGHTS_UNIFORM: i32 = 0
+export const KNN_WEIGHTS_DISTANCE: i32 = 1
+
+function _euclidean_dist_row(X: Matrix, i: i32, j: i32, n_features: i32) -> f32 {
+    let mut s: f32 = 0.0
+    for k in 0 to n_features {
+        let a: f32 = matrix_at(X, i, k)
+        let b: f32 = matrix_at(X, j, k)
+        if a != NAN_SENTINEL && b != NAN_SENTINEL {
+            let d: f32 = a - b
+            s = s + d * d
+        }
+    }
+    return sqrt((s as f64)) as f32
+}
+
+export function knn_imputer_fit(X: Matrix, n_neighbors: i32, weights: i32) -> KNNImputer {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let filled: Matrix = matrix_new(n, p)
+    for i in 0 to n {
+        for j in 0 to p {
+            matrix_set(filled, i, j, matrix_at(X, i, j))
+        }
+    }
+
+    for i in 0 to n {
+        for j in 0 to p {
+            if matrix_at(filled, i, j) == NAN_SENTINEL {
+                let mut best_dists: ptr<f32> = array_new_f32(n)
+                let mut best_indices: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+                let mut count: i32 = 0
+
+                for k in 0 to n {
+                    if k == i { continue }
+                    if matrix_at(filled, k, j) == NAN_SENTINEL { continue }
+                    best_dists[count] = _euclidean_dist_row(filled, i, k, p)
+                    best_indices[count] = k
+                    count = count + 1
+                }
+
+                let k_use: i32 = n_neighbors
+                if k_use > count { k_use = count }
+
+                for a in 0 to count {
+                    for b in 0 to count - 1 - a {
+                        if best_dists[b] > best_dists[b + 1] {
+                            let td: f32 = best_dists[b]
+                            best_dists[b] = best_dists[b + 1]
+                            best_dists[b + 1] = td
+                            let ti: i32 = best_indices[b]
+                            best_indices[b] = best_indices[b + 1]
+                            best_indices[b + 1] = ti
+                        }
+                    }
+                }
+
+                let mut weighted_sum: f32 = 0.0
+                let mut weight_total: f32 = 0.0
+                for a in 0 to k_use {
+                    let w: f32 = 1.0
+                    if weights == KNN_WEIGHTS_DISTANCE {
+                        let d: f32 = best_dists[a]
+                        if d < 1e-10 {
+                            w = 1.0
+                        } else {
+                            w = 1.0 / d
+                        }
+                    }
+                    weighted_sum = weighted_sum + w * matrix_at(filled, best_indices[a], j)
+                    weight_total = weight_total + w
+                }
+
+                if weight_total > 0 {
+                    matrix_set(filled, i, j, weighted_sum / weight_total)
+                } else {
+                    let mut col_mean: f32 = 0.0
+                    let mut col_count: i32 = 0
+                    for k in 0 to n {
+                        if matrix_at(filled, k, j) != NAN_SENTINEL {
+                            col_mean = col_mean + matrix_at(filled, k, j)
+                            col_count = col_count + 1
+                        }
+                    }
+                    if col_count > 0 {
+                        matrix_set(filled, i, j, col_mean / (col_count as f32))
+                    } else {
+                        matrix_set(filled, i, j, 0.0)
+                    }
+                }
+
+                array_free_f32(best_dists)
+                free(best_indices as ptr<void>)
+            }
+        }
+    }
+
+    return KNNImputer {
+        n_neighbors: n_neighbors,
+        weights: weights,
+        X_filled: filled,
+        n_features: p,
+        fitted: true
+    }
+}
+
+export function knn_imputer_transform(model: KNNImputer, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let p: i32 = model.n_features
+    let result: Matrix = matrix_new(n, p)
+
+    for i in 0 to n {
+        for j in 0 to p {
+            let val: f32 = matrix_at(X, i, j)
+            if val == NAN_SENTINEL {
+                let mut col_mean: f32 = 0.0
+                let mut col_count: i32 = 0
+                for k in 0 to model.X_filled.rows {
+                    col_mean = col_mean + matrix_at(model.X_filled, k, j)
+                    col_count = col_count + 1
+                }
+                if col_count > 0 {
+                    matrix_set(result, i, j, col_mean / (col_count as f32))
+                } else {
+                    matrix_set(result, i, j, 0.0)
+                }
+            } else {
+                matrix_set(result, i, j, val)
+            }
+        }
+    }
+
+    return result
+}
+
+export function knn_imputer_free(model: KNNImputer) -> void {
+    matrix_free(model.X_filled)
+}
+
+# ============================================================================
+# IterativeImputer
+# ============================================================================
+
+export struct IterativeImputer {
+    n_features: i32,
+    max_iter: i32,
+    tol: f32,
+    imputed_values: ptr<ptr<f32> >,
+    col_means: ptr<f32>,
+    n_samples: i32,
+    fitted: bool
+}
+
+export function iterative_imputer_fit(X: Matrix, max_iter: i32, tol: f32, seed: i32) -> IterativeImputer {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let filled: Matrix = matrix_new(n, p)
+    let col_means: ptr<f32> = array_new_f32(p)
+
+    for j in 0 to p {
+        let mut s: f32 = 0.0
+        let mut count: i32 = 0
+        for i in 0 to n {
+            let val: f32 = matrix_at(X, i, j)
+            if val != NAN_SENTINEL {
+                s = s + val
+                count = count + 1
+            }
+        }
+        if count > 0 {
+            col_means[j] = s / (count as f32)
+        } else {
+            col_means[j] = 0.0
+        }
+    }
+
+    for i in 0 to n {
+        for j in 0 to p {
+            if matrix_at(X, i, j) == NAN_SENTINEL {
+                matrix_set(filled, i, j, col_means[j])
+            } else {
+                matrix_set(filled, i, j, matrix_at(X, i, j))
+            }
+        }
+    }
+
+    let imputed: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for j in 0 to p {
+        imputed[j] = array_new_f32(n)
+        for i in 0 to n {
+            imputed[j][i] = matrix_at(filled, i, j)
+        }
+    }
+
+    for iter in 0 to max_iter {
+        let mut max_change: f32 = 0.0
+
+        for j in 0 to p {
+            let mut has_missing: bool = false
+            for i in 0 to n {
+                if matrix_at(X, i, j) == NAN_SENTINEL {
+                    has_missing = true
+                }
+            }
+            if not has_missing { continue }
+
+            let mut mean_j: f32 = 0.0
+            for i in 0 to n {
+                mean_j = mean_j + matrix_at(filled, i, j)
+            }
+            mean_j = mean_j / (n as f32)
+
+            let other_means: ptr<f32> = array_new_f32(p)
+            let weights: ptr<f32> = array_new_f32(p)
+            for k in 0 to p {
+                if k == j { continue }
+                let mut mk: f32 = 0.0
+                for i in 0 to n {
+                    mk = mk + matrix_at(filled, i, k)
+                }
+                mk = mk / (n as f32)
+                other_means[k] = mk
+
+                let mut cov_jk: f32 = 0.0
+                let mut var_k: f32 = 0.0
+                for i in 0 to n {
+                    let dj: f32 = matrix_at(filled, i, j) - mean_j
+                    let dk: f32 = matrix_at(filled, i, k) - mk
+                    cov_jk = cov_jk + dj * dk
+                    var_k = var_k + dk * dk
+                }
+                if var_k > 1e-10 {
+                    weights[k] = cov_jk / var_k
+                } else {
+                    weights[k] = 0.0
+                }
+            }
+
+            for i in 0 to n {
+                if matrix_at(X, i, j) == NAN_SENTINEL {
+                    let mut pred: f32 = mean_j
+                    for k in 0 to p {
+                        if k == j { continue }
+                        pred = pred + weights[k] * (matrix_at(filled, i, k) - other_means[k])
+                    }
+                    let old_val: f32 = matrix_at(filled, i, j)
+                    let change: f32 = fabs((pred - old_val) as f64) as f32
+                    if change > max_change { max_change = change }
+                    matrix_set(filled, i, j, pred)
+                    imputed[j][i] = pred
+                }
+            }
+
+            array_free_f32(other_means)
+            array_free_f32(weights)
+        }
+
+        if max_change < tol { break }
+    }
+
+    matrix_free(filled)
+
+    return IterativeImputer {
+        n_features: p,
+        max_iter: max_iter,
+        tol: tol,
+        imputed_values: imputed,
+        col_means: col_means,
+        n_samples: n,
+        fitted: true
+    }
+}
+
+export function iterative_imputer_transform(model: IterativeImputer, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let p: i32 = model.n_features
+    let result: Matrix = matrix_new(n, p)
+
+    for i in 0 to n {
+        for j in 0 to p {
+            let val: f32 = matrix_at(X, i, j)
+            if val == NAN_SENTINEL {
+                matrix_set(result, i, j, model.col_means[j])
+            } else {
+                matrix_set(result, i, j, val)
+            }
+        }
+    }
+
+    return result
+}
+
+export function iterative_imputer_free(model: IterativeImputer) -> void {
+    for j in 0 to model.n_features {
+        array_free_f32(model.imputed_values[j])
+    }
+    free(model.imputed_values as ptr<void>)
+    array_free_f32(model.col_means)
+}

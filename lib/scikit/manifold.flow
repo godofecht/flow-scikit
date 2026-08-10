@@ -80,7 +80,7 @@ function compute_joint_probabilities(dist: ptr<f32>, n: i32, perplexity: f32) ->
             }
 
             let diff: f32 = entropy - target_entropy
-            if fabs(diff as f64) as f32 < tol {
+            if (fabs(diff as f64) as f32) < tol {
                 break
             }
 
@@ -288,5 +288,439 @@ export function tsne_embedding(model: TSNE) -> Matrix {
 }
 
 export function tsne_free(model: TSNE) -> void {
+    array_free_f32(model.embedding)
+}
+
+# ============================================================================
+# Isomap
+# ============================================================================
+
+export struct Isomap {
+    embedding: ptr<f32>,
+    n_samples: i32,
+    n_features: i32,
+    n_components: i32,
+    n_neighbors: i32,
+    fitted: bool
+}
+
+export function isomap_fit(X: Matrix, n_components: i32, n_neighbors: i32) -> Isomap {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let D: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        D[i] = array_new_f32(n)
+        for j in 0 to n {
+            let mut s: f32 = 0.0
+            for k in 0 to p {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                s = s + d * d
+            }
+            D[i][j] = sqrt((s as f64)) as f32
+        }
+    }
+
+    let geo: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        geo[i] = array_copy_f32(D[i], n)
+    }
+
+    for k in 0 to n {
+        for i in 0 to n {
+            for j in 0 to n {
+                if geo[i][k] + geo[k][j] < geo[i][j] {
+                    geo[i][j] = geo[i][k] + geo[k][j]
+                }
+            }
+        }
+    }
+
+    let mut mean_d: f32 = 0.0
+    for i in 0 to n {
+        for j in 0 to n {
+            geo[i][j] = geo[i][j] * geo[i][j]
+            mean_d = mean_d + geo[i][j]
+        }
+    }
+    mean_d = mean_d / ((n * n) as f32)
+
+    let B: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        B[i] = array_new_f32(n)
+        for j in 0 to n {
+            B[i][j] = -0.5 * (geo[i][j] - mean_d)
+        }
+    }
+
+    let embedding: ptr<f32> = array_new_f32(n * n_components)
+    for c in 0 to n_components {
+        let v: ptr<f32> = array_new_f32(n)
+        srand(42 + c)
+        for i in 0 to n { v[i] = ((rand() % 1000) as f32) / 500.0 - 1.0 }
+
+        for iter in 0 to 100 {
+            let Bv: ptr<f32> = array_new_f32(n)
+            for i in 0 to n {
+                let mut s: f32 = 0.0
+                for j in 0 to n { s = s + B[i][j] * v[j] }
+                Bv[i] = s
+            }
+            let mut norm: f32 = 0.0
+            for i in 0 to n { norm = norm + Bv[i] * Bv[i] }
+            norm = sqrt((norm as f64)) as f32
+            if norm < 1e-10 { norm = 1e-10 }
+            for i in 0 to n { v[i] = Bv[i] / norm }
+            array_free_f32(Bv)
+        }
+
+        for i in 0 to n {
+            embedding[i * n_components + c] = v[i]
+        }
+        array_free_f32(v)
+    }
+
+    for i in 0 to n { array_free_f32(D[i]); array_free_f32(geo[i]); array_free_f32(B[i]) }
+    free(D as ptr<void>)
+    free(geo as ptr<void>)
+    free(B as ptr<void>)
+
+    return Isomap {
+        embedding: embedding,
+        n_samples: n,
+        n_features: p,
+        n_components: n_components,
+        n_neighbors: n_neighbors,
+        fitted: true
+    }
+}
+
+export function isomap_embedding(model: Isomap) -> Matrix {
+    let result: Matrix = matrix_new(model.n_samples, model.n_components)
+    for i in 0 to model.n_samples {
+        for j in 0 to model.n_components {
+            matrix_set(result, i, j, model.embedding[i * model.n_components + j])
+        }
+    }
+    return result
+}
+
+export function isomap_free(model: Isomap) -> void {
+    array_free_f32(model.embedding)
+}
+
+# ============================================================================
+# LocallyLinearEmbedding (LLE)
+# ============================================================================
+
+export struct LLE {
+    embedding: ptr<f32>,
+    n_samples: i32,
+    n_components: i32,
+    n_neighbors: i32,
+    fitted: bool
+}
+
+export function lle_fit(X: Matrix, n_components: i32, n_neighbors: i32) -> LLE {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let W: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        W[i] = array_new_f32(n)
+
+        let dists: ptr<f32> = array_new_f32(n)
+        for j in 0 to n {
+            let mut s: f32 = 0.0
+            for k in 0 to p {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                s = s + d * d
+            }
+            dists[j] = s
+        }
+
+        let indices: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+        for j in 0 to n { indices[j] = j }
+        for a in 0 to n {
+            for b in 0 to n - 1 - a {
+                if dists[indices[b]] > dists[indices[b + 1]] {
+                    let t: i32 = indices[b]
+                    indices[b] = indices[b + 1]
+                    indices[b + 1] = t
+                }
+            }
+        }
+
+        let k: i32 = n_neighbors
+        if k > n - 1 { k = n - 1 }
+        let mut sum_w: f32 = 0.0
+        for j in 1 to k + 1 {
+            W[i][indices[j]] = 1.0 / (k as f32)
+            sum_w = sum_w + W[i][indices[j]]
+        }
+        if sum_w > 1e-10 {
+            for j in 0 to n { W[i][j] = W[i][j] / sum_w }
+        }
+
+        array_free_f32(dists)
+        free(indices as ptr<void>)
+    }
+
+    let M: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        M[i] = array_new_f32(n)
+        for j in 0 to n {
+            let mut s: f32 = 0.0
+            if i == j { s = 1.0 }
+            s = s - W[i][j] - W[j][i]
+            for k in 0 to n {
+                s = s + W[k][i] * W[k][j]
+            }
+            M[i][j] = s
+        }
+    }
+
+    let embedding: ptr<f32> = array_new_f32(n * n_components)
+    for c in 0 to n_components {
+        let v: ptr<f32> = array_new_f32(n)
+        srand(42 + c)
+        for i in 0 to n { v[i] = ((rand() % 1000) as f32) / 500.0 - 1.0 }
+
+        for iter in 0 to 100 {
+            let Mv: ptr<f32> = array_new_f32(n)
+            for i in 0 to n {
+                let mut s: f32 = 0.0
+                for j in 0 to n { s = s + M[i][j] * v[j] }
+                Mv[i] = s
+            }
+            let mut norm: f32 = 0.0
+            for i in 0 to n { norm = norm + Mv[i] * Mv[i] }
+            norm = sqrt((norm as f64)) as f32
+            if norm < 1e-10 { norm = 1e-10 }
+            for i in 0 to n { v[i] = Mv[i] / norm }
+            array_free_f32(Mv)
+        }
+
+        for i in 0 to n {
+            embedding[i * n_components + c] = v[i]
+        }
+        array_free_f32(v)
+    }
+
+    for i in 0 to n { array_free_f32(W[i]); array_free_f32(M[i]) }
+    free(W as ptr<void>)
+    free(M as ptr<void>)
+
+    return LLE {
+        embedding: embedding,
+        n_samples: n,
+        n_components: n_components,
+        n_neighbors: n_neighbors,
+        fitted: true
+    }
+}
+
+export function lle_embedding(model: LLE) -> Matrix {
+    let result: Matrix = matrix_new(model.n_samples, model.n_components)
+    for i in 0 to model.n_samples {
+        for j in 0 to model.n_components {
+            matrix_set(result, i, j, model.embedding[i * model.n_components + j])
+        }
+    }
+    return result
+}
+
+export function lle_free(model: LLE) -> void {
+    array_free_f32(model.embedding)
+}
+
+# ============================================================================
+# SpectralEmbedding
+# ============================================================================
+
+export struct SpectralEmbedding {
+    embedding: ptr<f32>,
+    n_samples: i32,
+    n_components: i32,
+    fitted: bool
+}
+
+export function spectral_embedding_fit(X: Matrix, n_components: i32, gamma: f32) -> SpectralEmbedding {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let W: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        W[i] = array_new_f32(n)
+        for j in 0 to n {
+            let mut s: f32 = 0.0
+            for k in 0 to p {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                s = s + d * d
+            }
+            W[i][j] = exp((-gamma * s) as f64) as f32
+        }
+    }
+
+    let deg: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        for j in 0 to n { deg[i] = deg[i] + W[i][j] }
+        if deg[i] < 1e-10 { deg[i] = 1e-10 }
+    }
+
+    let L: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        L[i] = array_new_f32(n)
+        for j in 0 to n {
+            if i == j { L[i][j] = 1.0 }
+            else { L[i][j] = -W[i][j] / sqrt((deg[i] * deg[j]) as f64) as f32 }
+        }
+    }
+
+    let embedding: ptr<f32> = array_new_f32(n * n_components)
+    for c in 0 to n_components {
+        let v: ptr<f32> = array_new_f32(n)
+        srand(42 + c)
+        for i in 0 to n { v[i] = ((rand() % 1000) as f32) / 500.0 - 1.0 }
+
+        for iter in 0 to 100 {
+            let Lv: ptr<f32> = array_new_f32(n)
+            for i in 0 to n {
+                let mut s: f32 = 0.0
+                for j in 0 to n { s = s + L[i][j] * v[j] }
+                Lv[i] = s
+            }
+            let mut norm: f32 = 0.0
+            for i in 0 to n { norm = norm + Lv[i] * Lv[i] }
+            norm = sqrt((norm as f64)) as f32
+            if norm < 1e-10 { norm = 1e-10 }
+            for i in 0 to n { v[i] = Lv[i] / norm }
+            array_free_f32(Lv)
+        }
+
+        for i in 0 to n {
+            embedding[i * n_components + c] = v[i]
+        }
+        array_free_f32(v)
+    }
+
+    for i in 0 to n { array_free_f32(W[i]); array_free_f32(L[i]) }
+    free(W as ptr<void>)
+    free(L as ptr<void>)
+    array_free_f32(deg)
+
+    return SpectralEmbedding {
+        embedding: embedding,
+        n_samples: n,
+        n_components: n_components,
+        fitted: true
+    }
+}
+
+export function spectral_embedding_get(model: SpectralEmbedding) -> Matrix {
+    let result: Matrix = matrix_new(model.n_samples, model.n_components)
+    for i in 0 to model.n_samples {
+        for j in 0 to model.n_components {
+            matrix_set(result, i, j, model.embedding[i * model.n_components + j])
+        }
+    }
+    return result
+}
+
+export function spectral_embedding_free(model: SpectralEmbedding) -> void {
+    array_free_f32(model.embedding)
+}
+
+# ============================================================================
+# MDS (Multidimensional Scaling)
+# ============================================================================
+
+export struct MDS {
+    embedding: ptr<f32>,
+    n_samples: i32,
+    n_components: i32,
+    n_iter: i32,
+    stress: f32,
+    fitted: bool
+}
+
+export function mds_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f32, seed: i32) -> MDS {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let D: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        D[i] = array_new_f32(n)
+        for j in 0 to n {
+            let mut s: f32 = 0.0
+            for k in 0 to p {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                s = s + d * d
+            }
+            D[i][j] = sqrt((s as f64)) as f32
+        }
+    }
+
+    srand(seed)
+    let embedding: ptr<f32> = array_new_f32(n * n_components)
+    for i in 0 to n * n_components {
+        embedding[i] = ((rand() % 1000) as f32) / 500.0 - 1.0
+    }
+
+    let mut n_iter: i32 = 0
+    let mut stress: f32 = 0.0
+    for iter in 0 to max_iter {
+        n_iter = iter + 1
+        stress = 0.0
+
+        for i in 0 to n {
+            for j in 0 to n {
+                if i == j { continue }
+                let mut d_hat: f32 = 0.0
+                for c in 0 to n_components {
+                    let d: f32 = embedding[i * n_components + c] - embedding[j * n_components + c]
+                    d_hat = d_hat + d * d
+                }
+                d_hat = sqrt((d_hat as f64)) as f32
+                if d_hat < 1e-10 { d_hat = 1e-10 }
+
+                let delta: f32 = D[i][j] - d_hat
+                stress = stress + delta * delta
+
+                let grad_scale: f32 = delta / d_hat
+                for c in 0 to n_components {
+                    let g: f32 = grad_scale * (embedding[i * n_components + c] - embedding[j * n_components + c])
+                    embedding[i * n_components + c] = embedding[i * n_components + c] + 0.01 * g
+                }
+            }
+        }
+
+        if stress / (n as f32) < tol { break }
+    }
+
+    for i in 0 to n { array_free_f32(D[i]) }
+    free(D as ptr<void>)
+
+    return MDS {
+        embedding: embedding,
+        n_samples: n,
+        n_components: n_components,
+        n_iter: n_iter,
+        stress: stress,
+        fitted: true
+    }
+}
+
+export function mds_embedding(model: MDS) -> Matrix {
+    let result: Matrix = matrix_new(model.n_samples, model.n_components)
+    for i in 0 to model.n_samples {
+        for j in 0 to model.n_components {
+            matrix_set(result, i, j, model.embedding[i * model.n_components + j])
+        }
+    }
+    return result
+}
+
+export function mds_free(model: MDS) -> void {
     array_free_f32(model.embedding)
 }

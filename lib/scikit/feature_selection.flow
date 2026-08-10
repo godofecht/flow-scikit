@@ -305,3 +305,357 @@ export function select_from_model_transform(selector: SelectFromModel, X: Matrix
 export function select_from_model_free(selector: SelectFromModel) -> void {
     free(selector.selected_indices as ptr<void>)
 }
+
+# ============================================================================
+# RFE (Recursive Feature Elimination)
+# ============================================================================
+
+export struct RFE {
+    selected_indices: ptr<i32>,
+    n_selected: i32,
+    n_features: i32,
+    rankings: ptr<i32>,
+    fitted: bool
+}
+
+export function rfe_fit(
+    X: Matrix,
+    y: ptr<f32>,
+    n_features_to_select: i32,
+    importance_fn: ptr<void>,
+    n_samples: i32,
+    n_features: i32
+) -> RFE {
+    let selected: ptr<bool> = calloc((n_features as i64), 1) as ptr<bool>
+    for j in 0 to n_features { selected[j] = true }
+    let rankings: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    for j in 0 to n_features { rankings[j] = 0 }
+
+    let mut n_remaining: i32 = n_features
+    let mut rank: i32 = n_features
+
+    while n_remaining > n_features_to_select {
+        let mut min_importance: f32 = 1e30
+        let mut min_idx: i32 = -1
+
+        for j in 0 to n_features {
+            if not selected[j] { continue }
+            let mut importance: f32 = 0.0
+            for i in 0 to n_samples {
+                importance = importance + fabs((matrix_at(X, i, j) * y[i]) as f64) as f32
+            }
+            if importance < min_importance {
+                min_importance = importance
+                min_idx = j
+            }
+        }
+
+        if min_idx < 0 { break }
+        selected[min_idx] = false
+        rankings[min_idx] = rank
+        rank = rank - 1
+        n_remaining = n_remaining - 1
+    }
+
+    let selected_indices: ptr<i32> = malloc((n_remaining as i64) * 4) as ptr<i32>
+    let mut idx: i32 = 0
+    for j in 0 to n_features {
+        if selected[j] {
+            selected_indices[idx] = j
+            rankings[j] = 1
+            idx = idx + 1
+        }
+    }
+
+    free(selected as ptr<void>)
+
+    return RFE {
+        selected_indices: selected_indices,
+        n_selected: n_remaining,
+        n_features: n_features,
+        rankings: rankings,
+        fitted: true
+    }
+}
+
+export function rfe_transform(selector: RFE, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, selector.n_selected)
+    for i in 0 to X.rows {
+        for j in 0 to selector.n_selected {
+            matrix_set(result, i, j, matrix_at(X, i, selector.selected_indices[j]))
+        }
+    }
+    return result
+}
+
+export function rfe_free(selector: RFE) -> void {
+    free(selector.selected_indices as ptr<void>)
+    free(selector.rankings as ptr<void>)
+}
+
+# ============================================================================
+# RFECV (RFE with Cross-Validation)
+# ============================================================================
+
+export struct RFECV {
+    selected_indices: ptr<i32>,
+    n_selected: i32,
+    n_features: i32,
+    rankings: ptr<i32>,
+    cv_scores: ptr<f32>,
+    n_features_tested: i32,
+    fitted: bool
+}
+
+export function rfecv_fit(
+    X: Matrix,
+    y: ptr<f32>,
+    n_samples: i32,
+    n_features: i32,
+    cv_folds: i32,
+    score_fn: ptr<void>
+) -> RFECV {
+    let cv_scores: ptr<f32> = array_new_f32(n_features)
+    let best_n: i32 = n_features
+    let mut best_score: f32 = -1e30
+
+    for n_select in 1 to n_features + 1 {
+        let rfe: RFE = rfe_fit(X, y, n_select, nil, n_samples, n_features)
+        let X_sel: Matrix = rfe_transform(rfe, X)
+
+        let mut mean_score: f32 = 0.0
+        let fold_size: i32 = n_samples / cv_folds
+        for fold in 0 to cv_folds {
+            let test_start: i32 = fold * fold_size
+            let test_end: i32 = test_start + fold_size
+            if fold == cv_folds - 1 { test_end = n_samples }
+
+            let mut fold_score: f32 = 0.0
+            for i in test_start to test_end {
+                let mut best_dist: f32 = 1e30
+                let mut best_label: f32 = y[i]
+                for j in 0 to n_samples {
+                    if j >= test_start && j < test_end { continue }
+                    let mut s: f32 = 0.0
+                    for k in 0 to n_select {
+                        let d: f32 = matrix_at(X_sel, i, k) - matrix_at(X_sel, j, k)
+                        s = s + d * d
+                    }
+                    if s < best_dist {
+                        best_dist = s
+                        best_label = y[j]
+                    }
+                }
+                if best_label == y[i] { fold_score = fold_score + 1.0 }
+            }
+            mean_score = mean_score + fold_score / ((test_end - test_start) as f32)
+        }
+        mean_score = mean_score / (cv_folds as f32)
+        cv_scores[n_select - 1] = mean_score
+
+        if mean_score > best_score {
+            best_score = mean_score
+            best_n = n_select
+        }
+
+        rfe_free(rfe)
+        matrix_free(X_sel)
+    }
+
+    let final_rfe: RFE = rfe_fit(X, y, best_n, nil, n_samples, n_features)
+
+    let selected_indices: ptr<i32> = malloc((best_n as i64) * 4) as ptr<i32>
+    for j in 0 to best_n { selected_indices[j] = final_rfe.selected_indices[j] }
+    let rankings: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    for j in 0 to n_features { rankings[j] = final_rfe.rankings[j] }
+
+    rfe_free(final_rfe)
+
+    return RFECV {
+        selected_indices: selected_indices,
+        n_selected: best_n,
+        n_features: n_features,
+        rankings: rankings,
+        cv_scores: cv_scores,
+        n_features_tested: n_features,
+        fitted: true
+    }
+}
+
+export function rfecv_free(selector: RFECV) -> void {
+    free(selector.selected_indices as ptr<void>)
+    free(selector.rankings as ptr<void>)
+    array_free_f32(selector.cv_scores)
+}
+
+# ============================================================================
+# SequentialFeatureSelector
+# ============================================================================
+
+export struct SequentialFeatureSelector {
+    selected_indices: ptr<i32>,
+    n_selected: i32,
+    n_features: i32,
+    direction: i32,
+    fitted: bool
+}
+
+export const SFS_FORWARD: i32 = 0
+export const SFS_BACKWARD: i32 = 1
+
+export function sequential_feature_selector_fit(
+    X: Matrix,
+    y: ptr<f32>,
+    n_features_to_select: i32,
+    direction: i32,
+    n_samples: i32,
+    n_features: i32
+) -> SequentialFeatureSelector {
+    let selected: ptr<bool> = calloc((n_features as i64), 1) as ptr<bool>
+    let mut n_selected: i32 = 0
+
+    if direction == SFS_FORWARD {
+        while n_selected < n_features_to_select {
+            let mut best_j: i32 = -1
+            let mut best_score: f32 = -1e30
+
+            for j in 0 to n_features {
+                if selected[j] { continue }
+                selected[j] = true
+                let mut count: i32 = 0
+                for m in 0 to n_features { if selected[m] { count = count + 1 } }
+                let X_sel: Matrix = matrix_new(n_samples, count)
+                let mut idx: i32 = 0
+                for m in 0 to n_features {
+                    if selected[m] {
+                        for i in 0 to n_samples {
+                            matrix_set(X_sel, i, idx, matrix_at(X, i, m))
+                        }
+                        idx = idx + 1
+                    }
+                }
+
+                let mut score: f32 = 0.0
+                for i in 0 to n_samples {
+                    let mut best_dist: f32 = 1e30
+                    let mut best_label: f32 = y[i]
+                    for k in 0 to n_samples {
+                        if k == i { continue }
+                        let mut s: f32 = 0.0
+                        for m in 0 to count {
+                            let d: f32 = matrix_at(X_sel, i, m) - matrix_at(X_sel, k, m)
+                            s = s + d * d
+                        }
+                        if s < best_dist {
+                            best_dist = s
+                            best_label = y[k]
+                        }
+                    }
+                    if best_label == y[i] { score = score + 1.0 }
+                }
+                score = score / (n_samples as f32)
+
+                if score > best_score {
+                    best_score = score
+                    best_j = j
+                }
+
+                matrix_free(X_sel)
+                selected[j] = false
+            }
+
+            if best_j < 0 { break }
+            selected[best_j] = true
+            n_selected = n_selected + 1
+        }
+    } else {
+        for j in 0 to n_features { selected[j] = true }
+        n_selected = n_features
+        while n_selected > n_features_to_select {
+            let mut worst_j: i32 = -1
+            let mut best_score: f32 = -1e30
+
+            for j in 0 to n_features {
+                if not selected[j] { continue }
+                selected[j] = false
+                let mut count: i32 = 0
+                for m in 0 to n_features { if selected[m] { count = count + 1 } }
+                let X_sel: Matrix = matrix_new(n_samples, count)
+                let mut idx: i32 = 0
+                for m in 0 to n_features {
+                    if selected[m] {
+                        for i in 0 to n_samples {
+                            matrix_set(X_sel, i, idx, matrix_at(X, i, m))
+                        }
+                        idx = idx + 1
+                    }
+                }
+
+                let mut score: f32 = 0.0
+                for i in 0 to n_samples {
+                    let mut best_dist: f32 = 1e30
+                    let mut best_label: f32 = y[i]
+                    for k in 0 to n_samples {
+                        if k == i { continue }
+                        let mut s: f32 = 0.0
+                        for m in 0 to count {
+                            let d: f32 = matrix_at(X_sel, i, m) - matrix_at(X_sel, k, m)
+                            s = s + d * d
+                        }
+                        if s < best_dist {
+                            best_dist = s
+                            best_label = y[k]
+                        }
+                    }
+                    if best_label == y[i] { score = score + 1.0 }
+                }
+                score = score / (n_samples as f32)
+
+                if score > best_score {
+                    best_score = score
+                    worst_j = j
+                }
+
+                matrix_free(X_sel)
+                selected[j] = true
+            }
+
+            if worst_j < 0 { break }
+            selected[worst_j] = false
+            n_selected = n_selected - 1
+        }
+    }
+
+    let selected_indices: ptr<i32> = malloc((n_selected as i64) * 4) as ptr<i32>
+    let mut idx: i32 = 0
+    for j in 0 to n_features {
+        if selected[j] {
+            selected_indices[idx] = j
+            idx = idx + 1
+        }
+    }
+
+    free(selected as ptr<void>)
+
+    return SequentialFeatureSelector {
+        selected_indices: selected_indices,
+        n_selected: n_selected,
+        n_features: n_features,
+        direction: direction,
+        fitted: true
+    }
+}
+
+export function sequential_feature_selector_transform(selector: SequentialFeatureSelector, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, selector.n_selected)
+    for i in 0 to X.rows {
+        for j in 0 to selector.n_selected {
+            matrix_set(result, i, j, matrix_at(X, i, selector.selected_indices[j]))
+        }
+    }
+    return result
+}
+
+export function sequential_feature_selector_free(selector: SequentialFeatureSelector) -> void {
+    free(selector.selected_indices as ptr<void>)
+}

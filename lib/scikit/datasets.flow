@@ -53,9 +53,11 @@ export function make_classification(
                 let val: f32 = _gauss(idx * 100 + j) + cx
                 if j < n_informative {
                     val = val + weights[j] * (c as f32)
-                } else if j < n_informative + n_redundant {
-                    let src: i32 = j % n_informative
-                    val = val + matrix_at(X, idx, src) * 0.5
+                } else {
+                    if j < n_informative + n_redundant {
+                        let src: i32 = j % n_informative
+                        val = val + matrix_at(X, idx, src) * 0.5
+                    }
                 }
                 matrix_set(X, idx, j, val)
             }
@@ -229,4 +231,109 @@ export function make_circles(n_samples: i32, noise: f32, factor: f32, seed: i32)
 export function dataset_free(d: Dataset) -> void {
     matrix_free(d.X)
     array_free_f32(d.y)
+}
+
+# ============================================================================
+# load_iris (simplified, 150 samples, 4 features, 3 classes)
+# ============================================================================
+
+export function load_iris() -> Dataset {
+    let n: i32 = 150
+    let p: i32 = 4
+    let X: Matrix = matrix_new(n, p)
+    let y: ptr<f32> = array_new_f32(n)
+
+    let base: ptr<ptr<f32> > = malloc((3 as i64) * 8) as ptr<ptr<f32> >
+    for c in 0 to 3 {
+        base[c] = array_new_f32(p)
+    }
+    base[0][0] = 5.0; base[0][1] = 3.4; base[0][2] = 1.5; base[0][3] = 0.2
+    base[1][0] = 5.9; base[1][1] = 2.8; base[1][2] = 4.3; base[1][3] = 1.3
+    base[2][0] = 6.5; base[2][1] = 3.0; base[2][2] = 5.5; base[2][3] = 2.0
+
+    let spread: ptr<f32> = array_new_f32(p)
+    spread[0] = 0.35; spread[1] = 0.32; spread[2] = 0.55; spread[3] = 0.25
+
+    srand(42)
+    for i in 0 to n {
+        let c: i32 = i / 50
+        y[i] = c as f32
+        for j in 0 to p {
+            let noise: f32 = (((rand() % 1000) as f32) / 500.0 - 1.0) * spread[j]
+            matrix_set(X, i, j, base[c][j] + noise)
+        }
+    }
+
+    for c in 0 to 3 { array_free_f32(base[c]) }
+    free(base as ptr<void>)
+    array_free_f32(spread)
+
+    return Dataset {
+        X: X, y: y,
+        n_samples: n,
+        n_features: p,
+        n_classes: 3,
+        is_classification: true
+    }
+}
+
+# ============================================================================
+# make_s_curve
+# ============================================================================
+
+export function make_s_curve(n_samples: i32, noise: f32, seed: i32) -> Dataset {
+    let X: Matrix = matrix_new(n_samples, 3)
+    let y: ptr<f32> = array_new_f32(n_samples)
+
+    srand(seed)
+    for i in 0 to n_samples {
+        let t: f32 = 3.0 * 3.14159265 * (((rand() % 10000) as f32) / 10000.0)
+        let n0: f32 = (((rand() % 1000) as f32) / 500.0 - 1.0) * noise
+        let n1: f32 = (((rand() % 1000) as f32) / 500.0 - 1.0) * noise
+        let n2: f32 = (((rand() % 1000) as f32) / 500.0 - 1.0) * noise
+
+        matrix_set(X, i, 0, sin((t) as f64) as f32 + n0)
+        matrix_set(X, i, 1, t / 3.0 + n1)
+        matrix_set(X, i, 2, 0.0 + n2)
+        y[i] = t
+    }
+
+    return Dataset {
+        X: X, y: y,
+        n_samples: n_samples,
+        n_features: 3,
+        n_classes: 0,
+        is_classification: false
+    }
+}
+
+# ============================================================================
+# make_swiss_roll
+# ============================================================================
+
+export function make_swiss_roll(n_samples: i32, noise: f32, seed: i32) -> Dataset {
+    let X: Matrix = matrix_new(n_samples, 3)
+    let y: ptr<f32> = array_new_f32(n_samples)
+
+    srand(seed)
+    for i in 0 to n_samples {
+        let t: f32 = 1.5 * 3.14159265 * (1.0 + 2.0 * ((rand() % 10000) as f32) / 10000.0)
+        let h: f32 = 21.0 * ((rand() % 10000) as f32) / 10000.0
+        let n0: f32 = (((rand() % 1000) as f32) / 500.0 - 1.0) * noise
+        let n1: f32 = (((rand() % 1000) as f32) / 500.0 - 1.0) * noise
+        let n2: f32 = (((rand() % 1000) as f32) / 500.0 - 1.0) * noise
+
+        matrix_set(X, i, 0, t * cos((t) as f64) as f32 + n0)
+        matrix_set(X, i, 1, h + n1)
+        matrix_set(X, i, 2, t * sin((t) as f64) as f32 + n2)
+        y[i] = t
+    }
+
+    return Dataset {
+        X: X, y: y,
+        n_samples: n_samples,
+        n_features: 3,
+        n_classes: 0,
+        is_classification: false
+    }
 }

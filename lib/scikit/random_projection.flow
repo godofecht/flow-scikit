@@ -1,0 +1,158 @@
+# Random projection for flow-scikit.
+# Implements GaussianRandomProjection and SparseRandomProjection.
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function calloc(n: i64, size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function sqrt(x: f64) -> f64
+    function rand() -> i32
+    function srand(seed: i32) -> void
+    function printf(fmt: string, ...) -> i32
+}
+
+# ============================================================================
+# GaussianRandomProjection
+# ============================================================================
+
+export struct GaussianRandomProjection {
+    projection: ptr<ptr<f32> >,
+    n_components: i32,
+    n_features: i32,
+    fitted: bool
+}
+
+function _johnson_lindenstrauss_min_dim(n_samples: i32, eps: f32) -> i32 {
+    let val: f32 = 4.0 * log(((n_samples as f32) * log((1.0 / (1.0 - eps * eps)) as f64) as f32) as f64) as f64 / (eps * eps)
+    return val as i32
+}
+
+export function gaussian_random_projection_fit(n_features: i32, n_components: i32, seed: i32) -> GaussianRandomProjection {
+    srand(seed)
+
+    let proj: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+    let scale: f32 = 1.0 / sqrt((n_components as f32) as f64) as f32
+
+    for c in 0 to n_components {
+        proj[c] = array_new_f32(n_features)
+        for j in 0 to n_features {
+            let r1: f32 = ((rand() % 10000) as f32) / 10000.0
+            let r2: f32 = ((rand() % 10000) as f32) / 10000.0
+            if r1 < 1e-10 { r1 = 1e-10 }
+            let z: f32 = sqrt((-2.0 * log((r1) as f64)) as f64) as f32 * cos((6.28318 * r2) as f64) as f32
+            proj[c][j] = z * scale
+        }
+    }
+
+    return GaussianRandomProjection {
+        projection: proj,
+        n_components: n_components,
+        n_features: n_features,
+        fitted: true
+    }
+}
+
+export function gaussian_random_projection_transform(model: GaussianRandomProjection, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let result: Matrix = matrix_new(n, model.n_components)
+
+    for i in 0 to n {
+        for c in 0 to model.n_components {
+            let mut s: f32 = 0.0
+            for j in 0 to model.n_features {
+                s = s + matrix_at(X, i, j) * model.projection[c][j]
+            }
+            matrix_set(result, i, c, s)
+        }
+    }
+
+    return result
+}
+
+export function gaussian_random_projection_free(model: GaussianRandomProjection) -> void {
+    for c in 0 to model.n_components {
+        array_free_f32(model.projection[c])
+    }
+    free(model.projection as ptr<void>)
+}
+
+# ============================================================================
+# SparseRandomProjection
+# ============================================================================
+
+export struct SparseRandomProjection {
+    projection: ptr<ptr<f32> >,
+    indices: ptr<ptr<i32> >,
+    n_nonzero: ptr<i32>,
+    n_components: i32,
+    n_features: i32,
+    density: f32,
+    fitted: bool
+}
+
+export function sparse_random_projection_fit(n_features: i32, n_components: i32, density: f32, seed: i32) -> SparseRandomProjection {
+    srand(seed)
+
+    let proj: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+    let indices: ptr<ptr<i32> > = malloc((n_components as i64) * 8) as ptr<ptr<i32> >
+    let n_nonzero: ptr<i32> = malloc((n_components as i64) * 4) as ptr<i32>
+
+    let scale: f32 = sqrt((1.0 / density) as f64) as f32 / sqrt((n_components as f32) as f64) as f32
+    let n_sparse: i32 = ((n_features as f32) * density) as i32
+    if n_sparse < 1 { n_sparse = 1 }
+
+    for c in 0 to n_components {
+        proj[c] = array_new_f32(n_sparse)
+        indices[c] = malloc((n_sparse as i64) * 4) as ptr<i32>
+        n_nonzero[c] = n_sparse
+
+        for j in 0 to n_sparse {
+            indices[c][j] = rand() % n_features
+            let sign: i32 = rand() % 2
+            if sign == 0 {
+                proj[c][j] = scale
+            } else {
+                proj[c][j] = -scale
+            }
+        }
+    }
+
+    return SparseRandomProjection {
+        projection: proj,
+        indices: indices,
+        n_nonzero: n_nonzero,
+        n_components: n_components,
+        n_features: n_features,
+        density: density,
+        fitted: true
+    }
+}
+
+export function sparse_random_projection_transform(model: SparseRandomProjection, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let result: Matrix = matrix_new(n, model.n_components)
+
+    for i in 0 to n {
+        for c in 0 to model.n_components {
+            let mut s: f32 = 0.0
+            for j in 0 to model.n_nonzero[c] {
+                s = s + matrix_at(X, i, model.indices[c][j]) * model.projection[c][j]
+            }
+            matrix_set(result, i, c, s)
+        }
+    }
+
+    return result
+}
+
+export function sparse_random_projection_free(model: SparseRandomProjection) -> void {
+    for c in 0 to model.n_components {
+        array_free_f32(model.projection[c])
+        free(model.indices[c] as ptr<void>)
+    }
+    free(model.projection as ptr<void>)
+    free(model.indices as ptr<void>)
+    free(model.n_nonzero as ptr<void>)
+}

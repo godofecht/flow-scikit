@@ -135,7 +135,7 @@ function _stratified_shuffle(indices: ptr<i32>, y: ptr<f32>, n: i32, n_test: i32
         }
     }
 
-    let class_indices: ptr<ptr<i32>> = malloc((n_classes as i64) * 8) as ptr<ptr<i32>>
+    let class_indices: ptr<ptr<i32> > = malloc((n_classes as i64) * 8) as ptr<ptr<i32> >
     let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
     for c in 0 to n_classes {
         class_indices[c] = malloc((n as i64) * 4) as ptr<i32>
@@ -606,7 +606,7 @@ export function stratified_kfold_get_fold(skf: StratifiedKFold, y: ptr<f32>, n_s
         }
     }
 
-    let class_indices: ptr<ptr<i32>> = malloc((n_classes as i64) * 8) as ptr<ptr<i32>>
+    let class_indices: ptr<ptr<i32> > = malloc((n_classes as i64) * 8) as ptr<ptr<i32> >
     let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
     for c in 0 to n_classes {
         class_indices[c] = malloc((n_samples as i64) * 4) as ptr<i32>
@@ -901,4 +901,146 @@ export function shuffle_split_get_split(ss: ShuffleSplit, n_samples: i32, split:
         test_indices: test_indices,
         n_test: n_test
     }
+}
+
+# ============================================================================
+# RepeatedKFold
+# ============================================================================
+
+export struct RepeatedKFold {
+    n_splits: i32,
+    n_repeats: i32,
+    seed: i32
+}
+
+export function repeated_kfold_init(n_splits: i32, n_repeats: i32, seed: i32) -> RepeatedKFold {
+    return RepeatedKFold {
+        n_splits: n_splits,
+        n_repeats: n_repeats,
+        seed: seed
+    }
+}
+
+export function repeated_kfold_get_fold(rkf: RepeatedKFold, n_samples: i32, repeat: i32, fold: i32) -> FoldIndices {
+    let current_seed: i32 = rkf.seed + repeat * 1000 + fold
+    return k_fold_get_fold(n_samples, rkf.n_splits, fold, current_seed)
+}
+
+# ============================================================================
+# TimeSeriesSplit
+# ============================================================================
+
+export function time_series_split(n_samples: i32, n_splits: i32, fold: i32) -> FoldIndices {
+    let n_test: i32 = n_samples / (n_splits + 1)
+    if n_test < 1 { n_test = 1 }
+    let n_train: i32 = n_test * (fold + 1)
+    let test_start: i32 = n_train
+    let test_end: i32 = test_start + n_test
+    if test_end > n_samples { test_end = n_samples }
+
+    let train_indices: ptr<i32> = malloc((n_train as i64) * 4) as ptr<i32>
+    let test_indices: ptr<i32> = malloc((n_test as i64) * 4) as ptr<i32>
+
+    for i in 0 to n_train {
+        train_indices[i] = i
+    }
+    for i in 0 to n_test {
+        test_indices[i] = test_start + i
+    }
+
+    return FoldIndices {
+        train_indices: train_indices,
+        n_train: n_train,
+        test_indices: test_indices,
+        n_test: n_test
+    }
+}
+
+# ============================================================================
+# LeaveOneOut
+# ============================================================================
+
+export function leave_one_out(n_samples: i32, fold: i32) -> FoldIndices {
+    let n_train: i32 = n_samples - 1
+    let n_test: i32 = 1
+
+    let train_indices: ptr<i32> = malloc((n_train as i64) * 4) as ptr<i32>
+    let test_indices: ptr<i32> = malloc((n_test as i64) * 4) as ptr<i32>
+
+    test_indices[0] = fold
+    let mut idx: i32 = 0
+    for i in 0 to n_samples {
+        if i == fold { continue }
+        train_indices[idx] = i
+        idx = idx + 1
+    }
+
+    return FoldIndices {
+        train_indices: train_indices,
+        n_train: n_train,
+        test_indices: test_indices,
+        n_test: n_test
+    }
+}
+
+# ============================================================================
+# cross_val_predict
+# ============================================================================
+
+export function cross_val_predict(
+    X: Matrix,
+    y: ptr<f32>,
+    n_splits: i32,
+    predict_fn: ptr<void>,
+    n_samples: i32,
+    n_features: i32
+) -> ptr<f32> {
+    let predictions: ptr<f32> = array_new_f32(n_samples)
+    let fold_size: i32 = n_samples / n_splits
+
+    for fold in 0 to n_splits {
+        let test_start: i32 = fold * fold_size
+        let test_end: i32 = test_start + fold_size
+        if fold == n_splits - 1 { test_end = n_samples }
+
+        let n_train: i32 = n_samples - (test_end - test_start)
+        let train_indices: ptr<i32> = malloc((n_train as i64) * 4) as ptr<i32>
+        let mut idx: i32 = 0
+        for i in 0 to n_samples {
+            if i >= test_start && i < test_end { continue }
+            train_indices[idx] = i
+            idx = idx + 1
+        }
+
+        let X_train: Matrix = matrix_new(n_train, n_features)
+        let y_train: ptr<f32> = array_new_f32(n_train)
+        for i in 0 to n_train {
+            for j in 0 to n_features {
+                matrix_set(X_train, i, j, matrix_at(X, train_indices[i], j))
+            }
+            y_train[i] = y[train_indices[i]]
+        }
+
+        let X_test: Matrix = matrix_new(test_end - test_start, n_features)
+        for i in test_start to test_end {
+            for j in 0 to n_features {
+                matrix_set(X_test, i - test_start, j, matrix_at(X, i, j))
+            }
+        }
+
+        let model: LinearRegression = linear_regression_fit(X_train, y_train)
+        let preds: ptr<f32> = linear_regression_predict(model, X_test)
+        for i in test_start to test_end {
+            predictions[i] = preds[i - test_start]
+        }
+
+        free(train_indices as ptr<void>)
+        matrix_free(X_train)
+        array_free_f32(y_train)
+        matrix_free(X_test)
+        linear_regression_free(model)
+        array_free_f32(preds)
+    }
+
+    return predictions
 }

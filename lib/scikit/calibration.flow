@@ -40,8 +40,8 @@ export function calibration_curve(
 ) -> CalibrationResult {
     let bin_indices: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
 
-    let const STRATEGY_UNIFORM: i32 = 0
-    let const STRATEGY_QUANTILE: i32 = 1
+    let STRATEGY_UNIFORM: i32 = 0
+    let STRATEGY_QUANTILE: i32 = 1
 
     if strategy == STRATEGY_QUANTILE {
         let sorted_probs: ptr<f32> = array_copy_f32(y_prob, n)

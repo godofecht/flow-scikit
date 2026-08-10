@@ -79,8 +79,8 @@ function _softmax(arr: ptr<f32>, n: i32) -> void {
 }
 
 export struct MLPClassifier {
-    weights: ptr<ptr<f32>>,
-    biases: ptr<ptr<f32>>,
+    weights: ptr<ptr<f32> >,
+    biases: ptr<ptr<f32> >,
     layer_sizes: ptr<i32>,
     n_layers: i32,
     n_classes: i32,
@@ -88,8 +88,8 @@ export struct MLPClassifier {
     activation: i32,
     learning_rate: f32,
     momentum: f32,
-    v_weights: ptr<ptr<f32>>,
-    v_biases: ptr<ptr<f32>>,
+    v_weights: ptr<ptr<f32> >,
+    v_biases: ptr<ptr<f32> >,
     fitted: bool
 }
 
@@ -111,10 +111,10 @@ export function mlp_classifier_fit(
 
     srand(seed)
 
-    let weights: ptr<ptr<f32>> = malloc((n_layers as i64) * 8) as ptr<ptr<f32>>
-    let biases: ptr<ptr<f32>> = malloc((n_layers as i64) * 8) as ptr<ptr<f32>>
-    let v_weights: ptr<ptr<f32>> = malloc((n_layers as i64) * 8) as ptr<ptr<f32>>
-    let v_biases: ptr<ptr<f32>> = malloc((n_layers as i64) * 8) as ptr<ptr<f32>>
+    let weights: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let biases: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let v_weights: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let v_biases: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
 
     for l in 1 to n_layers {
         let fan_in: i32 = layer_sizes[l - 1]
@@ -146,16 +146,16 @@ export function mlp_classifier_fit(
         }
     }
 
-    let activations: ptr<ptr<f32>> = malloc((n_layers as i64) * 8) as ptr<ptr<f32>>
-    let zs: ptr<ptr<f32>> = malloc((n_layers as i64) * 8) as ptr<ptr<f32>>
+    let activations: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let zs: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
     for l in 0 to n_layers {
         activations[l] = array_new_f32(layer_sizes[l])
         zs[l] = array_new_f32(layer_sizes[l])
     }
 
-    let deltas: ptr<ptr<f32>> = malloc((n_layers as i64) * 8) as ptr<ptr<f32>>
-    let grad_w: ptr<ptr<f32>> = malloc((n_layers as i64) * 8) as ptr<ptr<f32>>
-    let grad_b: ptr<ptr<f32>> = malloc((n_layers as i64) * 8) as ptr<ptr<f32>>
+    let deltas: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let grad_w: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let grad_b: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
     for l in 0 to n_layers {
         deltas[l] = array_new_f32(layer_sizes[l])
         grad_w[l] = array_new_f32(layer_sizes[l - 1] * layer_sizes[l])
@@ -249,7 +249,7 @@ export function mlp_classifier_predict(model: MLPClassifier, X: Matrix) -> Matri
     let n: i32 = X.rows
     let result: Matrix = matrix_new(n, model.n_classes)
 
-    let act: ptr<ptr<f32>> = malloc((model.n_layers as i64) * 8) as ptr<ptr<f32>>
+    let act: ptr<ptr<f32> > = malloc((model.n_layers as i64) * 8) as ptr<ptr<f32> >
     for l in 0 to model.n_layers {
         act[l] = array_new_f32(model.layer_sizes[l])
     }
@@ -322,16 +322,16 @@ export function mlp_classifier_free(model: MLPClassifier) -> void {
 }
 
 export struct MLPRegressor {
-    weights: ptr<ptr<f32>>,
-    biases: ptr<ptr<f32>>,
+    weights: ptr<ptr<f32> >,
+    biases: ptr<ptr<f32> >,
     layer_sizes: ptr<i32>,
     n_layers: i32,
     n_outputs: i32,
     activation: i32,
     learning_rate: f32,
     momentum: f32,
-    v_weights: ptr<ptr<f32>>,
-    v_biases: ptr<ptr<f32>>,
+    v_weights: ptr<ptr<f32> >,
+    v_biases: ptr<ptr<f32> >,
     fitted: bool
 }
 
@@ -354,10 +354,10 @@ export function mlp_regressor_fit(
 
     srand(seed)
 
-    let weights: ptr<ptr<f32>> = malloc((n_layers as i64) * 8) as ptr<ptr<f32>>
-    let biases: ptr<ptr<f32>> = malloc((n_layers as i64) * 8) as ptr<ptr<f32>>
-    let v_weights: ptr<ptr<f32>> = malloc((n_layers as i64) * 8) as ptr<ptr<f32>>
-    let v_biases: ptr<ptr<f32>> = malloc((n_layers as i64) * 8) as ptr<ptr<f32>>
+    let weights: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let biases: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let v_weights: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let v_biases: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
 
     for l in 1 to n_layers {
         let fan_in: i32 = layer_sizes[l - 1]
@@ -376,9 +376,9 @@ export function mlp_regressor_fit(
         }
     }
 
-    let activations: ptr<ptr<f32>> = malloc((n_layers as i64) * 8) as ptr<ptr<f32>>
-    let zs: ptr<ptr<f32>> = malloc((n_layers as i64) * 8) as ptr<ptr<f32>>
-    let deltas: ptr<ptr<f32>> = malloc((n_layers as i64) * 8) as ptr<ptr<f32>>
+    let activations: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let zs: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
+    let deltas: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
     for l in 0 to n_layers {
         activations[l] = array_new_f32(layer_sizes[l])
         zs[l] = array_new_f32(layer_sizes[l])
@@ -458,7 +458,7 @@ export function mlp_regressor_predict(model: MLPRegressor, X: Matrix) -> ptr<f32
     let n: i32 = X.rows
     let result: ptr<f32> = array_new_f32(n)
 
-    let act: ptr<ptr<f32>> = malloc((model.n_layers as i64) * 8) as ptr<ptr<f32>>
+    let act: ptr<ptr<f32> > = malloc((model.n_layers as i64) * 8) as ptr<ptr<f32> >
     for l in 0 to model.n_layers {
         act[l] = array_new_f32(model.layer_sizes[l])
     }

@@ -6,8 +6,8 @@ import "lib/scikit/matrix.flow"
 export struct GaussianNB {
     classes: ptr<f32>,
     n_classes: i32,
-    means: ptr<ptr<f32>>,
-    variances: ptr<ptr<f32>>,
+    means: ptr<ptr<f32> >,
+    variances: ptr<ptr<f32> >,
     priors: ptr<f32>,
     n_features: i32,
     var_smoothing: f32,
@@ -32,8 +32,8 @@ export function gaussian_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, var_smoo
         }
     }
 
-    let means: ptr<ptr<f32>> = malloc((n_classes as i64) * 8) as ptr<ptr<f32>>
-    let variances: ptr<ptr<f32>> = malloc((n_classes as i64) * 8) as ptr<ptr<f32>>
+    let means: ptr<ptr<f32> > = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
+    let variances: ptr<ptr<f32> > = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
     let priors: ptr<f32> = array_new_f32(n_classes)
 
     let global_var: ptr<f32> = array_new_f32(n_features)
@@ -180,7 +180,7 @@ export struct MultinomialNB {
     classes: ptr<f32>,
     n_classes: i32,
     n_features: i32,
-    feature_log_prob: ptr<ptr<f32>>,
+    feature_log_prob: ptr<ptr<f32> >,
     class_log_prior: ptr<f32>,
     fitted: bool
 }
@@ -212,7 +212,7 @@ export function multinomial_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, alpha
         }
     }
 
-    let feature_log_prob: ptr<ptr<f32>> = malloc((n_classes as i64) * 8) as ptr<ptr<f32>>
+    let feature_log_prob: ptr<ptr<f32> > = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
     let class_log_prior: ptr<f32> = array_new_f32(n_classes)
 
     for c in 0 to n_classes {
@@ -324,7 +324,7 @@ export struct BernoulliNB {
     classes: ptr<f32>,
     n_classes: i32,
     n_features: i32,
-    feature_log_prob: ptr<ptr<f32>>,
+    feature_log_prob: ptr<ptr<f32> >,
     class_log_prior: ptr<f32>,
     fitted: bool
 }
@@ -356,7 +356,7 @@ export function bernoulli_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, alpha: 
         }
     }
 
-    let feature_log_prob: ptr<ptr<f32>> = malloc((n_classes as i64) * 8) as ptr<ptr<f32>>
+    let feature_log_prob: ptr<ptr<f32> > = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
     let class_log_prior: ptr<f32> = array_new_f32(n_classes)
 
     for c in 0 to n_classes {
@@ -431,6 +431,239 @@ export function bernoulli_nb_free(model: BernoulliNB) -> void {
         array_free_f32(model.feature_log_prob[c])
     }
     free(model.feature_log_prob as ptr<void>)
+    array_free_f32(model.classes)
+    array_free_f32(model.class_log_prior)
+}
+
+# ============================================================================
+# ComplementNB
+# ============================================================================
+
+export struct ComplementNB {
+    feature_log_prob: ptr<ptr<f32> >,
+    classes: ptr<f32>,
+    class_log_prior: ptr<f32>,
+    n_classes: i32,
+    n_features: i32,
+    alpha: f32,
+    fitted: bool
+}
+
+export function complement_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, alpha: f32) -> ComplementNB {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    for c in 0 to n_classes { classes[c] = c as f32 }
+
+    let class_log_prior: ptr<f32> = array_new_f32(n_classes)
+    for c in 0 to n_classes {
+        let mut count: i32 = 0
+        for i in 0 to n {
+            if y[i] as i32 == c { count = count + 1 }
+        }
+        if count > 0 {
+            class_log_prior[c] = log((count as f64) as f32 as f64) as f32
+        } else {
+            class_log_prior[c] = -1e10
+        }
+    }
+
+    let feature_log_prob: ptr<ptr<f32> > = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
+
+    let class_feature_counts: ptr<ptr<f32> > = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
+    for c in 0 to n_classes {
+        class_feature_counts[c] = array_new_f32(p)
+        for j in 0 to p { class_feature_counts[c][j] = 0.0 }
+    }
+
+    for i in 0 to n {
+        let c: i32 = y[i] as i32
+        for j in 0 to p {
+            class_feature_counts[c][j] = class_feature_counts[c][j] + matrix_at(X, i, j)
+        }
+    }
+
+    let total_counts: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        for c in 0 to n_classes {
+            total_counts[j] = total_counts[j] + class_feature_counts[c][j]
+        }
+    }
+
+    for c in 0 to n_classes {
+        feature_log_prob[c] = array_new_f32(p)
+        for j in 0 to p {
+            let complement_count: f32 = total_counts[j] - class_feature_counts[c][j]
+            let smoothed: f32 = complement_count + alpha
+            let total_complement: f32 = 0.0
+            for k in 0 to p {
+                total_complement = total_complement + (total_counts[k] - class_feature_counts[c][k]) + alpha
+            }
+            if total_complement > 0 {
+                feature_log_prob[c][j] = -log((smoothed / total_complement) as f64) as f32
+            } else {
+                feature_log_prob[c][j] = 0.0
+            }
+        }
+    }
+
+    for c in 0 to n_classes { array_free_f32(class_feature_counts[c]) }
+    free(class_feature_counts as ptr<void>)
+    array_free_f32(total_counts)
+
+    return ComplementNB {
+        feature_log_prob: feature_log_prob,
+        classes: classes,
+        class_log_prior: class_log_prior,
+        n_classes: n_classes,
+        n_features: p,
+        alpha: alpha,
+        fitted: true
+    }
+}
+
+export function complement_nb_predict(model: ComplementNB, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best_score: f32 = -1e30
+        for c in 0 to model.n_classes {
+            let mut score: f32 = model.class_log_prior[c]
+            for j in 0 to model.n_features {
+                score = score + matrix_at(X, i, j) * model.feature_log_prob[c][j]
+            }
+            if score > best_score {
+                best_score = score
+                best_c = c
+            }
+        }
+        result[i] = best_c as f32
+    }
+    return result
+}
+
+export function complement_nb_free(model: ComplementNB) -> void {
+    for c in 0 to model.n_classes {
+        array_free_f32(model.feature_log_prob[c])
+    }
+    free(model.feature_log_prob as ptr<void>)
+    array_free_f32(model.classes)
+    array_free_f32(model.class_log_prior)
+}
+
+# ============================================================================
+# CategoricalNB
+# ============================================================================
+
+export struct CategoricalNB {
+    category_log_prob: ptr<ptr<ptr<f32> > >,
+    n_categories: ptr<i32>,
+    classes: ptr<f32>,
+    class_log_prior: ptr<f32>,
+    n_classes: i32,
+    n_features: i32,
+    alpha: f32,
+    fitted: bool
+}
+
+export function categorical_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_categories: ptr<i32>, alpha: f32) -> CategoricalNB {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let class_log_prior: ptr<f32> = array_new_f32(n_classes)
+    for c in 0 to n_classes {
+        classes[c] = c as f32
+        let mut count: i32 = 0
+        for i in 0 to n {
+            if y[i] as i32 == c { count = count + 1 }
+        }
+        if count > 0 {
+            class_log_prior[c] = log((count as f64) as f32 as f64) as f32
+        } else {
+            class_log_prior[c] = -1e10
+        }
+    }
+
+    let category_log_prob: ptr<ptr<ptr<f32> > > = malloc((p as i64) * 8) as ptr<ptr<ptr<f32> > >
+    for j in 0 to p {
+        category_log_prob[j] = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
+        for c in 0 to n_classes {
+            let nc: i32 = n_categories[j]
+            category_log_prob[j][c] = array_new_f32(nc)
+            let counts: ptr<i32> = malloc((nc as i64) * 4) as ptr<i32>
+            for cat in 0 to nc { counts[cat] = 0 }
+            let mut total: i32 = 0
+            for i in 0 to n {
+                if y[i] as i32 == c {
+                    let cat: i32 = matrix_at(X, i, j) as i32
+                    if cat >= 0 && cat < nc {
+                        counts[cat] = counts[cat] + 1
+                        total = total + 1
+                    }
+                }
+            }
+            for cat in 0 to nc {
+                let smoothed: f32 = (counts[cat] as f32) + alpha
+                let denom: f32 = (total as f32) + alpha * (nc as f32)
+                if denom > 0 {
+                    category_log_prob[j][c][cat] = log((smoothed / denom) as f64) as f32
+                } else {
+                    category_log_prob[j][c][cat] = 0.0
+                }
+            }
+            free(counts as ptr<void>)
+        }
+    }
+
+    return CategoricalNB {
+        category_log_prob: category_log_prob,
+        n_categories: n_categories,
+        classes: classes,
+        class_log_prior: class_log_prior,
+        n_classes: n_classes,
+        n_features: p,
+        alpha: alpha,
+        fitted: true
+    }
+}
+
+export function categorical_nb_predict(model: CategoricalNB, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best_score: f32 = -1e30
+        for c in 0 to model.n_classes {
+            let mut score: f32 = model.class_log_prior[c]
+            for j in 0 to model.n_features {
+                let cat: i32 = matrix_at(X, i, j) as i32
+                if cat >= 0 && cat < model.n_categories[j] {
+                    score = score + model.category_log_prob[j][c][cat]
+                }
+            }
+            if score > best_score {
+                best_score = score
+                best_c = c
+            }
+        }
+        result[i] = best_c as f32
+    }
+    return result
+}
+
+export function categorical_nb_free(model: CategoricalNB) -> void {
+    for j in 0 to model.n_features {
+        for c in 0 to model.n_classes {
+            array_free_f32(model.category_log_prob[j][c])
+        }
+        free(model.category_log_prob[j] as ptr<void>)
+    }
+    free(model.category_log_prob as ptr<void>)
     array_free_f32(model.classes)
     array_free_f32(model.class_log_prior)
 }

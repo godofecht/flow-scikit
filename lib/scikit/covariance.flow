@@ -1,0 +1,544 @@
+# Covariance estimation for flow-scikit.
+# Implements EmpiricalCovariance, ShrunkCovariance, OAS, GraphicalLasso, MinCovDet.
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function calloc(n: i64, size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function sqrt(x: f64) -> f64
+    function fabs(x: f64) -> f64
+    function log(x: f64) -> f64
+    function rand() -> i32
+    function srand(seed: i32) -> void
+    function printf(fmt: string, ...) -> i32
+}
+
+export struct EmpiricalCovariance {
+    covariance: ptr<ptr<f32> >,
+    location: ptr<f32>,
+    n_features: i32,
+    n_samples: i32,
+    fitted: bool
+}
+
+export function empirical_covariance_fit(X: Matrix) -> EmpiricalCovariance {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let location: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let mut m: f32 = 0.0
+        for i in 0 to n {
+            m = m + matrix_at(X, i, j)
+        }
+        location[j] = m / (n as f32)
+    }
+
+    let cov: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to p {
+        cov[i] = array_new_f32(p)
+    }
+
+    for i in 0 to p {
+        for j in 0 to p {
+            let mut s: f32 = 0.0
+            for k in 0 to n {
+                let di: f32 = matrix_at(X, k, i) - location[i]
+                let dj: f32 = matrix_at(X, k, j) - location[j]
+                s = s + di * dj
+            }
+            cov[i][j] = s / (n as f32)
+        }
+    }
+
+    return EmpiricalCovariance {
+        covariance: cov,
+        location: location,
+        n_features: p,
+        n_samples: n,
+        fitted: true
+    }
+}
+
+export function empirical_covariance_get_precision(model: EmpiricalCovariance) -> ptr<ptr<f32> > {
+    let p: i32 = model.n_features
+    let inv: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to p {
+        inv[i] = array_new_f32(p)
+    }
+
+    let det: f32 = 1.0
+    for i in 0 to p {
+        det = det * model.covariance[i][i]
+    }
+
+    if (fabs((det) as f64) as f32) < 1e-10 {
+        for i in 0 to p {
+            inv[i][i] = 1.0 / (model.covariance[i][i] + 1e-6)
+        }
+    } else {
+        for i in 0 to p {
+            inv[i][i] = 1.0 / model.covariance[i][i]
+            for j in 0 to i {
+                inv[i][j] = -model.covariance[i][j] / (model.covariance[i][i] * model.covariance[j][j])
+                inv[j][i] = inv[i][j]
+            }
+        }
+    }
+
+    return inv
+}
+
+export function empirical_covariance_mahalanobis(model: EmpiricalCovariance, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let p: i32 = model.n_features
+    let precision: ptr<ptr<f32> > = empirical_covariance_get_precision(model)
+    let dists: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let diff: ptr<f32> = array_new_f32(p)
+        for j in 0 to p {
+            diff[j] = matrix_at(X, i, j) - model.location[j]
+        }
+        let mut s: f32 = 0.0
+        for a in 0 to p {
+            let mut dot: f32 = 0.0
+            for b in 0 to p {
+                dot = dot + diff[b] * precision[a][b]
+            }
+            s = s + diff[a] * dot
+        }
+        dists[i] = s
+        array_free_f32(diff)
+    }
+
+    for i in 0 to p {
+        array_free_f32(precision[i])
+    }
+    free(precision as ptr<void>)
+
+    return dists
+}
+
+export function empirical_covariance_free(model: EmpiricalCovariance) -> void {
+    for i in 0 to model.n_features {
+        array_free_f32(model.covariance[i])
+    }
+    free(model.covariance as ptr<void>)
+    array_free_f32(model.location)
+}
+
+# ============================================================================
+# ShrunkCovariance
+# ============================================================================
+
+export struct ShrunkCovariance {
+    covariance: ptr<ptr<f32> >,
+    location: ptr<f32>,
+    n_features: i32,
+    shrinkage: f32,
+    fitted: bool
+}
+
+export function shrunk_covariance_fit(X: Matrix, shrinkage: f32) -> ShrunkCovariance {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let location: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let mut m: f32 = 0.0
+        for i in 0 to n {
+            m = m + matrix_at(X, i, j)
+        }
+        location[j] = m / (n as f32)
+    }
+
+    let emp_cov: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to p {
+        emp_cov[i] = array_new_f32(p)
+    }
+    for i in 0 to p {
+        for j in 0 to p {
+            let mut s: f32 = 0.0
+            for k in 0 to n {
+                let di: f32 = matrix_at(X, k, i) - location[i]
+                let dj: f32 = matrix_at(X, k, j) - location[j]
+                s = s + di * dj
+            }
+            emp_cov[i][j] = s / (n as f32)
+        }
+    }
+
+    let mut trace: f32 = 0.0
+    for i in 0 to p {
+        trace = trace + emp_cov[i][i]
+    }
+    let mu: f32 = trace / (p as f32)
+
+    let cov: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to p {
+        cov[i] = array_new_f32(p)
+        for j in 0 to p {
+            if i == j {
+                cov[i][j] = (1.0 - shrinkage) * emp_cov[i][j] + shrinkage * mu
+            } else {
+                cov[i][j] = (1.0 - shrinkage) * emp_cov[i][j]
+            }
+        }
+    }
+
+    for i in 0 to p {
+        array_free_f32(emp_cov[i])
+    }
+    free(emp_cov as ptr<void>)
+
+    return ShrunkCovariance {
+        covariance: cov,
+        location: location,
+        n_features: p,
+        shrinkage: shrinkage,
+        fitted: true
+    }
+}
+
+export function shrunk_covariance_free(model: ShrunkCovariance) -> void {
+    for i in 0 to model.n_features {
+        array_free_f32(model.covariance[i])
+    }
+    free(model.covariance as ptr<void>)
+    array_free_f32(model.location)
+}
+
+# ============================================================================
+# OAS (Oracle Approximating Shrinkage)
+# ============================================================================
+
+export function oas_estimate(X: Matrix) -> f32 {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let mean: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let mut m: f32 = 0.0
+        for i in 0 to n {
+            m = m + matrix_at(X, i, j)
+        }
+        mean[j] = m / (n as f32)
+    }
+
+    let mut trace_sq: f32 = 0.0
+    let mut trace_cov_sq: f32 = 0.0
+    let mut trace: f32 = 0.0
+
+    for i in 0 to p {
+        for j in 0 to p {
+            let mut s: f32 = 0.0
+            for k in 0 to n {
+                let di: f32 = matrix_at(X, k, i) - mean[i]
+                let dj: f32 = matrix_at(X, k, j) - mean[j]
+                s = s + di * dj
+            }
+            let cij: f32 = s / (n as f32)
+            if i == j {
+                trace = trace + cij
+            }
+            trace_sq = trace_sq + cij * cij
+        }
+    }
+
+    for i in 0 to p {
+        for j in 0 to p {
+            let mut s: f32 = 0.0
+            for k in 0 to n {
+                let di: f32 = matrix_at(X, k, i) - mean[i]
+                let dj: f32 = matrix_at(X, k, j) - mean[j]
+                s = s + di * di * dj * dj
+            }
+            trace_cov_sq = trace_cov_sq + (s / (n as f32)) * (s / (n as f32))
+        }
+    }
+
+    array_free_f32(mean)
+
+    let numerator: f32 = (1.0 - 2.0 / (p as f32)) * trace_cov_sq + trace * trace
+    let denominator: f32 = (n as f32 + 1.0 - 2.0 / (p as f32)) * (trace_cov_sq - trace_sq / (p as f32))
+
+    if (fabs((denominator) as f64) as f32) < 1e-10 {
+        return 0.0
+    }
+    let rho: f32 = numerator / denominator
+    if rho < 0.0 { rho = 0.0 }
+    if rho > 1.0 { rho = 1.0 }
+    return rho
+}
+
+export function oas_fit(X: Matrix) -> ShrunkCovariance {
+    let shrinkage: f32 = oas_estimate(X)
+    return shrunk_covariance_fit(X, shrinkage)
+}
+
+# ============================================================================
+# GraphicalLasso (L1-penalized precision matrix)
+# ============================================================================
+
+export struct GraphicalLasso {
+    precision: ptr<ptr<f32> >,
+    covariance: ptr<ptr<f32> >,
+    location: ptr<f32>,
+    n_features: i32,
+    alpha: f32,
+    n_iter: i32,
+    fitted: bool
+}
+
+export function graphical_lasso_fit(X: Matrix, alpha: f32, max_iter: i32, tol: f32) -> GraphicalLasso {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let location: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let mut m: f32 = 0.0
+        for i in 0 to n {
+            m = m + matrix_at(X, i, j)
+        }
+        location[j] = m / (n as f32)
+    }
+
+    let emp_cov: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to p {
+        emp_cov[i] = array_new_f32(p)
+    }
+    for i in 0 to p {
+        for j in 0 to p {
+            let mut s: f32 = 0.0
+            for k in 0 to n {
+                let di: f32 = matrix_at(X, k, i) - location[i]
+                let dj: f32 = matrix_at(X, k, j) - location[j]
+                s = s + di * dj
+            }
+            emp_cov[i][j] = s / (n as f32)
+        }
+    }
+
+    let precision: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    let covariance: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to p {
+        precision[i] = array_new_f32(p)
+        covariance[i] = array_new_f32(p)
+    }
+
+    for i in 0 to p {
+        for j in 0 to p {
+            precision[i][j] = 0.0
+            if i == j {
+                precision[i][j] = 1.0 / (emp_cov[i][i] + alpha)
+            }
+        }
+    }
+
+    let mut n_iter: i32 = 0
+    for iter in 0 to max_iter {
+        n_iter = iter + 1
+        let mut max_change: f32 = 0.0
+
+        for i in 0 to p {
+            let w_ii: f32 = emp_cov[i][i] + alpha
+            let mut w_ii_inv: f32 = 1.0 / w_ii
+
+            for j in 0 to p {
+                if i == j { continue }
+                let mut s: f32 = emp_cov[i][j]
+                for k in 0 to p {
+                    if k != i && k != j {
+                        s = s - precision[i][k] * emp_cov[k][j]
+                    }
+                }
+                let old: f32 = precision[i][j]
+                let new_val: f32 = 0.0
+                if (fabs((s) as f64) as f32) > alpha {
+                    if s > 0 {
+                        new_val = -(s - alpha) * w_ii_inv
+                    } else {
+                        new_val = -(s + alpha) * w_ii_inv
+                    }
+                }
+                precision[i][j] = new_val
+                precision[j][i] = new_val
+                let change: f32 = fabs((new_val - old) as f64) as f32
+                if change > max_change { max_change = change }
+            }
+        }
+
+        if max_change < tol { break }
+    }
+
+    for i in 0 to p {
+        for j in 0 to p {
+            let mut s: f32 = 0.0
+            for k in 0 to p {
+                s = s + precision[i][k] * emp_cov[k][j]
+            }
+            covariance[i][j] = s
+        }
+    }
+
+    for i in 0 to p {
+        array_free_f32(emp_cov[i])
+    }
+    free(emp_cov as ptr<void>)
+
+    return GraphicalLasso {
+        precision: precision,
+        covariance: covariance,
+        location: location,
+        n_features: p,
+        alpha: alpha,
+        n_iter: n_iter,
+        fitted: true
+    }
+}
+
+export function graphical_lasso_free(model: GraphicalLasso) -> void {
+    for i in 0 to model.n_features {
+        array_free_f32(model.precision[i])
+        array_free_f32(model.covariance[i])
+    }
+    free(model.precision as ptr<void>)
+    free(model.covariance as ptr<void>)
+    array_free_f32(model.location)
+}
+
+# ============================================================================
+# MinCovDet (Minimum Covariance Determinant)
+# ============================================================================
+
+export struct MinCovDet {
+    covariance: ptr<ptr<f32> >,
+    location: ptr<f32>,
+    n_features: i32,
+    n_samples: i32,
+    support_: ptr<i32>,
+    n_support: i32,
+    fitted: bool
+}
+
+export function min_cov_det_fit(X: Matrix, h_fraction: f32, max_iter: i32, seed: i32) -> MinCovDet {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let h: i32 = ((n as f32) * h_fraction) as i32
+    if h < p + 1 { h = p + 1 }
+    if h > n { h = n }
+
+    srand(seed)
+
+    let best_det: ptr<f32> = array_new_f32(1)
+    best_det[0] = 1e30
+
+    let best_location: ptr<f32> = array_new_f32(p)
+    let best_cov: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to p {
+        best_cov[i] = array_new_f32(p)
+    }
+
+    let subset: ptr<i32> = malloc((h as i64) * 4) as ptr<i32>
+
+    for trial in 0 to max_iter {
+        for i in 0 to h {
+            subset[i] = rand() % n
+        }
+
+        let loc: ptr<f32> = array_new_f32(p)
+        for j in 0 to p {
+            let mut s: f32 = 0.0
+            for i in 0 to h {
+                s = s + matrix_at(X, subset[i], j)
+            }
+            loc[j] = s / (h as f32)
+        }
+
+        let cov: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+        for i in 0 to p {
+            cov[i] = array_new_f32(p)
+        }
+        for i in 0 to p {
+            for j in 0 to p {
+                let mut s: f32 = 0.0
+                for k in 0 to h {
+                    let di: f32 = matrix_at(X, subset[k], i) - loc[i]
+                    let dj: f32 = matrix_at(X, subset[k], j) - loc[j]
+                    s = s + di * dj
+                }
+                cov[i][j] = s / (h as f32)
+            }
+        }
+
+        let mut det: f32 = 1.0
+        for i in 0 to p {
+            det = det * (cov[i][i] + 1e-10)
+        }
+        det = fabs((det) as f64) as f32
+
+        if det < best_det[0] {
+            best_det[0] = det
+            for j in 0 to p {
+                best_location[j] = loc[j]
+            }
+            for i in 0 to p {
+                for j in 0 to p {
+                    best_cov[i][j] = cov[i][j]
+                }
+            }
+        }
+
+        array_free_f32(loc)
+        for i in 0 to p {
+            array_free_f32(cov[i])
+        }
+        free(cov as ptr<void>)
+    }
+
+    let support_: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let mut n_support: i32 = 0
+    let dists: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut s: f32 = 0.0
+        for a in 0 to p {
+            let d: f32 = matrix_at(X, i, a) - best_location[a]
+            s = s + d * d / (best_cov[a][a] + 1e-10)
+        }
+        dists[i] = s
+    }
+
+    let threshold: f32 = (p as f32) * 2.0
+    for i in 0 to n {
+        if dists[i] < threshold {
+            support_[n_support] = i
+            n_support = n_support + 1
+        }
+    }
+
+    array_free_f32(dists)
+    array_free_f32(best_det)
+    free(subset as ptr<void>)
+
+    return MinCovDet {
+        covariance: best_cov,
+        location: best_location,
+        n_features: p,
+        n_samples: n,
+        support_: support_,
+        n_support: n_support,
+        fitted: true
+    }
+}
+
+export function min_cov_det_free(model: MinCovDet) -> void {
+    for i in 0 to model.n_features {
+        array_free_f32(model.covariance[i])
+    }
+    free(model.covariance as ptr<void>)
+    array_free_f32(model.location)
+    free(model.support_ as ptr<void>)
+}

@@ -118,7 +118,7 @@ export const HANDLE_UNKNOWN_WARN: i32 = 1
 export const HANDLE_UNKNOWN_IGNORE: i32 = 2
 
 export struct OneHotEncoder {
-    categories: ptr<ptr<f32>>,
+    categories: ptr<ptr<f32> >,
     n_categories: ptr<i32>,
     n_features: i32,
     total_output_cols: i32,
@@ -127,7 +127,7 @@ export struct OneHotEncoder {
 }
 
 export function onehot_encoder_init(n_features: i32, handle_unknown: i32) -> OneHotEncoder {
-    let cats: ptr<ptr<f32>> = malloc((n_features as i64) * 8) as ptr<ptr<f32>>
+    let cats: ptr<ptr<f32> > = malloc((n_features as i64) * 8) as ptr<ptr<f32> >
     let n_cats: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
     for j in 0 to n_features {
         n_cats[j] = 0
@@ -623,7 +623,7 @@ export function label_encoder_free(encoder: LabelEncoder) -> void {
 # ============================================================================
 
 export struct OrdinalEncoder {
-    categories: ptr<ptr<f32>>,
+    categories: ptr<ptr<f32> >,
     n_categories: ptr<i32>,
     n_features: i32,
     handle_unknown: i32,
@@ -632,7 +632,7 @@ export struct OrdinalEncoder {
 
 export function ordinal_encoder_fit(X: Matrix, handle_unknown: i32) -> OrdinalEncoder {
     let n_features: i32 = X.cols
-    let cats: ptr<ptr<f32>> = malloc((n_features as i64) * 8) as ptr<ptr<f32>>
+    let cats: ptr<ptr<f32> > = malloc((n_features as i64) * 8) as ptr<ptr<f32> >
     let n_cats: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
 
     for j in 0 to n_features {
@@ -717,7 +717,7 @@ export const KBINS_QUANTILE: i32 = 1
 export const KBINS_KMEANS: i32 = 2
 
 export struct KBinsDiscretizer {
-    bin_edges: ptr<ptr<f32>>,
+    bin_edges: ptr<ptr<f32> >,
     n_bins: ptr<i32>,
     n_features: i32,
     strategy: i32,
@@ -727,7 +727,7 @@ export struct KBinsDiscretizer {
 
 export function kbins_discretizer_fit(X: Matrix, n_bins: i32, strategy: i32) -> KBinsDiscretizer {
     let n_features: i32 = X.cols
-    let bin_edges: ptr<ptr<f32>> = malloc((n_features as i64) * 8) as ptr<ptr<f32>>
+    let bin_edges: ptr<ptr<f32> > = malloc((n_features as i64) * 8) as ptr<ptr<f32> >
     let n_bins_arr: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
 
     for j in 0 to n_features {
@@ -1066,12 +1066,12 @@ export const POWER_BOX_COX: i32 = 1
 
 function _yeo_johnson(x: f32, lambda: f32) -> f32 {
     if x >= 0.0 {
-        if fabs((lambda) as f64) as f32 < 1e-10 {
+        if (fabs((lambda) as f64) as f32) < 1e-10 {
             return log((x + 1.0) as f64) as f32
         }
         return (pow_f32(x + 1.0, lambda) - 1.0) / lambda
     } else {
-        if fabs((lambda - 2.0) as f64) as f32 < 1e-10 {
+        if (fabs((lambda - 2.0) as f64) as f32) < 1e-10 {
             return 0.0 - log((1.0 - x) as f64) as f32
         }
         return 0.0 - ((pow_f32(1.0 - x, 2.0 - lambda) - 1.0) / (2.0 - lambda))
@@ -1161,8 +1161,8 @@ export function power_transformer_free(model: PowerTransformer) -> void {
 export struct QuantileTransformer {
     n_quantiles: i32,
     n_features: i32,
-    references: ptr<ptr<f32>>,
-    quantiles: ptr<ptr<f32>>,
+    references: ptr<ptr<f32> >,
+    quantiles: ptr<ptr<f32> >,
     output_distribution: i32,
     fitted: bool
 }
@@ -1212,8 +1212,8 @@ export function quantile_transformer_fit(X: Matrix, n_quantiles: i32, output_dis
     let n: i32 = X.rows
     let p: i32 = X.cols
 
-    let references: ptr<ptr<f32>> = malloc((p as i64) * 8) as ptr<ptr<f32>>
-    let quantiles: ptr<ptr<f32>> = malloc((p as i64) * 8) as ptr<ptr<f32>>
+    let references: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    let quantiles: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
 
     for j in 0 to p {
         references[j] = array_new_f32(n_quantiles)

@@ -89,28 +89,32 @@ export function dummy_classifier_predict(model: DummyClassifier, n_samples: i32)
         for i in 0 to n_samples {
             preds[i] = model.classes[best_c]
         }
-    } else if model.strategy == DUMMY_STRATEGY_CONSTANT {
-        for i in 0 to n_samples {
-            preds[i] = model.constant_label
-        }
-    } else if model.strategy == DUMMY_STRATEGY_UNIFORM {
-        for i in 0 to n_samples {
-            let c: i32 = rand() % model.n_classes
-            preds[i] = model.classes[c]
-        }
     } else {
-        for i in 0 to n_samples {
-            let r: f32 = ((rand() % 10000) as f32) / 10000.0
-            let mut cum: f32 = 0.0
-            let mut chosen: i32 = 0
-            for c in 0 to model.n_classes {
-                cum = cum + model.class_prior[c]
-                if r <= cum {
-                    chosen = c
-                    break
+        if model.strategy == DUMMY_STRATEGY_CONSTANT {
+            for i in 0 to n_samples {
+                preds[i] = model.constant_label
+            }
+        } else {
+            if model.strategy == DUMMY_STRATEGY_UNIFORM {
+                for i in 0 to n_samples {
+                    let c: i32 = rand() % model.n_classes
+                    preds[i] = model.classes[c]
+                }
+            } else {
+                for i in 0 to n_samples {
+                    let r: f32 = ((rand() % 10000) as f32) / 10000.0
+                    let mut cum: f32 = 0.0
+                    let mut chosen: i32 = 0
+                    for c in 0 to model.n_classes {
+                        cum = cum + model.class_prior[c]
+                        if r <= cum {
+                            chosen = c
+                            break
+                        }
+                    }
+                    preds[i] = model.classes[chosen]
                 }
             }
-            preds[i] = model.classes[chosen]
         }
     }
 
@@ -152,23 +156,25 @@ export function dummy_regressor_fit(y: ptr<f32>, n: i32, strategy: i32, constant
             sum = sum + y[i]
         }
         value = sum / (n as f32)
-    } else if strategy == DUMMY_REG_MEDIAN {
-        let sorted: ptr<f32> = array_copy_f32(y, n)
-        for i in 1 to n {
-            let key: f32 = sorted[i]
-            let mut j: i32 = i - 1
-            while j >= 0 && sorted[j] > key {
-                sorted[j + 1] = sorted[j]
-                j = j - 1
+    } else {
+        if strategy == DUMMY_REG_MEDIAN {
+            let sorted: ptr<f32> = array_copy_f32(y, n)
+            for i in 1 to n {
+                let key: f32 = sorted[i]
+                let mut j: i32 = i - 1
+                while j >= 0 && sorted[j] > key {
+                    sorted[j + 1] = sorted[j]
+                    j = j - 1
+                }
+                sorted[j + 1] = key
             }
-            sorted[j + 1] = key
+            if n % 2 == 0 {
+                value = (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+            } else {
+                value = sorted[n / 2]
+            }
+            array_free_f32(sorted)
         }
-        if n % 2 == 0 {
-            value = (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
-        } else {
-            value = sorted[n / 2]
-        }
-        array_free_f32(sorted)
     }
 
     return DummyRegressor {

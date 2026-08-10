@@ -1,0 +1,407 @@
+# Semi-supervised learning for flow-scikit.
+# Implements LabelPropagation, LabelSpreading, SelfTrainingClassifier.
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function calloc(n: i64, size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function exp(x: f64) -> f64
+    function sqrt(x: f64) -> f64
+    function fabs(x: f64) -> f64
+    function printf(fmt: string, ...) -> i32
+}
+
+const UNLABELED: i32 = -1
+
+# ============================================================================
+# LabelPropagation
+# ============================================================================
+
+export struct LabelPropagation {
+    labels: ptr<i32>,
+    label_distributions: ptr<ptr<f32> >,
+    n_classes: i32,
+    n_samples: i32,
+    n_features: i32,
+    n_iter: i32,
+    fitted: bool
+}
+
+function _build_affinity(X: Matrix, gamma: f32) -> ptr<ptr<f32> > {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let W: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        W[i] = array_new_f32(n)
+    }
+    for i in 0 to n {
+        for j in 0 to n {
+            let mut s: f32 = 0.0
+            for k in 0 to p {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                s = s + d * d
+            }
+            W[i][j] = exp((-gamma * s) as f64) as f32
+        }
+    }
+    return W
+}
+
+export function label_propagation_fit(X: Matrix, y: ptr<i32>, n_classes: i32, gamma: f32, max_iter: i32, tol: f32) -> LabelPropagation {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let W: ptr<ptr<f32> > = _build_affinity(X, gamma)
+
+    let mut deg: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        for j in 0 to n {
+            deg[i] = deg[i] + W[i][j]
+        }
+        if deg[i] < 1e-10 { deg[i] = 1e-10 }
+    }
+
+    let T: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        T[i] = array_new_f32(n)
+        for j in 0 to n {
+            T[i][j] = W[i][j] / deg[i]
+        }
+    }
+
+    let Y: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    let clamp: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        Y[i] = array_new_f32(n_classes)
+        clamp[i] = array_new_f32(n_classes)
+        if y[i] >= 0 && y[i] < n_classes {
+            clamp[i][y[i]] = 1.0
+            Y[i][y[i]] = 1.0
+        }
+    }
+
+    let mut n_iter: i32 = 0
+    for iter in 0 to max_iter {
+        n_iter = iter + 1
+        let mut max_change: f32 = 0.0
+
+        let new_Y: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+        for i in 0 to n {
+            new_Y[i] = array_new_f32(n_classes)
+        }
+
+        for i in 0 to n {
+            for c in 0 to n_classes {
+                let mut s: f32 = 0.0
+                for j in 0 to n {
+                    s = s + T[i][j] * Y[j][c]
+                }
+                new_Y[i][c] = s
+            }
+        }
+
+        for i in 0 to n {
+            if y[i] >= 0 {
+                for c in 0 to n_classes {
+                    new_Y[i][c] = clamp[i][c]
+                }
+            }
+            for c in 0 to n_classes {
+                let change: f32 = fabs((new_Y[i][c] - Y[i][c]) as f64) as f32
+                if change > max_change { max_change = change }
+                Y[i][c] = new_Y[i][c]
+            }
+            array_free_f32(new_Y[i])
+        }
+        free(new_Y as ptr<void>)
+
+        if max_change < tol { break }
+    }
+
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best_val: f32 = -1e30
+        for c in 0 to n_classes {
+            if Y[i][c] > best_val {
+                best_val = Y[i][c]
+                best_c = c
+            }
+        }
+        labels[i] = best_c
+    }
+
+    for i in 0 to n {
+        array_free_f32(W[i])
+        array_free_f32(T[i])
+        array_free_f32(clamp[i])
+    }
+    free(W as ptr<void>)
+    free(T as ptr<void>)
+    free(clamp as ptr<void>)
+    array_free_f32(deg)
+
+    return LabelPropagation {
+        labels: labels,
+        label_distributions: Y,
+        n_classes: n_classes,
+        n_samples: n,
+        n_features: p,
+        n_iter: n_iter,
+        fitted: true
+    }
+}
+
+export function label_propagation_predict(model: LabelPropagation) -> ptr<i32> {
+    let result: ptr<i32> = malloc((model.n_samples as i64) * 4) as ptr<i32>
+    for i in 0 to model.n_samples {
+        result[i] = model.labels[i]
+    }
+    return result
+}
+
+export function label_propagation_predict_proba(model: LabelPropagation) -> ptr<ptr<f32> > {
+    let result: ptr<ptr<f32> > = malloc((model.n_samples as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to model.n_samples {
+        result[i] = array_new_f32(model.n_classes)
+        let mut s: f32 = 0.0
+        for c in 0 to model.n_classes {
+            s = s + model.label_distributions[i][c]
+        }
+        if s < 1e-10 { s = 1.0 }
+        for c in 0 to model.n_classes {
+            result[i][c] = model.label_distributions[i][c] / s
+        }
+    }
+    return result
+}
+
+export function label_propagation_free(model: LabelPropagation) -> void {
+    for i in 0 to model.n_samples {
+        array_free_f32(model.label_distributions[i])
+    }
+    free(model.label_distributions as ptr<void>)
+    free(model.labels as ptr<void>)
+}
+
+# ============================================================================
+# LabelSpreading
+# ============================================================================
+
+export struct LabelSpreading {
+    labels: ptr<i32>,
+    label_distributions: ptr<ptr<f32> >,
+    n_classes: i32,
+    n_samples: i32,
+    n_features: i32,
+    n_iter: i32,
+    alpha: f32,
+    fitted: bool
+}
+
+export function label_spreading_fit(X: Matrix, y: ptr<i32>, n_classes: i32, gamma: f32, alpha: f32, max_iter: i32, tol: f32) -> LabelSpreading {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let W: ptr<ptr<f32> > = _build_affinity(X, gamma)
+
+    let mut deg: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        for j in 0 to n {
+            deg[i] = deg[i] + W[i][j]
+        }
+        if deg[i] < 1e-10 { deg[i] = 1e-10 }
+    }
+
+    let S: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        S[i] = array_new_f32(n)
+        for j in 0 to n {
+            S[i][j] = alpha * W[i][j] / deg[i]
+        }
+    }
+
+    let Y: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    let clamp: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        Y[i] = array_new_f32(n_classes)
+        clamp[i] = array_new_f32(n_classes)
+        if y[i] >= 0 && y[i] < n_classes {
+            clamp[i][y[i]] = 1.0
+            Y[i][y[i]] = 1.0
+        }
+    }
+
+    let mut n_iter: i32 = 0
+    for iter in 0 to max_iter {
+        n_iter = iter + 1
+        let mut max_change: f32 = 0.0
+
+        let new_Y: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+        for i in 0 to n {
+            new_Y[i] = array_new_f32(n_classes)
+        }
+
+        for i in 0 to n {
+            for c in 0 to n_classes {
+                let mut s: f32 = 0.0
+                for j in 0 to n {
+                    s = s + S[i][j] * Y[j][c]
+                }
+                new_Y[i][c] = s + (1.0 - alpha) * clamp[i][c]
+            }
+        }
+
+        for i in 0 to n {
+            for c in 0 to n_classes {
+                let change: f32 = fabs((new_Y[i][c] - Y[i][c]) as f64) as f32
+                if change > max_change { max_change = change }
+                Y[i][c] = new_Y[i][c]
+            }
+            array_free_f32(new_Y[i])
+        }
+        free(new_Y as ptr<void>)
+
+        if max_change < tol { break }
+    }
+
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best_val: f32 = -1e30
+        for c in 0 to n_classes {
+            if Y[i][c] > best_val {
+                best_val = Y[i][c]
+                best_c = c
+            }
+        }
+        labels[i] = best_c
+    }
+
+    for i in 0 to n {
+        array_free_f32(W[i])
+        array_free_f32(S[i])
+        array_free_f32(clamp[i])
+    }
+    free(W as ptr<void>)
+    free(S as ptr<void>)
+    free(clamp as ptr<void>)
+    array_free_f32(deg)
+
+    return LabelSpreading {
+        labels: labels,
+        label_distributions: Y,
+        n_classes: n_classes,
+        n_samples: n,
+        n_features: p,
+        n_iter: n_iter,
+        alpha: alpha,
+        fitted: true
+    }
+}
+
+export function label_spreading_predict(model: LabelSpreading) -> ptr<i32> {
+    let result: ptr<i32> = malloc((model.n_samples as i64) * 4) as ptr<i32>
+    for i in 0 to model.n_samples {
+        result[i] = model.labels[i]
+    }
+    return result
+}
+
+export function label_spreading_free(model: LabelSpreading) -> void {
+    for i in 0 to model.n_samples {
+        array_free_f32(model.label_distributions[i])
+    }
+    free(model.label_distributions as ptr<void>)
+    free(model.labels as ptr<void>)
+}
+
+# ============================================================================
+# SelfTrainingClassifier
+# ============================================================================
+
+export struct SelfTrainingClassifier {
+    labels: ptr<i32>,
+    confidence: ptr<f32>,
+    n_iter: i32,
+    n_labeled: i32,
+    n_samples: i32,
+    threshold: f32,
+    fitted: bool
+}
+
+export function self_training_classifier_fit(
+    y_initial: ptr<i32>,
+    probabilities: ptr<ptr<f32> >,
+    n_samples: i32,
+    n_classes: i32,
+    threshold: f32,
+    max_iter: i32
+) -> SelfTrainingClassifier {
+    let labels: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+    let confidence: ptr<f32> = array_new_f32(n_samples)
+
+    for i in 0 to n_samples {
+        labels[i] = y_initial[i]
+        confidence[i] = 0.0
+    }
+
+    let mut n_iter: i32 = 0
+    let mut n_labeled: i32 = 0
+
+    for i in 0 to n_samples {
+        if labels[i] >= 0 { n_labeled = n_labeled + 1 }
+    }
+
+    for iter in 0 to max_iter {
+        n_iter = iter + 1
+        let mut newly_labeled: i32 = 0
+
+        for i in 0 to n_samples {
+            if labels[i] >= 0 { continue }
+
+            let mut best_c: i32 = 0
+            let mut best_p: f32 = -1.0
+            for c in 0 to n_classes {
+                if probabilities[i][c] > best_p {
+                    best_p = probabilities[i][c]
+                    best_c = c
+                }
+            }
+
+            if best_p >= threshold {
+                labels[i] = best_c
+                confidence[i] = best_p
+                newly_labeled = newly_labeled + 1
+                n_labeled = n_labeled + 1
+            }
+        }
+
+        if newly_labeled == 0 { break }
+    }
+
+    return SelfTrainingClassifier {
+        labels: labels,
+        confidence: confidence,
+        n_iter: n_iter,
+        n_labeled: n_labeled,
+        n_samples: n_samples,
+        threshold: threshold,
+        fitted: true
+    }
+}
+
+export function self_training_classifier_predict(model: SelfTrainingClassifier) -> ptr<i32> {
+    let result: ptr<i32> = malloc((model.n_samples as i64) * 4) as ptr<i32>
+    for i in 0 to model.n_samples {
+        result[i] = model.labels[i]
+    }
+    return result
+}
+
+export function self_training_classifier_free(model: SelfTrainingClassifier) -> void {
+    free(model.labels as ptr<void>)
+    array_free_f32(model.confidence)
+}

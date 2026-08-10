@@ -268,3 +268,100 @@ export function gaussian_process_regressor_free(model: GaussianProcessRegressor)
     array_free_f32(model.y_train)
     array_free_f32(model.L)
 }
+
+# ============================================================================
+# GaussianProcessClassifier
+# ============================================================================
+
+export struct GaussianProcessClassifier {
+    X_train: Matrix,
+    y_train: ptr<f32>,
+    f: ptr<f32>,
+    gamma: f32,
+    n_samples: i32,
+    n_features: i32,
+    n_iter: i32,
+    fitted: bool
+}
+
+export function gaussian_process_classifier_fit(X: Matrix, y: ptr<f32>, gamma: f32, max_iter: i32) -> GaussianProcessClassifier {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let y_dual: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        if y[i] == 0.0 { y_dual[i] = -1.0 }
+        else { y_dual[i] = 1.0 }
+    }
+
+    let f: ptr<f32> = array_new_f32(n)
+    for i in 0 to n { f[i] = 0.0 }
+
+    let K: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        K[i] = array_new_f32(n)
+        for j in 0 to n {
+            let mut s: f32 = 0.0
+            for k in 0 to p {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                s = s + d * d
+            }
+            K[i][j] = exp((-gamma * s) as f64) as f32
+        }
+    }
+
+    for iter in 0 to max_iter {
+        for i in 0 to n {
+            let mut s: f32 = 0.0
+            for j in 0 to n {
+                s = s + K[i][j] * y_dual[j] * (1.0 / (1.0 + exp((-f[j]) as f64) as f32))
+            }
+            f[i] = s
+        }
+    }
+
+    for i in 0 to n { array_free_f32(K[i]) }
+    free(K as ptr<void>)
+
+    return GaussianProcessClassifier {
+        X_train: X,
+        y_train: y_dual,
+        f: f,
+        gamma: gamma,
+        n_samples: n,
+        n_features: p,
+        n_iter: max_iter,
+        fitted: true
+    }
+}
+
+export function gaussian_process_classifier_predict(model: GaussianProcessClassifier, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let p: i32 = model.n_features
+    let result: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut s: f32 = 0.0
+        for j in 0 to model.n_samples {
+            let mut dist: f32 = 0.0
+            for k in 0 to p {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(model.X_train, j, k)
+                dist = dist + d * d
+            }
+            let k_val: f32 = exp((-model.gamma * dist) as f64) as f32
+            s = s + k_val * model.y_train[j] * (1.0 / (1.0 + exp((-model.f[j]) as f64) as f32))
+        }
+        if s > 0 {
+            result[i] = 1.0
+        } else {
+            result[i] = 0.0
+        }
+    }
+    return result
+}
+
+export function gaussian_process_classifier_free(model: GaussianProcessClassifier) -> void {
+    matrix_free(model.X_train)
+    array_free_f32(model.y_train)
+    array_free_f32(model.f)
+}

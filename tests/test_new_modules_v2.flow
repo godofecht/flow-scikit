@@ -862,7 +862,7 @@ function test_sparse_pca() -> i32 {
     let mut n_zeros: i32 = 0
     for c in 0 to 2 {
         for j in 0 to 4 {
-            if fabs((spca.components[c][j]) as f64) as f32 < 1e-6 {
+            if (fabs((spca.components[c][j]) as f64) as f32) < 1e-6 {
                 n_zeros = n_zeros + 1
             }
         }
