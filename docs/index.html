@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="A relaxed, typed reimagining of scikit-learn in Flow." />
+    <title>flow-scikit — machine learning, but make it Flow</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="wordmark" href="#top" aria-label="flow-scikit home">flow<span>~</span>scikit</a>
+      <nav aria-label="Primary navigation">
+        <a href="#why">Why</a>
+        <a href="#play">See it move</a>
+        <a href="https://github.com/godofecht/flow-scikit">GitHub ↗</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">machine learning / but pleasantly typed</p>
+          <h1>Friendly tools for finding the shape of things.</h1>
+          <p class="lede">
+            flow-scikit reimagines the useful bits of scikit-learn in Flow:
+            compact APIs, explicit choices, and a little less mystery in the middle.
+          </p>
+          <div class="actions">
+            <a class="button button-primary" href="https://github.com/godofecht/flow-scikit">Browse the code</a>
+            <a class="button button-quiet" href="#play">Watch the tiny movies ↓</a>
+          </div>
+          <ul class="chips" aria-label="Highlights">
+            <li>typed</li>
+            <li>effect-aware</li>
+            <li>no surprise defaults</li>
+          </ul>
+        </div>
+        <div class="hero-art" aria-hidden="true">
+          <img src="assets/hero.png" alt="" />
+          <span class="hero-note note-one">a little boundary goes a long way</span>
+          <span class="hero-note note-two">three friendly clusters</span>
+        </div>
+      </section>
+
+      <section id="why" class="intro section-shell">
+        <p class="eyebrow">less ceremony, more signal</p>
+        <h2>The familiar toolkit, with some opinions.</h2>
+        <div class="feature-grid">
+          <article>
+            <span class="feature-number">01</span>
+            <h3>Probabilities stay visible</h3>
+            <p>Classifiers predict probabilities. Deciding on a label is an explicit, adjustable next step.</p>
+          </article>
+          <article>
+            <span class="feature-number">02</span>
+            <h3>Data enters one way</h3>
+            <p>A unified table interface keeps the inside calm, whatever dataframe-shaped thing lives at the edge.</p>
+          </article>
+          <article>
+            <span class="feature-number">03</span>
+            <h3>Progress is an effect</h3>
+            <p>Grid search can tell you what it is doing without turning your terminal into a novella.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="play" class="showcase section-shell">
+        <div class="showcase-heading">
+          <p class="eyebrow">small moving pictures</p>
+          <h2>What the toolbox feels like.</h2>
+          <p>These are deliberately tiny loops: just enough motion to make the ideas feel less abstract.</p>
+        </div>
+        <div class="demo-grid">
+          <article class="demo-card card-large">
+            <img src="assets/classification-boundary.gif" alt="Animated view of coloured classes separated by a smooth decision boundary" />
+            <div class="demo-copy">
+              <span>classification</span>
+              <h3>Keep the confidence.</h3>
+              <p>Predict a probability first; pick a threshold when your problem actually asks for one.</p>
+            </div>
+          </article>
+          <article class="demo-card">
+            <img src="assets/cluster-garden.gif" alt="Animated view of a cluster of indigo data points" />
+            <div class="demo-copy">
+              <span>clustering</span>
+              <h3>Find the neighbourhood.</h3>
+              <p>KMeans, DBSCAN, MeanShift, and friends for when labels have not arrived yet.</p>
+            </div>
+          </article>
+          <article class="demo-card">
+            <img src="assets/model-map.gif" alt="Animated view of cyan data points and a curved model boundary" />
+            <div class="demo-copy">
+              <span>model selection</span>
+              <h3>Try a few paths.</h3>
+              <p>Splits, folds, and searches that make the experimental part feel a bit more humane.</p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="code-section section-shell">
+        <div>
+          <p class="eyebrow">the good kind of familiar</p>
+          <h2>Start with something small.</h2>
+          <p>Bring a matrix, fit a model, inspect the result. The rest can grow from there.</p>
+        </div>
+        <pre aria-label="Example Flow code"><code>import "lib/scikit/scikit.flow"
+
+let model = knn_classifier_fit(X_train, y_train, 5)
+let confidence = knn_classifier_predict(model, X_test)
+let labels = knn_classifier_decide(model, X_test, 0.65)</code></pre>
+      </section>
+
+      <section class="closing section-shell">
+        <p class="eyebrow">open source, open-ended</p>
+        <h2>Come make the learning bit nicer.</h2>
+        <a class="button button-primary" href="https://github.com/godofecht/flow-scikit">Open flow-scikit on GitHub ↗</a>
+      </section>
+    </main>
+
+    <footer>
+      <a class="wordmark" href="#top">flow<span>~</span>scikit</a>
+      <p>Made for curious models and curious humans.</p>
+    </footer>
+  </body>
+</html>
