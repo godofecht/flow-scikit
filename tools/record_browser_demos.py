@@ -8,18 +8,7 @@ from PIL import Image
 from playwright.sync_api import sync_playwright
 
 
-RECORDINGS = [
-    ("home-price", "#home-area", [45, 85, 130, 185], "#home-area"),
-    ("delivery-eta", "#eta-distance", [4, 12, 28, 55], "#eta-distance"),
-    ("quality-check", "#quality-measured", [92, 100, 106, 118], "#quality-measured"),
-]
-
-
-def set_value(page, selector, value):
-    page.locator(selector).evaluate(
-        "(element, value) => { element.value = value; element.dispatchEvent(new Event('input', { bubbles: true })); }",
-        str(value),
-    )
+RECORDINGS = [("home-price", 0), ("delivery-eta", 4), ("quality-check", 7)]
 
 
 def main() -> int:
@@ -32,13 +21,15 @@ def main() -> int:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1440, "height": 1000}, device_scale_factor=1)
         page.goto(f"{base_url}/demos.html", wait_until="networkidle")
-        for name, selector, values, card_selector in RECORDINGS:
-            card = page.locator(selector).locator("xpath=ancestor::article")
+        for name, index in RECORDINGS:
+            card = page.locator(".visual-card").nth(index)
             card.scroll_into_view_if_needed()
             box = card.bounding_box()
+            canvas = card.locator("canvas")
+            canvas_box = canvas.bounding_box()
             frames = []
-            for value in values:
-                set_value(page, selector, value)
+            for fraction in (0.16, 0.38, 0.64, 0.86):
+                page.mouse.click(canvas_box["x"] + canvas_box["width"] * fraction, canvas_box["y"] + canvas_box["height"] * 0.48)
                 page.wait_for_timeout(200)
                 data = page.screenshot(clip=box)
                 import io
