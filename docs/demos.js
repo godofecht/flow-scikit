@@ -92,6 +92,7 @@ function bindSliders(ids, render) {
 }
 
 function initialiseExperiments() {
+  initialiseVisualLab();
   bindSliders(["home-area", "home-rooms", "home-age"], () => {
     const area = Number(document.querySelector("#home-area").value);
     const rooms = Number(document.querySelector("#home-rooms").value);
@@ -183,6 +184,59 @@ function initialiseExperiments() {
   });
 
   initialiseSegmentMap();
+}
+
+function initialiseVisualLab() {
+  const lab = document.querySelector("#visual-lab");
+  const experiments = [
+    ["Home prices", "Regression line", "price"], ["Payment reviews", "Risk boundary", "risk"],
+    ["Feature scaling", "Before / after", "scale"], ["Sensor alerts", "Normal range", "anomaly"],
+    ["Delivery windows", "Route estimate", "eta"], ["Message triage", "Review threshold", "spam"],
+    ["Stock cover", "Demand curve", "stock"], ["Part tolerance", "Pass / hold band", "quality"],
+    ["Customer segments", "Nearest centroid", "cluster"], ["MNIST digits", "Draw and classify", "mnist"]
+  ];
+  experiments.forEach(([title, subtitle, kind], index) => {
+    const card = document.createElement("article"); card.className = "visual-card";
+    card.innerHTML = `<header><div><small>${String(index + 1).padStart(2, "0")} / interactive</small><h3>${title}</h3></div><small>${subtitle}</small></header><canvas width="640" height="360" aria-label="${title} interactive graph"></canvas><footer><span>Click or drag in the chart</span><strong>Loading…</strong></footer>`;
+    lab.append(card);
+    drawVisualExperiment(card, kind, index);
+  });
+}
+
+function drawVisualExperiment(card, kind, seed) {
+  const canvas = card.querySelector("canvas"), ctx = canvas.getContext("2d"), result = card.querySelector("strong");
+  let point = { x: 0.54, y: 0.46 };
+  function render() {
+    const w = canvas.width, h = canvas.height, x = point.x * w, y = point.y * h;
+    ctx.fillStyle = "#0c1730"; ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = "#263b63"; ctx.lineWidth = 1;
+    for (let i = 48; i < w; i += 64) { ctx.beginPath(); ctx.moveTo(i, 28); ctx.lineTo(i, h - 36); ctx.stroke(); }
+    for (let i = 40; i < h; i += 48) { ctx.beginPath(); ctx.moveTo(36, i); ctx.lineTo(w - 28, i); ctx.stroke(); }
+    const colours = ["#5669e8", "#54b6d3", "#ef8068"];
+    for (let i = 0; i < 34; i += 1) {
+      const px = 54 + ((i * 83 + seed * 41) % 520), py = 70 + ((i * 47 + seed * 29) % 220);
+      const drift = Math.sin((i + point.x * 8) * 1.7) * 16;
+      ctx.fillStyle = colours[(i + seed) % 3]; ctx.beginPath(); ctx.arc(px, py + drift, 5, 0, Math.PI * 2); ctx.fill();
+    }
+    if (["price", "eta", "stock"].includes(kind)) { ctx.strokeStyle = "#ef8068"; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(40, h - 65); ctx.bezierCurveTo(w*.3,h*.55,w*.58,h*.7,w-35,48 + y*.18); ctx.stroke(); }
+    if (["risk", "spam", "quality", "anomaly"].includes(kind)) { ctx.fillStyle = "rgba(239,128,104,.18)"; ctx.fillRect(x, 30, w - x, h - 66); ctx.strokeStyle = "#ef8068"; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x, 30); ctx.lineTo(x, h - 36); ctx.stroke(); }
+    if (kind === "cluster") { [[.2,.72],[.49,.48],[.78,.28]].forEach((p,i)=>{ctx.fillStyle=colours[i];ctx.beginPath();ctx.arc(p[0]*w,p[1]*h,24,0,Math.PI*2);ctx.fill();}); }
+    if (kind === "mnist") { ctx.fillStyle="#dce8ff";ctx.font="22px DM Mono";ctx.fillText("Open the full drawing canvas below ↓", 88, 185); }
+    ctx.fillStyle = "#fffdf8"; ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.fill();
+    const value = Math.round(point.x * 100);
+    if (kind === "price") result.textContent = `£${new Intl.NumberFormat("en-GB").format(Math.round(flowNumber("home_price_estimate_f32_f32_f32", [30 + value * 1.8, 3, 18]) / 1000) * 1000)}`;
+    else if (kind === "risk") result.textContent = `${Math.round(flowNumber("payment_risk_f32_f32_f32", [value, 2, 28]))}/100 review score`;
+    else if (kind === "scale") result.textContent = `${flowNumber("standardise_value_f32_f32_f32", [value, 50, 18]).toFixed(2)}σ from average`;
+    else if (kind === "anomaly") result.textContent = `${flowNumber("absolute_z_score_f32_f32_f32", [value, 50, 12]).toFixed(1)}σ from normal`;
+    else if (kind === "eta") result.textContent = `${Math.round(flowNumber("delivery_eta_minutes_f32_f32_f32", [value / 2, 4, 35]))} min ETA`;
+    else if (kind === "spam") result.textContent = `${Math.round(flowNumber("message_risk_f32_f32_f32", [value / 20, .12, 1]))}/100 review score`;
+    else if (kind === "stock") result.textContent = `${flowNumber("stock_cover_days_f32_f32", [value * 8, 18]).toFixed(1)} days of cover`;
+    else if (kind === "quality") result.textContent = `${flowNumber("tolerance_deviation_f32_f32_f32", [value / 10, 10, .4]).toFixed(2)}× tolerance`;
+    else if (kind === "cluster") result.textContent = `${flowNumber("point_distance_f32_f32_f32_f32", [x, y, 315, 172]).toFixed(0)} distance to regular`;
+    else result.textContent = "Open canvas below";
+  }
+  function move(event) { const box=canvas.getBoundingClientRect(); point={x:Math.max(.06,Math.min(.94,(event.clientX-box.left)/box.width)),y:Math.max(.1,Math.min(.88,(event.clientY-box.top)/box.height))}; render(); }
+  let active=false; canvas.addEventListener("pointerdown",e=>{active=true;canvas.setPointerCapture(e.pointerId);move(e)}); canvas.addEventListener("pointermove",e=>{if(active)move(e)}); canvas.addEventListener("pointerup",()=>active=false); render();
 }
 
 function initialiseSegmentMap() {
