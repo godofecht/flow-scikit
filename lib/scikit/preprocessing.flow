@@ -592,6 +592,10 @@ export function normalizer_transform(normalizer: Normalizer, X: Matrix) -> Matri
     return result
 }
 
+export function normalizer_free(n: Normalizer) -> void {
+    return
+}
+
 # ============================================================================
 # Binarizer
 # Thresholds values to 0 or 1.
@@ -618,6 +622,10 @@ export function binarizer_transform(binarizer: Binarizer, X: Matrix) -> Matrix {
         }
     }
     return result
+}
+
+export function binarizer_free(b: Binarizer) -> void {
+    return
 }
 
 # ============================================================================
@@ -1045,6 +1053,11 @@ export function polynomial_features_transform(pf: PolynomialFeatures, X: Matrix)
     }
 
     return result
+}
+
+export function polynomial_features_free(pf: PolynomialFeatures) -> void {
+    # PolynomialFeatures has no heap-allocated fields
+    return
 }
 
 # ============================================================================

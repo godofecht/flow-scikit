@@ -22,7 +22,7 @@ function main() -> i32 {
         }
     }
 
-    let model: KNNClassifier = knn_classifier_fit(X, y, 3)
+    let model: KNNClassifier = knn_classifier_fit(X, y, 10, 3)
     let probabilities: Matrix = knn_classifier_predict(model, X)
     let labels: ptr<f32> = knn_classifier_decide(model, X, 0.60)
     let accuracy: f32 = accuracy_score(y, labels, 20)

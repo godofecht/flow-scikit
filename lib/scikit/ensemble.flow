@@ -457,6 +457,14 @@ export function voting_classifier_predict(model: VotingClassifier, X: Matrix) ->
     return preds
 }
 
+export function voting_classifier_free(model: VotingClassifier) -> void {
+    for t in 0 to model.n_estimators {
+        decision_tree_classifier_free(model.estimators[t])
+    }
+    free(model.estimators as ptr<void>)
+    array_free_f32(model.classes)
+}
+
 # ============================================================================
 # GradientBoostingClassifier
 # Fits regression trees on the negative gradient of the log loss.
