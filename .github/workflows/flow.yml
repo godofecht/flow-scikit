@@ -29,3 +29,28 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}/.flow-toolchain/src
         run: python .github/scripts/verify_flow_sources.py
+
+  run-all:
+    name: Run all tests and examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: flooooooooooow/flow
+          ref: 494f9e30e951f47fb95f2421a4163e58074e9bfc
+          path: .flow-toolchain
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Flow compiler deps
+        run: pip install -r .flow-toolchain/requirements.txt
+
+      - name: Run tests and examples
+        env:
+          FLOW_BIN: ${{ github.workspace }}/.flow-toolchain/flow
+          FLOW_HOST: python
+        run: python tools/run_all.py
