@@ -795,11 +795,12 @@ export function adaboost_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
         for i in 0 to n_samples {
             let r: f32 = (rand() as f32) / 2147483647.0 * cum
             let mut acc: f32 = 0.0
-            let mut idx: i32 = 0
+            let mut idx: i32 = n_samples - 1
             for j in 0 to n_samples {
                 acc = acc + weights[j]
                 if acc >= r {
                     idx = j
+                    break
                 }
             }
             sample_indices[i] = idx
@@ -971,11 +972,12 @@ export function adaboost_regressor_fit(X: Matrix, y: ptr<f32>, n_trees: i32, max
         for i in 0 to n_samples {
             let r: f32 = (rand() as f32) / 2147483647.0 * cum
             let mut acc: f32 = 0.0
-            let mut idx: i32 = 0
+            let mut idx: i32 = n_samples - 1
             for j in 0 to n_samples {
                 acc = acc + weights[j]
                 if acc >= r {
                     idx = j
+                    break
                 }
             }
             sample_indices[i] = idx
@@ -1018,20 +1020,23 @@ export function adaboost_regressor_fit(X: Matrix, y: ptr<f32>, n_trees: i32, max
             err = err + weights[i] * rel_err
         }
 
-        # Estimator weight: alpha = err^2 / (1 - err)^2 (linear loss)
-        # sklearn default loss="linear"
+        # Estimator weight (AdaBoost.R2, linear loss):
+        # beta = err / (1 - err), alpha = log(1/beta)
+        let mut beta: f32 = 0.0
         if err >= 0.99 {
             alphas[t] = 0.0
+            beta = 1e10
         } else {
-            let beta: f32 = err / (1.0 - err)
-            alphas[t] = beta * beta
+            beta = err / (1.0 - err)
+            if beta < 1e-10 { beta = 1e-10 }
+            alphas[t] = log((1.0 / beta) as f64) as f32
         }
 
-        # Update weights: increase for high-error samples
+        # Update weights: w_i *= beta^rel_err_i
         let mut total_w: f32 = 0.0
         for i in 0 to X.rows {
             let rel_err: f32 = fabs((y[i] - preds[i]) as f64) as f32 / max_err
-            weights[i] = weights[i] * pow(alphas[t], (1.0 - rel_err) as f64) as f32
+            weights[i] = weights[i] * pow(beta as f64, rel_err as f64) as f32
             total_w = total_w + weights[i]
         }
 

@@ -103,8 +103,7 @@ function test_simple_imputer() -> i32 {
     println("Test: SimpleImputer mean strategy")
     let X: Matrix = matrix_new(4, 1)
     matrix_set(X, 0, 0, 1.0)
-    matrix_set(X, 1, 0, 0.0 as f32)
-    let d: f64 = 0.0 as f64
+    matrix_set(X, 1, 0, 2.0)
     let nan_val: f32 = (0.0 / 0.0) as f32
     matrix_set(X, 2, 0, nan_val)
     matrix_set(X, 3, 0, 3.0)

@@ -208,16 +208,83 @@ export function pls_fit(X: Matrix, Y: Matrix, n_components: i32, max_iter: i32, 
         array_free_f32(p_vec)
     }
 
-    let coef: ptr<f32> = array_new_f32(p * q)
+    # Coefficient matrix: coef = W * (P^T * W)^{-1} * C^T
+    # For orthogonal W (which NIPLS produces), P^T * W is upper triangular
+    # and its inverse can be computed by back-substitution.
+    # For simplicity, compute R = W * (P^T * W)^{-1} then coef = R * C^T
+    let pt_w: ptr<f32> = array_new_f32(n_components * n_components)
     for a in 0 to n_components {
-        for j in 0 to p {
-            for k in 0 to q {
-                let w_a: f32 = x_weights[a * p + j]
-                let c_a: f32 = y_weights[a * q + k]
-                coef[j * q + k] = coef[j * q + k] + w_a * c_a
+        for b in 0 to n_components {
+            let mut sum: f32 = 0.0
+            for j in 0 to p {
+                sum = sum + x_loadings[a * p + j] * x_weights[b * p + j]
+            }
+            pt_w[a * n_components + b] = sum
+        }
+    }
+
+    # Invert pt_w (n_components x n_components) via Gaussian elimination
+    let inv_ptw: ptr<f32> = array_new_f32(n_components * n_components)
+    for i in 0 to n_components {
+        for j in 0 to n_components {
+            if i == j {
+                inv_ptw[i * n_components + j] = 1.0
+            } else {
+                inv_ptw[i * n_components + j] = 0.0
             }
         }
     }
+    let eps: f32 = 0.000000000001
+    for col in 0 to n_components {
+        let pivot: f32 = pt_w[col * n_components + col]
+        let abs_pivot: f32 = fabs(pivot as f64) as f32
+        if abs_pivot < eps {
+            # Skip degenerate column
+            continue
+        }
+        for j in 0 to n_components {
+            pt_w[col * n_components + j] = pt_w[col * n_components + j] / pivot
+            inv_ptw[col * n_components + j] = inv_ptw[col * n_components + j] / pivot
+        }
+        for row in 0 to n_components {
+            if row == col {
+                continue
+            }
+            let factor: f32 = pt_w[row * n_components + col]
+            for j in 0 to n_components {
+                pt_w[row * n_components + j] = pt_w[row * n_components + j] - factor * pt_w[col * n_components + j]
+                inv_ptw[row * n_components + j] = inv_ptw[row * n_components + j] - factor * inv_ptw[col * n_components + j]
+            }
+        }
+    }
+
+    # R = W * inv_ptw  (p x n_components)
+    let r_mat: ptr<f32> = array_new_f32(p * n_components)
+    for j in 0 to p {
+        for a in 0 to n_components {
+            let mut sum: f32 = 0.0
+            for b in 0 to n_components {
+                sum = sum + x_weights[b * p + j] * inv_ptw[b * n_components + a]
+            }
+            r_mat[j * n_components + a] = sum
+        }
+    }
+
+    # coef = R * Q^T  (p x q), where Q = y_loadings
+    let coef: ptr<f32> = array_new_f32(p * q)
+    for j in 0 to p {
+        for k in 0 to q {
+            let mut sum: f32 = 0.0
+            for a in 0 to n_components {
+                sum = sum + r_mat[j * n_components + a] * y_loadings[a * q + k]
+            }
+            coef[j * q + k] = sum
+        }
+    }
+
+    array_free_f32(pt_w)
+    array_free_f32(inv_ptw)
+    array_free_f32(r_mat)
 
     matrix_free(Xc)
     matrix_free(Yc)
