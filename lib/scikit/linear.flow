@@ -1013,3 +1013,204 @@ export function ridge_classifier_decision_function(model: RidgeClassifier, X: Ma
 export function ridge_classifier_free(model: RidgeClassifier) -> void {
     array_free_f32(model.weights)
 }
+
+# ============================================================================
+# HuberRegressor
+# ============================================================================
+
+export struct HuberRegressor {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    epsilon: f32,
+    n_iter: i32,
+    fitted: bool
+}
+
+export function huber_regressor_fit(X: Matrix, y: ptr<f32>, epsilon: f32, max_iter: i32, lr: f32) -> HuberRegressor {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let weights: ptr<f32> = array_new_f32(p)
+    let mut bias: f32 = 0.0
+
+    let mut delta: f32 = 1.0
+
+    for iter in 0 to max_iter {
+        let residuals: ptr<f32> = array_new_f32(n)
+        for i in 0 to n {
+            let mut pred: f32 = bias
+            for j in 0 to p {
+                pred = pred + weights[j] * matrix_at(X, i, j)
+            }
+            residuals[i] = y[i] - pred
+        }
+
+        let mut abs_resid: ptr<f32> = array_copy_f32(residuals, n)
+        for i in 0 to n {
+            abs_resid[i] = fabs((abs_resid[i]) as f64) as f32
+        }
+
+        for i in 1 to n {
+            let key: f32 = abs_resid[i]
+            let mut j: i32 = i - 1
+            while j >= 0 && abs_resid[j] > key {
+                abs_resid[j + 1] = abs_resid[j]
+                j = j - 1
+            }
+            abs_resid[j + 1] = key
+        }
+
+        let q: f32 = abs_resid[n / 2]
+        delta = q * epsilon
+
+        array_free_f32(abs_resid)
+
+        let grad_w: ptr<f32> = array_new_f32(p)
+        let mut grad_b: f32 = 0.0
+
+        for i in 0 to n {
+            let r: f32 = residuals[i]
+            let ar: f32 = fabs((r) as f64) as f32
+            let mut scale: f32 = 1.0
+            if ar > delta {
+                scale = delta / ar
+            }
+            for j in 0 to p {
+                grad_w[j] = grad_w[j] - r * scale * matrix_at(X, i, j)
+            }
+            grad_b = grad_b - r * scale
+        }
+
+        for j in 0 to p {
+            weights[j] = weights[j] - lr * grad_w[j] / (n as f32)
+        }
+        bias = bias - lr * grad_b / (n as f32)
+
+        array_free_f32(grad_w)
+        array_free_f32(residuals)
+    }
+
+    return HuberRegressor {
+        weights: weights, bias: bias,
+        n_features: p, epsilon: epsilon,
+        n_iter: max_iter, fitted: true
+    }
+}
+
+export function huber_regressor_predict(model: HuberRegressor, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut pred: f32 = model.bias
+        for j in 0 to model.n_features {
+            pred = pred + model.weights[j] * matrix_at(X, i, j)
+        }
+        result[i] = pred
+    }
+    return result
+}
+
+export function huber_regressor_free(model: HuberRegressor) -> void {
+    array_free_f32(model.weights)
+}
+
+# ============================================================================
+# BayesianRidge
+# ============================================================================
+
+export struct BayesianRidge {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    alpha: f32,
+    beta: f32,
+    n_iter: i32,
+    fitted: bool
+}
+
+export function bayesian_ridge_fit(X: Matrix, y: ptr<f32>, max_iter: i32, tol: f32) -> BayesianRidge {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let weights: ptr<f32> = array_new_f32(p)
+    let mut bias: f32 = 0.0
+
+    let y_mean: f32 = array_mean(y, n)
+    let mut alpha: f32 = 1.0
+    let mut beta: f32 = 1.0
+
+    for iter in 0 to max_iter {
+        let grad_w: ptr<f32> = array_new_f32(p)
+        let mut grad_b: f32 = 0.0
+
+        for i in 0 to n {
+            let mut pred: f32 = bias
+            for j in 0 to p {
+                pred = pred + weights[j] * matrix_at(X, i, j)
+            }
+            let error: f32 = y[i] - pred
+            for j in 0 to p {
+                grad_w[j] = grad_w[j] + error * matrix_at(X, i, j)
+            }
+            grad_b = grad_b + error
+        }
+
+        let lr: f32 = beta / (n as f32 * beta + alpha)
+        for j in 0 to p {
+            weights[j] = weights[j] + lr * (grad_w[j] - alpha * weights[j])
+        }
+        bias = bias + lr * grad_b
+
+        array_free_f32(grad_w)
+
+        let mut ss_res: f32 = 0.0
+        for i in 0 to n {
+            let mut pred: f32 = bias
+            for j in 0 to p {
+                pred = pred + weights[j] * matrix_at(X, i, j)
+            }
+            let d: f32 = y[i] - pred
+            ss_res = ss_res + d * d
+        }
+
+        let mut w_sq: f32 = 0.0
+        for j in 0 to p {
+            w_sq = w_sq + weights[j] * weights[j]
+        }
+
+        let new_beta: f32 = (n as f32) / (ss_res + 1e-10)
+        let new_alpha: f32 = (p as f32) / (w_sq + 1e-10)
+
+        if fabs((alpha - new_alpha) as f64) as f32 < tol && fabs((beta - new_beta) as f64) as f32 < tol {
+            alpha = new_alpha
+            beta = new_beta
+            break
+        }
+
+        alpha = new_alpha
+        beta = new_beta
+    }
+
+    return BayesianRidge {
+        weights: weights, bias: bias,
+        n_features: p,
+        alpha: alpha, beta: beta,
+        n_iter: max_iter, fitted: true
+    }
+}
+
+export function bayesian_ridge_predict(model: BayesianRidge, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut pred: f32 = model.bias
+        for j in 0 to model.n_features {
+            pred = pred + model.weights[j] * matrix_at(X, i, j)
+        }
+        result[i] = pred
+    }
+    return result
+}
+
+export function bayesian_ridge_free(model: BayesianRidge) -> void {
+    array_free_f32(model.weights)
+}

@@ -1049,3 +1049,263 @@ export function function_transformer_inverse_transform(ft: FunctionTransformer, 
     }
     return result
 }
+
+# ============================================================================
+# PowerTransformer (Yeo-Johnson approximation)
+# ============================================================================
+
+export struct PowerTransformer {
+    lambdas: ptr<f32>,
+    n_features: i32,
+    method: i32,
+    fitted: bool
+}
+
+export const POWER_YEO_JOHNSON: i32 = 0
+export const POWER_BOX_COX: i32 = 1
+
+function _yeo_johnson(x: f32, lambda: f32) -> f32 {
+    if x >= 0.0 {
+        if fabs((lambda) as f64) as f32 < 1e-10 {
+            return log((x + 1.0) as f64) as f32
+        }
+        return (pow_f32(x + 1.0, lambda) - 1.0) / lambda
+    } else {
+        if fabs((lambda - 2.0) as f64) as f32 < 1e-10 {
+            return 0.0 - log((1.0 - x) as f64) as f32
+        }
+        return 0.0 - ((pow_f32(1.0 - x, 2.0 - lambda) - 1.0) / (2.0 - lambda))
+    }
+}
+
+export function power_transformer_fit(X: Matrix, method: i32) -> PowerTransformer {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let lambdas: ptr<f32> = array_new_f32(p)
+
+    let lambdas_to_try: array<f32, 9> = [-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0, 0.25]
+
+    for j in 0 to p {
+        let best_ll: f32 = -1e10
+        let best_lambda: f32 = 0.0
+
+        for li in 0 to 9 {
+            let lambda: f32 = lambdas_to_try[li]
+            let mut ll: f32 = 0.0
+            let mut valid: bool = true
+
+            for i in 0 to n {
+                let x: f32 = matrix_at(X, i, j)
+                let transformed: f32 = _yeo_johnson(x, lambda)
+                if transformed > 1e-10 || transformed < -1e-10 {
+                    ll = ll + log((fabs((transformed) as f64)) as f64) as f32
+                } else {
+                    valid = false
+                }
+            }
+
+            if valid && ll > best_ll {
+                best_ll = ll
+                best_lambda = lambda
+            }
+        }
+
+        lambdas[j] = best_lambda
+    }
+
+    return PowerTransformer {
+        lambdas: lambdas, n_features: p,
+        method: method, fitted: true
+    }
+}
+
+export function power_transformer_transform(model: PowerTransformer, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, X.cols)
+    for i in 0 to X.rows {
+        for j in 0 to X.cols {
+            matrix_set(result, i, j, _yeo_johnson(matrix_at(X, i, j), model.lambdas[j]))
+        }
+    }
+
+    for j in 0 to model.n_features {
+        let mut mean: f32 = 0.0
+        for i in 0 to X.rows {
+            mean = mean + matrix_at(result, i, j)
+        }
+        mean = mean / (X.rows as f32)
+
+        let mut std: f32 = 0.0
+        for i in 0 to X.rows {
+            let d: f32 = matrix_at(result, i, j) - mean
+            std = std + d * d
+        }
+        std = sqrt((std / (X.rows as f32)) as f64) as f32
+        if std < 1e-10 { std = 1.0 }
+
+        for i in 0 to X.rows {
+            matrix_set(result, i, j, (matrix_at(result, i, j) - mean) / std)
+        }
+    }
+
+    return result
+}
+
+export function power_transformer_free(model: PowerTransformer) -> void {
+    array_free_f32(model.lambdas)
+}
+
+# ============================================================================
+# QuantileTransformer
+# ============================================================================
+
+export struct QuantileTransformer {
+    n_quantiles: i32,
+    n_features: i32,
+    references: ptr<ptr<f32>>,
+    quantiles: ptr<ptr<f32>>,
+    output_distribution: i32,
+    fitted: bool
+}
+
+export const QUANTILE_OUTPUT_UNIFORM: i32 = 0
+export const QUANTILE_OUTPUT_NORMAL: i32 = 1
+
+function _erf_approx(x: f32) -> f32 {
+    let a1: f32 = 0.254829592
+    let a2: f32 = -0.284496736
+    let a3: f32 = 1.421413741
+    let a4: f32 = -1.453152027
+    let a5: f32 = 1.061405429
+    let p: f32 = 0.3275911
+
+    let sign: f32 = 1.0
+    let mut ax: f32 = x
+    if x < 0.0 {
+        sign = -1.0
+        ax = -x
+    }
+
+    let t: f32 = 1.0 / (1.0 + p * ax)
+    let y: f32 = 1.0 - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * exp((0.0 - ax * ax) as f64) as f32
+
+    return sign * y
+}
+
+function _ppf(u: f32) -> f32 {
+    if u <= 0.0 { return -3.0 }
+    if u >= 1.0 { return 3.0 }
+    let mut x: f32 = 0.0
+    let mut step: f32 = 0.5
+    for _ in 0 to 50 {
+        let cdf: f32 = 0.5 * (1.0 + _erf_approx(x))
+        if cdf < u {
+            x = x + step
+        } else {
+            x = x - step
+        }
+        step = step * 0.5
+    }
+    return x
+}
+
+export function quantile_transformer_fit(X: Matrix, n_quantiles: i32, output_distribution: i32) -> QuantileTransformer {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let references: ptr<ptr<f32>> = malloc((p as i64) * 8) as ptr<ptr<f32>>
+    let quantiles: ptr<ptr<f32>> = malloc((p as i64) * 8) as ptr<ptr<f32>>
+
+    for j in 0 to p {
+        references[j] = array_new_f32(n_quantiles)
+        quantiles[j] = array_new_f32(n_quantiles)
+
+        for q in 0 to n_quantiles {
+            references[j][q] = (q as f32) / ((n_quantiles - 1) as f32)
+        }
+
+        let col: ptr<f32> = array_new_f32(n)
+        for i in 0 to n {
+            col[i] = matrix_at(X, i, j)
+        }
+
+        for i in 1 to n {
+            let key: f32 = col[i]
+            let mut k: i32 = i - 1
+            while k >= 0 && col[k] > key {
+                col[k + 1] = col[k]
+                k = k - 1
+            }
+            col[k + 1] = key
+        }
+
+        for q in 0 to n_quantiles {
+            let idx_f: f32 = references[j][q] * ((n - 1) as f32)
+            let idx_lo: i32 = idx_f as i32
+            let idx_hi: i32 = idx_lo + 1
+            if idx_hi >= n { idx_hi = n - 1 }
+            let frac: f32 = idx_f - (idx_lo as f32)
+            quantiles[j][q] = col[idx_lo] * (1.0 - frac) + col[idx_hi] * frac
+        }
+
+        array_free_f32(col)
+    }
+
+    return QuantileTransformer {
+        n_quantiles: n_quantiles,
+        n_features: p,
+        references: references,
+        quantiles: quantiles,
+        output_distribution: output_distribution,
+        fitted: true
+    }
+}
+
+export function quantile_transformer_transform(model: QuantileTransformer, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, X.cols)
+
+    for i in 0 to X.rows {
+        for j in 0 to X.cols {
+            let val: f32 = matrix_at(X, i, j)
+
+            let mut q: f32 = 0.0
+            let mut found: bool = false
+            for k in 0 to model.n_quantiles {
+                if model.quantiles[j][k] >= val {
+                    if k == 0 {
+                        q = model.references[j][0]
+                    } else {
+                        let lo: f32 = model.quantiles[j][k - 1]
+                        let hi: f32 = model.quantiles[j][k]
+                        let frac: f32 = 0.5
+                        if hi - lo > 1e-10 {
+                            frac = (val - lo) / (hi - lo)
+                        }
+                        q = model.references[j][k - 1] * (1.0 - frac) + model.references[j][k] * frac
+                    }
+                    found = true
+                    break
+                }
+            }
+            if not found {
+                q = 1.0
+            }
+
+            if model.output_distribution == QUANTILE_OUTPUT_NORMAL {
+                q = _ppf(q)
+            }
+
+            matrix_set(result, i, j, q)
+        }
+    }
+
+    return result
+}
+
+export function quantile_transformer_free(model: QuantileTransformer) -> void {
+    for j in 0 to model.n_features {
+        array_free_f32(model.references[j])
+        array_free_f32(model.quantiles[j])
+    }
+    free(model.references as ptr<void>)
+    free(model.quantiles as ptr<void>)
+}

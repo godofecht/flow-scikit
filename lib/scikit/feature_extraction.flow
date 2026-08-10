@@ -1,0 +1,204 @@
+# Feature extraction for flow-scikit.
+# Implements CountVectorizer and TfidfVectorizer for text data.
+# Tokenization is whitespace-based (Flow has no regex).
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function calloc(n: i64, size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function log(x: f64) -> f64
+    function sqrt(x: f64) -> f64
+    function printf(fmt: string, ...) -> i32
+}
+
+export struct CountVectorizer {
+    vocabulary: ptr<string>,
+    vocab_hashes: ptr<i32>,
+    n_features: i32,
+    n_docs: i32,
+    doc_freq: ptr<i32>,
+    fitted: bool
+}
+
+function _hash_string(s: string) -> i32 {
+    let h: i32 = 5381
+    let len: i32 = string_length(s)
+    for i in 0 to len {
+        let c: i32 = string_char_at(s, i)
+        h = ((h << 5) + h) + c
+    }
+    if h < 0 { h = 0 - h }
+    return h
+}
+
+function _tokenize(doc: string, out_tokens: ptr<string>, max_tokens: i32) -> i32 {
+    let len: i32 = string_length(doc)
+    let mut n_tokens: i32 = 0
+    let mut start: i32 = 0
+    let mut in_token: bool = false
+
+    for i in 0 to len {
+        let c: i32 = string_char_at(doc, i)
+        let is_space: bool = c == 32 || c == 9 || c == 10 || c == 13
+
+        if is_space {
+            if in_token {
+                if n_tokens < max_tokens {
+                    out_tokens[n_tokens] = string_substring(doc, start, i - start)
+                    n_tokens = n_tokens + 1
+                }
+                in_token = false
+            }
+        } else {
+            if not in_token {
+                start = i
+                in_token = true
+            }
+        }
+    }
+
+    if in_token && n_tokens < max_tokens {
+        out_tokens[n_tokens] = string_substring(doc, start, len - start)
+        n_tokens = n_tokens + 1
+    }
+
+    return n_tokens
+}
+
+export function count_vectorizer_fit(documents: ptr<string>, n_docs: i32, max_features: i32) -> CountVectorizer {
+    let max_tokens: i32 = 500
+    let tokens: ptr<string> = malloc((max_tokens as i64) * 8) as ptr<string>
+
+    let vocab: ptr<string> = malloc((max_features as i64) * 8) as ptr<string>
+    let vocab_hashes: ptr<i32> = malloc((max_features as i64) * 4) as ptr<i32>
+    let doc_freq: ptr<i32> = malloc((max_features as i64) * 4) as ptr<i32>
+
+    let mut n_features: i32 = 0
+
+    for d in 0 to n_docs {
+        let n_tokens: i32 = _tokenize(documents[d], tokens, max_tokens)
+
+        let seen: ptr<i32> = malloc((max_features as i64) * 4) as ptr<i32>
+        for i in 0 to max_features {
+            seen[i] = 0
+        }
+
+        for t in 0 to n_tokens {
+            let h: i32 = _hash_string(tokens[t])
+            let mut found: bool = false
+            for f in 0 to n_features {
+                if vocab_hashes[f] == h {
+                    found = true
+                    if seen[f] == 0 {
+                        doc_freq[f] = doc_freq[f] + 1
+                        seen[f] = 1
+                    }
+                    break
+                }
+            }
+            if not found && n_features < max_features {
+                vocab[n_features] = tokens[t]
+                vocab_hashes[n_features] = h
+                doc_freq[n_features] = 1
+                seen[n_features] = 1
+                n_features = n_features + 1
+            }
+        }
+
+        free(seen as ptr<void>)
+    }
+
+    free(tokens as ptr<void>)
+
+    return CountVectorizer {
+        vocabulary: vocab,
+        vocab_hashes: vocab_hashes,
+        n_features: n_features,
+        n_docs: n_docs,
+        doc_freq: doc_freq,
+        fitted: true
+    }
+}
+
+export function count_vectorizer_transform(model: CountVectorizer, documents: ptr<string>, n_docs: i32) -> Matrix {
+    let result: Matrix = matrix_new(n_docs, model.n_features)
+    let max_tokens: i32 = 500
+    let tokens: ptr<string> = malloc((max_tokens as i64) * 8) as ptr<string>
+
+    for d in 0 to n_docs {
+        let n_tokens: i32 = _tokenize(documents[d], tokens, max_tokens)
+
+        for t in 0 to n_tokens {
+            let h: i32 = _hash_string(tokens[t])
+            for f in 0 to model.n_features {
+                if model.vocab_hashes[f] == h {
+                    let val: f32 = matrix_at(result, d, f) + 1.0
+                    matrix_set(result, d, f, val)
+                    break
+                }
+            }
+        }
+    }
+
+    free(tokens as ptr<void>)
+    return result
+}
+
+export function count_vectorizer_free(model: CountVectorizer) -> void {
+    free(model.vocabulary as ptr<void>)
+    free(model.vocab_hashes as ptr<void>)
+    free(model.doc_freq as ptr<void>)
+}
+
+export struct TfidfVectorizer {
+    cv: CountVectorizer,
+    idf: ptr<f32>,
+    n_features: i32,
+    fitted: bool
+}
+
+export function tfidf_vectorizer_fit(documents: ptr<string>, n_docs: i32, max_features: i32) -> TfidfVectorizer {
+    let cv: CountVectorizer = count_vectorizer_fit(documents, n_docs, max_features)
+
+    let idf: ptr<f32> = array_new_f32(cv.n_features)
+    for f in 0 to cv.n_features {
+        let df: f32 = (cv.doc_freq[f] as f32)
+        if df < 1.0 { df = 1.0 }
+        idf[f] = log(((n_docs as f32) / df) as f64) as f32 + 1.0
+    }
+
+    return TfidfVectorizer {
+        cv: cv,
+        idf: idf,
+        n_features: cv.n_features,
+        fitted: true
+    }
+}
+
+export function tfidf_vectorizer_transform(model: TfidfVectorizer, documents: ptr<string>, n_docs: i32) -> Matrix {
+    let counts: Matrix = count_vectorizer_transform(model.cv, documents, n_docs)
+
+    for d in 0 to n_docs {
+        let mut norm: f32 = 0.0
+        for f in 0 to model.n_features {
+            let tfidf: f32 = matrix_at(counts, d, f) * model.idf[f]
+            matrix_set(counts, d, f, tfidf)
+            norm = norm + tfidf * tfidf
+        }
+        norm = sqrt((norm as f64)) as f32
+        if norm > 1e-10 {
+            for f in 0 to model.n_features {
+                matrix_set(counts, d, f, matrix_at(counts, d, f) / norm)
+            }
+        }
+    }
+
+    return counts
+}
+
+export function tfidf_vectorizer_free(model: TfidfVectorizer) -> void {
+    count_vectorizer_free(model.cv)
+    array_free_f32(model.idf)
+}

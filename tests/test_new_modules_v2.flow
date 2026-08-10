@@ -1,0 +1,946 @@
+# Tests for new modules: datasets, neural_network, mixture, dummy,
+# compose, feature_extraction, gaussian_process, multioutput,
+# ExtraTrees, MeanShift, Birch, HuberRegressor, BayesianRidge,
+# PowerTransformer, QuantileTransformer.
+#
+# Run: ./flow run tests/test_new_modules_v2.flow
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function rand() -> i32
+    function srand(seed: i32) -> void
+}
+
+function _noise(seed: i32) -> f32 {
+    let s: i32 = seed * 1103515245 + 12345
+    let n: i32 = ((s % 100) + 100) % 100
+    return ((n as f32) / 100.0 - 0.5) * 0.3
+}
+
+function test_make_classification() -> i32 {
+    println("Test: make_classification")
+    let ds: Dataset = make_classification(60, 4, 2, 2, 0, 2.0, 42)
+
+    if ds.n_samples != 60 {
+        println("  FAIL: n_samples should be 60")
+        return 1
+    }
+    if ds.n_features != 4 {
+        println("  FAIL: n_features should be 4")
+        return 1
+    }
+    if ds.n_classes != 2 {
+        println("  FAIL: n_classes should be 2")
+        return 1
+    }
+
+    let mut class0: i32 = 0
+    let mut class1: i32 = 0
+    for i in 0 to 60 {
+        if ds.y[i] == 0.0 { class0 = class0 + 1 }
+        if ds.y[i] == 1.0 { class1 = class1 + 1 }
+    }
+
+    if class0 == 0 || class1 == 0 {
+        println("  FAIL: should have both classes")
+        return 1
+    }
+
+    print("  OK: 60 samples, 4 features, 2 classes (")
+    print(class0)
+    print("/")
+    print(class1)
+    println(")")
+
+    dataset_free(ds)
+    return 0
+}
+
+function test_make_regression() -> i32 {
+    println("Test: make_regression")
+    let ds: Dataset = make_regression(50, 3, 2, 0.1, 1.0, 42)
+
+    if ds.n_samples != 50 {
+        println("  FAIL: n_samples should be 50")
+        return 1
+    }
+
+    let mut y_mean: f32 = 0.0
+    for i in 0 to 50 {
+        y_mean = y_mean + ds.y[i]
+    }
+    y_mean = y_mean / 50.0
+
+    let mut y_std: f32 = 0.0
+    for i in 0 to 50 {
+        let d: f32 = ds.y[i] - y_mean
+        y_std = y_std + d * d
+    }
+    y_std = sqrt((y_std / 50.0) as f64) as f32
+
+    if y_std < 0.1 {
+        println("  FAIL: y should have variance")
+        return 1
+    }
+
+    print("  OK: 50 samples, y std = ")
+    printf("%.4f", y_std)
+    println("")
+
+    dataset_free(ds)
+    return 0
+}
+
+function test_make_blobs() -> i32 {
+    println("Test: make_blobs")
+    let ds: Dataset = make_blobs(60, 2, 3, 0.5, -5.0, 5.0, 42)
+
+    if ds.n_classes != 3 {
+        println("  FAIL: should have 3 centers")
+        return 1
+    }
+
+    let mut found: array<bool, 3> = [false, false, false]
+    for i in 0 to 60 {
+        let c: i32 = ds.y[i] as i32
+        if c >= 0 && c < 3 { found[c] = true }
+    }
+
+    for c in 0 to 3 {
+        if not found[c] {
+            println("  FAIL: missing cluster")
+            return 1
+        }
+    }
+
+    println("  OK: 60 samples, 3 blobs, all clusters present")
+    dataset_free(ds)
+    return 0
+}
+
+function test_make_moons() -> i32 {
+    println("Test: make_moons")
+    let ds: Dataset = make_moons(40, 0.1, 42)
+
+    if ds.n_samples != 40 {
+        println("  FAIL: n_samples should be 40")
+        return 1
+    }
+    if ds.n_features != 2 {
+        println("  FAIL: n_features should be 2")
+        return 1
+    }
+
+    let mut class0: i32 = 0
+    let mut class1: i32 = 0
+    for i in 0 to 40 {
+        if ds.y[i] == 0.0 { class0 = class0 + 1 }
+        if ds.y[i] == 1.0 { class1 = class1 + 1 }
+    }
+
+    if class0 == 0 || class1 == 0 {
+        println("  FAIL: should have both classes")
+        return 1
+    }
+
+    print("  OK: 40 samples, 2 classes (")
+    print(class0)
+    print("/")
+    print(class1)
+    println(")")
+
+    dataset_free(ds)
+    return 0
+}
+
+function test_make_circles() -> i32 {
+    println("Test: make_circles")
+    let ds: Dataset = make_circles(40, 0.05, 0.5, 42)
+
+    if ds.n_samples != 40 {
+        println("  FAIL: n_samples should be 40")
+        return 1
+    }
+
+    let mut class0: i32 = 0
+    let mut class1: i32 = 0
+    for i in 0 to 40 {
+        if ds.y[i] == 0.0 { class0 = class0 + 1 }
+        if ds.y[i] == 1.0 { class1 = class1 + 1 }
+    }
+
+    if class0 == 0 || class1 == 0 {
+        println("  FAIL: should have both classes")
+        return 1
+    }
+
+    print("  OK: 40 samples, 2 classes (")
+    print(class0)
+    print("/")
+    print(class1)
+    println(")")
+
+    dataset_free(ds)
+    return 0
+}
+
+function test_mlp_classifier() -> i32 {
+    println("Test: MLPClassifier")
+    let ds: Dataset = make_classification(60, 4, 2, 4, 0, 2.0, 42)
+    let split: TrainTestSplit = train_test_split(ds.X, ds.y, 0.33, 0)
+
+    let hidden: array<i32, 1> = [8]
+    let model: MLPClassifier = mlp_classifier_fit(
+        split.X_train, split.y_train, 2,
+        hidden, 1, MLP_ACT_RELU, 200, 0.01, 0.9, 42
+    )
+
+    let probs: Matrix = mlp_classifier_predict(model, split.X_test)
+    let preds: ptr<f32> = mlp_classifier_decide(model, probs)
+    let acc: f32 = accuracy_score(split.y_test, preds, split.n_test)
+
+    if acc < 0.6 {
+        println("  FAIL: MLPClassifier accuracy should be > 0.6")
+        return 1
+    }
+
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+
+    mlp_classifier_free(model)
+    matrix_free(probs)
+    array_free_f32(preds)
+    train_test_split_free(split)
+    dataset_free(ds)
+    return 0
+}
+
+function test_mlp_regressor() -> i32 {
+    println("Test: MLPRegressor")
+    let ds: Dataset = make_regression(60, 3, 3, 0.1, 1.0, 42)
+    let split: TrainTestSplit = train_test_split(ds.X, ds.y, 0.33, 0)
+
+    let hidden: array<i32, 1> = [16]
+    let model: MLPRegressor = mlp_regressor_fit(
+        split.X_train, split.y_train,
+        hidden, 1, MLP_ACT_RELU, 300, 0.005, 0.9, 42
+    )
+
+    let preds: ptr<f32> = mlp_regressor_predict(model, split.X_test)
+    let r2: f32 = r2_score(split.y_test, preds, split.n_test)
+
+    if r2 < 0.3 {
+        println("  FAIL: MLPRegressor R2 should be > 0.3")
+        return 1
+    }
+
+    print("  OK: R2 = ")
+    printf("%.4f", r2)
+    println("")
+
+    mlp_regressor_free(model)
+    array_free_f32(preds)
+    train_test_split_free(split)
+    dataset_free(ds)
+    return 0
+}
+
+function test_gaussian_mixture() -> i32 {
+    println("Test: GaussianMixture")
+    let ds: Dataset = make_blobs(60, 2, 3, 0.3, -3.0, 3.0, 42)
+
+    let gmm: GaussianMixture = gaussian_mixture_fit(ds.X, 3, 100, 1e-3, 42)
+    let labels: ptr<i32> = gaussian_mixture_predict(gmm, ds.X)
+
+    let mut cluster_counts: array<i32, 3> = [0, 0, 0]
+    for i in 0 to 60 {
+        if labels[i] >= 0 && labels[i] < 3 {
+            cluster_counts[labels[i]] = cluster_counts[labels[i]] + 1
+        }
+    }
+
+    let mut all_found: bool = true
+    for c in 0 to 3 {
+        if cluster_counts[c] == 0 { all_found = false }
+    }
+
+    if not all_found {
+        println("  FAIL: GMM should find all 3 components")
+        return 1
+    }
+
+    print("  OK: 3 components found, log_likelihood = ")
+    printf("%.4f", gmm.log_likelihood)
+    println("")
+
+    free(labels as ptr<void>)
+    gaussian_mixture_free(gmm)
+    dataset_free(ds)
+    return 0
+}
+
+function test_dummy_classifier() -> i32 {
+    println("Test: DummyClassifier (prior)")
+    let y: ptr<f32> = array_new_f32(20)
+    for i in 0 to 12 { y[i] = 0.0 }
+    for i in 0 to 8 { y[12 + i] = 1.0 }
+
+    let model: DummyClassifier = dummy_classifier_fit(y, 20, 2, DUMMY_STRATEGY_PRIOR, 0.0, 42)
+    let preds: ptr<f32> = dummy_classifier_predict(model, 10)
+
+    let mut all_prior: bool = true
+    for i in 0 to 10 {
+        if preds[i] != 0.0 { all_prior = false }
+    }
+
+    if not all_prior {
+        println("  FAIL: prior strategy should predict most frequent class (0)")
+        return 1
+    }
+
+    println("  OK: all predictions are class 0 (most frequent)")
+
+    array_free_f32(preds)
+    dummy_classifier_free(model)
+    array_free_f32(y)
+    return 0
+}
+
+function test_dummy_regressor() -> i32 {
+    println("Test: DummyRegressor (mean)")
+    let y: ptr<f32> = array_new_f32(10)
+    for i in 0 to 10 {
+        y[i] = (i as f32) * 2.0
+    }
+
+    let model: DummyRegressor = dummy_regressor_fit(y, 10, DUMMY_REG_MEAN, 0.0)
+    let preds: ptr<f32> = dummy_regressor_predict(model, 5)
+
+    let expected: f32 = 9.0
+    if fabs((preds[0] - expected) as f64) as f32 > 0.01 {
+        println("  FAIL: mean strategy should predict 9.0")
+        return 1
+    }
+
+    print("  OK: all predictions = ")
+    printf("%.4f", preds[0])
+    println("")
+
+    array_free_f32(preds)
+    dummy_regressor_free(model)
+    array_free_f32(y)
+    return 0
+}
+
+function test_column_transformer() -> i32 {
+    println("Test: ColumnTransformer")
+    let X: Matrix = matrix_new(10, 4)
+    srand(42)
+    for i in 0 to 10 {
+        for j in 0 to 4 {
+            matrix_set(X, i, j, ((rand() % 100) as f32) / 10.0)
+        }
+    }
+
+    let ct: ColumnTransformer = column_transformer_init(2)
+    let cols1: array<i32, 2> = [0, 1]
+    let cols2: array<i32, 2> = [2, 3]
+    column_transformer_set_spec(ct, 0, TRANSFORMER_STANDARD_SCALER, cols1, 2)
+    column_transformer_set_spec(ct, 1, TRANSFORMER_MINMAX_SCALER, cols2, 2)
+
+    column_transformer_fit(ct, X)
+    let transformed: Matrix = column_transformer_transform(ct, X)
+
+    if transformed.cols != 4 {
+        println("  FAIL: should have 4 output features")
+        return 1
+    }
+
+    let mut col0_mean: f32 = 0.0
+    for i in 0 to 10 {
+        col0_mean = col0_mean + matrix_at(transformed, i, 0)
+    }
+    col0_mean = col0_mean / 10.0
+
+    if fabs((col0_mean) as f64) as f32 > 0.01 {
+        println("  FAIL: standard scaler col should have ~0 mean")
+        return 1
+    }
+
+    println("  OK: 4 output features, scaler col mean ~ 0")
+
+    matrix_free(transformed)
+    column_transformer_free(ct)
+    matrix_free(X)
+    return 0
+}
+
+function test_count_vectorizer() -> i32 {
+    println("Test: CountVectorizer")
+    let docs: array<string, 4> = [
+        "the quick brown fox",
+        "the lazy dog",
+        "quick brown dog",
+        "the fox and the dog"
+    ]
+
+    let cv: CountVectorizer = count_vectorizer_fit(docs, 4, 50)
+    let counts: Matrix = count_vectorizer_transform(cv, docs)
+
+    if cv.n_features < 3 {
+        println("  FAIL: should find at least 3 unique words")
+        return 1
+    }
+
+    let mut total: f32 = 0.0
+    for i in 0 to 4 {
+        for j in 0 to cv.n_features {
+            total = total + matrix_at(counts, i, j)
+        }
+    }
+
+    if total < 8.0 {
+        println("  FAIL: total word count should be at least 8")
+        return 1
+    }
+
+    print("  OK: ")
+    print(cv.n_features)
+    print(" features, total count = ")
+    printf("%.0f", total)
+    println("")
+
+    matrix_free(counts)
+    count_vectorizer_free(cv)
+    return 0
+}
+
+function test_tfidf_vectorizer() -> i32 {
+    println("Test: TfidfVectorizer")
+    let docs: array<string, 4> = [
+        "the quick brown fox",
+        "the lazy dog",
+        "quick brown dog",
+        "the fox and the dog"
+    ]
+
+    let tfidf: TfidfVectorizer = tfidf_vectorizer_fit(docs, 4, 50)
+    let result: Matrix = tfidf_vectorizer_transform(tfidf, docs)
+
+    for i in 0 to 4 {
+        let mut norm: f32 = 0.0
+        for j in 0 to tfidf.n_features {
+            norm = norm + matrix_at(result, i, j) * matrix_at(result, i, j)
+        }
+        norm = sqrt((norm as f64)) as f32
+        if fabs((norm - 1.0) as f64) as f32 > 0.01 {
+            println("  FAIL: row should be L2-normalized")
+            return 1
+        }
+    }
+
+    println("  OK: all rows L2-normalized")
+
+    matrix_free(result)
+    tfidf_vectorizer_free(tfidf)
+    return 0
+}
+
+function test_gaussian_process() -> i32 {
+    println("Test: GaussianProcessRegressor")
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 1)
+    let y: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let x: f32 = (i as f32) * 0.2
+        matrix_set(X, i, 0, x)
+        y[i] = sin((x as f64)) as f32 + _noise(i) * 0.05
+    }
+
+    let gp: GaussianProcessRegressor = gaussian_process_regressor_fit(X, y, 0.01, 0.5, GP_KERNEL_RBF)
+    let preds: ptr<f32> = gaussian_process_regressor_predict(gp, X)
+
+    let mut ss_res: f32 = 0.0
+    for i in 0 to n {
+        let d: f32 = y[i] - preds[i]
+        ss_res = ss_res + d * d
+    }
+    let rmse: f32 = sqrt((ss_res / (n as f32)) as f64) as f32
+
+    if rmse > 0.3 {
+        println("  FAIL: GP RMSE should be < 0.3")
+        return 1
+    }
+
+    print("  OK: RMSE = ")
+    printf("%.4f", rmse)
+    println("")
+
+    array_free_f32(preds)
+    gaussian_process_regressor_free(gp)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
+function test_multi_output_regressor() -> i32 {
+    println("Test: MultiOutputRegressor")
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 2)
+    let Y: Matrix = matrix_new(n, 2)
+
+    srand(42)
+    for i in 0 to n {
+        let x0: f32 = ((rand() % 100) as f32) / 10.0
+        let x1: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 0, x0)
+        matrix_set(X, i, 1, x1)
+        matrix_set(Y, i, 0, 2.0 * x0 + 1.0 * x1 + _noise(i) * 0.1)
+        matrix_set(Y, i, 1, 0.5 * x0 + 3.0 * x1 + _noise(i + 100) * 0.1)
+    }
+
+    let model: MultiOutputRegressor = multi_output_regressor_fit(X, Y, 2)
+    let preds: Matrix = multi_output_regressor_predict(model, X)
+
+    let mut ss_res: f32 = 0.0
+    let mut ss_tot: f32 = 0.0
+    for i in 0 to n {
+        for o in 0 to 2 {
+            let d: f32 = matrix_at(Y, i, o) - matrix_at(preds, i, o)
+            ss_res = ss_res + d * d
+            let dm: f32 = matrix_at(Y, i, o) - 5.0
+            ss_tot = ss_tot + dm * dm
+        }
+    }
+
+    let r2: f32 = 1.0 - ss_res / ss_tot
+    if r2 < 0.8 {
+        println("  FAIL: MultiOutputRegressor R2 should be > 0.8")
+        return 1
+    }
+
+    print("  OK: R2 = ")
+    printf("%.4f", r2)
+    println("")
+
+    matrix_free(preds)
+    multi_output_regressor_free(model)
+    matrix_free(X)
+    matrix_free(Y)
+    return 0
+}
+
+function test_extra_trees_classifier() -> i32 {
+    println("Test: ExtraTreesClassifier")
+    let ds: Dataset = make_classification(60, 4, 2, 4, 0, 2.0, 42)
+    let split: TrainTestSplit = train_test_split(ds.X, ds.y, 0.33, 0)
+
+    let model: ExtraTreesClassifier = extra_trees_classifier_fit(
+        split.X_train, split.y_train, 2, 10, 5, 42
+    )
+    let preds: ptr<f32> = extra_trees_classifier_predict(model, split.X_test)
+    let acc: f32 = accuracy_score(split.y_test, preds, split.n_test)
+
+    if acc < 0.6 {
+        println("  FAIL: ExtraTreesClassifier accuracy should be > 0.6")
+        return 1
+    }
+
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+
+    extra_trees_classifier_free(model)
+    array_free_f32(preds)
+    train_test_split_free(split)
+    dataset_free(ds)
+    return 0
+}
+
+function test_extra_trees_regressor() -> i32 {
+    println("Test: ExtraTreesRegressor")
+    let ds: Dataset = make_regression(60, 3, 3, 0.1, 1.0, 42)
+    let split: TrainTestSplit = train_test_split(ds.X, ds.y, 0.33, 0)
+
+    let model: ExtraTreesRegressor = extra_trees_regressor_fit(
+        split.X_train, split.y_train, 10, 5, 42
+    )
+    let preds: ptr<f32> = extra_trees_regressor_predict(model, split.X_test)
+    let r2: f32 = r2_score(split.y_test, preds, split.n_test)
+
+    if r2 < 0.3 {
+        println("  FAIL: ExtraTreesRegressor R2 should be > 0.3")
+        return 1
+    }
+
+    print("  OK: R2 = ")
+    printf("%.4f", r2)
+    println("")
+
+    extra_trees_regressor_free(model)
+    array_free_f32(preds)
+    train_test_split_free(split)
+    dataset_free(ds)
+    return 0
+}
+
+function test_mean_shift() -> i32 {
+    println("Test: MeanShift")
+    let ds: Dataset = make_blobs(30, 2, 3, 0.3, -3.0, 3.0, 42)
+
+    let ms: MeanShift = mean_shift_fit(ds.X, 1.5, 50)
+
+    if ms.n_clusters < 2 {
+        println("  FAIL: MeanShift should find at least 2 clusters")
+        return 1
+    }
+
+    print("  OK: found ")
+    print(ms.n_clusters)
+    println(" clusters")
+
+    mean_shift_free(ms)
+    dataset_free(ds)
+    return 0
+}
+
+function test_birch() -> i32 {
+    println("Test: Birch")
+    let ds: Dataset = make_blobs(30, 2, 3, 0.3, -3.0, 3.0, 42)
+
+    let b: Birch = birch_fit(ds.X, 1.0, 50)
+
+    if b.n_clusters < 2 {
+        println("  FAIL: Birch should find at least 2 clusters")
+        return 1
+    }
+
+    print("  OK: found ")
+    print(b.n_clusters)
+    println(" subclusters")
+
+    birch_free(b)
+    dataset_free(ds)
+    return 0
+}
+
+function test_huber_regressor() -> i32 {
+    println("Test: HuberRegressor")
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 1)
+    let y: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let x: f32 = (i as f32) * 0.3
+        matrix_set(X, i, 0, x)
+        y[i] = 2.0 * x + 1.0 + _noise(i) * 0.1
+    }
+    y[15] = 100.0
+    y[20] = -100.0
+
+    let model: HuberRegressor = huber_regressor_fit(X, y, 1.35, 100, 0.01)
+    let preds: ptr<f32> = huber_regressor_predict(model, X)
+
+    let mut clean_ss: f32 = 0.0
+    for i in 0 to n {
+        if i != 15 && i != 20 {
+            let d: f32 = y[i] - preds[i]
+            clean_ss = clean_ss + d * d
+        }
+    }
+    let clean_rmse: f32 = sqrt((clean_ss / 28.0) as f64) as f32
+
+    if clean_rmse > 0.5 {
+        println("  FAIL: HuberRegressor should be robust to outliers")
+        return 1
+    }
+
+    print("  OK: clean RMSE = ")
+    printf("%.4f", clean_rmse)
+    print(", weight = ")
+    printf("%.4f", model.weights[0])
+    println("")
+
+    huber_regressor_free(model)
+    array_free_f32(preds)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
+function test_bayesian_ridge() -> i32 {
+    println("Test: BayesianRidge")
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 2)
+    let y: ptr<f32> = array_new_f32(n)
+
+    srand(42)
+    for i in 0 to n {
+        let x0: f32 = ((rand() % 100) as f32) / 10.0
+        let x1: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 0, x0)
+        matrix_set(X, i, 1, x1)
+        y[i] = 2.0 * x0 + 3.0 * x1 + _noise(i) * 0.1
+    }
+
+    let model: BayesianRidge = bayesian_ridge_fit(X, y, 200, 1e-4)
+    let preds: ptr<f32> = bayesian_ridge_predict(model, X)
+    let r2: f32 = r2_score(y, preds, n)
+
+    if r2 < 0.9 {
+        println("  FAIL: BayesianRidge R2 should be > 0.9")
+        return 1
+    }
+
+    print("  OK: R2 = ")
+    printf("%.4f", r2)
+    print(", alpha = ")
+    printf("%.4f", model.alpha)
+    print(", beta = ")
+    printf("%.4f", model.beta)
+    println("")
+
+    bayesian_ridge_free(model)
+    array_free_f32(preds)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
+function test_power_transformer() -> i32 {
+    println("Test: PowerTransformer")
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 1)
+    srand(42)
+    for i in 0 to n {
+        let val: f32 = ((rand() % 100) as f32) / 10.0 + 0.1
+        matrix_set(X, i, 0, val * val)
+    }
+
+    let pt: PowerTransformer = power_transformer_fit(X, POWER_YEO_JOHNSON)
+    let transformed: Matrix = power_transformer_transform(pt, X)
+
+    let mut mean: f32 = 0.0
+    for i in 0 to n {
+        mean = mean + matrix_at(transformed, i, 0)
+    }
+    mean = mean / (n as f32)
+
+    let mut std: f32 = 0.0
+    for i in 0 to n {
+        let d: f32 = matrix_at(transformed, i, 0) - mean
+        std = std + d * d
+    }
+    std = sqrt((std / (n as f32)) as f64) as f32
+
+    if fabs((mean) as f64) as f32 > 0.1 {
+        println("  FAIL: transformed mean should be ~0")
+        return 1
+    }
+    if fabs((std - 1.0) as f64) as f32 > 0.1 {
+        println("  FAIL: transformed std should be ~1")
+        return 1
+    }
+
+    print("  OK: mean = ")
+    printf("%.4f", mean)
+    print(", std = ")
+    printf("%.4f", std)
+    println("")
+
+    matrix_free(transformed)
+    power_transformer_free(pt)
+    matrix_free(X)
+    return 0
+}
+
+function test_quantile_transformer() -> i32 {
+    println("Test: QuantileTransformer")
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 1)
+    srand(42)
+    for i in 0 to n {
+        let val: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 0, val * val)
+    }
+
+    let qt: QuantileTransformer = quantile_transformer_fit(X, 10, QUANTILE_OUTPUT_UNIFORM)
+    let transformed: Matrix = quantile_transformer_transform(qt, X)
+
+    let min_val: f32 = array_min_val(transformed.data, n)
+    let max_val: f32 = array_max_val(transformed.data, n)
+
+    if min_val < -0.1 || max_val > 1.1 {
+        println("  FAIL: uniform output should be in [0, 1]")
+        return 1
+    }
+
+    print("  OK: range [")
+    printf("%.4f", min_val)
+    print(", ")
+    printf("%.4f", max_val)
+    println("]")
+
+    matrix_free(transformed)
+    quantile_transformer_free(qt)
+    matrix_free(X)
+    return 0
+}
+
+function test_fast_ica() -> i32 {
+    println("Test: FastICA")
+    let n: i32 = 40
+    let X: Matrix = matrix_new(n, 3)
+
+    srand(42)
+    for i in 0 to n {
+        let s1: f32 = sin((i as f64) * 0.3) as f32
+        let s2: f32 = ((rand() % 100) as f32) / 50.0 - 1.0
+        let s3: f32 = _noise(i) * 2.0
+        matrix_set(X, i, 0, 0.5 * s1 + 0.2 * s2 + 0.1 * s3)
+        matrix_set(X, i, 1, 0.3 * s1 + 0.7 * s2 + 0.2 * s3)
+        matrix_set(X, i, 2, 0.1 * s1 + 0.4 * s2 + 0.9 * s3)
+    }
+
+    let ica: FastICA = fast_ica_fit(X, 2, 100, 1e-4, 42)
+    let transformed: Matrix = fast_ica_transform(ica, X)
+
+    if transformed.cols != 2 {
+        println("  FAIL: should have 2 components")
+        return 1
+    }
+
+    let mut total_var: f32 = 0.0
+    for i in 0 to n {
+        for c in 0 to 2 {
+            let v: f32 = matrix_at(transformed, i, c)
+            total_var = total_var + v * v
+        }
+    }
+
+    if total_var < 0.1 {
+        println("  FAIL: transformed data should have variance")
+        return 1
+    }
+
+    print("  OK: 2 components, n_iter = ")
+    print(ica.n_iter)
+    println("")
+
+    matrix_free(transformed)
+    fast_ica_free(ica)
+    matrix_free(X)
+    return 0
+}
+
+function test_sparse_pca() -> i32 {
+    println("Test: SparsePCA")
+    let n: i32 = 40
+    let X: Matrix = matrix_new(n, 4)
+
+    srand(42)
+    for i in 0 to n {
+        let s1: f32 = sin((i as f64) * 0.3) as f32
+        let s2: f32 = ((rand() % 100) as f32) / 50.0 - 1.0
+        matrix_set(X, i, 0, s1 + _noise(i) * 0.05)
+        matrix_set(X, i, 1, s1 + _noise(i + 10) * 0.05)
+        matrix_set(X, i, 2, s2 + _noise(i + 20) * 0.05)
+        matrix_set(X, i, 3, s2 + _noise(i + 30) * 0.05)
+    }
+
+    let spca: SparsePCA = sparse_pca_fit(X, 2, 0.1, 200, 1e-4, 42)
+    let transformed: Matrix = sparse_pca_transform(spca, X)
+
+    if transformed.cols != 2 {
+        println("  FAIL: should have 2 components")
+        return 1
+    }
+
+    let mut n_zeros: i32 = 0
+    for c in 0 to 2 {
+        for j in 0 to 4 {
+            if fabs((spca.components[c][j]) as f64) as f32 < 1e-6 {
+                n_zeros = n_zeros + 1
+            }
+        }
+    }
+
+    print("  OK: 2 components, ")
+    print(n_zeros)
+    println(" sparse zeros in loading vectors")
+
+    matrix_free(transformed)
+    sparse_pca_free(spca)
+    matrix_free(X)
+    return 0
+}
+
+function main() -> i32 {
+    println("=== New Modules v2 Tests ===")
+    println("")
+
+    let mut failures: i32 = 0
+
+    if test_make_classification() != 0 { failures = failures + 1 }
+    println("")
+    if test_make_regression() != 0 { failures = failures + 1 }
+    println("")
+    if test_make_blobs() != 0 { failures = failures + 1 }
+    println("")
+    if test_make_moons() != 0 { failures = failures + 1 }
+    println("")
+    if test_make_circles() != 0 { failures = failures + 1 }
+    println("")
+    if test_mlp_classifier() != 0 { failures = failures + 1 }
+    println("")
+    if test_mlp_regressor() != 0 { failures = failures + 1 }
+    println("")
+    if test_gaussian_mixture() != 0 { failures = failures + 1 }
+    println("")
+    if test_dummy_classifier() != 0 { failures = failures + 1 }
+    println("")
+    if test_dummy_regressor() != 0 { failures = failures + 1 }
+    println("")
+    if test_column_transformer() != 0 { failures = failures + 1 }
+    println("")
+    if test_count_vectorizer() != 0 { failures = failures + 1 }
+    println("")
+    if test_tfidf_vectorizer() != 0 { failures = failures + 1 }
+    println("")
+    if test_gaussian_process() != 0 { failures = failures + 1 }
+    println("")
+    if test_multi_output_regressor() != 0 { failures = failures + 1 }
+    println("")
+    if test_extra_trees_classifier() != 0 { failures = failures + 1 }
+    println("")
+    if test_extra_trees_regressor() != 0 { failures = failures + 1 }
+    println("")
+    if test_mean_shift() != 0 { failures = failures + 1 }
+    println("")
+    if test_birch() != 0 { failures = failures + 1 }
+    println("")
+    if test_huber_regressor() != 0 { failures = failures + 1 }
+    println("")
+    if test_bayesian_ridge() != 0 { failures = failures + 1 }
+    println("")
+    if test_power_transformer() != 0 { failures = failures + 1 }
+    println("")
+    if test_quantile_transformer() != 0 { failures = failures + 1 }
+    println("")
+    if test_fast_ica() != 0 { failures = failures + 1 }
+    println("")
+    if test_sparse_pca() != 0 { failures = failures + 1 }
+
+    println("")
+    if failures == 0 {
+        println("All new module v2 tests passed!")
+        return 0
+    }
+    print("FAILED: ")
+    print(failures)
+    println(" tests")
+    return 1
+}
