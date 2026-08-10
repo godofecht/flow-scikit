@@ -39,6 +39,28 @@ export function point_distance(x: f32, y: f32, center_x: f32, center_y: f32) -> 
     return dx * dx + dy * dy
 }
 
+export function delivery_eta_minutes(distance_km: f32, stops: f32, congestion: f32) -> f32 {
+    return 8.0 + distance_km * 2.2 + stops * 3.5 + congestion * 0.32
+}
+
+export function message_risk(link_count: f32, capital_ratio: f32, unknown_sender: f32) -> f32 {
+    let mut score: f32 = link_count * 16.0 + capital_ratio * 45.0 + unknown_sender * 22.0
+    if score > 100.0 { score = 100.0 }
+    return score
+}
+
+export function stock_cover_days(stock_units: f32, daily_sales: f32) -> f32 {
+    if daily_sales < 0.01 { return 999.0 }
+    return stock_units / daily_sales
+}
+
+export function tolerance_deviation(measured: f32, target: f32, tolerance: f32) -> f32 {
+    let mut difference: f32 = measured - target
+    if difference < 0.0 { difference = 0.0 - difference }
+    if tolerance < 0.01 { return 0.0 }
+    return difference / tolerance
+}
+
 function main() -> i32 {
     println("flow-scikit digit demo ready")
     return 0

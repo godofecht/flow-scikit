@@ -113,8 +113,15 @@ def make_demo(slug: str, title: str, detail: str, index: int, output_dir: Path) 
         draw.text((28, 39), title, font=font(26, True), fill=PAPER)
         draw.text((29, 70), detail, font=font(13), fill="#c8d4ed")
         DRAWERS[index % len(DRAWERS)](draw, step, index)
-        draw.text((29, 244), "flow-scikit example", font=font(10), fill="#8392b0")
-        frames.append(image)
+        draw.rounded_rectangle((28, 237, 452, 263), radius=6, fill="#152446")
+        phase = min(2, step // 10)
+        labels = ("inputs", "calculation", "decision")
+        for item, label in enumerate(labels):
+            x = 43 + item * 132
+            draw.ellipse((x, 246, x + 8, 254), fill=CORAL if item <= phase else "#52617f")
+            draw.text((x + 13, 244), label, font=font(10, item == phase), fill=PAPER if item == phase else MUTED)
+        # Store a higher-resolution GIF so the charts remain crisp on the documentation grid.
+        frames.append(image.resize((720, 405), Image.Resampling.LANCZOS))
     frames[0].save(output_dir / f"{slug}.gif", save_all=True, append_images=frames[1:], duration=65, loop=0, optimize=True, disposal=2)
 
 
