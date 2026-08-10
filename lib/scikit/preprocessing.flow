@@ -58,7 +58,8 @@ export function standard_scaler_transform(scaler: StandardScaler, X: Matrix) -> 
 
 export function standard_scaler_fit_transform(X: Matrix) -> Matrix {
     let scaler: StandardScaler = standard_scaler_fit(X)
-    return standard_scaler_transform(scaler, X)
+    let result = standard_scaler_transform(scaler, X)
+    return result
 }
 
 export function standard_scaler_free(scaler: StandardScaler) -> void {

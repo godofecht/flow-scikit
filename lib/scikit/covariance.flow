@@ -276,7 +276,8 @@ export function oas_estimate(X: Matrix) -> f32 {
 
 export function oas_fit(X: Matrix) -> ShrunkCovariance {
     let shrinkage: f32 = oas_estimate(X)
-    return shrunk_covariance_fit(X, shrinkage)
+    let result = shrunk_covariance_fit(X, shrinkage)
+    return result
 }
 
 # ============================================================================
@@ -469,7 +470,8 @@ export function ledoit_wolf_estimate_weighted(X: Matrix, sample_weights: ptr<f32
 
 export function ledoit_wolf_fit(X: Matrix) -> ShrunkCovariance {
     let shrinkage: f32 = ledoit_wolf_estimate(X)
-    return shrunk_covariance_fit(X, shrinkage)
+    let result = shrunk_covariance_fit(X, shrinkage)
+    return result
 }
 
 export function ledoit_wolf_fit_weighted(X: Matrix, sample_weights: ptr<f32>) -> ShrunkCovariance {

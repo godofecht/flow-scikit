@@ -163,7 +163,8 @@ export function isotonic_predict(model: IsotonicRegression, X: ptr<f32>, n: i32)
 }
 
 export function isotonic_transform(model: IsotonicRegression, y: ptr<f32>, n: i32) -> ptr<f32> {
-    return isotonic_predict(model, y, n)
+    let result = isotonic_predict(model, y, n)
+    return result
 }
 
 export function isotonic_free(model: IsotonicRegression) -> void {
