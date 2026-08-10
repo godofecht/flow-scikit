@@ -311,7 +311,8 @@ export function logistic_predict_proba(model: LogisticRegression, X: Matrix) -> 
 }
 
 export function logistic_predict(model: LogisticRegression, X: Matrix) -> ptr<f32> {
-    return logistic_predict_proba(model, X)
+    let result: ptr<f32> = logistic_predict_proba(model, X)
+    return result
 }
 
 export function logistic_decide(model: LogisticRegression, probs: ptr<f32>, n_samples: i32, threshold: f32) -> ptr<f32> {

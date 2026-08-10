@@ -224,7 +224,8 @@ export function pipeline_predict_proba(pipeline: Pipeline, X: Matrix) -> ptr<f32
 }
 
 export function pipeline_predict(pipeline: Pipeline, X: Matrix) -> ptr<f32> {
-    return pipeline_predict_proba(pipeline, X)
+    let result = pipeline_predict_proba(pipeline, X)
+    return result
 }
 
 export function pipeline_decide(pipeline: Pipeline, X: Matrix, threshold: f32) -> ptr<f32> {
