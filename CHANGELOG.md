@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### Sklearn parity fixes
+
+- `explained_variance_score` now returns NaN and prints a warning for single-
+  sample input or zero-variance y_true, instead of silently returning 0.0
+  or 1.0. Addresses sklearn #34622.
+- `OrdinalEncoder` now handles NaN as a missing value during fit (excluded
+  from categories) and transform (encoded as `encoded_missing_value`), instead
+  of treating it as an unknown category. Addresses sklearn #34387.
+- Added `ensure_no_nan` and `validate_for_predict` to the validation module.
+  These allow +inf / -inf at predict time for tree-based models, where
+  decision rules `x <= threshold` are well-defined for inf. Only NaN is
+  rejected. Addresses sklearn #34668.
+- Added `onehot_encoder_fit_with_freq` to OneHotEncoder. Categories appearing
+  fewer than `min_frequency` times are dropped from the encoding. Addresses
+  sklearn #34649.
+- `LabelPropagation` and `LabelSpreading` now assign uniform transition
+  probabilities to zero-affinity rows, instead of clamping degree to 1e-10
+  and producing all-zero distributions. Addresses sklearn #34351.
+- `KMeans` now relocates empty-cluster centroids to the point farthest from
+  its assigned centroid, instead of leaving the centroid in place. Addresses
+  sklearn #34074.
+- Closed 26 out-of-scope issues for components not implemented in flow-scikit.
+- Added `tests/test_sklearn_parity_fixes.flow` with 7 tests.
+
 ## 0.2.0
 
 - Added IsotonicRegression (pool-adjacent-violators algorithm)
