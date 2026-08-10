@@ -16,16 +16,16 @@ function make_classification_data() -> Dataset {
     let y: ptr<f32> = array_new_f32(n)
 
     for i in 0 to 30 {
-        let x0: f32 = _gauss(i * 7 + 1) * 0.5 + 1.0
-        let x1: f32 = _gauss(i * 13 + 3) * 0.5 + 1.0
+        let x0: f32 = _demo_gauss(i * 7 + 1) * 0.5 + 1.0
+        let x1: f32 = _demo_gauss(i * 13 + 3) * 0.5 + 1.0
         matrix_set(X, i, 0, x0)
         matrix_set(X, i, 1, x1)
         y[i] = 0.0
     }
 
     for i in 0 to 30 {
-        let x0: f32 = _gauss(i * 11 + 5) * 0.5 - 1.0
-        let x1: f32 = _gauss(i * 17 + 7) * 0.5 - 1.0
+        let x0: f32 = _demo_gauss(i * 11 + 5) * 0.5 - 1.0
+        let x1: f32 = _demo_gauss(i * 17 + 7) * 0.5 - 1.0
         matrix_set(X, 30 + i, 0, x0)
         matrix_set(X, 30 + i, 1, x1)
         y[30 + i] = 1.0
@@ -41,7 +41,7 @@ function make_classification_data() -> Dataset {
     }
 }
 
-function _gauss(seed: i32) -> f32 {
+function _demo_gauss(seed: i32) -> f32 {
     let s: i32 = seed * 1103515245 + 12345
     let n: i32 = (s % 10000 + 10000) % 10000
     return ((n as f32) / 5000.0 - 1.0)

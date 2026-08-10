@@ -118,9 +118,16 @@ function main() -> i32 {
     array_free_f32(bag_preds)
     println("")
 
-    # 6. VotingClassifier
+    # 6. VotingClassifier (requires pre-fitted estimators)
     println("--- VotingClassifier ---")
-    let voting: VotingClassifier = voting_classifier_fit(split.X_train, split.y_train, 2, 5, 42)
+    let estimators: ptr<DecisionTreeClassifier> = malloc(3 * 64) as ptr<DecisionTreeClassifier>
+    estimators[0] = decision_tree_classifier_fit(split.X_train, split.y_train, 2, 5, CRITERION_GINI)
+    estimators[1] = decision_tree_classifier_fit(split.X_train, split.y_train, 2, 7, CRITERION_GINI)
+    estimators[2] = decision_tree_classifier_fit(split.X_train, split.y_train, 2, 3, CRITERION_GINI)
+    let classes: ptr<f32> = array_new_f32(2)
+    classes[0] = 0.0
+    classes[1] = 1.0
+    let voting: VotingClassifier = voting_classifier_fit(estimators, 3, 2, classes, VOTING_SOFT)
     let vote_preds: ptr<f32> = voting_classifier_predict(voting, split.X_test)
     let vote_acc: f32 = accuracy_score(split.y_test, vote_preds, split.n_test)
     print("  Accuracy = ")
@@ -128,6 +135,9 @@ function main() -> i32 {
     println("")
     voting_classifier_free(voting)
     array_free_f32(vote_preds)
+    array_free_f32(classes)
+    for i in 0 to 3 { decision_tree_classifier_free(estimators[i]) }
+    free(estimators as ptr<void>)
     println("")
 
     # Summary table

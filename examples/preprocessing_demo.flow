@@ -69,12 +69,12 @@ function main() -> i32 {
     let X_mm: Matrix = minmax_scaler_transform(mms, X)
     print("  Min = [")
     for j in 0 to 3 {
-        printf("%.2f", mms.min[j])
+        printf("%.2f", mms.min_vals[j])
         if j < 2 { print(", ") }
     }
     print("], Max = [")
     for j in 0 to 3 {
-        printf("%.2f", mms.max[j])
+        printf("%.2f", mms.max_vals[j])
         if j < 2 { print(", ") }
     }
     println("]")
@@ -130,7 +130,7 @@ function main() -> i32 {
 
     # 5. Normalizer
     println("--- Normalizer (L2) ---")
-    let norm: Normalizer = normalizer_fit(2)
+    let norm: Normalizer = normalizer_init(2)
     let X_norm: Matrix = normalizer_transform(norm, X)
     let mut row0_norm: f32 = 0.0
     for j in 0 to 3 {
@@ -145,7 +145,7 @@ function main() -> i32 {
 
     # 6. Binarizer
     println("--- Binarizer (threshold=5.0) ---")
-    let bin: Binarizer = binarizer_fit(5.0)
+    let bin: Binarizer = binarizer_init(5.0)
     let X_bin: Matrix = binarizer_transform(bin, X)
     print("  Binarized (row 3): [")
     for j in 0 to 3 {
@@ -178,7 +178,7 @@ function main() -> i32 {
 
     # 8. PolynomialFeatures
     println("--- PolynomialFeatures (degree=2) ---")
-    let pf: PolynomialFeatures = polynomial_features_fit(2, false)
+    let pf: PolynomialFeatures = polynomial_features_fit(2, 2, false, true)
     let X_poly: Matrix = polynomial_features_transform(pf, X)
     print("  Input shape: ")
     print(X.rows)
@@ -219,7 +219,7 @@ function main() -> i32 {
     matrix_set(X_imp, 2, 0, 7.0); matrix_set(X_imp, 2, 1, 8.0); matrix_set(X_imp, 2, 2, 0.0)
     matrix_set(X_imp, 3, 0, 0.0); matrix_set(X_imp, 3, 1, 11.0); matrix_set(X_imp, 3, 2, 12.0)
 
-    let imputer: SimpleImputer = simple_imputer_fit(X_imp, IMPUTE_MEAN)
+    let imputer: SimpleImputer = simple_imputer_fit(X_imp, IMPUTE_STRATEGY_MEAN, 0.0)
     let X_imputed: Matrix = simple_imputer_transform(imputer, X_imp)
     println("  Before (with 0 = missing):")
     for i in 0 to 4 {
