@@ -9,7 +9,7 @@ import "lib/scikit/scikit.flow"
 
 extern {
     function rand() -> i32
-    function srand(seed: i32) -> void
+    function srand(seed: u32) -> void
 }
 
 function _make_simple_data(n: i32, p: i32, seed: i32) -> Matrix {
@@ -398,7 +398,7 @@ function test_rfe() -> i32 {
     println("Test: RFE")
     let X: Matrix = _make_simple_data(30, 6, 42)
     let y: ptr<f32> = _make_labels(30, 2, 42)
-    let model: RFE = rfe_fit(X, y, 3, nil, 30, 6)
+    let model: RFE = rfe_fit(X, y, 3, null, 30, 6)
 
     if model.n_selected != 3 {
         println("  FAIL: should select 3 features")
@@ -660,7 +660,7 @@ function test_cross_val_predict() -> i32 {
     let X: Matrix = _make_simple_data(20, 3, 42)
     let y: ptr<f32> = array_new_f32(20)
     for i in 0 to 20 { y[i] = (i as f32) * 0.1 }
-    let preds: ptr<f32> = cross_val_predict(X, y, 5, nil, 20, 3)
+    let preds: ptr<f32> = cross_val_predict(X, y, 5, null, 20, 3)
 
     let mut ok: bool = true
     for i in 0 to 20 {

@@ -732,7 +732,7 @@ export function multiclass_logistic_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
                 logits[c] = z
             }
 
-            let probs: ptr<f32> = _softmax(logits, n_classes)
+            let probs: ptr<f32> = _softmax_probs(logits, n_classes)
 
             let true_c: i32 = 0
             for c in 0 to n_classes {
@@ -783,7 +783,7 @@ export function multiclass_logistic_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
     }
 }
 
-function _softmax(logits: ptr<f32>, n: i32) -> ptr<f32> {
+function _softmax_probs(logits: ptr<f32>, n: i32) -> ptr<f32> {
     let mut max_val: f32 = logits[0]
     for i in 1 to n {
         if logits[i] > max_val {
@@ -814,7 +814,7 @@ export function multiclass_logistic_predict(model: MultiClassLogisticRegression,
             }
             logits[c] = z
         }
-        let p: ptr<f32> = _softmax(logits, model.n_classes)
+        let p: ptr<f32> = _softmax_probs(logits, model.n_classes)
         for c in 0 to model.n_classes {
             matrix_set(probs, i, c, p[c])
         }
@@ -1255,7 +1255,7 @@ export function ransac_regressor_fit(X: Matrix, y: ptr<f32>, min_samples: i32, m
             sub_y[i] = y[sample_indices[i]]
         }
 
-        let model: LinearRegression = linear_regression_fit(sub_X, sub_y)
+        let model: LinearRegression = linear_regression_fit(sub_X, sub_y, penalty_none())
         let preds: ptr<f32> = linear_regression_predict(model, X)
 
         let mask: ptr<bool> = calloc((n as i64), 1) as ptr<bool>
@@ -1297,7 +1297,7 @@ export function ransac_regressor_fit(X: Matrix, y: ptr<f32>, min_samples: i32, m
         }
     }
 
-    let final_model: LinearRegression = linear_regression_fit(inlier_X, inlier_y)
+    let final_model: LinearRegression = linear_regression_fit(inlier_X, inlier_y, penalty_none())
     for j in 0 to p { best_weights[j] = final_model.weights[j] }
     best_bias = final_model.bias
 
@@ -1368,7 +1368,7 @@ export function theil_sen_regressor_fit(X: Matrix, y: ptr<f32>, n_subsamples: i3
             sub_y[i] = y[indices[i]]
         }
 
-        let model: LinearRegression = linear_regression_fit(sub_X, sub_y)
+        let model: LinearRegression = linear_regression_fit(sub_X, sub_y, penalty_none())
         slopes[n_estimates] = array_copy_f32(model.weights, p)
         intercepts[n_estimates] = model.bias
         n_estimates = n_estimates + 1

@@ -60,8 +60,8 @@ export function knn_classifier_predict_proba(model: KNNClassifier, X: Matrix) ->
         }
 
         for j in 0 to model.k {
-            (neighbors + j).distance = 1e30
-            (neighbors + j).label = 0.0
+            neighbors[j].distance = 1e30
+            neighbors[j].label = 0.0
         }
 
         for j in 0 to model.X_train.rows {
@@ -73,19 +73,19 @@ export function knn_classifier_predict_proba(model: KNNClassifier, X: Matrix) ->
 
             let mut worst_idx: i32 = 0
             for n in 1 to model.k {
-                if (neighbors + n).distance > (neighbors + worst_idx).distance {
+                if neighbors[n].distance > neighbors[worst_idx].distance {
                     worst_idx = n
                 }
             }
 
-            if dist < (neighbors + worst_idx).distance {
-                (neighbors + worst_idx).distance = dist
-                (neighbors + worst_idx).label = model.y_train[j]
+            if dist < neighbors[worst_idx].distance {
+                neighbors[worst_idx].distance = dist
+                neighbors[worst_idx].label = model.y_train[j]
             }
         }
 
         for n in 0 to model.k {
-            let label: f32 = (neighbors + n).label
+            let label: f32 = neighbors[n].label
             for c in 0 to model.n_classes {
                 if model.classes[c] == label {
                     let cur: f32 = matrix_at(probs, i, c)
@@ -146,8 +146,8 @@ export function knn_regressor_predict(model: KNNRegressor, X: Matrix) -> ptr<f32
 
     for i in 0 to X.rows {
         for j in 0 to model.k {
-            (neighbors + j).distance = 1e30
-            (neighbors + j).label = 0.0
+            neighbors[j].distance = 1e30
+            neighbors[j].label = 0.0
         }
 
         for j in 0 to model.X_train.rows {
@@ -159,20 +159,20 @@ export function knn_regressor_predict(model: KNNRegressor, X: Matrix) -> ptr<f32
 
             let mut worst_idx: i32 = 0
             for n in 1 to model.k {
-                if (neighbors + n).distance > (neighbors + worst_idx).distance {
+                if neighbors[n].distance > neighbors[worst_idx].distance {
                     worst_idx = n
                 }
             }
 
-            if dist < (neighbors + worst_idx).distance {
-                (neighbors + worst_idx).distance = dist
-                (neighbors + worst_idx).label = model.y_train[j]
+            if dist < neighbors[worst_idx].distance {
+                neighbors[worst_idx].distance = dist
+                neighbors[worst_idx].label = model.y_train[j]
             }
         }
 
         let mut sum: f32 = 0.0
         for n in 0 to model.k {
-            sum = sum + (neighbors + n).label
+            sum = sum + neighbors[n].label
         }
         preds[i] = sum / (model.k as f32)
     }
