@@ -1,0 +1,39 @@
+# MNIST-style 8x8 digit classification with KNN.
+# This is a small local example: it uses generated 8x8 digit-like vectors,
+# not the full downloadable MNIST dataset.
+# Run: FLOW_HOST=python flow run examples/mnist_knn_demo.flow
+
+import "lib/scikit/scikit.flow"
+
+function main() -> i32 {
+    let X: Matrix = matrix_new(20, 64)
+    let y: ptr<f32> = array_new_f32(20)
+
+    # Two simple groups stand in for compact 8x8 digit samples.
+    for i in 0 to 20 {
+        y[i] = (i / 10) as f32
+        for pixel in 0 to 64 {
+            let row: i32 = pixel / 8
+            let col: i32 = pixel % 8
+            let mut value: f32 = 0.0
+            if i < 10 && (col == 3 || col == 4) { value = 1.0 }
+            if i >= 10 && (row == 1 || row == 6 || col == 1 || col == 6) { value = 1.0 }
+            matrix_set(X, i, pixel, value)
+        }
+    }
+
+    let model: KNNClassifier = knn_classifier_fit(X, y, 3)
+    let probabilities: Matrix = knn_classifier_predict(model, X)
+    let labels: ptr<f32> = knn_classifier_decide(model, X, 0.60)
+    let accuracy: f32 = accuracy_score(y, labels, 20)
+
+    print("MNIST-style 8x8 KNN accuracy: ")
+    println(accuracy)
+
+    matrix_free(probabilities)
+    array_free_f32(labels)
+    knn_classifier_free(model)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}

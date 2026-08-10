@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Practical flow-scikit examples, including a Flow WebAssembly digit demo." />
+    <title>flow-scikit demos</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script defer src="wasm/mnist_demo.js"></script>
+    <script defer src="demos.js"></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="wordmark" href="index.html">flow<span>~</span>scikit</a>
+      <nav aria-label="Primary navigation">
+        <a href="index.html#why">Design</a>
+        <a href="#mnist">WASM digit demo</a>
+        <a href="https://github.com/godofecht/flow-scikit">GitHub ↗</a>
+      </nav>
+    </header>
+    <main>
+      <section class="demo-hero section-shell">
+        <p class="eyebrow">practical examples</p>
+        <h1>Examples you can inspect, change, and run.</h1>
+        <p class="lede dark-lede">Each example has a clear job. They are not intended to hide the hard parts; they are intended to give you a solid first step.</p>
+      </section>
+
+      <section class="use-cases section-shell">
+        <article class="use-case">
+          <p class="eyebrow">01 / classification</p>
+          <h2>Iris classification</h2>
+          <p>Train a small classifier from four flower measurements. This is a good first example for fitting a model, checking probabilities, and choosing a threshold.</p>
+          <pre><code>let model = knn_classifier_fit(X_train, y_train, 5)
+let probabilities = knn_classifier_predict(model, X_test)
+let labels = knn_classifier_decide(model, X_test, 0.65)</code></pre>
+          <a href="https://github.com/godofecht/flow-scikit/blob/main/examples/iris_classification.flow">Read the Flow example ↗</a>
+        </article>
+        <article class="use-case">
+          <p class="eyebrow">02 / preprocessing</p>
+          <h2>Data with different scales</h2>
+          <p>Standardise continuous columns, keep categorical data separate, then pass the result to a model. This is the usual place where pipelines become valuable.</p>
+          <pre><code>let scaler = standard_scaler_fit(X_train)
+let X_ready = standard_scaler_transform(scaler, X_train)
+let model = logistic_regression_fit(X_ready, y_train)</code></pre>
+          <a href="https://github.com/godofecht/flow-scikit/blob/main/examples/preprocessing_demo.flow">Read the preprocessing example ↗</a>
+        </article>
+        <article class="use-case">
+          <p class="eyebrow">03 / validation</p>
+          <h2>Pick settings without guessing</h2>
+          <p>Use cross-validation to compare parameter values. The progress effect can report what is happening without coupling search code to one display format.</p>
+          <pre><code>let folds = stratified_kfold(5, true, 42)
+let score = cross_validate_score(model, X, y, folds)
+println(score)</code></pre>
+          <a href="https://github.com/godofecht/flow-scikit/blob/main/examples/grid_search_demo.flow">Read the search example ↗</a>
+        </article>
+      </section>
+
+      <section id="mnist" class="wasm-demo section-shell">
+        <div class="wasm-copy">
+          <p class="eyebrow">04 / browser wasm</p>
+          <h2>A small digit recogniser, running from Flow-built WASM.</h2>
+          <p>This demo uses ten built-in 8×8 digit samples. Pick one, add a little noise, and run the recogniser. It is a tiny prototype rather than a MNIST benchmark, but the confidence score is calculated in the WebAssembly module built from Flow.</p>
+          <p class="wasm-status" id="wasm-status">Loading the Flow WebAssembly module…</p>
+          <div class="sample-row" aria-label="Choose a digit sample">
+            <button class="digit-button active" data-digit="0">0</button>
+            <button class="digit-button" data-digit="1">1</button>
+            <button class="digit-button" data-digit="2">2</button>
+            <button class="digit-button" data-digit="3">3</button>
+            <button class="digit-button" data-digit="4">4</button>
+            <button class="digit-button" data-digit="5">5</button>
+            <button class="digit-button" data-digit="6">6</button>
+            <button class="digit-button" data-digit="7">7</button>
+            <button class="digit-button" data-digit="8">8</button>
+            <button class="digit-button" data-digit="9">9</button>
+          </div>
+          <label class="noise-label" for="noise">Sample noise <output id="noise-value">8%</output></label>
+          <input id="noise" type="range" min="0" max="35" value="8" />
+          <button id="run-digit" class="button button-primary">Run recogniser</button>
+          <p class="wasm-note">Flow source → C backend → Emscripten → WebAssembly. No model data is sent anywhere.</p>
+        </div>
+        <div class="digit-panel">
+          <div id="pixel-grid" class="pixel-grid" aria-label="Selected 8 by 8 digit image"></div>
+          <div class="prediction" aria-live="polite">
+            <span>Predicted digit</span>
+            <strong id="prediction">—</strong>
+            <small id="confidence">Choose a sample, then run it.</small>
+          </div>
+        </div>
+      </section>
+
+      <section class="demo-links section-shell">
+        <p class="eyebrow">more examples in the repository</p>
+        <h2>There is more to try.</h2>
+        <div class="link-grid">
+          <a href="https://github.com/godofecht/flow-scikit/blob/main/examples/clustering_demo.flow">Clustering: KMeans, DBSCAN, and more <span>↗</span></a>
+          <a href="https://github.com/godofecht/flow-scikit/blob/main/examples/ensemble_comparison.flow">Ensembles: forests and boosting <span>↗</span></a>
+          <a href="https://github.com/godofecht/flow-scikit/blob/main/examples/regression_demo.flow">Regression: fit and compare <span>↗</span></a>
+          <a href="https://github.com/godofecht/flow-scikit/blob/main/examples/svm_demo.flow">Support vector machines <span>↗</span></a>
+          <a href="https://github.com/godofecht/flow-scikit/blob/main/examples/mnist_knn_demo.flow">MNIST-style KNN source <span>↗</span></a>
+          <a href="https://github.com/godofecht/flow-scikit/tree/main/tests">Tests and expected behaviour <span>↗</span></a>
+        </div>
+      </section>
+    </main>
+    <footer><a class="wordmark" href="index.html">flow<span>~</span>scikit</a><p>Built for practical experiments and readable code.</p></footer>
+  </body>
+</html>
