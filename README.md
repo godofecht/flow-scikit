@@ -103,7 +103,7 @@ lib/scikit/
 │                          #   AdaBoostClassifier, ExtraTreesClassifier/Regressor
 ├── cluster.flow           # KMeans, MiniBatchKMeans, DBSCAN,
 │                          #   AgglomerativeClustering, MeanShift, Birch
-├── decomposition.flow     # PCA, TruncatedSVD, NMF
+├── decomposition.flow     # PCA, TruncatedSVD, NMF, FastICA, SparsePCA
 ├── metrics.flow           # accuracy, precision/recall/f1, classification_report,
 │                          #   MSE, RMSE, MAE, R2, roc_auc, roc_curve,
 │                          #   precision_recall_curve, log_loss, cohen_kappa,
@@ -178,7 +178,7 @@ tests/
 |                           | ExtraTreesRegressor                                          |
 | `cluster`                 | KMeans, MiniBatchKMeans, DBSCAN, AgglomerativeClustering,    |
 |                           | MeanShift, Birch                                             |
-| `decomposition`           | PCA, TruncatedSVD, NMF                                      |
+| `decomposition`           | PCA, TruncatedSVD, NMF, FastICA, SparsePCA                  |
 | `metrics`                 | accuracy_score, precision_recall_fscore,                     |
 |                           | classification_report, confusion_matrix,                     |
 |                           | roc_curve, roc_auc_score, precision_recall_curve,            |

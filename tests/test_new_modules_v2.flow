@@ -790,6 +790,94 @@ function test_quantile_transformer() -> i32 {
     return 0
 }
 
+function test_fast_ica() -> i32 {
+    println("Test: FastICA")
+    let n: i32 = 40
+    let X: Matrix = matrix_new(n, 3)
+
+    srand(42)
+    for i in 0 to n {
+        let s1: f32 = sin((i as f64) * 0.3) as f32
+        let s2: f32 = ((rand() % 100) as f32) / 50.0 - 1.0
+        let s3: f32 = _noise(i) * 2.0
+        matrix_set(X, i, 0, 0.5 * s1 + 0.2 * s2 + 0.1 * s3)
+        matrix_set(X, i, 1, 0.3 * s1 + 0.7 * s2 + 0.2 * s3)
+        matrix_set(X, i, 2, 0.1 * s1 + 0.4 * s2 + 0.9 * s3)
+    }
+
+    let ica: FastICA = fast_ica_fit(X, 2, 100, 1e-4, 42)
+    let transformed: Matrix = fast_ica_transform(ica, X)
+
+    if transformed.cols != 2 {
+        println("  FAIL: should have 2 components")
+        return 1
+    }
+
+    let mut total_var: f32 = 0.0
+    for i in 0 to n {
+        for c in 0 to 2 {
+            let v: f32 = matrix_at(transformed, i, c)
+            total_var = total_var + v * v
+        }
+    }
+
+    if total_var < 0.1 {
+        println("  FAIL: transformed data should have variance")
+        return 1
+    }
+
+    print("  OK: 2 components, n_iter = ")
+    print(ica.n_iter)
+    println("")
+
+    matrix_free(transformed)
+    fast_ica_free(ica)
+    matrix_free(X)
+    return 0
+}
+
+function test_sparse_pca() -> i32 {
+    println("Test: SparsePCA")
+    let n: i32 = 40
+    let X: Matrix = matrix_new(n, 4)
+
+    srand(42)
+    for i in 0 to n {
+        let s1: f32 = sin((i as f64) * 0.3) as f32
+        let s2: f32 = ((rand() % 100) as f32) / 50.0 - 1.0
+        matrix_set(X, i, 0, s1 + _noise(i) * 0.05)
+        matrix_set(X, i, 1, s1 + _noise(i + 10) * 0.05)
+        matrix_set(X, i, 2, s2 + _noise(i + 20) * 0.05)
+        matrix_set(X, i, 3, s2 + _noise(i + 30) * 0.05)
+    }
+
+    let spca: SparsePCA = sparse_pca_fit(X, 2, 0.1, 200, 1e-4, 42)
+    let transformed: Matrix = sparse_pca_transform(spca, X)
+
+    if transformed.cols != 2 {
+        println("  FAIL: should have 2 components")
+        return 1
+    }
+
+    let mut n_zeros: i32 = 0
+    for c in 0 to 2 {
+        for j in 0 to 4 {
+            if fabs((spca.components[c][j]) as f64) as f32 < 1e-6 {
+                n_zeros = n_zeros + 1
+            }
+        }
+    }
+
+    print("  OK: 2 components, ")
+    print(n_zeros)
+    println(" sparse zeros in loading vectors")
+
+    matrix_free(transformed)
+    sparse_pca_free(spca)
+    matrix_free(X)
+    return 0
+}
+
 function main() -> i32 {
     println("=== New Modules v2 Tests ===")
     println("")
@@ -841,6 +929,10 @@ function main() -> i32 {
     if test_power_transformer() != 0 { failures = failures + 1 }
     println("")
     if test_quantile_transformer() != 0 { failures = failures + 1 }
+    println("")
+    if test_fast_ica() != 0 { failures = failures + 1 }
+    println("")
+    if test_sparse_pca() != 0 { failures = failures + 1 }
 
     println("")
     if failures == 0 {
