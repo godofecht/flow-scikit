@@ -27,8 +27,8 @@
 
       <section id="lab" class="experiment-lab section-shell">
         <p class="eyebrow">interactive Flow/WASM lab</p>
-        <h2>Five small experiments with real decisions behind them.</h2>
-        <p class="gallery-lede">Move the controls. The calculations run locally in the same Flow-built WebAssembly module as the digit demo. The numbers are illustrative, but the workflows are the ones teams actually need to reason about.</p>
+        <h2>Ten small experiments with real decisions behind them.</h2>
+        <p class="gallery-lede">Move the controls. Calculations run locally in the same Flow-built WebAssembly module as the digit demo. Values are deliberately simple and visible, so you can inspect the behaviour rather than take a score on faith.</p>
         <div class="experiment-grid">
           <article class="experiment-card">
             <span class="experiment-number">01 / pricing</span><h3>Estimate a home price</h3><p>Test how floor area, rooms, and age change a transparent baseline estimate.</p>
@@ -58,9 +58,40 @@
             <label>Normal spread <output id="anomaly-std-output">12</output><input id="anomaly-std" type="range" min="2" max="35" value="12" /></label>
             <strong class="experiment-result" id="anomaly-result">Loading…</strong>
           </article>
+          <article class="experiment-card">
+            <span class="experiment-number">05 / operations</span><h3>Give a delivery window</h3><p>Make a clear ETA from route length, stops, and the current traffic level.</p>
+            <label>Route distance <output id="eta-distance-output">12 km</output><input id="eta-distance" type="range" min="1" max="70" value="12" /></label>
+            <label>Stops remaining <output id="eta-stops-output">4</output><input id="eta-stops" type="range" min="0" max="18" value="4" /></label>
+            <label>Traffic level <output id="eta-traffic-output">35%</output><input id="eta-traffic" type="range" min="0" max="100" value="35" /></label>
+            <strong class="experiment-result" id="eta-result">Loading…</strong>
+          </article>
+          <article class="experiment-card">
+            <span class="experiment-number">06 / inbox</span><h3>Sort messages for review</h3><p>Use simple, visible signals to decide what should enter a manual spam queue.</p>
+            <label>Links in message <output id="spam-links-output">1</output><input id="spam-links" type="range" min="0" max="6" value="1" /></label>
+            <label>Capital letters <output id="spam-caps-output">12%</output><input id="spam-caps" type="range" min="0" max="100" value="12" /></label>
+            <label>Unknown sender <output id="spam-sender-output">no</output><input id="spam-sender" type="range" min="0" max="1" value="0" /></label>
+            <strong class="experiment-result" id="spam-result">Loading…</strong>
+          </article>
+          <article class="experiment-card">
+            <span class="experiment-number">07 / stock</span><h3>Plan a reorder</h3><p>Check how long stock will last at the current sales rate before placing the next order.</p>
+            <label>Units in stock <output id="stock-units-output">240</output><input id="stock-units" type="range" min="10" max="1000" value="240" /></label>
+            <label>Daily sales <output id="stock-sales-output">18</output><input id="stock-sales" type="range" min="1" max="100" value="18" /></label>
+            <label>Supplier lead time <output id="stock-lead-output">10 days</output><input id="stock-lead" type="range" min="1" max="45" value="10" /></label>
+            <strong class="experiment-result" id="stock-result">Loading…</strong>
+          </article>
+          <article class="experiment-card">
+            <span class="experiment-number">08 / quality</span><h3>Check a manufactured part</h3><p>Compare a measurement with its target and tolerance before sending the part onward.</p>
+            <label>Measured width <output id="quality-measured-output">10.3 mm</output><input id="quality-measured" type="range" min="80" max="120" value="103" /></label>
+            <label>Target width <output id="quality-target-output">10.0 mm</output><input id="quality-target" type="range" min="80" max="120" value="100" /></label>
+            <label>Tolerance <output id="quality-tolerance-output">0.4 mm</output><input id="quality-tolerance" type="range" min="1" max="15" value="4" /></label>
+            <strong class="experiment-result" id="quality-result">Loading…</strong>
+          </article>
           <article class="experiment-card experiment-wide">
-            <span class="experiment-number">05 / segmentation</span><h3>Assign a customer to the nearest behaviour group</h3><p>Drag the dot. The Flow kernel calculates distance to three fixed customer segments: occasional, regular, and high-value.</p>
+            <span class="experiment-number">09 / segmentation</span><h3>Assign a customer to the nearest behaviour group</h3><p>Drag the dot. The Flow kernel calculates distance to three fixed customer segments: occasional, regular, and high-value.</p>
             <div class="segment-layout"><canvas id="segment-canvas" width="360" height="220" aria-label="Interactive customer segment map"></canvas><div><p class="segment-key"><i></i> Occasional <i></i> Regular <i></i> High-value</p><strong class="experiment-result" id="segment-result">Loading…</strong><small>Horizontal: visits per month. Vertical: average order value.</small></div></div>
+          </article>
+          <article class="experiment-card experiment-wide">
+            <span class="experiment-number">10 / handwriting</span><h3>Classify a handwritten digit</h3><p>The MNIST experiment below is the tenth lab: draw a digit, normalise it to 28×28 pixels, and compare it with centroids trained from the MNIST training set.</p><a class="experiment-jump" href="#mnist">Open the MNIST canvas ↓</a>
           </article>
         </div>
       </section>

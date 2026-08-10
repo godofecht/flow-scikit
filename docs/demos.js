@@ -138,6 +138,50 @@ function initialiseExperiments() {
     document.querySelector("#anomaly-result").textContent = z >= 3 ? `${z.toFixed(1)}σ · investigate` : `${z.toFixed(1)}σ · within expected range`;
   });
 
+  bindSliders(["eta-distance", "eta-stops", "eta-traffic"], () => {
+    const distance = Number(document.querySelector("#eta-distance").value);
+    const stops = Number(document.querySelector("#eta-stops").value);
+    const traffic = Number(document.querySelector("#eta-traffic").value);
+    document.querySelector("#eta-distance-output").textContent = `${distance} km`;
+    document.querySelector("#eta-stops-output").textContent = stops;
+    document.querySelector("#eta-traffic-output").textContent = `${traffic}%`;
+    const eta = flowNumber("delivery_eta_minutes_f32_f32_f32", [distance, stops, traffic]);
+    document.querySelector("#eta-result").textContent = `Estimated arrival: ${Math.round(eta)} minutes`;
+  });
+
+  bindSliders(["spam-links", "spam-caps", "spam-sender"], () => {
+    const links = Number(document.querySelector("#spam-links").value);
+    const caps = Number(document.querySelector("#spam-caps").value) / 100;
+    const sender = Number(document.querySelector("#spam-sender").value);
+    document.querySelector("#spam-links-output").textContent = links;
+    document.querySelector("#spam-caps-output").textContent = `${Math.round(caps * 100)}%`;
+    document.querySelector("#spam-sender-output").textContent = sender ? "yes" : "no";
+    const risk = flowNumber("message_risk_f32_f32_f32", [links, caps, sender]);
+    document.querySelector("#spam-result").textContent = risk >= 50 ? `Review queue · score ${Math.round(risk)}/100` : `Deliver normally · score ${Math.round(risk)}/100`;
+  });
+
+  bindSliders(["stock-units", "stock-sales", "stock-lead"], () => {
+    const units = Number(document.querySelector("#stock-units").value);
+    const sales = Number(document.querySelector("#stock-sales").value);
+    const lead = Number(document.querySelector("#stock-lead").value);
+    document.querySelector("#stock-units-output").textContent = units;
+    document.querySelector("#stock-sales-output").textContent = sales;
+    document.querySelector("#stock-lead-output").textContent = `${lead} days`;
+    const cover = flowNumber("stock_cover_days_f32_f32", [units, sales]);
+    document.querySelector("#stock-result").textContent = cover <= lead ? `Reorder now · ${cover.toFixed(1)} days of cover` : `Stock is sufficient · ${cover.toFixed(1)} days of cover`;
+  });
+
+  bindSliders(["quality-measured", "quality-target", "quality-tolerance"], () => {
+    const measured = Number(document.querySelector("#quality-measured").value) / 10;
+    const target = Number(document.querySelector("#quality-target").value) / 10;
+    const tolerance = Number(document.querySelector("#quality-tolerance").value) / 10;
+    document.querySelector("#quality-measured-output").textContent = `${measured.toFixed(1)} mm`;
+    document.querySelector("#quality-target-output").textContent = `${target.toFixed(1)} mm`;
+    document.querySelector("#quality-tolerance-output").textContent = `${tolerance.toFixed(1)} mm`;
+    const deviation = flowNumber("tolerance_deviation_f32_f32_f32", [measured, target, tolerance]);
+    document.querySelector("#quality-result").textContent = deviation <= 1 ? `Pass · ${deviation.toFixed(2)}× tolerance used` : `Hold for inspection · ${deviation.toFixed(2)}× tolerance`;
+  });
+
   initialiseSegmentMap();
 }
 
