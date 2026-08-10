@@ -92,7 +92,6 @@ function bindSliders(ids, render) {
 }
 
 function initialiseExperiments() {
-  initialiseVisualLab();
   bindSliders(["home-area", "home-rooms", "home-age"], () => {
     const area = Number(document.querySelector("#home-area").value);
     const rooms = Number(document.querySelector("#home-rooms").value);
@@ -188,6 +187,7 @@ function initialiseExperiments() {
 
 function initialiseVisualLab() {
   const lab = document.querySelector("#visual-lab");
+  if (!lab) return;
   const experiments = [
     ["Home prices", "Regression line", "price"], ["Payment reviews", "Risk boundary", "risk"],
     ["Feature scaling", "Before / after", "scale"], ["Sensor alerts", "Normal range", "anomaly"],
