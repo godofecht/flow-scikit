@@ -58,33 +58,50 @@ println(score)</code></pre>
       <section id="mnist" class="wasm-demo section-shell">
         <div class="wasm-copy">
           <p class="eyebrow">04 / browser wasm</p>
-          <h2>A small digit recogniser, running from Flow-built WASM.</h2>
-          <p>This demo uses ten built-in 8×8 digit samples. Pick one, add a little noise, and run the recogniser. It is a tiny prototype rather than a MNIST benchmark, but the confidence score is calculated in the WebAssembly module built from Flow.</p>
-          <p class="wasm-status" id="wasm-status">Loading the Flow WebAssembly module…</p>
-          <div class="sample-row" aria-label="Choose a digit sample">
-            <button class="digit-button active" data-digit="0">0</button>
-            <button class="digit-button" data-digit="1">1</button>
-            <button class="digit-button" data-digit="2">2</button>
-            <button class="digit-button" data-digit="3">3</button>
-            <button class="digit-button" data-digit="4">4</button>
-            <button class="digit-button" data-digit="5">5</button>
-            <button class="digit-button" data-digit="6">6</button>
-            <button class="digit-button" data-digit="7">7</button>
-            <button class="digit-button" data-digit="8">8</button>
-            <button class="digit-button" data-digit="9">9</button>
+          <h2>Draw a digit. Classify it with a real MNIST prototype model.</h2>
+          <p>Draw one digit in the box. The demo rescales it to 28×28 pixels, compares it with ten centroids trained from all 60,000 MNIST training images, and returns the closest class.</p>
+          <p class="wasm-status" id="wasm-status">Loading the MNIST centroids and the Flow WebAssembly distance kernel…</p>
+          <div class="draw-actions">
+            <button id="run-digit" class="button button-primary">Classify drawing</button>
+            <button id="clear-digit" class="button button-quiet dark-button">Clear canvas</button>
           </div>
-          <label class="noise-label" for="noise">Sample noise <output id="noise-value">8%</output></label>
-          <input id="noise" type="range" min="0" max="35" value="8" />
-          <button id="run-digit" class="button button-primary">Run recogniser</button>
-          <p class="wasm-note">Flow source → C backend → Emscripten → WebAssembly. No model data is sent anywhere.</p>
+          <p class="wasm-note">The learned centroids stay in your browser. Flow source → C backend → Emscripten → WebAssembly calculates the ten distance scores.</p>
         </div>
         <div class="digit-panel">
-          <div id="pixel-grid" class="pixel-grid" aria-label="Selected 8 by 8 digit image"></div>
+          <canvas id="digit-canvas" width="280" height="280" aria-label="Draw a handwritten digit from zero to nine"></canvas>
           <div class="prediction" aria-live="polite">
             <span>Predicted digit</span>
             <strong id="prediction">—</strong>
-            <small id="confidence">Choose a sample, then run it.</small>
+            <small id="confidence">Draw a single digit, then classify it.</small>
           </div>
+        </div>
+      </section>
+
+      <section id="gif-gallery" class="gif-gallery section-shell">
+        <p class="eyebrow">20 visual examples</p>
+        <h2>One short GIF for each common job.</h2>
+        <p class="gallery-lede">These are concise visual guides. Each one maps to a real part of the library and gives a quick picture of what the method is for.</p>
+        <div class="gif-grid">
+          <figure><img loading="lazy" src="assets/examples/classification-boundary.gif" alt="Classification decision boundary animation" /><figcaption>Classification boundary</figcaption></figure>
+          <figure><img loading="lazy" src="assets/examples/logistic-confidence.gif" alt="Logistic regression confidence animation" /><figcaption>Logistic confidence</figcaption></figure>
+          <figure><img loading="lazy" src="assets/examples/linear-regression.gif" alt="Linear regression animation" /><figcaption>Linear regression</figcaption></figure>
+          <figure><img loading="lazy" src="assets/examples/ridge-path.gif" alt="Ridge and Lasso regularisation animation" /><figcaption>Ridge and Lasso</figcaption></figure>
+          <figure><img loading="lazy" src="assets/examples/preprocessing-scale.gif" alt="Feature scaling animation" /><figcaption>Feature scaling</figcaption></figure>
+          <figure><img loading="lazy" src="assets/examples/onehot-encode.gif" alt="One-hot encoding animation" /><figcaption>One-hot encoding</figcaption></figure>
+          <figure><img loading="lazy" src="assets/examples/imputation.gif" alt="Missing value imputation animation" /><figcaption>Imputation</figcaption></figure>
+          <figure><img loading="lazy" src="assets/examples/kmeans.gif" alt="KMeans clustering animation" /><figcaption>KMeans clustering</figcaption></figure>
+          <figure><img loading="lazy" src="assets/examples/dbscan.gif" alt="DBSCAN clustering animation" /><figcaption>DBSCAN</figcaption></figure>
+          <figure><img loading="lazy" src="assets/examples/pca.gif" alt="PCA dimension reduction animation" /><figcaption>PCA</figcaption></figure>
+          <figure><img loading="lazy" src="assets/examples/tsne.gif" alt="t-SNE neighbourhood map animation" /><figcaption>t-SNE</figcaption></figure>
+          <figure><img loading="lazy" src="assets/examples/decision-tree.gif" alt="Decision tree split animation" /><figcaption>Decision tree</figcaption></figure>
+          <figure><img loading="lazy" src="assets/examples/random-forest.gif" alt="Random forest animation" /><figcaption>Random forest</figcaption></figure>
+          <figure><img loading="lazy" src="assets/examples/svm-margin.gif" alt="Support vector machine margin animation" /><figcaption>SVM margin</figcaption></figure>
+          <figure><img loading="lazy" src="assets/examples/grid-search.gif" alt="Grid search animation" /><figcaption>Grid search</figcaption></figure>
+          <figure><img loading="lazy" src="assets/examples/cross-validation.gif" alt="Cross validation fold animation" /><figcaption>Cross-validation</figcaption></figure>
+          <figure><img loading="lazy" src="assets/examples/calibration.gif" alt="Calibration animation" /><figcaption>Calibration</figcaption></figure>
+          <figure><img loading="lazy" src="assets/examples/feature-selection.gif" alt="Feature selection animation" /><figcaption>Feature selection</figcaption></figure>
+          <figure><img loading="lazy" src="assets/examples/gaussian-mixture.gif" alt="Gaussian mixture animation" /><figcaption>Gaussian mixture</figcaption></figure>
+          <figure><img loading="lazy" src="assets/examples/neural-network.gif" alt="Neural network animation" /><figcaption>Neural network</figcaption></figure>
         </div>
       </section>
 
