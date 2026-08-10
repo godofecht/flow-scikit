@@ -1362,7 +1362,10 @@ export function isolation_forest_fit(X: Matrix, n_trees: i32, max_depth: i32, se
                 matrix_set(sub_X, i, j, matrix_at(X, idx, j))
             }
         }
-        trees[t] = decision_tree_regressor_fit(sub_X, array_new_f32(sub_size), sub_size, p, max_depth)
+        let y_sub: ptr<f32> = array_new_f32(sub_size)
+        for i in 0 to sub_size { y_sub[i] = 0.0 }
+        trees[t] = decision_tree_regressor_fit(sub_X, y_sub, max_depth, CRITERION_MSE)
+        array_free_f32(y_sub)
         matrix_free(sub_X)
     }
 

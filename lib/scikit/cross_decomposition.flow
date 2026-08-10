@@ -566,20 +566,20 @@ export function pls_canonical_fit(X: Matrix, Y: Matrix, n_components: i32) -> PL
             t[i] = s
         }
 
-        let c: ptr<f32> = array_new_f32(q)
+        let c_vec: ptr<f32> = array_new_f32(q)
         for j in 0 to q {
             let mut s: f32 = 0.0
             for i in 0 to n { s = s + matrix_at(Yc, i, j) * t[i] }
-            c[j] = s
+            c_vec[j] = s
         }
         let mut c_norm: f32 = 0.0
-        for j in 0 to q { c_norm = c_norm + c[j] * c[j] }
+        for j in 0 to q { c_norm = c_norm + c_vec[j] * c_vec[j] }
         c_norm = sqrt((c_norm as f64)) as f32
         if c_norm < 1e-10 { c_norm = 1e-10 }
-        for j in 0 to q { c[j] = c[j] / c_norm }
+        for j in 0 to q { c_vec[j] = c_vec[j] / c_norm }
 
         x_weights[c] = w
-        y_weights[c] = c
+        y_weights[c] = c_vec
 
         let p_load: ptr<f32> = array_new_f32(p)
         for j in 0 to p {

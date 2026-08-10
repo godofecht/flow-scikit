@@ -923,7 +923,8 @@ export function repeated_kfold_init(n_splits: i32, n_repeats: i32, seed: i32) ->
 
 export function repeated_kfold_get_fold(rkf: RepeatedKFold, n_samples: i32, repeat: i32, fold: i32) -> FoldIndices {
     let current_seed: i32 = rkf.seed + repeat * 1000 + fold
-    return k_fold_get_fold(n_samples, rkf.n_splits, fold, current_seed)
+    let kf: KFold = kfold_init(rkf.n_splits, true, current_seed)
+    return kfold_get_fold(kf, n_samples, fold)
 }
 
 # ============================================================================
@@ -1028,7 +1029,7 @@ export function cross_val_predict(
             }
         }
 
-        let model: LinearRegression = linear_regression_fit(X_train, y_train)
+        let model: LinearRegression = linear_regression_fit(X_train, y_train, penalty_none())
         let preds: ptr<f32> = linear_regression_predict(model, X_test)
         for i in test_start to test_end {
             predictions[i] = preds[i - test_start]

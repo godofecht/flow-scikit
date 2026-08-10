@@ -85,7 +85,7 @@ export function column_transformer_fit(ct: ColumnTransformer, X: Matrix) -> void
             ct.scalers[s] = standard_scaler_fit(sub)
             n_output = n_output + spec.n_columns
         } elif spec.transformer_type == TRANSFORMER_MINMAX_SCALER {
-            ct.minmax_scalers[s] = minmax_scaler_fit(sub, 0.0, 1.0)
+            ct.minmax_scalers[s] = minmax_scaler_fit(sub)
             n_output = n_output + spec.n_columns
         } elif spec.transformer_type == TRANSFORMER_ROBUST_SCALER {
             ct.robust_scalers[s] = robust_scaler_fit(sub)
@@ -96,8 +96,8 @@ export function column_transformer_fit(ct: ColumnTransformer, X: Matrix) -> void
         } elif spec.transformer_type == TRANSFORMER_PASSTHROUGH {
             n_output = n_output + spec.n_columns
         } elif spec.transformer_type == TRANSFORMER_ONEHOT_ENCODER {
-            ct.onehot_encoders[s] = onehot_encoder_fit(sub, spec.n_columns, HANDLE_UNKNOWN_WARN)
-            n_output = n_output + ct.onehot_encoders[s].n_categories_total
+            ct.onehot_encoders[s] = onehot_encoder_fit(sub, HANDLE_UNKNOWN_WARN)
+            n_output = n_output + ct.onehot_encoders[s].total_output_cols
         } elif spec.transformer_type == TRANSFORMER_ORDINAL_ENCODER {
             n_output = n_output + spec.n_columns
         }
@@ -163,7 +163,7 @@ export function column_transformer_transform(ct: ColumnTransformer, X: Matrix) -
             out_col = out_col + spec.n_columns
         } elif spec.transformer_type == TRANSFORMER_ONEHOT_ENCODER {
             let transformed: Matrix = onehot_encoder_transform(ct.onehot_encoders[s], sub)
-            let n_enc: i32 = ct.onehot_encoders[s].n_categories_total
+            let n_enc: i32 = ct.onehot_encoders[s].total_output_cols
             for i in 0 to X.rows {
                 for j in 0 to n_enc {
                     matrix_set(result, i, out_col + j, matrix_at(transformed, i, j))
@@ -271,7 +271,7 @@ export function transformed_target_regressor_fit(X: Matrix, y: ptr<f32>, transfo
         for i in 0 to n { y_transformed[i] = y[i] }
     }
 
-    let model: LinearRegression = linear_regression_fit(X, y_transformed)
+    let model: LinearRegression = linear_regression_fit(X, y_transformed, penalty_none())
     array_free_f32(y_transformed)
 
     return TransformedTargetRegressor {
