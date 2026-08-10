@@ -35,6 +35,22 @@ export function ensure_all_finite(m: Matrix) -> ValidationResult {
     return ValidationResult { ok: true, code: ENSURE_OK, message: "" }
 }
 
+# Like ensure_all_finite but allows +inf / -inf.
+# Use this at predict time for tree-based models where inf is a valid
+# input (decision rules x <= threshold are well-defined for inf).
+# Addresses sklearn #34668: RandomForest errors out with infinite values.
+export function ensure_no_nan(m: Matrix) -> ValidationResult {
+    let n: i32 = m.rows * m.cols
+    for i in 0 to n {
+        let val: f32 = m.data[i]
+        let d: f64 = val as f64
+        if d != d {
+            return ValidationResult { ok: false, code: ENSURE_ERR_NAN, message: "NaN found in matrix" }
+        }
+    }
+    return ValidationResult { ok: true, code: ENSURE_OK, message: "" }
+}
+
 export function ensure_2d(m: Matrix) -> ValidationResult {
     if m.rows < 1 {
         return ValidationResult { ok: false, code: ENSURE_ERR_NOT_2D, message: "Matrix has 0 rows, expected 2D" }
@@ -91,6 +107,24 @@ export function validate_dataset(X: Matrix, y: ptr<f32>, n_y: i32, is_classifica
     let r4: ValidationResult = ensure_consistent_samples(X, y, n_y)
     if not r4.ok {
         return r4
+    }
+    return ValidationResult { ok: true, code: ENSURE_OK, message: "" }
+}
+
+# Predict-time validation: allows inf (tree-based models handle inf fine).
+# Addresses sklearn #34668.
+export function validate_for_predict(X: Matrix) -> ValidationResult {
+    let r1: ValidationResult = ensure_non_empty(X)
+    if not r1.ok {
+        return r1
+    }
+    let r2: ValidationResult = ensure_2d(X)
+    if not r2.ok {
+        return r2
+    }
+    let r3: ValidationResult = ensure_no_nan(X)
+    if not r3.ok {
+        return r3
     }
     return ValidationResult { ok: true, code: ENSURE_OK, message: "" }
 }

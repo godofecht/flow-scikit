@@ -60,7 +60,15 @@ export function label_propagation_fit(X: Matrix, y: ptr<i32>, n_classes: i32, ga
         for j in 0 to n {
             deg[i] = deg[i] + W[i][j]
         }
-        if deg[i] < 1e-10 { deg[i] = 1e-10 }
+        # Zero-affinity rows get uniform transition probabilities.
+        # Addresses sklearn #34351: zero-affinity fallback should be
+        # a mathematically valid uniform distribution, not all-zeros.
+        if deg[i] < 1e-10 {
+            deg[i] = 1.0
+            for j in 0 to n {
+                W[i][j] = 1.0 / (n as f32)
+            }
+        }
     }
 
     let T: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
@@ -212,7 +220,14 @@ export function label_spreading_fit(X: Matrix, y: ptr<i32>, n_classes: i32, gamm
         for j in 0 to n {
             deg[i] = deg[i] + W[i][j]
         }
-        if deg[i] < 1e-10 { deg[i] = 1e-10 }
+        # Zero-affinity rows get uniform transition probabilities.
+        # Addresses sklearn #34351.
+        if deg[i] < 1e-10 {
+            deg[i] = 1.0
+            for j in 0 to n {
+                W[i][j] = 1.0 / (n as f32)
+            }
+        }
     }
 
     let S: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
