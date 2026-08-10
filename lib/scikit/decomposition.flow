@@ -3,6 +3,12 @@
 
 import "lib/scikit/matrix.flow"
 
+extern {
+    function tanh(x: f64) -> f64
+    function srand(seed: i32) -> void
+    function rand() -> i32
+}
+
 export struct PCA {
     components: ptr<ptr<f32>>,
     n_components: i32,
@@ -440,4 +446,355 @@ export function truncated_svd_free(model: TruncatedSVD) -> void {
     free(model.components as ptr<void>)
     array_free_f32(model.explained_variance)
     array_free_f32(model.explained_variance_ratio)
+}
+
+# ============================================================================
+# FastICA
+# ============================================================================
+
+export struct FastICA {
+    components: ptr<ptr<f32>>,
+    n_components: i32,
+    n_features: i32,
+    mean: ptr<f32>,
+    mixing: ptr<ptr<f32>>,
+    n_iter: i32,
+    fitted: bool
+}
+
+function _tanh_derivative(x: f32) -> f32 {
+    let t: f32 = tanh((x) as f64) as f32
+    return 1.0 - t * t
+}
+
+function _gram_schmidt(row: ptr<f32>, basis: ptr<ptr<f32>>, n_basis: i32, n_features: i32) -> void {
+    for b in 0 to n_basis {
+        let mut dot: f32 = 0.0
+        for j in 0 to n_features {
+            dot = dot + row[j] * basis[b][j]
+        }
+        for j in 0 to n_features {
+            row[j] = row[j] - dot * basis[b][j]
+        }
+    }
+    let mut norm: f32 = 0.0
+    for j in 0 to n_features {
+        norm = norm + row[j] * row[j]
+    }
+    norm = sqrt((norm as f64)) as f32
+    if norm > 1e-10 {
+        for j in 0 to n_features {
+            row[j] = row[j] / norm
+        }
+    }
+}
+
+export function fast_ica_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f32, seed: i32) -> FastICA {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let mean: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let mut m: f32 = 0.0
+        for i in 0 to n {
+            m = m + matrix_at(X, i, j)
+        }
+        mean[j] = m / (n as f32)
+    }
+
+    let Xc: Matrix = matrix_new(n, p)
+    for i in 0 to n {
+        for j in 0 to p {
+            matrix_set(Xc, i, j, matrix_at(X, i, j) - mean[j])
+        }
+    }
+
+    # Whitening via PCA
+    let cov: Matrix = matrix_new(p, p)
+    for i in 0 to p {
+        for j in 0 to p {
+            let mut s: f32 = 0.0
+            for k in 0 to n {
+                s = s + matrix_at(Xc, k, i) * matrix_at(Xc, k, j)
+            }
+            matrix_set(cov, i, j, s / (n as f32))
+        }
+    }
+
+    let pca_model: PCA = pca_fit(X, n_components)
+    let whitening: ptr<ptr<f32>> = malloc((n_components as i64) * 8) as ptr<ptr<f32>>
+    for c in 0 to n_components {
+        whitening[c] = array_new_f32(p)
+        let ev: f32 = pca_model.explained_variance[c]
+        if ev < 1e-10 { ev = 1e-10 }
+        for j in 0 to p {
+            whitening[c][j] = pca_model.components[c][j] / sqrt((ev as f64)) as f32
+        }
+    }
+
+    let Xw: Matrix = matrix_new(n, n_components)
+    for i in 0 to n {
+        for c in 0 to n_components {
+            let mut s: f32 = 0.0
+            for j in 0 to p {
+                s = s + matrix_at(Xc, i, j) * whitening[c][j]
+            }
+            matrix_set(Xw, i, c, s)
+        }
+    }
+
+    srand(seed)
+
+    let components: ptr<ptr<f32>> = malloc((n_components as i64) * 8) as ptr<ptr<f32>>
+    let mut n_iter: i32 = 0
+
+    for c in 0 to n_components {
+        components[c] = array_new_f32(n_components)
+        for j in 0 to n_components {
+            components[c][j] = ((rand() % 1000) as f32) / 500.0 - 1.0
+        }
+        _gram_schmidt(components[c], components, c, n_components)
+
+        for iter in 0 to max_iter {
+            n_iter = iter + 1
+
+            let w_old: ptr<f32> = array_copy_f32(components[c], n_components)
+
+            let gw: ptr<f32> = array_new_f32(n_components)
+            let g_w: ptr<f32> = array_new_f32(n_components)
+
+            for i in 0 to n {
+                let mut dot: f32 = 0.0
+                for j in 0 to n_components {
+                    dot = dot + components[c][j] * matrix_at(Xw, i, j)
+                }
+                let t: f32 = tanh((dot) as f64) as f32
+                let g_deriv: f32 = 1.0 - t * t
+
+                for j in 0 to n_components {
+                    gw[j] = gw[j] + t * matrix_at(Xw, i, j)
+                    g_w[j] = g_w[j] + g_deriv * components[c][j]
+                }
+            }
+
+            for j in 0 to n_components {
+                components[c][j] = (gw[j] - g_w[j] * components[c][j]) / (n as f32)
+            }
+
+            _gram_schmidt(components[c], components, c, n_components)
+
+            let mut dot: f32 = 0.0
+            for j in 0 to n_components {
+                dot = dot + components[c][j] * w_old[j]
+            }
+            let convergence: f32 = fabs((fabs((dot) as f64) as f32 - 1.0) as f64) as f32
+
+            array_free_f32(w_old)
+            array_free_f32(gw)
+            array_free_f32(g_w)
+
+            if convergence < tol { break }
+        }
+    }
+
+    let mixing: ptr<ptr<f32>> = malloc((n_components as i64) * 8) as ptr<ptr<f32>>
+    for c in 0 to n_components {
+        mixing[c] = array_new_f32(p)
+        for j in 0 to p {
+            let mut s: f32 = 0.0
+            for k in 0 to n_components {
+                s = s + components[c][k] * whitening[c][j]
+            }
+            mixing[c][j] = s
+        }
+    }
+
+    for c in 0 to n_components {
+        array_free_f32(whitening[c])
+    }
+    free(whitening as ptr<void>)
+    matrix_free(Xw)
+    matrix_free(Xc)
+    matrix_free(cov)
+    pca_free(pca_model)
+
+    return FastICA {
+        components: components,
+        n_components: n_components,
+        n_features: p,
+        mean: mean,
+        mixing: mixing,
+        n_iter: n_iter,
+        fitted: true
+    }
+}
+
+export function fast_ica_transform(model: FastICA, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, model.n_components)
+    for i in 0 to X.rows {
+        for c in 0 to model.n_components {
+            let mut s: f32 = 0.0
+            for j in 0 to model.n_features {
+                s = s + (matrix_at(X, i, j) - model.mean[j]) * model.mixing[c][j]
+            }
+            matrix_set(result, i, c, s)
+        }
+    }
+    return result
+}
+
+export function fast_ica_free(model: FastICA) -> void {
+    for c in 0 to model.n_components {
+        array_free_f32(model.components[c])
+        array_free_f32(model.mixing[c])
+    }
+    free(model.components as ptr<void>)
+    free(model.mixing as ptr<void>)
+    array_free_f32(model.mean)
+}
+
+# ============================================================================
+# SparsePCA
+# ============================================================================
+
+export struct SparsePCA {
+    components: ptr<ptr<f32>>,
+    n_components: i32,
+    n_features: i32,
+    mean: ptr<f32>,
+    alpha: f32,
+    n_iter: i32,
+    fitted: bool
+}
+
+export function sparse_pca_fit(X: Matrix, n_components: i32, alpha: f32, max_iter: i32, tol: f32, seed: i32) -> SparsePCA {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let mean: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let mut m: f32 = 0.0
+        for i in 0 to n {
+            m = m + matrix_at(X, i, j)
+        }
+        mean[j] = m / (n as f32)
+    }
+
+    let Xc: Matrix = matrix_new(n, p)
+    for i in 0 to n {
+        for j in 0 to p {
+            matrix_set(Xc, i, j, matrix_at(X, i, j) - mean[j])
+        }
+    }
+
+    srand(seed)
+
+    let components: ptr<ptr<f32>> = malloc((n_components as i64) * 8) as ptr<ptr<f32>>
+    let mut n_iter: i32 = 0
+
+    for c in 0 to n_components {
+        components[c] = array_new_f32(p)
+        for j in 0 to p {
+            components[c][j] = ((rand() % 1000) as f32) / 500.0 - 1.0
+        }
+        let mut norm: f32 = 0.0
+        for j in 0 to p {
+            norm = norm + components[c][j] * components[c][j]
+        }
+        norm = sqrt((norm as f64)) as f32
+        if norm > 1e-10 {
+            for j in 0 to p {
+                components[c][j] = components[c][j] / norm
+            }
+        }
+
+        for iter in 0 to max_iter {
+            n_iter = iter + 1
+
+            let grad: ptr<f32> = array_new_f32(p)
+            for i in 0 to n {
+                let mut dot: f32 = 0.0
+                for j in 0 to p {
+                    dot = dot + components[c][j] * matrix_at(Xc, i, j)
+                }
+                for j in 0 to p {
+                    grad[j] = grad[j] - dot * matrix_at(Xc, i, j)
+                }
+            }
+
+            for j in 0 to p {
+                grad[j] = grad[j] / (n as f32)
+            }
+
+            let lr: f32 = 0.01
+            for j in 0 to p {
+                components[c][j] = components[c][j] - lr * grad[j]
+            }
+
+            for j in 0 to p {
+                if components[c][j] > alpha {
+                    components[c][j] = components[c][j] - alpha
+                } elif components[c][j] < -alpha {
+                    components[c][j] = components[c][j] + alpha
+                } else {
+                    components[c][j] = 0.0
+                }
+            }
+
+            let mut norm: f32 = 0.0
+            for j in 0 to p {
+                norm = norm + components[c][j] * components[c][j]
+            }
+            norm = sqrt((norm as f64)) as f32
+            if norm > 1e-10 {
+                for j in 0 to p {
+                    components[c][j] = components[c][j] / norm
+                }
+            }
+
+            array_free_f32(grad)
+
+            if iter > 0 && iter % 10 == 0 {
+                let mut change: f32 = 0.0
+                for j in 0 to p {
+                    change = change + fabs((grad[j]) as f64) as f32
+                }
+                if change / (p as f32) < tol { break }
+            }
+        }
+    }
+
+    matrix_free(Xc)
+
+    return SparsePCA {
+        components: components,
+        n_components: n_components,
+        n_features: p,
+        mean: mean,
+        alpha: alpha,
+        n_iter: n_iter,
+        fitted: true
+    }
+}
+
+export function sparse_pca_transform(model: SparsePCA, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, model.n_components)
+    for i in 0 to X.rows {
+        for c in 0 to model.n_components {
+            let mut s: f32 = 0.0
+            for j in 0 to model.n_features {
+                s = s + (matrix_at(X, i, j) - model.mean[j]) * model.components[c][j]
+            }
+            matrix_set(result, i, c, s)
+        }
+    }
+    return result
+}
+
+export function sparse_pca_free(model: SparsePCA) -> void {
+    for c in 0 to model.n_components {
+        array_free_f32(model.components[c])
+    }
+    free(model.components as ptr<void>)
+    array_free_f32(model.mean)
 }

@@ -1,0 +1,232 @@
+# Synthetic dataset generators for flow-scikit.
+# Mirrors sklearn.datasets.make_* functions.
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function rand() -> i32
+    function srand(seed: i32) -> void
+    function sqrt(x: f64) -> f64
+    function exp(x: f64) -> f64
+    function log(x: f64) -> f64
+    function fabs(x: f64) -> f64
+    function sin(x: f64) -> f64
+    function cos(x: f64) -> f64
+    function printf(fmt: string, ...) -> i32
+    function malloc(size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+}
+
+function _gauss(seed: i32) -> f32 {
+    let u1: f32 = ((rand() % 10000) as f32) / 10000.0
+    let u2: f32 = ((rand() % 10000) as f32) / 10000.0
+    if u1 < 1e-6 { u1 = 1e-6 }
+    let r: f32 = sqrt((0.0 - 2.0 * log(u1 as f64)) as f64) as f32
+    let theta: f32 = 2.0 * 3.14159265 * u2
+    return r * cos(theta as f64) as f32
+}
+
+export function make_classification(
+    n_samples: i32, n_features: i32, n_classes: i32,
+    n_informative: i32, n_redundant: i32,
+    class_sep: f32, seed: i32
+) -> Dataset {
+    srand(seed)
+
+    let X: Matrix = matrix_new(n_samples, n_features)
+    let y: ptr<f32> = array_new_f32(n_samples)
+
+    let weights: ptr<f32> = array_new_f32(n_informative)
+    for j in 0 to n_informative {
+        weights[j] = ((rand() % 100) as f32) / 10.0 - 5.0
+    }
+
+    let per_class: i32 = n_samples / n_classes
+
+    for c in 0 to n_classes {
+        let cx: f32 = (c as f32) * class_sep
+        for i in 0 to per_class {
+            let idx: i32 = c * per_class + i
+            if idx >= n_samples { break }
+
+            for j in 0 to n_features {
+                let val: f32 = _gauss(idx * 100 + j) + cx
+                if j < n_informative {
+                    val = val + weights[j] * (c as f32)
+                } else if j < n_informative + n_redundant {
+                    let src: i32 = j % n_informative
+                    val = val + matrix_at(X, idx, src) * 0.5
+                }
+                matrix_set(X, idx, j, val)
+            }
+            y[idx] = (c as f32)
+        }
+    }
+
+    free(weights as ptr<void>)
+
+    return Dataset {
+        X: X, y: y,
+        n_samples: n_samples,
+        n_features: n_features,
+        n_classes: n_classes,
+        is_classification: true
+    }
+}
+
+export function make_regression(
+    n_samples: i32, n_features: i32, n_informative: i32,
+    noise: f32, bias: f32, seed: i32
+) -> Dataset {
+    srand(seed)
+
+    let X: Matrix = matrix_new(n_samples, n_features)
+    let y: ptr<f32> = array_new_f32(n_samples)
+
+    let weights: ptr<f32> = array_new_f32(n_informative)
+    for j in 0 to n_informative {
+        weights[j] = ((rand() % 100) as f32) / 10.0 - 5.0
+    }
+
+    for i in 0 to n_samples {
+        for j in 0 to n_features {
+            matrix_set(X, i, j, _gauss(i * 100 + j))
+        }
+
+        let mut y_val: f32 = bias
+        for j in 0 to n_informative {
+            y_val = y_val + weights[j] * matrix_at(X, i, j)
+        }
+        y_val = y_val + _gauss(i * 200) * noise
+        y[i] = y_val
+    }
+
+    free(weights as ptr<void>)
+
+    return Dataset {
+        X: X, y: y,
+        n_samples: n_samples,
+        n_features: n_features,
+        n_classes: 0,
+        is_classification: false
+    }
+}
+
+export function make_blobs(
+    n_samples: i32, n_features: i32, n_centers: i32,
+    cluster_std: f32, center_box_min: f32, center_box_max: f32,
+    seed: i32
+) -> Dataset {
+    srand(seed)
+
+    let X: Matrix = matrix_new(n_samples, n_features)
+    let y: ptr<f32> = array_new_f32(n_samples)
+
+    let centers: ptr<f32> = array_new_f32(n_centers * n_features)
+    for c in 0 to n_centers {
+        for j in 0 to n_features {
+            let range: f32 = center_box_max - center_box_min
+            centers[c * n_features + j] = center_box_min + ((rand() % 1000) as f32) / 1000.0 * range
+        }
+    }
+
+    let per_center: i32 = n_samples / n_centers
+
+    for c in 0 to n_centers {
+        for i in 0 to per_center {
+            let idx: i32 = c * per_center + i
+            if idx >= n_samples { break }
+
+            for j in 0 to n_features {
+                let val: f32 = centers[c * n_features + j] + _gauss(idx * 100 + j) * cluster_std
+                matrix_set(X, idx, j, val)
+            }
+            y[idx] = (c as f32)
+        }
+    }
+
+    free(centers as ptr<void>)
+
+    return Dataset {
+        X: X, y: y,
+        n_samples: n_samples,
+        n_features: n_features,
+        n_classes: n_centers,
+        is_classification: true
+    }
+}
+
+export function make_moons(n_samples: i32, noise: f32, seed: i32) -> Dataset {
+    srand(seed)
+
+    let X: Matrix = matrix_new(n_samples, 2)
+    let y: ptr<f32> = array_new_f32(n_samples)
+
+    let half: i32 = n_samples / 2
+
+    for i in 0 to half {
+        let t: f32 = 3.14159265 * ((i as f32) / (half as f32))
+        let x: f32 = cos(t as f64) as f32 + _gauss(i) * noise
+        let y_val: f32 = sin(t as f64) as f32 + _gauss(i + 1000) * noise
+        matrix_set(X, i, 0, x)
+        matrix_set(X, i, 1, y_val)
+        y[i] = 0.0
+    }
+
+    for i in 0 to (n_samples - half) {
+        let idx: i32 = half + i
+        let t: f32 = 3.14159265 * ((i as f32) / ((n_samples - half) as f32))
+        let x: f32 = 1.0 - cos(t as f64) as f32 + _gauss(idx) * noise
+        let y_val: f32 = 0.0 - sin(t as f64) as f32 + _gauss(idx + 1000) * noise
+        matrix_set(X, idx, 0, x)
+        matrix_set(X, idx, 1, y_val)
+        y[idx] = 1.0
+    }
+
+    return Dataset {
+        X: X, y: y,
+        n_samples: n_samples,
+        n_features: 2,
+        n_classes: 2,
+        is_classification: true
+    }
+}
+
+export function make_circles(n_samples: i32, noise: f32, factor: f32, seed: i32) -> Dataset {
+    srand(seed)
+
+    let X: Matrix = matrix_new(n_samples, 2)
+    let y: ptr<f32> = array_new_f32(n_samples)
+
+    let half: i32 = n_samples / 2
+
+    for i in 0 to half {
+        let t: f32 = 2.0 * 3.14159265 * ((i as f32) / (half as f32))
+        let r: f32 = 1.0
+        matrix_set(X, i, 0, r * cos(t as f64) as f32 + _gauss(i) * noise)
+        matrix_set(X, i, 1, r * sin(t as f64) as f32 + _gauss(i + 1000) * noise)
+        y[i] = 0.0
+    }
+
+    for i in 0 to (n_samples - half) {
+        let idx: i32 = half + i
+        let t: f32 = 2.0 * 3.14159265 * ((i as f32) / ((n_samples - half) as f32))
+        let r: f32 = factor
+        matrix_set(X, idx, 0, r * cos(t as f64) as f32 + _gauss(idx) * noise)
+        matrix_set(X, idx, 1, r * sin(t as f64) as f32 + _gauss(idx + 1000) * noise)
+        y[idx] = 1.0
+    }
+
+    return Dataset {
+        X: X, y: y,
+        n_samples: n_samples,
+        n_features: 2,
+        n_classes: 2,
+        is_classification: true
+    }
+}
+
+export function dataset_free(d: Dataset) -> void {
+    matrix_free(d.X)
+    array_free_f32(d.y)
+}

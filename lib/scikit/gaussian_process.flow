@@ -1,0 +1,270 @@
+# Gaussian Process for flow-scikit.
+# Implements GaussianProcessRegressor with RBF kernel.
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function calloc(n: i64, size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function exp(x: f64) -> f64
+    function log(x: f64) -> f64
+    function sqrt(x: f64) -> f64
+    function fabs(x: f64) -> f64
+    function printf(fmt: string, ...) -> i32
+}
+
+export const GP_KERNEL_RBF: i32 = 0
+export const GP_KERNEL_MATERN: i32 = 1
+export const GP_KERNEL_LINEAR: i32 = 2
+
+export struct GaussianProcessRegressor {
+    X_train: Matrix,
+    y_train: ptr<f32>,
+    alpha: f32,
+    length_scale: f32,
+    kernel_type: i32,
+    n_train: i32,
+    n_features: i32,
+    L: ptr<f32>,
+    fitted: bool
+}
+
+function _rbf_kernel(x1: ptr<f32>, x2: ptr<f32>, n: i32, length_scale: f32) -> f32 {
+    let mut dist_sq: f32 = 0.0
+    for i in 0 to n {
+        let d: f32 = x1[i] - x2[i]
+        dist_sq = dist_sq + d * d
+    }
+    let gamma: f32 = 0.5 / (length_scale * length_scale)
+    return exp((0.0 - gamma * dist_sq) as f64) as f32
+}
+
+function _linear_kernel(x1: ptr<f32>, x2: ptr<f32>, n: i32) -> f32 {
+    let mut dot: f32 = 0.0
+    for i in 0 to n {
+        dot = dot + x1[i] * x2[i]
+    }
+    return dot
+}
+
+function _kernel(x1: ptr<f32>, x2: ptr<f32>, n: i32, kernel_type: i32, length_scale: f32) -> f32 {
+    if kernel_type == GP_KERNEL_LINEAR {
+        return _linear_kernel(x1, x2, n)
+    }
+    return _rbf_kernel(x1, x2, n, length_scale)
+}
+
+function _cholesky(K: ptr<f32>, n: i32, alpha: f32) -> ptr<f32> {
+    let L: ptr<f32> = array_new_f32(n * n)
+
+    for i in 0 to n {
+        for j in 0 to n {
+            L[i * n + j] = K[i * n + j]
+        }
+        L[i * n + i] = L[i * n + i] + alpha
+    }
+
+    for i in 0 to n {
+        for j in 0 to i + 1 {
+            let mut sum: f32 = L[i * n + j]
+            for k in 0 to j {
+                sum = sum - L[i * n + k] * L[j * n + k]
+            }
+            if i == j {
+                if sum < 1e-10 { sum = 1e-10 }
+                L[i * n + j] = sqrt((sum as f64)) as f32
+            } else {
+                if L[j * n + j] < 1e-10 {
+                    L[i * n + j] = 0.0
+                } else {
+                    L[i * n + j] = sum / L[j * n + j]
+                }
+            }
+        }
+    }
+
+    return L
+}
+
+function _forward_sub(L: ptr<f32>, b: ptr<f32>, n: i32) -> ptr<f32> {
+    let y: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut sum: f32 = b[i]
+        for j in 0 to i {
+            sum = sum - L[i * n + j] * y[j]
+        }
+        if L[i * n + i] < 1e-10 {
+            y[i] = 0.0
+        } else {
+            y[i] = sum / L[i * n + i]
+        }
+    }
+    return y
+}
+
+function _backward_sub(L: ptr<f32>, y: ptr<f32>, n: i32) -> ptr<f32> {
+    let x: ptr<f32> = array_new_f32(n)
+    for i in n - 1 to 0 {
+        let mut sum: f32 = y[i]
+        for j in i + 1 to n {
+            sum = sum - L[j * n + i] * x[j]
+        }
+        if L[i * n + i] < 1e-10 {
+            x[i] = 0.0
+        } else {
+            x[i] = sum / L[i * n + i]
+        }
+    }
+    return x
+}
+
+export function gaussian_process_regressor_fit(
+    X: Matrix, y: ptr<f32>,
+    alpha: f32, length_scale: f32, kernel_type: i32
+) -> GaussianProcessRegressor {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    let K: ptr<f32> = array_new_f32(n * n)
+    let x_i: ptr<f32> = array_new_f32(n_features)
+    let x_j: ptr<f32> = array_new_f32(n_features)
+
+    for i in 0 to n {
+        for j in 0 to n_features {
+            x_i[j] = matrix_at(X, i, j)
+        }
+        for j in 0 to n {
+            for k in 0 to n_features {
+                x_j[k] = matrix_at(X, j, k)
+            }
+            K[i * n + j] = _kernel(x_i, x_j, n_features, kernel_type, length_scale)
+        }
+    }
+
+    let L: ptr<f32> = _cholesky(K, n, alpha)
+
+    array_free_f32(K)
+    array_free_f32(x_i)
+    array_free_f32(x_j)
+
+    return GaussianProcessRegressor {
+        X_train: matrix_copy(X),
+        y_train: array_copy_f32(y, n),
+        alpha: alpha,
+        length_scale: length_scale,
+        kernel_type: kernel_type,
+        n_train: n,
+        n_features: n_features,
+        L: L,
+        fitted: true
+    }
+}
+
+export function gaussian_process_regressor_predict(model: GaussianProcessRegressor, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let n_train: i32 = model.n_train
+    let n_features: i32 = model.n_features
+
+    let alpha_vec: ptr<f32> = _forward_sub(model.L, model.y_train, n_train)
+    let alpha_sol: ptr<f32> = _backward_sub(model.L, alpha_vec, n_train)
+
+    let x_train_i: ptr<f32> = array_new_f32(n_features)
+    let x_test: ptr<f32> = array_new_f32(n_features)
+    let k_star: ptr<f32> = array_new_f32(n_train)
+
+    let preds: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        for j in 0 to n_features {
+            x_test[j] = matrix_at(X, i, j)
+        }
+
+        for j in 0 to n_train {
+            for k in 0 to n_features {
+                x_train_i[k] = matrix_at(model.X_train, j, k)
+            }
+            k_star[j] = _kernel(x_test, x_train_i, n_features, model.kernel_type, model.length_scale)
+        }
+
+        let mut pred: f32 = 0.0
+        for j in 0 to n_train {
+            pred = pred + k_star[j] * alpha_sol[j]
+        }
+        preds[i] = pred
+    }
+
+    array_free_f32(alpha_vec)
+    array_free_f32(alpha_sol)
+    array_free_f32(x_train_i)
+    array_free_f32(x_test)
+    array_free_f32(k_star)
+
+    return preds
+}
+
+export function gaussian_process_regressor_predict_with_std(model: GaussianProcessRegressor, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let n_train: i32 = model.n_train
+    let n_features: i32 = model.n_features
+
+    let alpha_vec: ptr<f32> = _forward_sub(model.L, model.y_train, n_train)
+    let alpha_sol: ptr<f32> = _backward_sub(model.L, alpha_vec, n_train)
+
+    let x_train_i: ptr<f32> = array_new_f32(n_features)
+    let x_test: ptr<f32> = array_new_f32(n_features)
+    let k_star: ptr<f32> = array_new_f32(n_train)
+    let v: ptr<f32> = array_new_f32(n_train)
+
+    let result: Matrix = matrix_new(n, 2)
+
+    for i in 0 to n {
+        for j in 0 to n_features {
+            x_test[j] = matrix_at(X, i, j)
+        }
+
+        for j in 0 to n_train {
+            for k in 0 to n_features {
+                x_train_i[k] = matrix_at(model.X_train, j, k)
+            }
+            k_star[j] = _kernel(x_test, x_train_i, n_features, model.kernel_type, model.length_scale)
+        }
+
+        let mut pred: f32 = 0.0
+        for j in 0 to n_train {
+            pred = pred + k_star[j] * alpha_sol[j]
+        }
+        matrix_set(result, i, 0, pred)
+
+        let v_sol: ptr<f32> = _forward_sub(model.L, k_star, n_train)
+
+        let mut k_xx: f32 = 1.0
+        if model.kernel_type == GP_KERNEL_LINEAR {
+            k_xx = _linear_kernel(x_test, x_test, n_features)
+        }
+
+        let mut variance: f32 = k_xx
+        for j in 0 to n_train {
+            variance = variance - v_sol[j] * v_sol[j]
+        }
+        if variance < 0.0 { variance = 0.0 }
+        matrix_set(result, i, 1, sqrt((variance as f64)) as f32)
+
+        array_free_f32(v_sol)
+    }
+
+    array_free_f32(alpha_vec)
+    array_free_f32(alpha_sol)
+    array_free_f32(x_train_i)
+    array_free_f32(x_test)
+    array_free_f32(k_star)
+    array_free_f32(v)
+
+    return result
+}
+
+export function gaussian_process_regressor_free(model: GaussianProcessRegressor) -> void {
+    matrix_free(model.X_train)
+    array_free_f32(model.y_train)
+    array_free_f32(model.L)
+}

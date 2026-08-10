@@ -521,3 +521,251 @@ export function minibatch_kmeans_free(model: MiniBatchKMeans) -> void {
     }
     free(model.centroids as ptr<void>)
 }
+
+# ============================================================================
+# MeanShift
+# ============================================================================
+
+export struct MeanShift {
+    centroids: ptr<ptr<f32>>,
+    n_clusters: i32,
+    n_features: i32,
+    labels: ptr<i32>,
+    bandwidth: f32,
+    n_iter: i32,
+    fitted: bool
+}
+
+export function mean_shift_fit(X: Matrix, bandwidth: f32, max_iter: i32) -> MeanShift {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    let shifted: ptr<ptr<f32>> = malloc((n as i64) * 8) as ptr<ptr<f32>>
+    for i in 0 to n {
+        shifted[i] = array_new_f32(n_features)
+        for j in 0 to n_features {
+            shifted[i][j] = matrix_at(X, i, j)
+        }
+    }
+
+    let bw_sq: f32 = bandwidth * bandwidth
+
+    for iter in 0 to max_iter {
+        let mut max_shift: f32 = 0.0
+
+        for i in 0 to n {
+            let mut new_pos: ptr<f32> = array_new_f32(n_features)
+            let mut total_weight: f32 = 0.0
+
+            for j in 0 to n {
+                let mut dist_sq: f32 = 0.0
+                for k in 0 to n_features {
+                    let d: f32 = shifted[i][k] - matrix_at(X, j, k)
+                    dist_sq = dist_sq + d * d
+                }
+
+                if dist_sq < bw_sq {
+                    let weight: f32 = 1.0
+                    for k in 0 to n_features {
+                        new_pos[k] = new_pos[k] + matrix_at(X, j, k) * weight
+                    }
+                    total_weight = total_weight + weight
+                }
+            }
+
+            if total_weight > 0.0 {
+                for k in 0 to n_features {
+                    new_pos[k] = new_pos[k] / total_weight
+                }
+            }
+
+            let mut shift_dist: f32 = 0.0
+            for k in 0 to n_features {
+                let d: f32 = new_pos[k] - shifted[i][k]
+                shift_dist = shift_dist + d * d
+                shifted[i][k] = new_pos[k]
+            }
+            shift_dist = sqrt((shift_dist as f64)) as f32
+            if shift_dist > max_shift { max_shift = shift_dist }
+
+            array_free_f32(new_pos)
+        }
+
+        if max_shift < 1e-4 { break }
+    }
+
+    let mut n_clusters: i32 = 0
+    let centroids: ptr<ptr<f32>> = malloc((n as i64) * 8) as ptr<ptr<f32>>
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+
+    for i in 0 to n {
+        let mut found: bool = false
+        for c in 0 to n_clusters {
+            let mut dist_sq: f32 = 0.0
+            for k in 0 to n_features {
+                let d: f32 = shifted[i][k] - centroids[c][k]
+                dist_sq = dist_sq + d * d
+            }
+            if sqrt((dist_sq as f64)) as f32 < bandwidth {
+                labels[i] = c
+                found = true
+                break
+            }
+        }
+        if not found {
+            centroids[n_clusters] = array_new_f32(n_features)
+            for k in 0 to n_features {
+                centroids[n_clusters][k] = shifted[i][k]
+            }
+            labels[i] = n_clusters
+            n_clusters = n_clusters + 1
+        }
+    }
+
+    for i in 0 to n {
+        array_free_f32(shifted[i])
+    }
+    free(shifted as ptr<void>)
+
+    return MeanShift {
+        centroids: centroids, n_clusters: n_clusters,
+        n_features: n_features, labels: labels,
+        bandwidth: bandwidth, n_iter: max_iter,
+        fitted: true
+    }
+}
+
+export function mean_shift_predict(model: MeanShift, X: Matrix) -> ptr<i32> {
+    let n: i32 = X.rows
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best_dist: f32 = 1e10
+        for c in 0 to model.n_clusters {
+            let mut dist_sq: f32 = 0.0
+            for k in 0 to model.n_features {
+                let d: f32 = matrix_at(X, i, k) - model.centroids[c][k]
+                dist_sq = dist_sq + d * d
+            }
+            if dist_sq < best_dist {
+                best_dist = dist_sq
+                best_c = c
+            }
+        }
+        labels[i] = best_c
+    }
+
+    return labels
+}
+
+export function mean_shift_free(model: MeanShift) -> void {
+    for c in 0 to model.n_clusters {
+        array_free_f32(model.centroids[c])
+    }
+    free(model.centroids as ptr<void>)
+    free(model.labels as ptr<void>)
+}
+
+# ============================================================================
+# Birch
+# ============================================================================
+
+export struct Birch {
+    centroids: ptr<ptr<f32>>,
+    n_clusters: i32,
+    n_features: i32,
+    labels: ptr<i32>,
+    threshold: f32,
+    branching_factor: i32,
+    fitted: bool
+}
+
+export function birch_fit(X: Matrix, threshold: f32, branching_factor: i32) -> Birch {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    let max_clusters: i32 = n
+    let centroids: ptr<ptr<f32>> = malloc((max_clusters as i64) * 8) as ptr<ptr<f32>>
+    let cluster_counts: ptr<i32> = malloc((max_clusters as i64) * 4) as ptr<i32>
+    let n_clusters: i32 = 0
+
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+
+    for i in 0 to n {
+        let mut best_c: i32 = -1
+        let mut best_dist: f32 = 1e10
+
+        for c in 0 to n_clusters {
+            let mut dist_sq: f32 = 0.0
+            for k in 0 to n_features {
+                let d: f32 = matrix_at(X, i, k) - centroids[c][k]
+                dist_sq = dist_sq + d * d
+            }
+            if dist_sq < best_dist {
+                best_dist = dist_sq
+                best_c = c
+            }
+        }
+
+        if best_c >= 0 && best_dist < threshold * threshold {
+            let count: f32 = (cluster_counts[best_c] as f32)
+            for k in 0 to n_features {
+                let new_val: f32 = (centroids[best_c][k] * count + matrix_at(X, i, k)) / (count + 1.0)
+                centroids[best_c][k] = new_val
+            }
+            cluster_counts[best_c] = cluster_counts[best_c] + 1
+            labels[i] = best_c
+        } else {
+            centroids[n_clusters] = array_new_f32(n_features)
+            for k in 0 to n_features {
+                centroids[n_clusters][k] = matrix_at(X, i, k)
+            }
+            cluster_counts[n_clusters] = 1
+            labels[i] = n_clusters
+            n_clusters = n_clusters + 1
+        }
+    }
+
+    free(cluster_counts as ptr<void>)
+
+    return Birch {
+        centroids: centroids, n_clusters: n_clusters,
+        n_features: n_features, labels: labels,
+        threshold: threshold,
+        branching_factor: branching_factor,
+        fitted: true
+    }
+}
+
+export function birch_predict(model: Birch, X: Matrix) -> ptr<i32> {
+    let n: i32 = X.rows
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best_dist: f32 = 1e10
+        for c in 0 to model.n_clusters {
+            let mut dist_sq: f32 = 0.0
+            for k in 0 to model.n_features {
+                let d: f32 = matrix_at(X, i, k) - model.centroids[c][k]
+                dist_sq = dist_sq + d * d
+            }
+            if dist_sq < best_dist {
+                best_dist = dist_sq
+                best_c = c
+            }
+        }
+        labels[i] = best_c
+    }
+
+    return labels
+}
+
+export function birch_free(model: Birch) -> void {
+    for c in 0 to model.n_clusters {
+        array_free_f32(model.centroids[c])
+    }
+    free(model.centroids as ptr<void>)
+    free(model.labels as ptr<void>)
+}

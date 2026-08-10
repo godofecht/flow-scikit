@@ -1,0 +1,257 @@
+# Gaussian Mixture Models for flow-scikit.
+# Implements GaussianMixture with EM algorithm (full covariance diagonal).
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function calloc(n: i64, size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function exp(x: f64) -> f64
+    function log(x: f64) -> f64
+    function sqrt(x: f64) -> f64
+    function fabs(x: f64) -> f64
+    function rand() -> i32
+    function srand(seed: i32) -> void
+    function printf(fmt: string, ...) -> i32
+}
+
+export struct GaussianMixture {
+    means: ptr<ptr<f32>>,
+    variances: ptr<ptr<f32>>,
+    weights: ptr<f32>,
+    n_components: i32,
+    n_features: i32,
+    log_likelihood: f32,
+    n_iter: i32,
+    converged: bool,
+    fitted: bool
+}
+
+function _log_gaussian(x: ptr<f32>, mean: ptr<f32>, var: ptr<f32>, n_features: i32) -> f32 {
+    let mut log_prob: f32 = 0.0
+    for j in 0 to n_features {
+        let d: f32 = x[j] - mean[j]
+        let v: f32 = var[j]
+        if v < 1e-10 { v = 1e-10 }
+        log_prob = log_prob - 0.5 * log((2.0 * 3.14159265 * v) as f64) as f32
+        log_prob = log_prob - 0.5 * d * d / v
+    }
+    return log_prob
+}
+
+export function gaussian_mixture_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f32, seed: i32) -> GaussianMixture {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    srand(seed)
+
+    let means: ptr<ptr<f32>> = malloc((n_components as i64) * 8) as ptr<ptr<f32>>
+    let variances: ptr<ptr<f32>> = malloc((n_components as i64) * 8) as ptr<ptr<f32>>
+    let weights: ptr<f32> = array_new_f32(n_components)
+
+    for k in 0 to n_components {
+        means[k] = array_new_f32(n_features)
+        variances[k] = array_new_f32(n_features)
+        let idx: i32 = rand() % n
+        for j in 0 to n_features {
+            means[k][j] = matrix_at(X, idx, j)
+            variances[k][j] = 1.0
+        }
+        weights[k] = 1.0 / (n_components as f32)
+    }
+
+    let resp: ptr<ptr<f32>> = malloc((n as i64) * 8) as ptr<ptr<f32>>
+    for i in 0 to n {
+        resp[i] = array_new_f32(n_components)
+    }
+
+    let mut prev_ll: f32 = -1e10
+    let mut n_iter: i32 = 0
+    let mut converged: bool = false
+
+    for iter in 0 to max_iter {
+        n_iter = iter + 1
+
+        # E-step
+        let mut total_ll: f32 = 0.0
+        for i in 0 to n {
+            let x_row: ptr<f32> = array_new_f32(n_features)
+            for j in 0 to n_features {
+                x_row[j] = matrix_at(X, i, j)
+            }
+
+            let mut max_log: f32 = -1e10
+            for k in 0 to n_components {
+                let lg: f32 = log((weights[k] as f64)) as f32 + _log_gaussian(x_row, means[k], variances[k], n_features)
+                resp[i][k] = lg
+                if lg > max_log { max_log = lg }
+            }
+
+            let mut sum_exp: f32 = 0.0
+            for k in 0 to n_components {
+                resp[i][k] = exp((resp[i][k] - max_log) as f64) as f32
+                sum_exp = sum_exp + resp[i][k]
+            }
+            for k in 0 to n_components {
+                resp[i][k] = resp[i][k] / sum_exp
+            }
+
+            total_ll = total_ll + max_log + log((sum_exp as f64)) as f32
+            array_free_f32(x_row)
+        }
+
+        total_ll = total_ll / (n as f32)
+
+        if fabs((prev_ll - total_ll) as f64) as f32 < tol {
+            converged = true
+            prev_ll = total_ll
+            break
+        }
+        prev_ll = total_ll
+
+        # M-step
+        for k in 0 to n_components {
+            let mut nk: f32 = 0.0
+            for i in 0 to n {
+                nk = nk + resp[i][k]
+            }
+
+            weights[k] = nk / (n as f32)
+
+            for j in 0 to n_features {
+                let mut mean_j: f32 = 0.0
+                for i in 0 to n {
+                    mean_j = mean_j + resp[i][k] * matrix_at(X, i, j)
+                }
+                if nk > 1e-10 {
+                    means[k][j] = mean_j / nk
+                }
+
+                let mut var_j: f32 = 0.0
+                for i in 0 to n {
+                    let d: f32 = matrix_at(X, i, j) - means[k][j]
+                    var_j = var_j + resp[i][k] * d * d
+                }
+                if nk > 1e-10 {
+                    variances[k][j] = var_j / nk
+                }
+                if variances[k][j] < 1e-6 {
+                    variances[k][j] = 1e-6
+                }
+            }
+        }
+    }
+
+    for i in 0 to n {
+        array_free_f32(resp[i])
+    }
+    free(resp as ptr<void>)
+
+    return GaussianMixture {
+        means: means, variances: variances, weights: weights,
+        n_components: n_components, n_features: n_features,
+        log_likelihood: prev_ll, n_iter: n_iter,
+        converged: converged, fitted: true
+    }
+}
+
+export function gaussian_mixture_predict(model: GaussianMixture, X: Matrix) -> ptr<i32> {
+    let n: i32 = X.rows
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+
+    let x_row: ptr<f32> = array_new_f32(model.n_features)
+
+    for i in 0 to n {
+        for j in 0 to model.n_features {
+            x_row[j] = matrix_at(X, i, j)
+        }
+
+        let mut best_k: i32 = 0
+        let mut best_log: f32 = -1e10
+        for k in 0 to model.n_components {
+            let lg: f32 = log((model.weights[k] as f64)) as f32 + _log_gaussian(x_row, model.means[k], model.variances[k], model.n_features)
+            if lg > best_log {
+                best_log = lg
+                best_k = k
+            }
+        }
+        labels[i] = best_k
+    }
+
+    array_free_f32(x_row)
+    return labels
+}
+
+export function gaussian_mixture_predict_proba(model: GaussianMixture, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let result: Matrix = matrix_new(n, model.n_components)
+
+    let x_row: ptr<f32> = array_new_f32(model.n_features)
+
+    for i in 0 to n {
+        for j in 0 to model.n_features {
+            x_row[j] = matrix_at(X, i, j)
+        }
+
+        let mut max_log: f32 = -1e10
+        for k in 0 to model.n_components {
+            let lg: f32 = log((model.weights[k] as f64)) as f32 + _log_gaussian(x_row, model.means[k], model.variances[k], model.n_features)
+            matrix_set(result, i, k, lg)
+            if lg > max_log { max_log = lg }
+        }
+
+        let mut sum_exp: f32 = 0.0
+        for k in 0 to model.n_components {
+            let val: f32 = exp((matrix_at(result, i, k) - max_log) as f64) as f32
+            matrix_set(result, i, k, val)
+            sum_exp = sum_exp + val
+        }
+        for k in 0 to model.n_components {
+            matrix_set(result, i, k, matrix_at(result, i, k) / sum_exp)
+        }
+    }
+
+    array_free_f32(x_row)
+    return result
+}
+
+export function gaussian_mixture_score(model: GaussianMixture, X: Matrix) -> f32 {
+    let n: i32 = X.rows
+    let mut total_ll: f32 = 0.0
+
+    let x_row: ptr<f32> = array_new_f32(model.n_features)
+
+    for i in 0 to n {
+        for j in 0 to model.n_features {
+            x_row[j] = matrix_at(X, i, j)
+        }
+
+        let mut max_log: f32 = -1e10
+        for k in 0 to model.n_components {
+            let lg: f32 = log((model.weights[k] as f64)) as f32 + _log_gaussian(x_row, model.means[k], model.variances[k], model.n_features)
+            if lg > max_log { max_log = lg }
+        }
+
+        let mut sum_exp: f32 = 0.0
+        for k in 0 to model.n_components {
+            let lg: f32 = log((model.weights[k] as f64)) as f32 + _log_gaussian(x_row, model.means[k], model.variances[k], model.n_features)
+            sum_exp = sum_exp + exp((lg - max_log) as f64) as f32
+        }
+
+        total_ll = total_ll + max_log + log((sum_exp as f64)) as f32
+    }
+
+    array_free_f32(x_row)
+    return total_ll / (n as f32)
+}
+
+export function gaussian_mixture_free(model: GaussianMixture) -> void {
+    for k in 0 to model.n_components {
+        array_free_f32(model.means[k])
+        array_free_f32(model.variances[k])
+    }
+    free(model.means as ptr<void>)
+    free(model.variances as ptr<void>)
+    array_free_f32(model.weights)
+}
