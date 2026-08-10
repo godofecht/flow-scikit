@@ -1,0 +1,16 @@
+# A small browser-friendly digit confidence function.
+# It is compiled to WebAssembly for docs/demos.html.
+
+export function mnist_confidence(digit: i32, noise_percent: i32) -> i32 {
+    let mut base: i32 = 96
+    if digit == 1 || digit == 7 { base = 98 }
+    if digit == 5 || digit == 8 { base = 94 }
+    let mut confidence: i32 = base - noise_percent
+    if confidence < 55 { confidence = 55 }
+    return confidence
+}
+
+function main() -> i32 {
+    println("flow-scikit digit demo ready")
+    return 0
+}

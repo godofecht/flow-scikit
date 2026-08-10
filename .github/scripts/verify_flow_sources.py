@@ -22,6 +22,7 @@ def main() -> int:
     entrypoints = [ROOT / "lib/scikit/scikit.flow"]
     entrypoints.extend(sorted((ROOT / "tests").glob("*.flow")))
     entrypoints.extend(sorted((ROOT / "examples").glob("*.flow")))
+    entrypoints.extend(sorted((ROOT / "docs" / "wasm").glob("*.flow")))
 
     for entrypoint in entrypoints:
         try:
