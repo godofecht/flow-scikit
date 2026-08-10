@@ -66,6 +66,7 @@ async function loadModel() {
     centroids = model.centroids.map((centroid) => new Float32Array(centroid));
     status.textContent = `Ready. ${model.training_examples.toLocaleString()} MNIST images trained the ten centroids. Draw a digit and classify it.`;
     status.classList.add("ready");
+    initialiseExperiments();
   } catch (error) {
     status.textContent = "The model did not load. Please refresh the page and try again.";
     status.classList.add("error");
@@ -80,6 +81,88 @@ canvas.addEventListener("pointerdown", (event) => {
   context.beginPath();
   context.moveTo(point.x, point.y);
 });
+
+function flowNumber(name, values) {
+  return wasm.ccall(name, "number", values.map(() => "number"), values);
+}
+
+function bindSliders(ids, render) {
+  ids.forEach((id) => document.querySelector(`#${id}`).addEventListener("input", render));
+  render();
+}
+
+function initialiseExperiments() {
+  bindSliders(["home-area", "home-rooms", "home-age"], () => {
+    const area = Number(document.querySelector("#home-area").value);
+    const rooms = Number(document.querySelector("#home-rooms").value);
+    const age = Number(document.querySelector("#home-age").value);
+    document.querySelector("#home-area-output").textContent = `${area} m²`;
+    document.querySelector("#home-rooms-output").textContent = rooms;
+    document.querySelector("#home-age-output").textContent = `${age} years`;
+    const price = flowNumber("home_price_estimate_f32_f32_f32", [area, rooms, age]);
+    const rounded = Math.round(price / 1000) * 1000;
+    document.querySelector("#home-result").textContent = `Baseline estimate: £${rounded.toLocaleString("en-GB")}`;
+  });
+
+  bindSliders(["risk-util", "risk-late", "risk-debt"], () => {
+    const utilisation = Number(document.querySelector("#risk-util").value);
+    const late = Number(document.querySelector("#risk-late").value);
+    const debt = Number(document.querySelector("#risk-debt").value);
+    document.querySelector("#risk-util-output").textContent = `${utilisation}%`;
+    document.querySelector("#risk-late-output").textContent = late;
+    document.querySelector("#risk-debt-output").textContent = `${debt}%`;
+    const score = flowNumber("payment_risk_f32_f32_f32", [utilisation, late, debt]);
+    const queue = score >= 65 ? "Review now" : score >= 40 ? "Review soon" : "Low priority";
+    document.querySelector("#risk-result").textContent = `${queue} · risk score ${Math.round(score)}/100`;
+  });
+
+  bindSliders(["scale-value", "scale-mean", "scale-std"], () => {
+    const value = Number(document.querySelector("#scale-value").value);
+    const mean = Number(document.querySelector("#scale-mean").value);
+    const std = Number(document.querySelector("#scale-std").value);
+    document.querySelector("#scale-value-output").textContent = `£${value}k`;
+    document.querySelector("#scale-mean-output").textContent = `£${mean}k`;
+    document.querySelector("#scale-std-output").textContent = `£${std}k`;
+    const z = flowNumber("standardise_value_f32_f32_f32", [value, mean, std]);
+    document.querySelector("#scale-result").textContent = `${z.toFixed(2)} standard deviations from average`;
+  });
+
+  bindSliders(["anomaly-value", "anomaly-mean", "anomaly-std"], () => {
+    const value = Number(document.querySelector("#anomaly-value").value);
+    const mean = Number(document.querySelector("#anomaly-mean").value);
+    const std = Number(document.querySelector("#anomaly-std").value);
+    document.querySelector("#anomaly-value-output").textContent = value;
+    document.querySelector("#anomaly-mean-output").textContent = mean;
+    document.querySelector("#anomaly-std-output").textContent = std;
+    const z = flowNumber("absolute_z_score_f32_f32_f32", [value, mean, std]);
+    document.querySelector("#anomaly-result").textContent = z >= 3 ? `${z.toFixed(1)}σ · investigate` : `${z.toFixed(1)}σ · within expected range`;
+  });
+
+  initialiseSegmentMap();
+}
+
+function initialiseSegmentMap() {
+  const segmentCanvas = document.querySelector("#segment-canvas");
+  const segmentContext = segmentCanvas.getContext("2d");
+  const groups = [{ name: "Occasional", x: 78, y: 165, color: "#5669e8" }, { name: "Regular", x: 185, y: 112, color: "#54b6d3" }, { name: "High-value", x: 288, y: 62, color: "#ef8068" }];
+  let point = { x: 160, y: 138 };
+  function draw() {
+    segmentContext.fillStyle = "#0c1730"; segmentContext.fillRect(0, 0, 360, 220);
+    segmentContext.strokeStyle = "#33496f"; segmentContext.lineWidth = 1;
+    for (let x = 40; x < 350; x += 60) segmentContext.beginPath(), segmentContext.moveTo(x, 20), segmentContext.lineTo(x, 190), segmentContext.stroke();
+    for (let y = 30; y < 200; y += 40) segmentContext.beginPath(), segmentContext.moveTo(30, y), segmentContext.lineTo(340, y), segmentContext.stroke();
+    groups.forEach((group) => { segmentContext.fillStyle = group.color; segmentContext.beginPath(); segmentContext.arc(group.x, group.y, 18, 0, Math.PI * 2); segmentContext.fill(); segmentContext.fillStyle = "#dce8ff"; segmentContext.font = "11px DM Mono"; segmentContext.fillText(group.name, group.x - 24, group.y + 33); });
+    segmentContext.fillStyle = "#fffdf8"; segmentContext.beginPath(); segmentContext.arc(point.x, point.y, 8, 0, Math.PI * 2); segmentContext.fill();
+    const closest = groups.map((group) => ({ group, distance: flowNumber("point_distance_f32_f32_f32_f32", [point.x, point.y, group.x, group.y]) })).sort((a, b) => a.distance - b.distance)[0];
+    document.querySelector("#segment-result").textContent = `Nearest group: ${closest.group.name}`;
+  }
+  function move(event) { const box = segmentCanvas.getBoundingClientRect(); point = { x: Math.max(30, Math.min(340, (event.clientX - box.left) * 360 / box.width)), y: Math.max(20, Math.min(190, (event.clientY - box.top) * 220 / box.height)) }; draw(); }
+  let dragging = false;
+  segmentCanvas.addEventListener("pointerdown", (event) => { dragging = true; segmentCanvas.setPointerCapture(event.pointerId); move(event); });
+  segmentCanvas.addEventListener("pointermove", (event) => { if (dragging) move(event); });
+  segmentCanvas.addEventListener("pointerup", () => { dragging = false; });
+  draw();
+}
 canvas.addEventListener("pointermove", (event) => {
   if (!drawing) return;
   const point = position(event);
