@@ -299,6 +299,14 @@ function main() -> i32 {
 
 ## Running Tests
 
+Run every test with a single command:
+
+```bash
+python tools/run_all.py tests
+```
+
+Or run an individual test:
+
 ```bash
 ./flow run tests/test_preprocessing.flow
 ./flow run tests/test_metrics.flow
@@ -313,6 +321,14 @@ function main() -> i32 {
 
 ## Running Examples
 
+Run every example with a single command:
+
+```bash
+python tools/run_all.py examples
+```
+
+Or run an individual example:
+
 ```bash
 ./flow run examples/iris_classification.flow
 ./flow run examples/regression_demo.flow
@@ -323,6 +339,12 @@ function main() -> i32 {
 ./flow run examples/ensemble_comparison.flow
 ./flow run examples/svm_demo.flow
 ./flow run examples/preprocessing_demo.flow
+```
+
+To run tests and examples together:
+
+```bash
+python tools/run_all.py
 ```
 
 See [DEMOS.md](DEMOS.md) for gif recordings of each demo.

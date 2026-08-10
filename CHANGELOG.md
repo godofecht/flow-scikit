@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Tooling
+
+- Added `tools/run_all.py` to run every test and example with a single
+  command. Closes #2.
+- CI now runs all tests and examples via the runner, not just syntax
+  validation.
+
 ### Sklearn parity fixes
 
 - `explained_variance_score` now returns NaN and prints a warning for single-
