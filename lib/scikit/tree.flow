@@ -25,7 +25,8 @@ export struct TreeNode {
     right: i32,
     is_leaf: bool,
     value: f32,
-    n_samples: i32
+    n_samples: i32,
+    impurity: f32
 }
 
 export struct DecisionTreeClassifier {
@@ -154,7 +155,7 @@ export function decision_tree_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: 
     }
 
     let max_nodes: i32 = 2 * X.rows + 1
-    let nodes: ptr<TreeNode> = malloc((max_nodes as i64) * 32) as ptr<TreeNode>
+    let nodes: ptr<TreeNode> = malloc((max_nodes as i64) * 36) as ptr<TreeNode>
     let mut n_nodes: i32 = 0
 
     let indices: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
@@ -205,6 +206,7 @@ function _build_classifier_tree(
         (nodes + node_idx).n_samples = n_indices
         (nodes + node_idx).left = -1
         (nodes + node_idx).right = -1
+        (nodes + node_idx).impurity = _gini(y_subset, n_indices, classes, n_classes)
         array_free_f32(y_subset)
         return node_idx
     }
@@ -284,6 +286,7 @@ function _build_classifier_tree(
         (nodes + node_idx).n_samples = n_indices
         (nodes + node_idx).left = -1
         (nodes + node_idx).right = -1
+        (nodes + node_idx).impurity = parent_impurity
         array_free_f32(y_sub)
         return node_idx
     }
@@ -307,6 +310,7 @@ function _build_classifier_tree(
     (nodes + node_idx).feature = best_feature
     (nodes + node_idx).threshold = best_threshold
     (nodes + node_idx).n_samples = n_indices
+    (nodes + node_idx).impurity = parent_impurity
 
     let left_idx: i32 = _build_classifier_tree(nodes, n_nodes, X, y, left_indices, left_n, depth + 1, max_depth, criterion, classes, n_classes)
     let right_idx: i32 = _build_classifier_tree(nodes, n_nodes, X, y, right_indices, right_n, depth + 1, max_depth, criterion, classes, n_classes)
@@ -349,9 +353,48 @@ export function decision_tree_classifier_free(model: DecisionTreeClassifier) -> 
     array_free_f32(model.classes)
 }
 
+# Feature importances for DecisionTreeClassifier.
+# Computes the weighted impurity decrease per feature, normalized to sum 1.
+# Addresses sklearn #34472: feature_importances_ with proper not-fitted check.
+export function decision_tree_classifier_feature_importances(model: DecisionTreeClassifier, n_features: i32) -> ptr<f32> {
+    if not model.fitted || model.n_nodes == 0 {
+        println("[flow-scikit] ERROR: classifier not fitted, call fit before feature_importances_")
+        return array_new_f32(n_features)
+    }
+    let importances: ptr<f32> = array_new_f32(n_features)
+    for f in 0 to n_features {
+        importances[f] = 0.0
+    }
+    let root_samples: f32 = (model.nodes + 0).n_samples as f32
+    if root_samples < 1.0 {
+        return importances
+    }
+    for i in 0 to model.n_nodes {
+        let node: ptr<TreeNode> = model.nodes + i
+        if not node.is_leaf {
+            let left: ptr<TreeNode> = model.nodes + node.left
+            let right: ptr<TreeNode> = model.nodes + node.right
+            let decrease: f32 = (node.n_samples as f32) * node.impurity
+                - (left.n_samples as f32) * left.impurity
+                - (right.n_samples as f32) * right.impurity
+            importances[node.feature] = importances[node.feature] + decrease / root_samples
+        }
+    }
+    let mut total: f32 = 0.0
+    for f in 0 to n_features {
+        total = total + importances[f]
+    }
+    if total > 0.0 {
+        for f in 0 to n_features {
+            importances[f] = importances[f] / total
+        }
+    }
+    return importances
+}
+
 export function decision_tree_regressor_fit(X: Matrix, y: ptr<f32>, max_depth: i32, criterion: i32) -> DecisionTreeRegressor {
     let max_nodes: i32 = 2 * X.rows + 1
-    let nodes: ptr<TreeNode> = malloc((max_nodes as i64) * 32) as ptr<TreeNode>
+    let nodes: ptr<TreeNode> = malloc((max_nodes as i64) * 36) as ptr<TreeNode>
     let mut n_nodes: i32 = 0
 
     let indices: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
@@ -398,6 +441,7 @@ function _build_regressor_tree(
         (nodes + node_idx).n_samples = n_indices
         (nodes + node_idx).left = -1
         (nodes + node_idx).right = -1
+        (nodes + node_idx).impurity = _mse(y_subset, n_indices)
         array_free_f32(y_subset)
         return node_idx
     }
@@ -467,6 +511,7 @@ function _build_regressor_tree(
         (nodes + node_idx).n_samples = n_indices
         (nodes + node_idx).left = -1
         (nodes + node_idx).right = -1
+        (nodes + node_idx).impurity = parent_impurity
         array_free_f32(y_sub)
         return node_idx
     }
@@ -490,6 +535,7 @@ function _build_regressor_tree(
     (nodes + node_idx).feature = best_feature
     (nodes + node_idx).threshold = best_threshold
     (nodes + node_idx).n_samples = n_indices
+    (nodes + node_idx).impurity = parent_impurity
 
     let left_idx: i32 = _build_regressor_tree(nodes, n_nodes, X, y, left_indices, left_n, depth + 1, max_depth, criterion)
     let right_idx: i32 = _build_regressor_tree(nodes, n_nodes, X, y, right_indices, right_n, depth + 1, max_depth, criterion)
@@ -529,6 +575,44 @@ export function decision_tree_regressor_predict(model: DecisionTreeRegressor, X:
 
 export function decision_tree_regressor_free(model: DecisionTreeRegressor) -> void {
     free(model.nodes as ptr<void>)
+}
+
+# Feature importances for DecisionTreeRegressor.
+# Addresses sklearn #34472: feature_importances_ with proper not-fitted check.
+export function decision_tree_regressor_feature_importances(model: DecisionTreeRegressor, n_features: i32) -> ptr<f32> {
+    if not model.fitted || model.n_nodes == 0 {
+        println("[flow-scikit] ERROR: regressor not fitted, call fit before feature_importances_")
+        return array_new_f32(n_features)
+    }
+    let importances: ptr<f32> = array_new_f32(n_features)
+    for f in 0 to n_features {
+        importances[f] = 0.0
+    }
+    let root_samples: f32 = (model.nodes + 0).n_samples as f32
+    if root_samples < 1.0 {
+        return importances
+    }
+    for i in 0 to model.n_nodes {
+        let node: ptr<TreeNode> = model.nodes + i
+        if not node.is_leaf {
+            let left: ptr<TreeNode> = model.nodes + node.left
+            let right: ptr<TreeNode> = model.nodes + node.right
+            let decrease: f32 = (node.n_samples as f32) * node.impurity
+                - (left.n_samples as f32) * left.impurity
+                - (right.n_samples as f32) * right.impurity
+            importances[node.feature] = importances[node.feature] + decrease / root_samples
+        }
+    }
+    let mut total: f32 = 0.0
+    for f in 0 to n_features {
+        total = total + importances[f]
+    }
+    if total > 0.0 {
+        for f in 0 to n_features {
+            importances[f] = importances[f] / total
+        }
+    }
+    return importances
 }
 
 # ============================================================================

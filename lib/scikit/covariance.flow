@@ -1,5 +1,5 @@
 # Covariance estimation for flow-scikit.
-# Implements EmpiricalCovariance, ShrunkCovariance, OAS, GraphicalLasso, MinCovDet.
+# Implements EmpiricalCovariance, ShrunkCovariance, OAS, LedoitWolf, GraphicalLasso, MinCovDet.
 
 import "lib/scikit/matrix.flow"
 
@@ -277,6 +277,269 @@ export function oas_estimate(X: Matrix) -> f32 {
 export function oas_fit(X: Matrix) -> ShrunkCovariance {
     let shrinkage: f32 = oas_estimate(X)
     return shrunk_covariance_fit(X, shrinkage)
+}
+
+# ============================================================================
+# LedoitWolf (optimal shrinkage estimator)
+# Ledoit & Wolf (2004): "A well-conditioned estimator for large-dimensional
+# covariance matrices". Computes the optimal shrinkage intensity analytically.
+# Addresses sklearn #34660: adding weights to the calculation for Ledoit Wolf.
+# ============================================================================
+
+export function ledoit_wolf_estimate(X: Matrix) -> f32 {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let mean: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let mut m: f32 = 0.0
+        for i in 0 to n {
+            m = m + matrix_at(X, i, j)
+        }
+        mean[j] = m / (n as f32)
+    }
+
+    # Empirical covariance S (1/n)
+    let emp_cov: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to p {
+        emp_cov[i] = array_new_f32(p)
+    }
+    for i in 0 to p {
+        for j in 0 to p {
+            let mut s: f32 = 0.0
+            for k in 0 to n {
+                let di: f32 = matrix_at(X, k, i) - mean[i]
+                let dj: f32 = matrix_at(X, k, j) - mean[j]
+                s = s + di * dj
+            }
+            emp_cov[i][j] = s / (n as f32)
+        }
+    }
+
+    # mu = trace(S) / p
+    let mut trace: f32 = 0.0
+    for i in 0 to p {
+        trace = trace + emp_cov[i][i]
+    }
+    let mu: f32 = trace / (p as f32)
+
+    # d^2 = ||S - mu*I||_F^2
+    let mut d_sq: f32 = 0.0
+    for i in 0 to p {
+        for j in 0 to p {
+            let target: f32 = 0.0
+            if i == j {
+                target = mu
+            }
+            let diff: f32 = emp_cov[i][j] - target
+            d_sq = d_sq + diff * diff
+        }
+    }
+
+    # b_bar^2 = (1/n^2) * sum_k ||(x_k - mean)(x_k - mean)^T - S||_F^2
+    let mut b_bar_sq: f32 = 0.0
+    for k in 0 to n {
+        for i in 0 to p {
+            for j in 0 to p {
+                let di: f32 = matrix_at(X, k, i) - mean[i]
+                let dj: f32 = matrix_at(X, k, j) - mean[j]
+                let outer: f32 = di * dj
+                let diff: f32 = outer - emp_cov[i][j]
+                b_bar_sq = b_bar_sq + diff * diff
+            }
+        }
+    }
+    b_bar_sq = b_bar_sq / ((n as f32) * (n as f32))
+
+    for i in 0 to p {
+        array_free_f32(emp_cov[i])
+    }
+    free(emp_cov as ptr<void>)
+    array_free_f32(mean)
+
+    if d_sq < 1e-10 {
+        return 1.0
+    }
+
+    # b^2 = min(b_bar^2, d^2)
+    let mut b_sq: f32 = b_bar_sq
+    if b_sq > d_sq {
+        b_sq = d_sq
+    }
+
+    let shrinkage: f32 = b_sq / d_sq
+    return shrinkage
+}
+
+# LedoitWolf with sample weights.
+# Addresses sklearn #34660: adding weights to the calculation for Ledoit Wolf.
+export function ledoit_wolf_estimate_weighted(X: Matrix, sample_weights: ptr<f32>) -> f32 {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    # Compute total weight
+    let mut total_w: f32 = 0.0
+    for i in 0 to n {
+        total_w = total_w + sample_weights[i]
+    }
+    if total_w < 1e-10 {
+        return 1.0
+    }
+
+    # Weighted mean
+    let mean: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let mut m: f32 = 0.0
+        for i in 0 to n {
+            m = m + sample_weights[i] * matrix_at(X, i, j)
+        }
+        mean[j] = m / total_w
+    }
+
+    # Weighted empirical covariance S
+    let emp_cov: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to p {
+        emp_cov[i] = array_new_f32(p)
+    }
+    for i in 0 to p {
+        for j in 0 to p {
+            let mut s: f32 = 0.0
+            for k in 0 to n {
+                let di: f32 = matrix_at(X, k, i) - mean[i]
+                let dj: f32 = matrix_at(X, k, j) - mean[j]
+                s = s + sample_weights[k] * di * dj
+            }
+            emp_cov[i][j] = s / total_w
+        }
+    }
+
+    # mu = trace(S) / p
+    let mut trace: f32 = 0.0
+    for i in 0 to p {
+        trace = trace + emp_cov[i][i]
+    }
+    let mu: f32 = trace / (p as f32)
+
+    # d^2 = ||S - mu*I||_F^2
+    let mut d_sq: f32 = 0.0
+    for i in 0 to p {
+        for j in 0 to p {
+            let target: f32 = 0.0
+            if i == j {
+                target = mu
+            }
+            let diff: f32 = emp_cov[i][j] - target
+            d_sq = d_sq + diff * diff
+        }
+    }
+
+    # b_bar^2 with weights
+    let mut b_bar_sq: f32 = 0.0
+    for k in 0 to n {
+        let w: f32 = sample_weights[k] / total_w
+        for i in 0 to p {
+            for j in 0 to p {
+                let di: f32 = matrix_at(X, k, i) - mean[i]
+                let dj: f32 = matrix_at(X, k, j) - mean[j]
+                let outer: f32 = di * dj
+                let diff: f32 = outer - emp_cov[i][j]
+                b_bar_sq = b_bar_sq + w * diff * diff
+            }
+        }
+    }
+
+    for i in 0 to p {
+        array_free_f32(emp_cov[i])
+    }
+    free(emp_cov as ptr<void>)
+    array_free_f32(mean)
+
+    if d_sq < 1e-10 {
+        return 1.0
+    }
+
+    let mut b_sq: f32 = b_bar_sq
+    if b_sq > d_sq {
+        b_sq = d_sq
+    }
+
+    let shrinkage: f32 = b_sq / d_sq
+    return shrinkage
+}
+
+export function ledoit_wolf_fit(X: Matrix) -> ShrunkCovariance {
+    let shrinkage: f32 = ledoit_wolf_estimate(X)
+    return shrunk_covariance_fit(X, shrinkage)
+}
+
+export function ledoit_wolf_fit_weighted(X: Matrix, sample_weights: ptr<f32>) -> ShrunkCovariance {
+    let shrinkage: f32 = ledoit_wolf_estimate_weighted(X, sample_weights)
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let mut total_w: f32 = 0.0
+    for i in 0 to n {
+        total_w = total_w + sample_weights[i]
+    }
+    if total_w < 1e-10 {
+        total_w = 1.0
+    }
+
+    let location: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let mut m: f32 = 0.0
+        for i in 0 to n {
+            m = m + sample_weights[i] * matrix_at(X, i, j)
+        }
+        location[j] = m / total_w
+    }
+
+    let emp_cov: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to p {
+        emp_cov[i] = array_new_f32(p)
+    }
+    for i in 0 to p {
+        for j in 0 to p {
+            let mut s: f32 = 0.0
+            for k in 0 to n {
+                let di: f32 = matrix_at(X, k, i) - location[i]
+                let dj: f32 = matrix_at(X, k, j) - location[j]
+                s = s + sample_weights[k] * di * dj
+            }
+            emp_cov[i][j] = s / total_w
+        }
+    }
+
+    let mut trace: f32 = 0.0
+    for i in 0 to p {
+        trace = trace + emp_cov[i][i]
+    }
+    let mu: f32 = trace / (p as f32)
+
+    let cov: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to p {
+        cov[i] = array_new_f32(p)
+        for j in 0 to p {
+            if i == j {
+                cov[i][j] = (1.0 - shrinkage) * emp_cov[i][j] + shrinkage * mu
+            } else {
+                cov[i][j] = (1.0 - shrinkage) * emp_cov[i][j]
+            }
+        }
+    }
+
+    for i in 0 to p {
+        array_free_f32(emp_cov[i])
+    }
+    free(emp_cov as ptr<void>)
+
+    return ShrunkCovariance {
+        covariance: cov,
+        location: location,
+        n_features: p,
+        shrinkage: shrinkage,
+        fitted: true
+    }
 }
 
 # ============================================================================

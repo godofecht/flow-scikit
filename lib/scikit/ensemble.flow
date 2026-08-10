@@ -171,6 +171,28 @@ export function random_forest_classifier_free(model: RandomForestClassifier) -> 
     array_free_f32(model.classes)
 }
 
+# Feature importances for RandomForestClassifier: average of per-tree importances.
+# Addresses sklearn #34472.
+export function random_forest_classifier_feature_importances(model: RandomForestClassifier, n_features: i32) -> ptr<f32> {
+    let importances: ptr<f32> = array_new_f32(n_features)
+    for f in 0 to n_features {
+        importances[f] = 0.0
+    }
+    for t in 0 to model.n_trees {
+        let tree_imp: ptr<f32> = decision_tree_classifier_feature_importances(model.trees[t], n_features)
+        for f in 0 to n_features {
+            importances[f] = importances[f] + tree_imp[f]
+        }
+        array_free_f32(tree_imp)
+    }
+    if model.n_trees > 0 {
+        for f in 0 to n_features {
+            importances[f] = importances[f] / (model.n_trees as f32)
+        }
+    }
+    return importances
+}
+
 export struct RandomForestRegressor {
     trees: ptr<DecisionTreeRegressor>,
     n_trees: i32,
@@ -235,6 +257,28 @@ export function random_forest_regressor_free(model: RandomForestRegressor) -> vo
         decision_tree_regressor_free(model.trees[t])
     }
     free(model.trees as ptr<void>)
+}
+
+# Feature importances for RandomForestRegressor: average of per-tree importances.
+# Addresses sklearn #34472.
+export function random_forest_regressor_feature_importances(model: RandomForestRegressor, n_features: i32) -> ptr<f32> {
+    let importances: ptr<f32> = array_new_f32(n_features)
+    for f in 0 to n_features {
+        importances[f] = 0.0
+    }
+    for t in 0 to model.n_trees {
+        let tree_imp: ptr<f32> = decision_tree_regressor_feature_importances(model.trees[t], n_features)
+        for f in 0 to n_features {
+            importances[f] = importances[f] + tree_imp[f]
+        }
+        array_free_f32(tree_imp)
+    }
+    if model.n_trees > 0 {
+        for f in 0 to n_features {
+            importances[f] = importances[f] / (model.n_trees as f32)
+        }
+    }
+    return importances
 }
 
 # ============================================================================
@@ -571,6 +615,28 @@ export function gradient_boosting_classifier_free(model: GradientBoostingClassif
     array_free_f32(model.classes)
 }
 
+# Feature importances for GradientBoostingClassifier.
+# Addresses sklearn #34472.
+export function gradient_boosting_classifier_feature_importances(model: GradientBoostingClassifier, n_features: i32) -> ptr<f32> {
+    let importances: ptr<f32> = array_new_f32(n_features)
+    for f in 0 to n_features {
+        importances[f] = 0.0
+    }
+    for t in 0 to model.n_trees {
+        let tree_imp: ptr<f32> = decision_tree_regressor_feature_importances(model.trees[t], n_features)
+        for f in 0 to n_features {
+            importances[f] = importances[f] + tree_imp[f]
+        }
+        array_free_f32(tree_imp)
+    }
+    if model.n_trees > 0 {
+        for f in 0 to n_features {
+            importances[f] = importances[f] / (model.n_trees as f32)
+        }
+    }
+    return importances
+}
+
 # ============================================================================
 # GradientBoostingRegressor
 # ============================================================================
@@ -646,6 +712,28 @@ export function gradient_boosting_regressor_free(model: GradientBoostingRegresso
         decision_tree_regressor_free(model.trees[t])
     }
     free(model.trees as ptr<void>)
+}
+
+# Feature importances for GradientBoostingRegressor.
+# Addresses sklearn #34472.
+export function gradient_boosting_regressor_feature_importances(model: GradientBoostingRegressor, n_features: i32) -> ptr<f32> {
+    let importances: ptr<f32> = array_new_f32(n_features)
+    for f in 0 to n_features {
+        importances[f] = 0.0
+    }
+    for t in 0 to model.n_trees {
+        let tree_imp: ptr<f32> = decision_tree_regressor_feature_importances(model.trees[t], n_features)
+        for f in 0 to n_features {
+            importances[f] = importances[f] + tree_imp[f]
+        }
+        array_free_f32(tree_imp)
+    }
+    if model.n_trees > 0 {
+        for f in 0 to n_features {
+            importances[f] = importances[f] / (model.n_trees as f32)
+        }
+    }
+    return importances
 }
 
 # ============================================================================
@@ -813,6 +901,252 @@ export function adaboost_classifier_free(model: AdaBoostClassifier) -> void {
     free(model.trees as ptr<void>)
     array_free_f32(model.alphas)
     array_free_f32(model.classes)
+}
+
+# Feature importances for AdaBoostClassifier: weighted average of per-tree
+# importances, weighted by estimator weights (alphas).
+# Addresses sklearn #34472: feature_importances_ with proper not-fitted check.
+export function adaboost_classifier_feature_importances(model: AdaBoostClassifier, n_features: i32) -> ptr<f32> {
+    let importances: ptr<f32> = array_new_f32(n_features)
+    for f in 0 to n_features {
+        importances[f] = 0.0
+    }
+    let mut total_weight: f32 = 0.0
+    for t in 0 to model.n_trees {
+        let tree_imp: ptr<f32> = decision_tree_classifier_feature_importances(model.trees[t], n_features)
+        let w: f32 = model.alphas[t]
+        total_weight = total_weight + w
+        for f in 0 to n_features {
+            importances[f] = importances[f] + w * tree_imp[f]
+        }
+        array_free_f32(tree_imp)
+    }
+    if total_weight > 0.0 {
+        for f in 0 to n_features {
+            importances[f] = importances[f] / total_weight
+        }
+    }
+    return importances
+}
+
+# ============================================================================
+# AdaBoostRegressor (AdaBoost.R2 algorithm)
+# ============================================================================
+
+export struct AdaBoostRegressor {
+    trees: ptr<DecisionTreeRegressor>,
+    alphas: ptr<f32>,
+    n_trees: i32,
+    fitted: bool
+}
+
+export function adaboost_regressor_fit(X: Matrix, y: ptr<f32>, n_trees: i32, max_depth: i32, seed: i32) -> AdaBoostRegressor {
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeRegressor>
+    let alphas: ptr<f32> = array_new_f32(n_trees)
+
+    let weights: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        weights[i] = 1.0 / (X.rows as f32)
+    }
+
+    srand(seed)
+
+    for t in 0 to n_trees {
+        let n_samples: i32 = X.rows
+        let sample_indices: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+
+        let mut cum: f32 = 0.0
+        for i in 0 to n_samples {
+            cum = cum + weights[i]
+        }
+
+        for i in 0 to n_samples {
+            let r: f32 = (rand() as f32) / 2147483647.0 * cum
+            let mut acc: f32 = 0.0
+            let mut idx: i32 = 0
+            for j in 0 to n_samples {
+                acc = acc + weights[j]
+                if acc >= r {
+                    idx = j
+                }
+            }
+            sample_indices[i] = idx
+        }
+
+        let X_boot: Matrix = matrix_new(n_samples, X.cols)
+        let y_boot: ptr<f32> = array_new_f32(n_samples)
+        for i in 0 to n_samples {
+            y_boot[i] = y[sample_indices[i]]
+            for j in 0 to X.cols {
+                matrix_set(X_boot, i, j, matrix_at(X, sample_indices[i], j))
+            }
+        }
+
+        trees[t] = decision_tree_regressor_fit(X_boot, y_boot, max_depth, CRITERION_MSE)
+
+        let preds: ptr<f32> = decision_tree_regressor_predict(trees[t], X)
+
+        # AdaBoost.R2: compute relative errors
+        let mut max_err: f32 = 0.0
+        for i in 0 to X.rows {
+            let abs_err: f32 = fabs((y[i] - preds[i]) as f64) as f32
+            if abs_err > max_err {
+                max_err = abs_err
+            }
+        }
+
+        if max_err < 1e-10 {
+            alphas[t] = 1.0
+            free(sample_indices as ptr<void>)
+            matrix_free(X_boot)
+            array_free_f32(y_boot)
+            array_free_f32(preds)
+            continue
+        }
+
+        let mut err: f32 = 0.0
+        for i in 0 to X.rows {
+            let rel_err: f32 = fabs((y[i] - preds[i]) as f64) as f32 / max_err
+            err = err + weights[i] * rel_err
+        }
+
+        # Estimator weight: alpha = err^2 / (1 - err)^2 (linear loss)
+        # sklearn default loss="linear"
+        if err >= 0.99 {
+            alphas[t] = 0.0
+        } else {
+            let beta: f32 = err / (1.0 - err)
+            alphas[t] = beta * beta
+        }
+
+        # Update weights: increase for high-error samples
+        let mut total_w: f32 = 0.0
+        for i in 0 to X.rows {
+            let rel_err: f32 = fabs((y[i] - preds[i]) as f64) as f32 / max_err
+            weights[i] = weights[i] * pow(alphas[t], (1.0 - rel_err) as f64) as f32
+            total_w = total_w + weights[i]
+        }
+
+        for i in 0 to X.rows {
+            weights[i] = weights[i] / total_w
+        }
+
+        free(sample_indices as ptr<void>)
+        matrix_free(X_boot)
+        array_free_f32(y_boot)
+        array_free_f32(preds)
+    }
+
+    array_free_f32(weights)
+
+    return AdaBoostRegressor {
+        trees: trees,
+        alphas: alphas,
+        n_trees: n_trees,
+        fitted: true
+    }
+}
+
+export function adaboost_regressor_predict(model: AdaBoostRegressor, X: Matrix) -> ptr<f32> {
+    # Weighted median prediction (sorted by prediction, accumulate weights)
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    let tree_preds: ptr<ptr<f32> > = malloc((model.n_trees as i64) * 8) as ptr<ptr<f32> >
+
+    for t in 0 to model.n_trees {
+        tree_preds[t] = decision_tree_regressor_predict(model.trees[t], X)
+    }
+
+    for i in 0 to X.rows {
+        # Collect (prediction, weight) pairs and sort by prediction
+        let sorted_preds: ptr<f32> = array_new_f32(model.n_trees)
+        let sorted_weights: ptr<f32> = array_new_f32(model.n_trees)
+        let order: ptr<i32> = malloc((model.n_trees as i64) * 4) as ptr<i32>
+        for t in 0 to model.n_trees {
+            order[t] = t
+        }
+
+        # Simple insertion sort by prediction value
+        for t in 1 to model.n_trees {
+            let key: i32 = order[t]
+            let key_val: f32 = tree_preds[key][i]
+            let mut j: i32 = t - 1
+            while j >= 0 && tree_preds[order[j]][i] > key_val {
+                order[j + 1] = order[j]
+                j = j - 1
+            }
+            order[j + 1] = key
+        }
+
+        for t in 0 to model.n_trees {
+            sorted_preds[t] = tree_preds[order[t]][i]
+            sorted_weights[t] = model.alphas[order[t]]
+        }
+
+        # Weighted median: find where cumulative weight crosses 0.5
+        let mut total_w: f32 = 0.0
+        for t in 0 to model.n_trees {
+            total_w = total_w + sorted_weights[t]
+        }
+
+        let mut cum_w: f32 = 0.0
+        let mut median_idx: i32 = model.n_trees - 1
+        if total_w > 0.0 {
+            for t in 0 to model.n_trees {
+                cum_w = cum_w + sorted_weights[t] / total_w
+                if cum_w >= 0.5 {
+                    median_idx = t
+                    break
+                }
+            }
+        }
+
+        preds[i] = sorted_preds[median_idx]
+
+        array_free_f32(sorted_preds)
+        array_free_f32(sorted_weights)
+        free(order as ptr<void>)
+    }
+
+    for t in 0 to model.n_trees {
+        array_free_f32(tree_preds[t])
+    }
+    free(tree_preds as ptr<void>)
+
+    return preds
+}
+
+export function adaboost_regressor_free(model: AdaBoostRegressor) -> void {
+    for t in 0 to model.n_trees {
+        decision_tree_regressor_free(model.trees[t])
+    }
+    free(model.trees as ptr<void>)
+    array_free_f32(model.alphas)
+}
+
+# Feature importances for AdaBoostRegressor: weighted average of per-tree
+# importances, weighted by estimator weights (alphas).
+# Addresses sklearn #34472.
+export function adaboost_regressor_feature_importances(model: AdaBoostRegressor, n_features: i32) -> ptr<f32> {
+    let importances: ptr<f32> = array_new_f32(n_features)
+    for f in 0 to n_features {
+        importances[f] = 0.0
+    }
+    let mut total_weight: f32 = 0.0
+    for t in 0 to model.n_trees {
+        let tree_imp: ptr<f32> = decision_tree_regressor_feature_importances(model.trees[t], n_features)
+        let w: f32 = model.alphas[t]
+        total_weight = total_weight + w
+        for f in 0 to n_features {
+            importances[f] = importances[f] + w * tree_imp[f]
+        }
+        array_free_f32(tree_imp)
+    }
+    if total_weight > 0.0 {
+        for f in 0 to n_features {
+            importances[f] = importances[f] / total_weight
+        }
+    }
+    return importances
 }
 
 # ============================================================================

@@ -209,8 +209,9 @@ tests/
 | `ensemble`                | RandomForestClassifier, RandomForestRegressor,               |
 |                           | BaggingClassifier, VotingClassifier,                         |
 |                           | GradientBoostingClassifier, GradientBoostingRegressor,       |
-|                           | AdaBoostClassifier, ExtraTreesClassifier,                   |
-|                           | ExtraTreesRegressor, IsolationForest, StackingClassifier,   |
+|                           | AdaBoostClassifier, AdaBoostRegressor,                       |
+|                           | ExtraTreesClassifier, ExtraTreesRegressor,                   |
+|                           | IsolationForest, StackingClassifier,                         |
 |                           | HistGradientBoostingClassifier                               |
 | `cluster`                 | KMeans, MiniBatchKMeans, DBSCAN, AgglomerativeClustering,    |
 |                           | MeanShift, Birch, SpectralClustering, AffinityPropagation, |
@@ -258,7 +259,7 @@ tests/
 | `multioutput`            | MultiOutputClassifier, MultiOutputRegressor,               |
 |                           | ClassifierChain, RegressorChain                              |
 | `covariance`             | EmpiricalCovariance, ShrunkCovariance, OAS,                 |
-|                           | GraphicalLasso, MinCovDet                                    |
+|                           | LedoitWolf, GraphicalLasso, MinCovDet                        |
 | `impute`                 | KNNImputer, IterativeImputer                                 |
 | `kernel_approximation`   | RBFSampler, Nystroem, AdditiveChi2Sampler                    |
 | `random_projection`      | GaussianRandomProjection, SparseRandomProjection             |

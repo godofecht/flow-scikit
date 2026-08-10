@@ -11,6 +11,23 @@
 
 ### Sklearn parity fixes
 
+- Added `feature_importances_` for DecisionTreeClassifier,
+  DecisionTreeRegressor, RandomForestClassifier, RandomForestRegressor,
+  GradientBoostingClassifier, GradientBoostingRegressor, and
+  AdaBoostClassifier. Uses weighted impurity decrease, normalized to sum 1.
+  Includes proper not-fitted check via the `fitted` field. Addresses sklearn
+  #34472.
+- Added AdaBoostRegressor (AdaBoost.R2 algorithm with linear loss and
+  weighted median prediction). Includes `feature_importances_` weighted by
+  estimator weights. Addresses sklearn #34472.
+- Added LedoitWolf covariance estimator with analytical shrinkage intensity
+  (Ledoit & Wolf 2004). Includes `ledoit_wolf_fit`, `ledoit_wolf_estimate`,
+  and weighted variants `ledoit_wolf_fit_weighted` and
+  `ledoit_wolf_estimate_weighted` that accept sample weights. Addresses
+  sklearn #34660.
+- Added `impurity` field to TreeNode for feature importance computation.
+- Added `pow` to the extern declarations in matrix.flow.
+- Added `tests/test_parity_fixes_v2.flow` with 8 tests.
 - `explained_variance_score` now returns NaN and prints a warning for single-
   sample input or zero-variance y_true, instead of silently returning 0.0
   or 1.0. Addresses sklearn #34622.
