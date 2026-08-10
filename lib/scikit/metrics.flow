@@ -1147,3 +1147,320 @@ export function cosine_distances(X: Matrix, Y: Matrix) -> Matrix {
     }
     return result
 }
+
+# Multi-class metrics (One-vs-Rest and One-vs-One)
+# ============================================================================
+
+export struct MultiClassMetric {
+    per_class: ptr<f32>,
+    n_classes: i32,
+    macro_avg: f32,
+    micro_avg: f32,
+    weighted_avg: f32
+}
+
+export function multiclass_precision_ovr(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32) -> MultiClassMetric {
+    let per_class: ptr<f32> = array_new_f32(n_classes)
+    let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+
+    for c in 0 to n_classes {
+        class_counts[c] = 0
+    }
+
+    for c in 0 to n_classes {
+        let mut tp: i32 = 0
+        let mut fp: i32 = 0
+        let mut fn_: i32 = 0
+
+        for i in 0 to n {
+            let true_pos: bool = y_true[i] == classes[c]
+            let pred_pos: bool = y_pred[i] == classes[c]
+
+            if true_pos && pred_pos { tp = tp + 1 }
+            if not true_pos && pred_pos { fp = fp + 1 }
+            if true_pos && not pred_pos { fn_ = fn_ + 1 }
+        }
+
+        let denom: i32 = tp + fp
+        if denom > 0 {
+            per_class[c] = (tp as f32) / (denom as f32)
+        } else {
+            per_class[c] = 0.0
+        }
+        class_counts[c] = tp + fn_
+    }
+
+    let mut macro: f32 = 0.0
+    let mut weighted: f32 = 0.0
+    let mut total_count: i32 = 0
+    for c in 0 to n_classes {
+        macro = macro + per_class[c]
+        weighted = weighted + per_class[c] * (class_counts[c] as f32)
+        total_count = total_count + class_counts[c]
+    }
+    macro = macro / (n_classes as f32)
+    if total_count > 0 {
+        weighted = weighted / (total_count as f32)
+    }
+
+    let mut micro_tp: i32 = 0
+    let mut micro_fp: i32 = 0
+    for i in 0 to n {
+        if y_true[i] == y_pred[i] {
+            micro_tp = micro_tp + 1
+        } else {
+            micro_fp = micro_fp + 1
+        }
+    }
+    let micro: f32 = 0.0
+    if micro_tp + micro_fp > 0 {
+        micro = (micro_tp as f32) / ((micro_tp + micro_fp) as f32)
+    }
+
+    free(class_counts as ptr<void>)
+
+    return MultiClassMetric {
+        per_class: per_class,
+        n_classes: n_classes,
+        macro_avg: macro,
+        micro_avg: micro,
+        weighted_avg: weighted
+    }
+}
+
+export function multiclass_recall_ovr(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32) -> MultiClassMetric {
+    let per_class: ptr<f32> = array_new_f32(n_classes)
+    let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+
+    for c in 0 to n_classes {
+        class_counts[c] = 0
+    }
+
+    for c in 0 to n_classes {
+        let mut tp: i32 = 0
+        let mut fn_: i32 = 0
+
+        for i in 0 to n {
+            let true_pos: bool = y_true[i] == classes[c]
+            let pred_pos: bool = y_pred[i] == classes[c]
+
+            if true_pos && pred_pos { tp = tp + 1 }
+            if true_pos && not pred_pos { fn_ = fn_ + 1 }
+        }
+
+        let denom: i32 = tp + fn_
+        if denom > 0 {
+            per_class[c] = (tp as f32) / (denom as f32)
+        } else {
+            per_class[c] = 0.0
+        }
+        class_counts[c] = denom
+    }
+
+    let mut macro: f32 = 0.0
+    let mut weighted: f32 = 0.0
+    let mut total_count: i32 = 0
+    for c in 0 to n_classes {
+        macro = macro + per_class[c]
+        weighted = weighted + per_class[c] * (class_counts[c] as f32)
+        total_count = total_count + class_counts[c]
+    }
+    macro = macro / (n_classes as f32)
+    if total_count > 0 {
+        weighted = weighted / (total_count as f32)
+    }
+
+    let mut micro_tp: i32 = 0
+    let mut micro_fn: i32 = 0
+    for i in 0 to n {
+        if y_true[i] == y_pred[i] {
+            micro_tp = micro_tp + 1
+        } else {
+            micro_fn = micro_fn + 1
+        }
+    }
+    let micro: f32 = 0.0
+    if micro_tp + micro_fn > 0 {
+        micro = (micro_tp as f32) / ((micro_tp + micro_fn) as f32)
+    }
+
+    free(class_counts as ptr<void>)
+
+    return MultiClassMetric {
+        per_class: per_class,
+        n_classes: n_classes,
+        macro_avg: macro,
+        micro_avg: micro,
+        weighted_avg: weighted
+    }
+}
+
+export function multiclass_f1_ovr(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32) -> MultiClassMetric {
+    let prec: MultiClassMetric = multiclass_precision_ovr(y_true, y_pred, n, classes, n_classes)
+    let rec: MultiClassMetric = multiclass_recall_ovr(y_true, y_pred, n, classes, n_classes)
+
+    let per_class: ptr<f32> = array_new_f32(n_classes)
+    for c in 0 to n_classes {
+        let p: f32 = prec.per_class[c]
+        let r: f32 = rec.per_class[c]
+        if p + r > 0.0 {
+            per_class[c] = 2.0 * p * r / (p + r)
+        } else {
+            per_class[c] = 0.0
+        }
+    }
+
+    let mut macro: f32 = 0.0
+    let mut weighted: f32 = 0.0
+    let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    let mut total_count: i32 = 0
+    for c in 0 to n_classes {
+        let mut count: i32 = 0
+        for i in 0 to n {
+            if y_true[i] == classes[c] { count = count + 1 }
+        }
+        class_counts[c] = count
+        macro = macro + per_class[c]
+        weighted = weighted + per_class[c] * (count as f32)
+        total_count = total_count + count
+    }
+    macro = macro / (n_classes as f32)
+    if total_count > 0 {
+        weighted = weighted / (total_count as f32)
+    }
+
+    let micro: f32 = 0.0
+    if prec.micro_avg + rec.micro_avg > 0.0 {
+        micro = 2.0 * prec.micro_avg * rec.micro_avg / (prec.micro_avg + rec.micro_avg)
+    }
+
+    free(class_counts as ptr<void>)
+    multiclass_metric_free(prec)
+    multiclass_metric_free(rec)
+
+    return MultiClassMetric {
+        per_class: per_class,
+        n_classes: n_classes,
+        macro_avg: macro,
+        micro_avg: micro,
+        weighted_avg: weighted
+    }
+}
+
+export function multiclass_metric_free(m: MultiClassMetric) -> void {
+    array_free_f32(m.per_class)
+}
+
+export function print_multiclass_metric(name: string, m: MultiClassMetric, classes: ptr<f32>) -> void {
+    print("  ")
+    print(name)
+    println(" (OvR):")
+    for c in 0 to m.n_classes {
+        print("    class ")
+        print(classes[c])
+        print(": ")
+        printf("%.4f", m.per_class[c])
+        println("")
+    }
+    print("    macro avg: ")
+    printf("%.4f", m.macro_avg)
+    println("")
+    print("    micro avg: ")
+    printf("%.4f", m.micro_avg)
+    println("")
+    print("    weighted avg: ")
+    printf("%.4f", m.weighted_avg)
+    println("")
+}
+
+# ============================================================================
+# One-vs-One pairwise metrics
+# ============================================================================
+
+export struct OvOResult {
+    scores: ptr<f32>,
+    n_pairs: i32,
+    avg: f32
+}
+
+export function multiclass_precision_ovo(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32) -> OvOResult {
+    let n_pairs: i32 = n_classes * (n_classes - 1) / 2
+    let scores: ptr<f32> = array_new_f32(n_pairs)
+
+    let mut idx: i32 = 0
+    for a in 0 to n_classes {
+        for b in a + 1 to n_classes {
+            let mut tp: i32 = 0
+            let mut fp: i32 = 0
+
+            for i in 0 to n {
+                if y_true[i] == classes[a] || y_true[i] == classes[b] {
+                    if y_pred[i] == classes[a] && y_true[i] == classes[a] {
+                        tp = tp + 1
+                    }
+                    if y_pred[i] == classes[a] && y_true[i] == classes[b] {
+                        fp = fp + 1
+                    }
+                }
+            }
+
+            if tp + fp > 0 {
+                scores[idx] = (tp as f32) / ((tp + fp) as f32)
+            } else {
+                scores[idx] = 0.0
+            }
+            idx = idx + 1
+        }
+    }
+
+    let mut avg: f32 = 0.0
+    for i in 0 to n_pairs {
+        avg = avg + scores[i]
+    }
+    avg = avg / (n_pairs as f32)
+
+    return OvOResult { scores: scores, n_pairs: n_pairs, avg: avg }
+}
+
+export function multiclass_recall_ovo(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32) -> OvOResult {
+    let n_pairs: i32 = n_classes * (n_classes - 1) / 2
+    let scores: ptr<f32> = array_new_f32(n_pairs)
+
+    let mut idx: i32 = 0
+    for a in 0 to n_classes {
+        for b in a + 1 to n_classes {
+            let mut tp: i32 = 0
+            let mut fn_: i32 = 0
+
+            for i in 0 to n {
+                if y_true[i] == classes[a] || y_true[i] == classes[b] {
+                    if y_pred[i] == classes[a] && y_true[i] == classes[a] {
+                        tp = tp + 1
+                    }
+                    if y_pred[i] == classes[b] && y_true[i] == classes[a] {
+                        fn_ = fn_ + 1
+                    }
+                }
+            }
+
+            if tp + fn_ > 0 {
+                scores[idx] = (tp as f32) / ((tp + fn_) as f32)
+            } else {
+                scores[idx] = 0.0
+            }
+            idx = idx + 1
+        }
+    }
+
+    let mut avg: f32 = 0.0
+    for i in 0 to n_pairs {
+        avg = avg + scores[i]
+    }
+    avg = avg / (n_pairs as f32)
+
+    return OvOResult { scores: scores, n_pairs: n_pairs, avg: avg }
+}
+
+export function ovo_result_free(r: OvOResult) -> void {
+    array_free_f32(r.scores)
+}

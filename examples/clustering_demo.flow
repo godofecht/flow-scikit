@@ -1,0 +1,141 @@
+# Clustering demo for flow-scikit.
+# Demonstrates KMeans, MiniBatchKMeans, DBSCAN, and AgglomerativeClustering
+# on synthetic 2D data with three Gaussian blobs.
+#
+# Run: ./flow run examples/clustering_demo.flow
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function rand() -> i32
+    function srand(seed: i32) -> void
+}
+
+function make_blobs() -> Matrix {
+    let n: i32 = 60
+    let X: Matrix = matrix_new(n, 2)
+
+    srand(42)
+
+    let centers: array<f32, 6> = [0.0, 0.0, 5.0, 5.0, -5.0, 5.0]
+
+    for i in 0 to 20 {
+        let cx: f32 = centers[0] + ((rand() % 100) as f32) / 50.0 - 1.0
+        let cy: f32 = centers[1] + ((rand() % 100) as f32) / 50.0 - 1.0
+        matrix_set(X, i, 0, cx)
+        matrix_set(X, i, 1, cy)
+    }
+    for i in 0 to 20 {
+        let cx: f32 = centers[2] + ((rand() % 100) as f32) / 50.0 - 1.0
+        let cy: f32 = centers[3] + ((rand() % 100) as f32) / 50.0 - 1.0
+        matrix_set(X, 20 + i, 0, cx)
+        matrix_set(X, 20 + i, 1, cy)
+    }
+    for i in 0 to 20 {
+        let cx: f32 = centers[4] + ((rand() % 100) as f32) / 50.0 - 1.0
+        let cy: f32 = centers[5] + ((rand() % 100) as f32) / 50.0 - 1.0
+        matrix_set(X, 40 + i, 0, cx)
+        matrix_set(X, 40 + i, 1, cy)
+    }
+
+    return X
+}
+
+function print_labels(title: string, labels: ptr<i32>, n: i32) -> void {
+    print("  ")
+    print(title)
+    print(": [")
+    for i in 0 to n {
+        if i > 0 && i % 10 == 0 {
+            println("")
+            print("    ")
+        }
+        print(labels[i])
+        if i < n - 1 {
+            print(", ")
+        }
+    }
+    println("]")
+}
+
+function main() -> i32 {
+    println("=== flow-scikit Clustering Demo ===")
+    println("")
+
+    let X: Matrix = make_blobs()
+    let n: i32 = X.rows
+
+    println("Data: 60 samples, 2 features, 3 Gaussian blobs")
+    println("")
+
+    # 1. KMeans
+    println("--- KMeans ---")
+    let km: KMeans = kmeans_fit(X, 3, 100, 1e-4, 42)
+    print("  Inertia = ")
+    printf("%.4f", km.inertia)
+    println("")
+    print("  Cluster centers:")
+    for k in 0 to 3 {
+        print("  [")
+        printf("%.2f", km.centroids[k][0])
+        print(", ")
+        printf("%.2f", km.centroids[k][1])
+        print("]")
+    }
+    println("")
+    print_labels("Labels", km.labels, n)
+    println("")
+    kmeans_free(km)
+    println("")
+
+    # 2. MiniBatchKMeans
+    println("--- MiniBatchKMeans ---")
+    let mbkm: MiniBatchKMeans = minibatch_kmeans_fit(X, 3, 10, 50, 1e-4, 42)
+    print("  Inertia = ")
+    printf("%.4f", mbkm.inertia)
+    println("")
+    let mb_labels: ptr<i32> = minibatch_kmeans_predict(mbkm, X)
+    print_labels("Labels", mb_labels, n)
+    println("")
+    minibatch_kmeans_free(mbkm)
+    free(mb_labels as ptr<void>)
+    println("")
+
+    # 3. DBSCAN
+    println("--- DBSCAN ---")
+    let dbscan: DBSCAN = dbscan_fit(X, 2.0, 3)
+    print("  Found ")
+    print(dbscan.n_clusters)
+    print(" clusters, ")
+    print(dbscan.n_noise)
+    println(" noise points")
+    print_labels("Labels", dbscan.labels, n)
+    println("")
+    dbscan_free(dbscan)
+    println("")
+
+    # 4. AgglomerativeClustering
+    println("--- AgglomerativeClustering ---")
+    let agg: AgglomerativeClustering = agglomerative_clustering_fit(X, 3)
+    print("  Found ")
+    print(agg.n_clusters)
+    println(" clusters")
+    print_labels("Labels", agg.labels, n)
+    println("")
+    agglomerative_clustering_free(agg)
+    println("")
+
+    # 5. Silhouette score for KMeans
+    println("--- Silhouette Score ---")
+    let km2: KMeans = kmeans_fit(X, 3, 100, 1e-4, 42)
+    let sil: f32 = silhouette_score(X, km2.labels, n)
+    print("  KMeans(k=3) silhouette = ")
+    printf("%.4f", sil)
+    println("")
+    kmeans_free(km2)
+    println("")
+
+    println("=== Done ===")
+    matrix_free(X)
+    return 0
+}

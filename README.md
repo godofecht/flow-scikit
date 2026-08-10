@@ -181,6 +181,7 @@ tests/
 ├── test_extended_modules.flow
 ├── test_new_modules_v2.flow
 ├── test_expanded_estimators.flow
+```
 
 ## API Coverage
 
@@ -228,6 +229,9 @@ tests/
 |                           | adjusted_rand_index, normalized_mutual_info,                |
 |                           | v_measure_score, jaccard_score, brier_score_loss,           |
 |                           | euclidean/manhattan/cosine_distances                        |
+|                           | multiclass_precision_ovr, multiclass_recall_ovr,             |
+|                           | multiclass_f1_ovr, multiclass_precision_ovo,                 |
+|                           | multiclass_recall_ovo                                       |
 | `model_selection`         | train_test_split, cross_validate_score, GridSearchCV,        |
 |                           | RandomizedSearchCV, KFold, StratifiedKFold,                  |
 |                           | ShuffleSplit, learning_curve, validation_curve,             |
