@@ -205,7 +205,7 @@ export function multinomial_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, alpha
                 break
             }
         }
-        if !found {
+        if not found {
             classes[class_idx] = y[i]
             class_counts[class_idx] = 1
             class_idx = class_idx + 1
@@ -349,7 +349,7 @@ export function bernoulli_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, alpha: 
                 break
             }
         }
-        if !found {
+        if not found {
             classes[class_idx] = y[i]
             class_counts[class_idx] = 1
             class_idx = class_idx + 1

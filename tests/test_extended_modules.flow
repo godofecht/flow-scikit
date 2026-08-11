@@ -81,15 +81,19 @@ function test_multinomial_nb() -> i32 {
 
     srand(42)
     for i in 0 to 10 {
-        for j in 0 to 4 {
-            matrix_set(X, i, j, ((rand() % 5) as f32) + 1.0)
-        }
+        # Class 0: high values in features 0-1, low in 2-3
+        matrix_set(X, i, 0, ((rand() % 3) as f32) + 5.0)
+        matrix_set(X, i, 1, ((rand() % 3) as f32) + 5.0)
+        matrix_set(X, i, 2, ((rand() % 3) as f32) + 1.0)
+        matrix_set(X, i, 3, ((rand() % 3) as f32) + 1.0)
         y[i] = 0.0
     }
     for i in 0 to 10 {
-        for j in 0 to 4 {
-            matrix_set(X, 10 + i, j, ((rand() % 5) as f32) + 5.0)
-        }
+        # Class 1: low values in features 0-1, high in 2-3
+        matrix_set(X, 10 + i, 0, ((rand() % 3) as f32) + 1.0)
+        matrix_set(X, 10 + i, 1, ((rand() % 3) as f32) + 1.0)
+        matrix_set(X, 10 + i, 2, ((rand() % 3) as f32) + 5.0)
+        matrix_set(X, 10 + i, 3, ((rand() % 3) as f32) + 5.0)
         y[10 + i] = 1.0
     }
 
@@ -99,6 +103,9 @@ function test_multinomial_nb() -> i32 {
 
     if acc < 0.7 {
         println("  FAIL: MultinomialNB accuracy should be > 0.7")
+        print("  got: ")
+        printf("%.4f", acc)
+        println("")
         return 1
     }
 
