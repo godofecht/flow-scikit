@@ -25,6 +25,7 @@ Filed issues so far:
 - #412: String concatenation with + not supported
 - #413: FLOW compilation failed suppresses all error diagnostics
 - #414: Vectorization pragmas generate incorrect code in sensitive loops
+- #421: Inline exp() in nested while loop causes bus error
 
 ## Flow transpiler constraints (workarounds)
 
@@ -32,6 +33,7 @@ Filed issues so far:
 - No direct `return StructLiteral { field: func() }`. Assign to locals first.
 - No escaped quotes in strings. Avoid `\"` entirely.
 - No string concatenation with `+`. Use sequential `print()` calls.
+- No inline `exp()` in nested while loops. Extract to a helper function.
 - `export const` is not transitively visible. Use numeric literals downstream.
 - No scientific notation (`1e-10`). Use `0.0000000001`.
 - Use `fabs((x) as f64) as f32` for absolute value.

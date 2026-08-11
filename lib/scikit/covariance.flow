@@ -807,3 +807,125 @@ export function min_cov_det_free(model: MinCovDet) -> void {
     array_free_f32(model.location)
     free(model.support_ as ptr<void>)
 }
+
+# ============================================================================
+# GraphicalLassoCV
+# ============================================================================
+
+export struct GraphicalLassoCV {
+    emp_cov: Matrix,
+    alpha: f32,
+    n_iter: i32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function graphical_lasso_cv_fit(X: Matrix, n_alphas: i32, n_folds: i32, max_iter: i32) -> GraphicalLassoCV {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    # Compute empirical covariance
+    let emp_cov: Matrix = matrix_new(n_features, n_features)
+    let means: ptr<f32> = array_new_f32(n_features)
+    let mut j: i32 = 0
+    while j < n_features {
+        let mut s: f32 = 0.0
+        let mut i: i32 = 0
+        while i < n {
+            s = s + matrix_at(X, i, j)
+            i = i + 1
+        }
+        means[j] = s / (n as f32)
+        j = j + 1
+    }
+
+    let mut i: i32 = 0
+    while i < n_features {
+        let mut j2: i32 = 0
+        while j2 < n_features {
+            let mut s: f32 = 0.0
+            let mut k: i32 = 0
+            while k < n {
+                let d1: f32 = matrix_at(X, k, i) - means[i]
+                let d2: f32 = matrix_at(X, k, j2) - means[j2]
+                s = s + d1 * d2
+                k = k + 1
+            }
+            matrix_set(emp_cov, i, j2, s / ((n - 1) as f32))
+            j2 = j2 + 1
+        }
+        i = i + 1
+    }
+
+    # Grid of alpha values
+    let mut max_off: f32 = 0.0
+    i = 0
+    while i < n_features {
+        let mut j3: i32 = 0
+        while j3 < n_features {
+            if i != j3 {
+                let v: f32 = fabs((matrix_at(emp_cov, i, j3)) as f64) as f32
+                if v > max_off {
+                    max_off = v
+                }
+            }
+            j3 = j3 + 1
+        }
+        i = i + 1
+    }
+
+    # Try each alpha, compute log-likelihood
+    let mut best_alpha: f32 = max_off
+    let mut best_score: f32 = -999999.0
+
+    let mut a_idx: i32 = 0
+    while a_idx < n_alphas {
+        let mut alpha: f32 = max_off * ((a_idx as f32) + 1.0) / (n_alphas as f32)
+        if alpha < 0.001 { alpha = 0.001 }
+
+        # Fit GraphicalLasso with this alpha
+        let gl: GraphicalLasso = graphical_lasso_fit(emp_cov, alpha, max_iter, 0.0001)
+
+        # Compute log-likelihood using the precision matrix
+        # log(det(precision)) - trace(precision * emp_cov)
+        # Access precision via gl.precision which is ptr<ptr<f32>>
+        let mut trace: f32 = 0.0
+        i = 0
+        while i < n_features {
+            let mut j4: i32 = 0
+            while j4 < n_features {
+                trace = trace + gl.precision[i][j4] * matrix_at(emp_cov, j4, i)
+                j4 = j4 + 1
+            }
+            i = i + 1
+        }
+        # Simple score: negative trace (higher is better)
+        let score: f32 = -trace
+
+        if score > best_score {
+            best_score = score
+            best_alpha = alpha
+        }
+
+        graphical_lasso_free(gl)
+        a_idx = a_idx + 1
+    }
+
+    array_free_f32(means)
+
+    let emp_cov_copy: Matrix = matrix_copy(emp_cov)
+    matrix_free(emp_cov)
+
+    let result: GraphicalLassoCV = GraphicalLassoCV {
+        emp_cov: emp_cov_copy,
+        alpha: best_alpha,
+        n_iter: max_iter,
+        n_features: n_features,
+        fitted: true
+    }
+    return result
+}
+
+export function graphical_lasso_cv_free(model: GraphicalLassoCV) -> void {
+    matrix_free(model.emp_cov)
+}
