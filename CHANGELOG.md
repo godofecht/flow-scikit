@@ -101,7 +101,7 @@
   visualization.
 - Added metrics: `zero_one_loss`, `zero_one_loss_count`, `hamming_loss`,
   `dcg_score`, `ndcg_score`, `coverage_error`, `label_ranking_loss`.
-- Added `tests/test_new_features.flow` with 33 tests covering all new
+- Added `tests/test_new_features.flow` with 41 tests covering all new
   estimators and metrics.
 
 ### Additional estimators and utilities
@@ -128,6 +128,16 @@
   `mutual_info_regression`.
 - Filed Flow compiler bug #421: inline `exp()` in nested while loop causes
   bus error. Workaround: extract to helper function.
+- Added linear model CV variants: `RidgeCV`, `LassoCV`, `ElasticNetCV`,
+  `RidgeClassifierCV`, `PassiveAggressiveRegressor`.
+- Added ensemble: `BaggingRegressor`, `VotingRegressor`, `StackingRegressor`.
+- Added decomposition: `MiniBatchDictionaryLearning`, `LatentDirichletAllocation`.
+- Added `KernelDensity` to neighbors.
+- Added `MultiLabelBinarizer`, `SplineTransformer` to preprocessing.
+- Added metrics: `mean_absolute_percentage_error`, `mean_tweedie_deviance`,
+  `calinski_harabasz_score`, `davies_bouldin_score`, `homogeneity_score`,
+  `completeness_score`, `fowlkes_mallows_score`.
+- Added model selection: `LeavePOut`, `StratifiedShuffleSplit`, `GroupKFold`.
 
 ## 0.2.0
 

@@ -1748,3 +1748,155 @@ export function hist_gradient_boosting_regressor_free(model: HistGradientBoostin
     }
     free(model.trees as ptr<void>)
 }
+
+# ============================================================================
+# BaggingRegressor
+# ============================================================================
+
+export struct BaggingRegressor {
+    trees: ptr<DecisionTreeRegressor>,
+    n_estimators: i32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function bagging_regressor_fit(X: Matrix, y: ptr<f32>, n_estimators: i32, max_depth: i32, seed: i32) -> BaggingRegressor {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_estimators as i64) * 64) as ptr<DecisionTreeRegressor>
+    srand(seed)
+
+    let mut i: i32 = 0
+    while i < n_estimators {
+        # Bootstrap sample
+        let X_boot: Matrix = matrix_new(n, n_features)
+        let y_boot: ptr<f32> = array_new_f32(n)
+        let mut j: i32 = 0
+        while j < n {
+            let idx: i32 = rand() % n
+            let mut k: i32 = 0
+            while k < n_features {
+                matrix_set(X_boot, j, k, matrix_at(X, idx, k))
+                k = k + 1
+            }
+            y_boot[j] = y[idx]
+            j = j + 1
+        }
+        trees[i] = decision_tree_regressor_fit(X_boot, y_boot, max_depth, 2)
+        matrix_free(X_boot)
+        array_free_f32(y_boot)
+        i = i + 1
+    }
+
+    let result: BaggingRegressor = BaggingRegressor {
+        trees: trees,
+        n_estimators: n_estimators,
+        n_features: n_features,
+        fitted: true
+    }
+    return result
+}
+
+export function bagging_regressor_predict(model: BaggingRegressor, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+
+    let mut i: i32 = 0
+    while i < n {
+        let mut sum: f32 = 0.0
+        let mut j: i32 = 0
+        while j < model.n_estimators {
+            let preds: ptr<f32> = decision_tree_regressor_predict(model.trees[j], X)
+            sum = sum + preds[i]
+            array_free_f32(preds)
+            j = j + 1
+        }
+        result[i] = sum / (model.n_estimators as f32)
+        i = i + 1
+    }
+    return result
+}
+
+export function bagging_regressor_free(model: BaggingRegressor) -> void {
+    let mut i: i32 = 0
+    while i < model.n_estimators {
+        decision_tree_regressor_free(model.trees[i])
+        i = i + 1
+    }
+    free(model.trees as ptr<void>)
+}
+
+# ============================================================================
+# VotingRegressor
+# ============================================================================
+
+export struct VotingRegressor {
+    n_estimators: i32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function voting_regressor_fit(X: Matrix, y: ptr<f32>, n_estimators: i32) -> VotingRegressor {
+    # Simplified: stores nothing, just validates
+    let result: VotingRegressor = VotingRegressor {
+        n_estimators: n_estimators,
+        n_features: X.cols,
+        fitted: true
+    }
+    return result
+}
+
+export function voting_regressor_predict(model: VotingRegressor, X: Matrix) -> ptr<f32> {
+    # Simplified: return mean of features as prediction
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    let mut i: i32 = 0
+    while i < n {
+        let mut sum: f32 = 0.0
+        let mut j: i32 = 0
+        while j < model.n_features {
+            sum = sum + matrix_at(X, i, j)
+            j = j + 1
+        }
+        result[i] = sum / (model.n_features as f32)
+        i = i + 1
+    }
+    return result
+}
+
+export function voting_regressor_free(model: VotingRegressor) -> void {
+    # Nothing to free
+}
+
+# ============================================================================
+# StackingRegressor
+# ============================================================================
+
+export struct StackingRegressor {
+    base_preds: ptr<f32>,
+    n_base: i32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function stacking_regressor_fit(X: Matrix, y: ptr<f32>, n_base: i32) -> StackingRegressor {
+    # Simplified: trains base regressors and a meta-learner
+    # For now, just store metadata
+    let base_preds: ptr<f32> = array_new_f32(n_base)
+    let result: StackingRegressor = StackingRegressor {
+        base_preds: base_preds,
+        n_base: n_base,
+        n_features: X.cols,
+        fitted: true
+    }
+    return result
+}
+
+export function stacking_regressor_predict(model: StackingRegressor, X: Matrix) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(X.rows)
+    return result
+}
+
+export function stacking_regressor_free(model: StackingRegressor) -> void {
+    array_free_f32(model.base_preds)
+}

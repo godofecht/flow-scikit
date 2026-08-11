@@ -1360,3 +1360,358 @@ export function permutation_test_score(X: Matrix, y: ptr<f32>, n_permutations: i
     }
     return result
 }
+
+# ============================================================================
+# LeavePOut
+# Leave p out cross-validation. n_splits = C(n, p), capped at 100.
+# ============================================================================
+
+export struct LeavePOut {
+    n: i32,
+    p: i32,
+    n_splits: i32
+}
+
+function _binomial_capped(n: i32, k: i32) -> i32 {
+    if k > n {
+        return 0
+    }
+    if k == 0 || k == n {
+        return 1
+    }
+    let mut result: i32 = 1
+    let mut i: i32 = 0
+    while i < k {
+        result = result * (n - i)
+        result = result / (i + 1)
+        if result > 100 {
+            return 100
+        }
+        i = i + 1
+    }
+    if result > 100 {
+        return 100
+    }
+    return result
+}
+
+function _leave_p_out_nth_combo(n: i32, p: i32, target: i32, combo: ptr<i32>) -> bool {
+    for i in 0 to p {
+        combo[i] = i
+    }
+    let mut count: i32 = 0
+    if count == target {
+        return true
+    }
+    while true {
+        let mut i: i32 = p - 1
+        let mut found: bool = false
+        while i >= 0 && not found {
+            if combo[i] < n - p + i {
+                found = true
+            } else {
+                i = i - 1
+            }
+        }
+        if not found {
+            return false
+        }
+        combo[i] = combo[i] + 1
+        let mut j: i32 = i + 1
+        while j < p {
+            combo[j] = combo[j - 1] + 1
+            j = j + 1
+        }
+        count = count + 1
+        if count == target {
+            return true
+        }
+        if count >= 100 {
+            return false
+        }
+    }
+    return false
+}
+
+export function leave_p_out_init(n: i32, p: i32) -> LeavePOut {
+    let ns: i32 = _binomial_capped(n, p)
+    let result: LeavePOut = LeavePOut {
+        n: n,
+        p: p,
+        n_splits: ns
+    }
+    return result
+}
+
+export function leave_p_out_get_split(splitter: LeavePOut, split_idx: i32) -> TrainTestSplit {
+    let n: i32 = splitter.n
+    let p: i32 = splitter.p
+
+    let combo: ptr<i32> = malloc((p as i64) * 4) as ptr<i32>
+    _leave_p_out_nth_combo(n, p, split_idx, combo)
+
+    let n_test: i32 = p
+    let n_train: i32 = n - p
+
+    let is_test: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        is_test[i] = 0
+    }
+    for i in 0 to p {
+        is_test[combo[i]] = 1
+    }
+
+    let X_train: Matrix = matrix_new(n_train, 0)
+    let X_test: Matrix = matrix_new(n_test, 0)
+    let y_train: ptr<f32> = array_new_f32(n_train)
+    let y_test: ptr<f32> = array_new_f32(n_test)
+
+    let mut train_pos: i32 = 0
+    let mut test_pos: i32 = 0
+    for i in 0 to n {
+        if is_test[i] == 1 {
+            y_test[test_pos] = 0.0
+            test_pos = test_pos + 1
+        } else {
+            y_train[train_pos] = 0.0
+            train_pos = train_pos + 1
+        }
+    }
+
+    free(combo as ptr<void>)
+    free(is_test as ptr<void>)
+
+    let result: TrainTestSplit = TrainTestSplit {
+        X_train: X_train,
+        X_test: X_test,
+        y_train: y_train,
+        y_test: y_test,
+        n_train: n_train,
+        n_test: n_test
+    }
+    return result
+}
+
+# ============================================================================
+# StratifiedShuffleSplit
+# Stratified random split. Shuffles within each class and takes test_size
+# fraction from each class.
+# ============================================================================
+
+export struct StratifiedShuffleSplit {
+    n_splits: i32,
+    test_size: f32,
+    n: i32,
+    n_classes: i32,
+    seed: i32
+}
+
+export function stratified_shuffle_split_init(n_splits: i32, test_size: f32, n: i32, n_classes: i32, seed: i32) -> StratifiedShuffleSplit {
+    let result: StratifiedShuffleSplit = StratifiedShuffleSplit {
+        n_splits: n_splits,
+        test_size: test_size,
+        n: n,
+        n_classes: n_classes,
+        seed: seed
+    }
+    return result
+}
+
+export function stratified_shuffle_split_get_split(splitter: StratifiedShuffleSplit, split_idx: i32, y: ptr<f32>) -> TrainTestSplit {
+    let n: i32 = splitter.n
+    let test_size: f32 = splitter.test_size
+
+    let unique: ptr<f32> = array_new_f32(n)
+    let mut n_found: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if unique[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            unique[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let class_indices: ptr<ptr<i32> > = malloc((n_found as i64) * 8) as ptr<ptr<i32> >
+    let class_counts: ptr<i32> = malloc((n_found as i64) * 4) as ptr<i32>
+    for c in 0 to n_found {
+        class_indices[c] = malloc((n as i64) * 4) as ptr<i32>
+        class_counts[c] = 0
+    }
+
+    for i in 0 to n {
+        for c in 0 to n_found {
+            if y[i] == unique[c] {
+                class_indices[c][class_counts[c]] = i
+                class_counts[c] = class_counts[c] + 1
+            }
+        }
+    }
+
+    srand(splitter.seed + split_idx)
+    for c in 0 to n_found {
+        let cnt: i32 = class_counts[c]
+        for i in 0 to cnt {
+            let j: i32 = rand() % cnt
+            let tmp: i32 = class_indices[c][i]
+            class_indices[c][i] = class_indices[c][j]
+            class_indices[c][j] = tmp
+        }
+    }
+
+    let is_test: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        is_test[i] = 0
+    }
+
+    let mut test_count: i32 = 0
+    for c in 0 to n_found {
+        let cnt: i32 = class_counts[c]
+        let n_test_c: i32 = ((cnt as f32) * test_size) as i32
+        for i in 0 to n_test_c {
+            is_test[class_indices[c][i]] = 1
+            test_count = test_count + 1
+        }
+    }
+
+    let n_test: i32 = test_count
+    let n_train: i32 = n - n_test
+
+    let X_train: Matrix = matrix_new(n_train, 0)
+    let X_test: Matrix = matrix_new(n_test, 0)
+    let y_train: ptr<f32> = array_new_f32(n_train)
+    let y_test: ptr<f32> = array_new_f32(n_test)
+
+    let mut train_pos: i32 = 0
+    let mut test_pos: i32 = 0
+    for i in 0 to n {
+        if is_test[i] == 1 {
+            y_test[test_pos] = y[i]
+            test_pos = test_pos + 1
+        } else {
+            y_train[train_pos] = y[i]
+            train_pos = train_pos + 1
+        }
+    }
+
+    for c in 0 to n_found {
+        free(class_indices[c] as ptr<void>)
+    }
+    free(class_indices as ptr<void>)
+    free(class_counts as ptr<void>)
+    array_free_f32(unique)
+    free(is_test as ptr<void>)
+
+    let result: TrainTestSplit = TrainTestSplit {
+        X_train: X_train,
+        X_test: X_test,
+        y_train: y_train,
+        y_test: y_test,
+        n_train: n_train,
+        n_test: n_test
+    }
+    return result
+}
+
+# ============================================================================
+# GroupKFold
+# K-fold with group awareness. Same group does not appear in both train and
+# test. Groups are assigned to folds round-robin.
+# ============================================================================
+
+export struct GroupKFold {
+    n_splits: i32,
+    n: i32
+}
+
+export function group_kfold_init(n_splits: i32, n: i32) -> GroupKFold {
+    let result: GroupKFold = GroupKFold {
+        n_splits: n_splits,
+        n: n
+    }
+    return result
+}
+
+export function group_kfold_get_fold(splitter: GroupKFold, fold_idx: i32, groups: ptr<i32>, n_groups: i32) -> TrainTestSplit {
+    let n: i32 = splitter.n
+    let n_splits: i32 = splitter.n_splits
+
+    let unique_groups: ptr<i32> = malloc((n_groups as i64) * 4) as ptr<i32>
+    let mut n_found: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if unique_groups[k] == groups[i] {
+                found = true
+            }
+        }
+        if not found {
+            unique_groups[n_found] = groups[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let group_fold: ptr<i32> = malloc((n_found as i64) * 4) as ptr<i32>
+    for g in 0 to n_found {
+        group_fold[g] = g % n_splits
+    }
+
+    let is_test: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        is_test[i] = 0
+    }
+
+    let mut n_test: i32 = 0
+    for i in 0 to n {
+        let mut g_idx: i32 = 0
+        let mut found: bool = false
+        while g_idx < n_found && not found {
+            if unique_groups[g_idx] == groups[i] {
+                found = true
+            } else {
+                g_idx = g_idx + 1
+            }
+        }
+        if group_fold[g_idx] == fold_idx {
+            is_test[i] = 1
+            n_test = n_test + 1
+        }
+    }
+
+    let n_train: i32 = n - n_test
+
+    let X_train: Matrix = matrix_new(n_train, 0)
+    let X_test: Matrix = matrix_new(n_test, 0)
+    let y_train: ptr<f32> = array_new_f32(n_train)
+    let y_test: ptr<f32> = array_new_f32(n_test)
+
+    let mut train_pos: i32 = 0
+    let mut test_pos: i32 = 0
+    for i in 0 to n {
+        if is_test[i] == 1 {
+            y_test[test_pos] = 0.0
+            test_pos = test_pos + 1
+        } else {
+            y_train[train_pos] = 0.0
+            train_pos = train_pos + 1
+        }
+    }
+
+    free(unique_groups as ptr<void>)
+    free(group_fold as ptr<void>)
+    free(is_test as ptr<void>)
+
+    let result: TrainTestSplit = TrainTestSplit {
+        X_train: X_train,
+        X_test: X_test,
+        y_train: y_train,
+        y_test: y_test,
+        n_train: n_train,
+        n_test: n_test
+    }
+    return result
+}

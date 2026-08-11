@@ -1518,3 +1518,167 @@ export function target_encoder_free(model: TargetEncoder) -> void {
     free(model.encodings as ptr<void>)
     free(model.n_categories as ptr<void>)
 }
+
+# ============================================================================
+# MultiLabelBinarizer
+# ============================================================================
+
+export struct MultiLabelBinarizer {
+    classes: ptr<f32>,
+    n_classes: i32,
+    fitted: bool
+}
+
+export function multilabel_binarizer_fit(y: ptr<ptr<f32> >, n_samples: i32, n_labels_per_sample: ptr<i32>, n_classes: i32) -> MultiLabelBinarizer {
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut i: i32 = 0
+    while i < n_classes {
+        classes[i] = (i as f32)
+        i = i + 1
+    }
+    let result: MultiLabelBinarizer = MultiLabelBinarizer {
+        classes: classes,
+        n_classes: n_classes,
+        fitted: true
+    }
+    return result
+}
+
+export function multilabel_binarizer_transform(model: MultiLabelBinarizer, y: ptr<ptr<f32> >, n_samples: i32, n_labels_per_sample: ptr<i32>) -> Matrix {
+    let result: Matrix = matrix_new(n_samples, model.n_classes)
+    let mut i: i32 = 0
+    while i < n_samples {
+        # Initialize all zeros
+        let mut j: i32 = 0
+        while j < model.n_classes {
+            matrix_set(result, i, j, 0.0)
+            j = j + 1
+        }
+        # Set 1 for present labels
+        let n_labels: i32 = n_labels_per_sample[i]
+        let mut k: i32 = 0
+        while k < n_labels {
+            let label: f32 = y[i][k]
+            let label_idx: i32 = label as i32
+            if label_idx >= 0 && label_idx < model.n_classes {
+                matrix_set(result, i, label_idx, 1.0)
+            }
+            k = k + 1
+        }
+        i = i + 1
+    }
+    return result
+}
+
+export function multilabel_binarizer_free(model: MultiLabelBinarizer) -> void {
+    array_free_f32(model.classes)
+}
+
+# ============================================================================
+# SplineTransformer
+# ============================================================================
+
+export struct SplineTransformer {
+    n_knots: i32,
+    degree: i32,
+    knots: ptr<f32>,
+    n_features: i32,
+    n_output_features: i32,
+    fitted: bool
+}
+
+export function spline_transformer_fit(X: Matrix, n_knots: i32, degree: i32) -> SplineTransformer {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    # Compute knots as quantiles of the data (per feature, but simplified to first feature)
+    let knots: ptr<f32> = array_new_f32(n_knots)
+    let mut i: i32 = 0
+    while i < n_knots {
+        let t: f32 = (i as f32) / ((n_knots - 1) as f32)
+        let idx: i32 = (t * ((n - 1) as f32)) as i32
+        knots[i] = matrix_at(X, idx, 0)
+        i = i + 1
+    }
+
+    # n_output_features = n_knots + degree - 1 per input feature
+    let n_output: i32 = (n_knots + degree - 1) * n_features
+
+    let result: SplineTransformer = SplineTransformer {
+        n_knots: n_knots,
+        degree: degree,
+        knots: knots,
+        n_features: n_features,
+        n_output_features: n_output,
+        fitted: true
+    }
+    return result
+}
+
+function _bspline_basis(x: f32, knots: ptr<f32>, n_knots: i32, degree: i32) -> ptr<f32> {
+    let n_basis: i32 = n_knots + degree - 1
+    let result: ptr<f32> = array_new_f32(n_basis)
+
+    # Degree 0: B-spline basis functions
+    let mut i: i32 = 0
+    while i < n_basis {
+        if i < n_knots - 1 {
+            if x >= knots[i] && x < knots[i + 1] {
+                result[i] = 1.0
+            }
+        }
+        i = i + 1
+    }
+
+    # Higher degree via Cox-de Boor recursion
+    let mut d: i32 = 1
+    while d <= degree {
+        let mut i2: i32 = 0
+        while i2 < n_basis - d {
+            let denom1: f32 = knots[i2 + d] - knots[i2]
+            let denom2: f32 = knots[i2 + d + 1] - knots[i2 + 1]
+            let mut term1: f32 = 0.0
+            let mut term2: f32 = 0.0
+            if denom1 > 0.0000000001 {
+                term1 = (x - knots[i2]) / denom1 * result[i2]
+            }
+            if denom2 > 0.0000000001 {
+                term2 = (knots[i2 + d + 1] - x) / denom2 * result[i2 + 1]
+            }
+            result[i2] = term1 + term2
+            i2 = i2 + 1
+        }
+        d = d + 1
+    }
+
+    return result
+}
+
+export function spline_transformer_transform(model: SplineTransformer, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let result: Matrix = matrix_new(n, model.n_output_features)
+    let n_basis_per_feat: i32 = model.n_knots + model.degree - 1
+
+    let mut i: i32 = 0
+    while i < n {
+        let mut out_idx: i32 = 0
+        let mut f: i32 = 0
+        while f < model.n_features {
+            let basis: ptr<f32> = _bspline_basis(matrix_at(X, i, f), model.knots, model.n_knots, model.degree)
+            let mut b: i32 = 0
+            while b < n_basis_per_feat {
+                matrix_set(result, i, out_idx, basis[b])
+                out_idx = out_idx + 1
+                b = b + 1
+            }
+            array_free_f32(basis)
+            f = f + 1
+        }
+        i = i + 1
+    }
+    return result
+}
+
+export function spline_transformer_free(model: SplineTransformer) -> void {
+    array_free_f32(model.knots)
+}
