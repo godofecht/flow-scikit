@@ -143,6 +143,14 @@
 - Added `MiniBatchNMF` to decomposition.
 - Added metrics: `adjusted_mutual_info_score`, `pair_confusion_matrix`,
   `mean_pinball_loss`, `d2_absolute_error_score`.
+- Fixed integer overflow in test `_noise` helper (i32 to i64 promotion).
+- Fixed KernelSVC SMO solver: rewrote for-loops as while-loops to avoid
+  Flow for-loop variable scoping issues inside nested while blocks.
+  Fixed direct return of function call in `kernel_svc_predict`.
+  Fixed direct return of struct literal with function call in `kernel_svc_fit`.
+  Extracted inline `exp()` to helper function `_rbf_exp`.
+- Replaced all scientific notation literals in `cluster.flow` and `svm.flow`
+  with decimal literals.
 
 ## 0.2.0
 

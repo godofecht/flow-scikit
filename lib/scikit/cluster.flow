@@ -38,7 +38,7 @@ export function kmeans_fit(X: Matrix, n_clusters: i32, max_iter: i32, tol: f32, 
 
         for i in 0 to X.rows {
             let mut best_k: i32 = 0
-            let mut best_dist: f32 = 1e30
+            let mut best_dist: f32 = 9999999999.0
             for k in 0 to n_clusters {
                 let mut dist: f32 = 0.0
                 for j in 0 to n_features {
@@ -151,7 +151,7 @@ export function kmeans_predict(model: KMeans, X: Matrix) -> ptr<i32> {
     let preds: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
     for i in 0 to X.rows {
         let mut best_k: i32 = 0
-        let mut best_dist: f32 = 1e30
+        let mut best_dist: f32 = 9999999999.0
         for k in 0 to model.n_clusters {
             let mut dist: f32 = 0.0
             for j in 0 to model.n_features {
@@ -361,7 +361,7 @@ export function agglomerative_clustering_fit(X: Matrix, n_clusters: i32) -> Aggl
     }
 
     while active_clusters > n_clusters {
-        let mut min_dist: f32 = 1e30
+        let mut min_dist: f32 = 9999999999.0
         let mut min_i: i32 = -1
         let mut min_j: i32 = -1
 
@@ -625,7 +625,7 @@ export function mean_shift_fit(X: Matrix, bandwidth: f32, max_iter: i32) -> Mean
             array_free_f32(new_pos)
         }
 
-        if max_shift < 1e-4 { break }
+        if max_shift < 0.0001 { break }
     }
 
     let mut n_clusters: i32 = 0
@@ -846,7 +846,7 @@ export function spectral_clustering_fit(X: Matrix, n_clusters: i32, gamma: f32, 
         for j in 0 to n {
             deg[i] = deg[i] + W[i][j]
         }
-        if deg[i] < 1e-10 { deg[i] = 1e-10 }
+        if deg[i] < 0.0000000001 { deg[i] = 0.0000000001 }
     }
 
     let L: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
@@ -896,7 +896,7 @@ export function spectral_clustering_fit(X: Matrix, n_clusters: i32, gamma: f32, 
                 norm = norm + Av[i] * Av[i]
             }
             norm = sqrt((norm as f64)) as f32
-            if norm < 1e-10 { norm = 1e-10 }
+            if norm < 0.0000000001 { norm = 0.0000000001 }
 
             let mut change: f32 = 0.0
             for i in 0 to n {
@@ -906,7 +906,7 @@ export function spectral_clustering_fit(X: Matrix, n_clusters: i32, gamma: f32, 
                 eigvecs[c][i] = new_val
             }
             array_free_f32(Av)
-            if change < 1e-6 { break }
+            if change < 0.000001 { break }
         }
     }
 
@@ -917,7 +917,7 @@ export function spectral_clustering_fit(X: Matrix, n_clusters: i32, gamma: f32, 
         }
     }
 
-    let km: KMeans = kmeans_fit(features, n_clusters, 100, 1e-4, seed)
+    let km: KMeans = kmeans_fit(features, n_clusters, 100, 0.0001, seed)
 
     let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
     for i in 0 to n {
@@ -1016,7 +1016,7 @@ export function affinity_propagation_fit(X: Matrix, damping: f32, max_iter: i32,
 
         for i in 0 to n {
             for k in 0 to n {
-                let mut max_other: f32 = -1e30
+                let mut max_other: f32 = -9999999999.0
                 for kk in 0 to n {
                     if kk == k { continue }
                     let val: f32 = A[i][kk] + S[i][kk]
@@ -1048,7 +1048,7 @@ export function affinity_propagation_fit(X: Matrix, damping: f32, max_iter: i32,
         let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
         for i in 0 to n {
             let mut best_k: i32 = 0
-            let mut best_val: f32 = -1e30
+            let mut best_val: f32 = -9999999999.0
             for k in 0 to n {
                 let val: f32 = A[i][k] + R[i][k]
                 if val > best_val {
@@ -1087,7 +1087,7 @@ export function affinity_propagation_fit(X: Matrix, damping: f32, max_iter: i32,
 
     for i in 0 to n {
         let mut best_e: i32 = 0
-        let mut best_sim: f32 = -1e30
+        let mut best_sim: f32 = -9999999999.0
         for e in 0 to n_exemplars {
             let k: i32 = exemplars[e]
             if S[i][k] > best_sim {
@@ -1151,7 +1151,7 @@ export function optics_fit(X: Matrix, eps: f32, min_samples: i32) -> OPTICS {
     let processed: ptr<bool> = calloc((n as i64), 1) as ptr<bool>
 
     for i in 0 to n {
-        reachability[i] = 1e30
+        reachability[i] = 9999999999.0
         ordering[i] = 0
     }
 
@@ -1218,7 +1218,7 @@ export function optics_fit(X: Matrix, eps: f32, min_samples: i32) -> OPTICS {
             }
 
             let mut best_j: i32 = -1
-            let mut best_reach: f32 = 1e30
+            let mut best_reach: f32 = 9999999999.0
             for j in 0 to n_neighbors {
                 if reachability[neighbors[j]] < best_reach {
                     best_reach = reachability[neighbors[j]]
@@ -1353,7 +1353,7 @@ export function bisecting_kmeans_fit(X: Matrix, n_clusters: i32, max_iter: i32, 
             }
         }
 
-        let km: KMeans = kmeans_fit(sub_X, 2, max_iter, 1e-4, seed + n_current)
+        let km: KMeans = kmeans_fit(sub_X, 2, max_iter, 0.0001, seed + n_current)
 
         let new_cluster: i32 = n_current
         centroids[n_current] = array_copy_f32(km.centroids[1], p)

@@ -205,26 +205,32 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
 
     let classes: ptr<f32> = array_new_f32(n_classes)
     let mut n_found: i32 = 0
-    for i in 0 to n {
+    let mut i: i32 = 0
+    while i < n {
         let mut found: bool = false
-        for k in 0 to n_found {
+        let mut k: i32 = 0
+        while k < n_found {
             if classes[k] == y[i] {
                 found = true
             }
+            k = k + 1
         }
         if not found {
             classes[n_found] = y[i]
             n_found = n_found + 1
         }
+        i = i + 1
     }
 
     let y_dual: ptr<f32> = array_new_f32(n)
-    for i in 0 to n {
+    i = 0
+    while i < n {
         if y[i] == classes[1] {
             y_dual[i] = 1.0
         } else {
             y_dual[i] = -1.0
         }
+        i = i + 1
     }
 
     let kernel: Matrix = _rbf_kernel(X, X, gamma)
@@ -232,38 +238,43 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
     let alphas: ptr<f32> = array_new_f32(n)
     let mut b: f32 = 0.0
 
-    let tol: f32 = 1e-3
+    let tol: f32 = 0.001
     let mut iter: i32 = 0
 
     while iter < max_iter {
         let mut num_changed: i32 = 0
 
-        for i in 0 to n {
+        i = 0
+        while i < n {
             let mut ei: f32 = 0.0
-            for j in 0 to n {
+            let mut j: i32 = 0
+            while j < n {
                 ei = ei + alphas[j] * y_dual[j] * matrix_at(kernel, i, j)
+                j = j + 1
             }
             ei = ei + b - y_dual[i]
 
             let yi_ei: f32 = y_dual[i] * ei
             if (yi_ei < -tol && alphas[i] < C) || (yi_ei > tol && alphas[i] > 0.0) {
-                let j: i32 = (iter * 7 + i * 13 + 3) % n
-                if j == i {
-                    j = (j + 1) % n
+                let mut j2: i32 = (iter * 7 + i * 13 + 3) % n
+                if j2 == i {
+                    j2 = (j2 + 1) % n
                 }
 
                 let mut ej: f32 = 0.0
-                for k in 0 to n {
-                    ej = ej + alphas[k] * y_dual[k] * matrix_at(kernel, j, k)
+                let mut k: i32 = 0
+                while k < n {
+                    ej = ej + alphas[k] * y_dual[k] * matrix_at(kernel, j2, k)
+                    k = k + 1
                 }
-                ej = ej + b - y_dual[j]
+                ej = ej + b - y_dual[j2]
 
                 let alpha_i_old: f32 = alphas[i]
-                let alpha_j_old: f32 = alphas[j]
+                let alpha_j_old: f32 = alphas[j2]
 
                 let mut L: f32 = 0.0
                 let mut H: f32 = C
-                if y_dual[i] == y_dual[j] {
+                if y_dual[i] == y_dual[j2] {
                     L = alpha_i_old + alpha_j_old - C
                     H = alpha_i_old + alpha_j_old
                     if L < 0.0 {
@@ -284,15 +295,17 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
                 }
 
                 if L == H {
+                    i = i + 1
                     continue
                 }
 
-                let eta: f32 = 2.0 * matrix_at(kernel, i, j) - matrix_at(kernel, i, i) - matrix_at(kernel, j, j)
-                if eta >= 0.0 {
+                let eta: f32 = 2.0 * matrix_at(kernel, i, j2) - matrix_at(kernel, i, i) - matrix_at(kernel, j2, j2)
+                if eta >= -0.0000000001 {
+                    i = i + 1
                     continue
                 }
 
-                let mut alpha_j_new: f32 = alpha_j_old - y_dual[j] * (ei - ej) / eta
+                let mut alpha_j_new: f32 = alpha_j_old - y_dual[j2] * (ei - ej) / eta
                 if alpha_j_new < L {
                     alpha_j_new = L
                 }
@@ -300,13 +313,13 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
                     alpha_j_new = H
                 }
 
-                let alpha_i_new: f32 = alpha_i_old + y_dual[i] * y_dual[j] * (alpha_j_old - alpha_j_new)
+                let alpha_i_new: f32 = alpha_i_old + y_dual[i] * y_dual[j2] * (alpha_j_old - alpha_j_new)
 
                 alphas[i] = alpha_i_new
-                alphas[j] = alpha_j_new
+                alphas[j2] = alpha_j_new
 
-                let b1: f32 = b - ei - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, i) - y_dual[j] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, i, j)
-                let b2: f32 = b - ej - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, j) - y_dual[j] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, j, j)
+                let b1: f32 = b - ei - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, i) - y_dual[j2] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, i, j2)
+                let b2: f32 = b - ej - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, j2) - y_dual[j2] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, j2, j2)
 
                 if alpha_i_new > 0.0 && alpha_i_new < C {
                     b = b1
@@ -318,6 +331,7 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
 
                 num_changed = num_changed + 1
             }
+            i = i + 1
         }
 
         iter = iter + 1
@@ -328,8 +342,9 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
 
     matrix_free(kernel)
 
-    return KernelSVC {
-        X_train: matrix_copy(X),
+    let X_copy: Matrix = matrix_copy(X)
+    let result: KernelSVC = KernelSVC {
+        X_train: X_copy,
         y_train_dual: y_dual,
         alphas: alphas,
         b: b,
@@ -341,6 +356,12 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
         C: C,
         fitted: true
     }
+    return result
+}
+
+function _rbf_exp(neg_gamma_sum: f32) -> f32 {
+    let val: f32 = exp((neg_gamma_sum) as f64) as f32
+    return val
 }
 
 function _rbf_kernel(X1: Matrix, X2: Matrix, gamma: f32) -> Matrix {
@@ -352,7 +373,7 @@ function _rbf_kernel(X1: Matrix, X2: Matrix, gamma: f32) -> Matrix {
                 let d: f32 = matrix_at(X1, i, k) - matrix_at(X2, j, k)
                 sum = sum + d * d
             }
-            let val: f32 = exp((0.0 - gamma * sum) as f64) as f32
+            let val: f32 = _rbf_exp(0.0 - gamma * sum)
             matrix_set(result, i, j, val)
         }
     }
@@ -370,7 +391,7 @@ export function kernel_svc_decision_function(model: KernelSVC, X: Matrix) -> ptr
                     let d: f32 = matrix_at(X, i, f) - matrix_at(model.X_train, j, f)
                     k_val = k_val + d * d
                 }
-                k_val = exp((0.0 - model.gamma * k_val) as f64) as f32
+                k_val = _rbf_exp(0.0 - model.gamma * k_val)
                 sum = sum + model.alphas[j] * model.y_train_dual[j] * k_val
             }
         }
@@ -380,7 +401,8 @@ export function kernel_svc_decision_function(model: KernelSVC, X: Matrix) -> ptr
 }
 
 export function kernel_svc_predict(model: KernelSVC, X: Matrix) -> ptr<f32> {
-    return kernel_svc_decision_function(model, X)
+    let result: ptr<f32> = kernel_svc_decision_function(model, X)
+    return result
 }
 
 export function kernel_svc_decide(model: KernelSVC, scores: ptr<f32>, n_samples: i32) -> ptr<f32> {
@@ -443,7 +465,7 @@ export function nu_svc_fit(X: Matrix, y: ptr<f32>, nu: f32, gamma: f32, max_iter
         for i in 0 to n {
             let mut g_i: f32 = -b
             for j in 0 to n {
-                if alphas[j] < 1e-10 { continue }
+                if alphas[j] < 0.0000000001 { continue }
                 let mut s: f32 = 0.0
                 for k in 0 to p {
                     let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
@@ -465,7 +487,7 @@ export function nu_svc_fit(X: Matrix, y: ptr<f32>, nu: f32, gamma: f32, max_iter
 
     let mut n_support: i32 = 0
     for i in 0 to n {
-        if alphas[i] > 1e-6 { n_support = n_support + 1 }
+        if alphas[i] > 0.000001 { n_support = n_support + 1 }
     }
 
     return NuSVC {
@@ -490,7 +512,7 @@ export function nu_svc_predict(model: NuSVC, X: Matrix) -> ptr<f32> {
     for i in 0 to n {
         let mut decision: f32 = -model.b
         for j in 0 to model.X_train.rows {
-            if model.alphas[j] < 1e-10 { continue }
+            if model.alphas[j] < 0.0000000001 { continue }
             let mut s: f32 = 0.0
             for k in 0 to p {
                 let d: f32 = matrix_at(X, i, k) - matrix_at(model.X_train, j, k)
@@ -544,7 +566,7 @@ export function nu_svr_fit(X: Matrix, y: ptr<f32>, nu: f32, C: f32, gamma: f32, 
         for i in 0 to n {
             let mut g_i: f32 = y[i] - b
             for j in 0 to n {
-                if (fabs((alphas[j]) as f64) as f32) < 1e-10 { continue }
+                if (fabs((alphas[j]) as f64) as f32) < 0.0000000001 { continue }
                 let mut s: f32 = 0.0
                 for k in 0 to p {
                     let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
@@ -565,7 +587,7 @@ export function nu_svr_fit(X: Matrix, y: ptr<f32>, nu: f32, C: f32, gamma: f32, 
 
     let mut n_support: i32 = 0
     for i in 0 to n {
-        if (fabs((alphas[i]) as f64) as f32) > 1e-6 { n_support = n_support + 1 }
+        if (fabs((alphas[i]) as f64) as f32) > 0.000001 { n_support = n_support + 1 }
     }
 
     return NuSVR {
@@ -589,7 +611,7 @@ export function nu_svr_predict(model: NuSVR, X: Matrix) -> ptr<f32> {
     for i in 0 to n {
         let mut pred: f32 = model.b
         for j in 0 to model.X_train.rows {
-            if (fabs((model.alphas[j]) as f64) as f32) < 1e-10 { continue }
+            if (fabs((model.alphas[j]) as f64) as f32) < 0.0000000001 { continue }
             let mut s: f32 = 0.0
             for k in 0 to p {
                 let d: f32 = matrix_at(X, i, k) - matrix_at(model.X_train, j, k)
@@ -673,7 +695,7 @@ export function one_class_svm_fit(X: Matrix, nu: f32, gamma: f32, max_iter: i32)
 
     let mut n_support: i32 = 0
     for i in 0 to n {
-        if alphas[i] > 1e-6 { n_support = n_support + 1 }
+        if alphas[i] > 0.000001 { n_support = n_support + 1 }
     }
 
     return OneClassSVM {
@@ -696,7 +718,7 @@ export function one_class_svm_predict(model: OneClassSVM, X: Matrix) -> ptr<i32>
     for i in 0 to n {
         let mut score: f32 = -model.b
         for j in 0 to model.X_train.rows {
-            if model.alphas[j] < 1e-10 { continue }
+            if model.alphas[j] < 0.0000000001 { continue }
             let mut s: f32 = 0.0
             for k in 0 to p {
                 let d: f32 = matrix_at(X, i, k) - matrix_at(model.X_train, j, k)
