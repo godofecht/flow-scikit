@@ -1956,3 +1956,364 @@ export function class_balance_accuracy(y_true: ptr<f32>, y_pred: ptr<f32>, n: i3
     let result: f32 = sum_cba / (n_classes as f32)
     return result
 }
+
+# ============================================================================
+# Mean Absolute Percentage Error
+# ============================================================================
+
+export function mean_absolute_percentage_error(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
+    let mut sum: f32 = 0.0
+    let epsilon: f32 = 0.0000000001
+    for i in 0 to n {
+        let mut denom: f32 = fabs((y_true[i]) as f64) as f32
+        if denom < epsilon {
+            denom = epsilon
+        }
+        let diff: f32 = fabs((y_true[i] - y_pred[i]) as f64) as f32
+        sum = sum + diff / denom
+    }
+    let result: f32 = sum / (n as f32) * 100.0
+    return result
+}
+
+# ============================================================================
+# Mean Tweedie Deviance
+# ============================================================================
+
+export function mean_tweedie_deviance(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, power: f32) -> f32 {
+    let mut sum: f32 = 0.0
+    for i in 0 to n {
+        sum = sum + tweedie_deviance_point(y_true[i], y_pred[i], power)
+    }
+    let result: f32 = sum / (n as f32)
+    return result
+}
+
+# ============================================================================
+# Calinski-Harabasz Score
+# ============================================================================
+
+export function calinski_harabasz_score(X: Matrix, labels: ptr<f32>, n_clusters: i32, n: i32) -> f32 {
+    let n_features: i32 = X.cols
+
+    # Compute global mean
+    let global_mean: ptr<f32> = array_new_f32(n_features)
+    for j in 0 to n_features {
+        let mut s: f32 = 0.0
+        for i in 0 to n {
+            s = s + matrix_at(X, i, j)
+        }
+        global_mean[j] = s / (n as f32)
+    }
+
+    # Compute cluster centers and counts
+    let centers: ptr<f32> = array_new_f32(n_clusters * n_features)
+    let counts: ptr<i32> = malloc((n_clusters as i64) * 4) as ptr<i32>
+    for k in 0 to n_clusters {
+        counts[k] = 0
+    }
+    for i in 0 to n {
+        let k: i32 = labels[i] as i32
+        counts[k] = counts[k] + 1
+        for j in 0 to n_features {
+            centers[k * n_features + j] = centers[k * n_features + j] + matrix_at(X, i, j)
+        }
+    }
+    for k in 0 to n_clusters {
+        if counts[k] > 0 {
+            for j in 0 to n_features {
+                centers[k * n_features + j] = centers[k * n_features + j] / (counts[k] as f32)
+            }
+        }
+    }
+
+    # W_k = within-cluster sum of squares
+    let mut w_k: f32 = 0.0
+    for i in 0 to n {
+        let k: i32 = labels[i] as i32
+        for j in 0 to n_features {
+            let d: f32 = matrix_at(X, i, j) - centers[k * n_features + j]
+            w_k = w_k + d * d
+        }
+    }
+
+    # B_k = between-cluster dispersion
+    let mut b_k: f32 = 0.0
+    for k in 0 to n_clusters {
+        for j in 0 to n_features {
+            let d: f32 = centers[k * n_features + j] - global_mean[j]
+            b_k = b_k + (counts[k] as f32) * d * d
+        }
+    }
+
+    array_free_f32(global_mean)
+    array_free_f32(centers)
+    free(counts as ptr<void>)
+
+    if n_clusters <= 1 || n <= n_clusters {
+        let result: f32 = 0.0
+        return result
+    }
+    let result: f32 = (b_k / ((n_clusters - 1) as f32)) / (w_k / ((n - n_clusters) as f32))
+    return result
+}
+
+# ============================================================================
+# Davies-Bouldin Score
+# ============================================================================
+
+export function davies_bouldin_score(X: Matrix, labels: ptr<f32>, n_clusters: i32, n: i32) -> f32 {
+    let n_features: i32 = X.cols
+
+    # Compute cluster centers and counts
+    let centers: ptr<f32> = array_new_f32(n_clusters * n_features)
+    let counts: ptr<i32> = malloc((n_clusters as i64) * 4) as ptr<i32>
+    for k in 0 to n_clusters {
+        counts[k] = 0
+    }
+    for i in 0 to n {
+        let k: i32 = labels[i] as i32
+        counts[k] = counts[k] + 1
+        for j in 0 to n_features {
+            centers[k * n_features + j] = centers[k * n_features + j] + matrix_at(X, i, j)
+        }
+    }
+    for k in 0 to n_clusters {
+        if counts[k] > 0 {
+            for j in 0 to n_features {
+                centers[k * n_features + j] = centers[k * n_features + j] / (counts[k] as f32)
+            }
+        }
+    }
+
+    # S_i = average distance from points in cluster i to center i
+    let s_vals: ptr<f32> = array_new_f32(n_clusters)
+    for k in 0 to n_clusters {
+        s_vals[k] = 0.0
+    }
+    for i in 0 to n {
+        let k: i32 = labels[i] as i32
+        let mut dist: f32 = 0.0
+        for j in 0 to n_features {
+            let d: f32 = matrix_at(X, i, j) - centers[k * n_features + j]
+            dist = dist + d * d
+        }
+        s_vals[k] = s_vals[k] + sqrt((dist) as f64) as f32
+    }
+    for k in 0 to n_clusters {
+        if counts[k] > 0 {
+            s_vals[k] = s_vals[k] / (counts[k] as f32)
+        }
+    }
+
+    # DB = (1/k) * sum of max_j D_ij
+    let mut db: f32 = 0.0
+    for i in 0 to n_clusters {
+        let mut max_d: f32 = 0.0
+        for j in 0 to n_clusters {
+            if i == j { continue }
+            # distance between centers
+            let mut dist_c: f32 = 0.0
+            for f in 0 to n_features {
+                let d: f32 = centers[i * n_features + f] - centers[j * n_features + f]
+                dist_c = dist_c + d * d
+            }
+            dist_c = sqrt((dist_c) as f64) as f32
+            if dist_c < 0.0000000001 {
+                dist_c = 0.0000000001
+            }
+            let d_ij: f32 = (s_vals[i] + s_vals[j]) / dist_c
+            if d_ij > max_d {
+                max_d = d_ij
+            }
+        }
+        db = db + max_d
+    }
+
+    array_free_f32(centers)
+    array_free_f32(s_vals)
+    free(counts as ptr<void>)
+
+    let result: f32 = db / (n_clusters as f32)
+    return result
+}
+
+# ============================================================================
+# Homogeneity Score
+# h = 1 - H(C|K) / H(C) where C=true labels, K=pred labels
+# ============================================================================
+
+export function homogeneity_score(labels_true: ptr<f32>, labels_pred: ptr<f32>, n: i32) -> f32 {
+    let mut n_classes: i32 = 0
+    for i in 0 to n {
+        let c: i32 = labels_true[i] as i32
+        if c + 1 > n_classes { n_classes = c + 1 }
+    }
+    let mut n_clusters: i32 = 0
+    for i in 0 to n {
+        let c: i32 = labels_pred[i] as i32
+        if c + 1 > n_clusters { n_clusters = c + 1 }
+    }
+
+    let contingency: ptr<ptr<i32> > = malloc((n_classes as i64) * 8) as ptr<ptr<i32> >
+    for i in 0 to n_classes {
+        contingency[i] = malloc((n_clusters as i64) * 4) as ptr<i32>
+        for j in 0 to n_clusters { contingency[i][j] = 0 }
+    }
+    for i in 0 to n {
+        contingency[labels_true[i] as i32][labels_pred[i] as i32] = contingency[labels_true[i] as i32][labels_pred[i] as i32] + 1
+    }
+
+    let a: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    let b: ptr<i32> = malloc((n_clusters as i64) * 4) as ptr<i32>
+    for i in 0 to n_classes {
+        a[i] = 0
+        for j in 0 to n_clusters { a[i] = a[i] + contingency[i][j] }
+    }
+    for j in 0 to n_clusters {
+        b[j] = 0
+        for i in 0 to n_classes { b[j] = b[j] + contingency[i][j] }
+    }
+
+    # H(C|K) = conditional entropy of C given K
+    let mut h_c_k: f32 = 0.0
+    for k in 0 to n_clusters {
+        if b[k] == 0 { continue }
+        let p_k: f32 = b[k] as f32 / (n as f32)
+        for c in 0 to n_classes {
+            if contingency[c][k] == 0 { continue }
+            let p_ck: f32 = contingency[c][k] as f32 / (b[k] as f32)
+            h_c_k = h_c_k - p_k * p_ck * log((p_ck) as f64) as f32
+        }
+    }
+
+    # H(C) = entropy of C
+    let mut h_c: f32 = 0.0
+    for c in 0 to n_classes {
+        if a[c] == 0 { continue }
+        let p_c: f32 = a[c] as f32 / (n as f32)
+        h_c = h_c - p_c * log((p_c) as f64) as f32
+    }
+
+    for i in 0 to n_classes {
+        free(contingency[i] as ptr<void>)
+    }
+    free(contingency as ptr<void>)
+    free(a as ptr<void>)
+    free(b as ptr<void>)
+
+    if h_c < 0.0000000001 {
+        let result: f32 = 1.0
+        return result
+    }
+    let result: f32 = 1.0 - h_c_k / h_c
+    return result
+}
+
+# ============================================================================
+# Completeness Score
+# c = 1 - H(K|C) / H(K)
+# ============================================================================
+
+export function completeness_score(labels_true: ptr<f32>, labels_pred: ptr<f32>, n: i32) -> f32 {
+    let mut n_classes: i32 = 0
+    for i in 0 to n {
+        let c: i32 = labels_true[i] as i32
+        if c + 1 > n_classes { n_classes = c + 1 }
+    }
+    let mut n_clusters: i32 = 0
+    for i in 0 to n {
+        let c: i32 = labels_pred[i] as i32
+        if c + 1 > n_clusters { n_clusters = c + 1 }
+    }
+
+    let contingency: ptr<ptr<i32> > = malloc((n_classes as i64) * 8) as ptr<ptr<i32> >
+    for i in 0 to n_classes {
+        contingency[i] = malloc((n_clusters as i64) * 4) as ptr<i32>
+        for j in 0 to n_clusters { contingency[i][j] = 0 }
+    }
+    for i in 0 to n {
+        contingency[labels_true[i] as i32][labels_pred[i] as i32] = contingency[labels_true[i] as i32][labels_pred[i] as i32] + 1
+    }
+
+    let a: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    let b: ptr<i32> = malloc((n_clusters as i64) * 4) as ptr<i32>
+    for i in 0 to n_classes {
+        a[i] = 0
+        for j in 0 to n_clusters { a[i] = a[i] + contingency[i][j] }
+    }
+    for j in 0 to n_clusters {
+        b[j] = 0
+        for i in 0 to n_classes { b[j] = b[j] + contingency[i][j] }
+    }
+
+    # H(K|C) = conditional entropy of K given C
+    let mut h_k_c: f32 = 0.0
+    for c in 0 to n_classes {
+        if a[c] == 0 { continue }
+        let p_c: f32 = a[c] as f32 / (n as f32)
+        for k in 0 to n_clusters {
+            if contingency[c][k] == 0 { continue }
+            let p_kc: f32 = contingency[c][k] as f32 / (a[c] as f32)
+            h_k_c = h_k_c - p_c * p_kc * log((p_kc) as f64) as f32
+        }
+    }
+
+    # H(K) = entropy of K
+    let mut h_k: f32 = 0.0
+    for k in 0 to n_clusters {
+        if b[k] == 0 { continue }
+        let p_k: f32 = b[k] as f32 / (n as f32)
+        h_k = h_k - p_k * log((p_k) as f64) as f32
+    }
+
+    for i in 0 to n_classes {
+        free(contingency[i] as ptr<void>)
+    }
+    free(contingency as ptr<void>)
+    free(a as ptr<void>)
+    free(b as ptr<void>)
+
+    if h_k < 0.0000000001 {
+        let result: f32 = 1.0
+        return result
+    }
+    let result: f32 = 1.0 - h_k_c / h_k
+    return result
+}
+
+# ============================================================================
+# Fowlkes-Mallows Score
+# FMI = TP / sqrt((TP + FP) * (TP + FN))
+# ============================================================================
+
+export function fowlkes_mallows_score(labels_true: ptr<f32>, labels_pred: ptr<f32>, n: i32) -> f32 {
+    let mut tp: i32 = 0
+    let mut fp: i32 = 0
+    let mut fn_: i32 = 0
+    for i in 0 to n {
+        for j in i + 1 to n {
+            let same_true: bool = labels_true[i] == labels_true[j]
+            let same_pred: bool = labels_pred[i] == labels_pred[j]
+            if same_true && same_pred {
+                tp = tp + 1
+            }
+            if not same_true && same_pred {
+                fp = fp + 1
+            }
+            if same_true && not same_pred {
+                fn_ = fn_ + 1
+            }
+        }
+    }
+    let tp_f: f32 = tp as f32
+    let fp_f: f32 = fp as f32
+    let fn_f: f32 = fn_ as f32
+    let denom: f32 = sqrt(((tp_f + fp_f) * (tp_f + fn_f)) as f64) as f32
+    if denom < 0.0000000001 {
+        let result: f32 = 0.0
+        return result
+    }
+    let result: f32 = tp_f / denom
+    return result
+}

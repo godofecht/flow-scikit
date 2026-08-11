@@ -2351,3 +2351,608 @@ export function multitask_elastic_net_free(model: MultiTaskElasticNet) -> void {
     free(model.weights as ptr<void>)
     array_free_f32(model.bias)
 }
+
+# ============================================================================
+# RidgeCV
+# ============================================================================
+
+export struct RidgeCV {
+    alpha: f32,
+    coef: ptr<f32>,
+    intercept: f32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function ridge_cv_fit(X: Matrix, y: ptr<f32>, n_alphas: i32) -> RidgeCV {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    # Generate alpha grid (logspace from 0.001 to 10)
+    let alphas: ptr<f32> = array_new_f32(n_alphas)
+    let mut i: i32 = 0
+    while i < n_alphas {
+        let t: f32 = (i as f32) / ((n_alphas - 1) as f32)
+        alphas[i] = 0.001 * pow(10.0 as f64, (t * 4.0) as f64) as f32
+        i = i + 1
+    }
+
+    # Try each alpha, compute 5-fold CV MSE
+    let mut best_alpha: f32 = alphas[0]
+    let mut best_mse: f32 = 999999.0
+    let fold_size: i32 = n / 5
+
+    let mut a_idx: i32 = 0
+    while a_idx < n_alphas {
+        let alpha: f32 = alphas[a_idx]
+        let mut total_mse: f32 = 0.0
+        let mut fold: i32 = 0
+        while fold < 5 {
+            let test_start: i32 = fold * fold_size
+            let test_end: i32 = test_start + fold_size
+            if fold == 4 { test_end = n }
+            let n_train: i32 = n - (test_end - test_start)
+
+            let X_train: Matrix = matrix_new(n_train, n_features)
+            let y_train: ptr<f32> = array_new_f32(n_train)
+            let mut idx: i32 = 0
+            let mut j: i32 = 0
+            while j < n {
+                if j < test_start || j >= test_end {
+                    let mut k: i32 = 0
+                    while k < n_features {
+                        matrix_set(X_train, idx, k, matrix_at(X, j, k))
+                        k = k + 1
+                    }
+                    y_train[idx] = y[j]
+                    idx = idx + 1
+                }
+                j = j + 1
+            }
+
+            let model: Ridge = ridge_fit(X_train, y_train, alpha, 1000, 0.01)
+
+            let mut fold_mse: f32 = 0.0
+            let n_test: i32 = test_end - test_start
+            let mut t2: i32 = test_start
+            while t2 < test_end {
+                let mut pred: f32 = model.bias
+                let mut k2: i32 = 0
+                while k2 < n_features {
+                    pred = pred + model.weights[k2] * matrix_at(X, t2, k2)
+                    k2 = k2 + 1
+                }
+                let diff: f32 = y[t2] - pred
+                fold_mse = fold_mse + diff * diff
+                t2 = t2 + 1
+            }
+            total_mse = total_mse + fold_mse / (n_test as f32)
+
+            ridge_free(model)
+            matrix_free(X_train)
+            array_free_f32(y_train)
+            fold = fold + 1
+        }
+
+        let avg_mse: f32 = total_mse / 5.0
+        if avg_mse < best_mse {
+            best_mse = avg_mse
+            best_alpha = alpha
+        }
+        a_idx = a_idx + 1
+    }
+
+    # Refit with best alpha on all data
+    let best_model: Ridge = ridge_fit(X, y, best_alpha, 1000, 0.01)
+    let coef_copy: ptr<f32> = array_copy_f32(best_model.weights, n_features)
+    let intercept_copy: f32 = best_model.bias
+    ridge_free(best_model)
+    array_free_f32(alphas)
+
+    let result: RidgeCV = RidgeCV {
+        alpha: best_alpha,
+        coef: coef_copy,
+        intercept: intercept_copy,
+        n_features: n_features,
+        fitted: true
+    }
+    return result
+}
+
+export function ridge_cv_predict(model: RidgeCV, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    let mut i: i32 = 0
+    while i < n {
+        let mut pred: f32 = model.intercept
+        let mut j: i32 = 0
+        while j < model.n_features {
+            pred = pred + model.coef[j] * matrix_at(X, i, j)
+            j = j + 1
+        }
+        result[i] = pred
+        i = i + 1
+    }
+    return result
+}
+
+export function ridge_cv_free(model: RidgeCV) -> void {
+    array_free_f32(model.coef)
+}
+
+# ============================================================================
+# LassoCV
+# ============================================================================
+
+export struct LassoCV {
+    alpha: f32,
+    coef: ptr<f32>,
+    intercept: f32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function lasso_cv_fit(X: Matrix, y: ptr<f32>, n_alphas: i32) -> LassoCV {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    let alphas: ptr<f32> = array_new_f32(n_alphas)
+    let mut i: i32 = 0
+    while i < n_alphas {
+        let t: f32 = (i as f32) / ((n_alphas - 1) as f32)
+        alphas[i] = 0.001 * pow(10.0 as f64, (t * 4.0) as f64) as f32
+        i = i + 1
+    }
+
+    let mut best_alpha: f32 = alphas[0]
+    let mut best_mse: f32 = 999999.0
+    let fold_size: i32 = n / 5
+
+    let mut a_idx: i32 = 0
+    while a_idx < n_alphas {
+        let alpha: f32 = alphas[a_idx]
+        let mut total_mse: f32 = 0.0
+        let mut fold: i32 = 0
+        while fold < 5 {
+            let test_start: i32 = fold * fold_size
+            let test_end: i32 = test_start + fold_size
+            if fold == 4 { test_end = n }
+            let n_train: i32 = n - (test_end - test_start)
+
+            let X_train: Matrix = matrix_new(n_train, n_features)
+            let y_train: ptr<f32> = array_new_f32(n_train)
+            let mut idx: i32 = 0
+            let mut j: i32 = 0
+            while j < n {
+                if j < test_start || j >= test_end {
+                    let mut k: i32 = 0
+                    while k < n_features {
+                        matrix_set(X_train, idx, k, matrix_at(X, j, k))
+                        k = k + 1
+                    }
+                    y_train[idx] = y[j]
+                    idx = idx + 1
+                }
+                j = j + 1
+            }
+
+            let model: Lasso = lasso_fit(X_train, y_train, alpha, 1000, 0.01)
+
+            let mut fold_mse: f32 = 0.0
+            let n_test: i32 = test_end - test_start
+            let mut t2: i32 = test_start
+            while t2 < test_end {
+                let mut pred: f32 = model.bias
+                let mut k2: i32 = 0
+                while k2 < n_features {
+                    pred = pred + model.weights[k2] * matrix_at(X, t2, k2)
+                    k2 = k2 + 1
+                }
+                let diff: f32 = y[t2] - pred
+                fold_mse = fold_mse + diff * diff
+                t2 = t2 + 1
+            }
+            total_mse = total_mse + fold_mse / (n_test as f32)
+
+            lasso_free(model)
+            matrix_free(X_train)
+            array_free_f32(y_train)
+            fold = fold + 1
+        }
+
+        let avg_mse: f32 = total_mse / 5.0
+        if avg_mse < best_mse {
+            best_mse = avg_mse
+            best_alpha = alpha
+        }
+        a_idx = a_idx + 1
+    }
+
+    let best_model: Lasso = lasso_fit(X, y, best_alpha, 1000, 0.01)
+    let coef_copy: ptr<f32> = array_copy_f32(best_model.weights, n_features)
+    let intercept_copy: f32 = best_model.bias
+    lasso_free(best_model)
+    array_free_f32(alphas)
+
+    let result: LassoCV = LassoCV {
+        alpha: best_alpha,
+        coef: coef_copy,
+        intercept: intercept_copy,
+        n_features: n_features,
+        fitted: true
+    }
+    return result
+}
+
+export function lasso_cv_predict(model: LassoCV, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    let mut i: i32 = 0
+    while i < n {
+        let mut pred: f32 = model.intercept
+        let mut j: i32 = 0
+        while j < model.n_features {
+            pred = pred + model.coef[j] * matrix_at(X, i, j)
+            j = j + 1
+        }
+        result[i] = pred
+        i = i + 1
+    }
+    return result
+}
+
+export function lasso_cv_free(model: LassoCV) -> void {
+    array_free_f32(model.coef)
+}
+
+# ============================================================================
+# ElasticNetCV
+# ============================================================================
+
+export struct ElasticNetCV {
+    alpha: f32,
+    l1_ratio: f32,
+    coef: ptr<f32>,
+    intercept: f32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function elastic_net_cv_fit(X: Matrix, y: ptr<f32>, n_alphas: i32) -> ElasticNetCV {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    let alphas: ptr<f32> = array_new_f32(n_alphas)
+    let mut i: i32 = 0
+    while i < n_alphas {
+        let t: f32 = (i as f32) / ((n_alphas - 1) as f32)
+        alphas[i] = 0.001 * pow(10.0 as f64, (t * 4.0) as f64) as f32
+        i = i + 1
+    }
+
+    let l1_ratio: f32 = 0.5
+    let mut best_alpha: f32 = alphas[0]
+    let mut best_mse: f32 = 999999.0
+    let fold_size: i32 = n / 5
+
+    let mut a_idx: i32 = 0
+    while a_idx < n_alphas {
+        let alpha: f32 = alphas[a_idx]
+        let mut total_mse: f32 = 0.0
+        let mut fold: i32 = 0
+        while fold < 5 {
+            let test_start: i32 = fold * fold_size
+            let test_end: i32 = test_start + fold_size
+            if fold == 4 { test_end = n }
+            let n_train: i32 = n - (test_end - test_start)
+
+            let X_train: Matrix = matrix_new(n_train, n_features)
+            let y_train: ptr<f32> = array_new_f32(n_train)
+            let mut idx: i32 = 0
+            let mut j: i32 = 0
+            while j < n {
+                if j < test_start || j >= test_end {
+                    let mut k: i32 = 0
+                    while k < n_features {
+                        matrix_set(X_train, idx, k, matrix_at(X, j, k))
+                        k = k + 1
+                    }
+                    y_train[idx] = y[j]
+                    idx = idx + 1
+                }
+                j = j + 1
+            }
+
+            let model: ElasticNet = elastic_net_fit(X_train, y_train, alpha, l1_ratio, 1000, 0.01)
+
+            let mut fold_mse: f32 = 0.0
+            let n_test: i32 = test_end - test_start
+            let mut t2: i32 = test_start
+            while t2 < test_end {
+                let mut pred: f32 = model.bias
+                let mut k2: i32 = 0
+                while k2 < n_features {
+                    pred = pred + model.weights[k2] * matrix_at(X, t2, k2)
+                    k2 = k2 + 1
+                }
+                let diff: f32 = y[t2] - pred
+                fold_mse = fold_mse + diff * diff
+                t2 = t2 + 1
+            }
+            total_mse = total_mse + fold_mse / (n_test as f32)
+
+            elastic_net_free(model)
+            matrix_free(X_train)
+            array_free_f32(y_train)
+            fold = fold + 1
+        }
+
+        let avg_mse: f32 = total_mse / 5.0
+        if avg_mse < best_mse {
+            best_mse = avg_mse
+            best_alpha = alpha
+        }
+        a_idx = a_idx + 1
+    }
+
+    let best_model: ElasticNet = elastic_net_fit(X, y, best_alpha, l1_ratio, 1000, 0.01)
+    let coef_copy: ptr<f32> = array_copy_f32(best_model.weights, n_features)
+    let intercept_copy: f32 = best_model.bias
+    elastic_net_free(best_model)
+    array_free_f32(alphas)
+
+    let result: ElasticNetCV = ElasticNetCV {
+        alpha: best_alpha,
+        l1_ratio: l1_ratio,
+        coef: coef_copy,
+        intercept: intercept_copy,
+        n_features: n_features,
+        fitted: true
+    }
+    return result
+}
+
+export function elastic_net_cv_predict(model: ElasticNetCV, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    let mut i: i32 = 0
+    while i < n {
+        let mut pred: f32 = model.intercept
+        let mut j: i32 = 0
+        while j < model.n_features {
+            pred = pred + model.coef[j] * matrix_at(X, i, j)
+            j = j + 1
+        }
+        result[i] = pred
+        i = i + 1
+    }
+    return result
+}
+
+export function elastic_net_cv_free(model: ElasticNetCV) -> void {
+    array_free_f32(model.coef)
+}
+
+# ============================================================================
+# RidgeClassifierCV
+# ============================================================================
+
+export struct RidgeClassifierCV {
+    alpha: f32,
+    coef: ptr<f32>,
+    intercept: f32,
+    n_features: i32,
+    n_classes: i32,
+    fitted: bool
+}
+
+export function ridge_classifier_cv_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_alphas: i32) -> RidgeClassifierCV {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    let alphas: ptr<f32> = array_new_f32(n_alphas)
+    let mut i: i32 = 0
+    while i < n_alphas {
+        let t: f32 = (i as f32) / ((n_alphas - 1) as f32)
+        alphas[i] = 0.001 * pow(10.0 as f64, (t * 4.0) as f64) as f32
+        i = i + 1
+    }
+
+    let mut best_alpha: f32 = alphas[0]
+    let mut best_acc: f32 = -1.0
+    let fold_size: i32 = n / 5
+
+    let mut a_idx: i32 = 0
+    while a_idx < n_alphas {
+        let alpha: f32 = alphas[a_idx]
+        let mut total_acc: f32 = 0.0
+        let mut fold: i32 = 0
+        while fold < 5 {
+            let test_start: i32 = fold * fold_size
+            let test_end: i32 = test_start + fold_size
+            if fold == 4 { test_end = n }
+            let n_train: i32 = n - (test_end - test_start)
+
+            let X_train: Matrix = matrix_new(n_train, n_features)
+            let y_train: ptr<f32> = array_new_f32(n_train)
+            let mut idx: i32 = 0
+            let mut j: i32 = 0
+            while j < n {
+                if j < test_start || j >= test_end {
+                    let mut k: i32 = 0
+                    while k < n_features {
+                        matrix_set(X_train, idx, k, matrix_at(X, j, k))
+                        k = k + 1
+                    }
+                    y_train[idx] = y[j]
+                    idx = idx + 1
+                }
+                j = j + 1
+            }
+
+            let model: RidgeClassifier = ridge_classifier_fit(X_train, y_train, alpha, 1000, 0.01)
+
+            let mut correct: i32 = 0
+            let mut t2: i32 = test_start
+            while t2 < test_end {
+                let mut pred_val: f32 = model.bias
+                let mut k2: i32 = 0
+                while k2 < n_features {
+                    pred_val = pred_val + model.weights[k2] * matrix_at(X, t2, k2)
+                    k2 = k2 + 1
+                }
+                let pred_cls: f32 = 0.0
+                if pred_val > 0.5 { pred_cls = 1.0 }
+                if pred_val > 1.5 { pred_cls = 2.0 }
+                if y[t2] == pred_cls {
+                    correct = correct + 1
+                }
+                t2 = t2 + 1
+            }
+            total_acc = total_acc + (correct as f32) / ((test_end - test_start) as f32)
+
+            ridge_classifier_free(model)
+            matrix_free(X_train)
+            array_free_f32(y_train)
+            fold = fold + 1
+        }
+
+        let avg_acc: f32 = total_acc / 5.0
+        if avg_acc > best_acc {
+            best_acc = avg_acc
+            best_alpha = alpha
+        }
+        a_idx = a_idx + 1
+    }
+
+    # Refit with best alpha
+    let best_model: RidgeClassifier = ridge_classifier_fit(X, y, best_alpha, 1000, 0.01)
+    let coef_copy: ptr<f32> = array_copy_f32(best_model.weights, n_features)
+    let intercept_copy: f32 = best_model.bias
+    ridge_classifier_free(best_model)
+    array_free_f32(alphas)
+
+    let result: RidgeClassifierCV = RidgeClassifierCV {
+        alpha: best_alpha,
+        coef: coef_copy,
+        intercept: intercept_copy,
+        n_features: n_features,
+        n_classes: n_classes,
+        fitted: true
+    }
+    return result
+}
+
+export function ridge_classifier_cv_predict(model: RidgeClassifierCV, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    let mut i: i32 = 0
+    while i < n {
+        let mut pred_val: f32 = model.intercept
+        let mut j: i32 = 0
+        while j < model.n_features {
+            pred_val = pred_val + model.coef[j] * matrix_at(X, i, j)
+            j = j + 1
+        }
+        let pred_cls: f32 = 0.0
+        if pred_val > 0.5 { pred_cls = 1.0 }
+        if pred_val > 1.5 { pred_cls = 2.0 }
+        result[i] = pred_cls
+        i = i + 1
+    }
+    return result
+}
+
+export function ridge_classifier_cv_free(model: RidgeClassifierCV) -> void {
+    array_free_f32(model.coef)
+}
+
+# ============================================================================
+# PassiveAggressiveRegressor
+# ============================================================================
+
+export struct PassiveAggressiveRegressor {
+    coef: ptr<f32>,
+    intercept: f32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function passive_aggressive_regressor_fit(X: Matrix, y: ptr<f32>, C: f32, max_iter: i32) -> PassiveAggressiveRegressor {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+    let coef: ptr<f32> = array_new_f32(n_features)
+    let mut intercept: f32 = 0.0
+
+    let mut epoch: i32 = 0
+    while epoch < max_iter {
+        let mut i: i32 = 0
+        while i < n {
+            let mut pred: f32 = intercept
+            let mut j: i32 = 0
+            while j < n_features {
+                pred = pred + coef[j] * matrix_at(X, i, j)
+                j = j + 1
+            }
+            let loss: f32 = fabs((y[i] - pred) as f64) as f32
+
+            if loss > 0.0 {
+                # Compute norm squared
+                let mut norm_sq: f32 = 0.0
+                let mut k: i32 = 0
+                while k < n_features {
+                    norm_sq = norm_sq + matrix_at(X, i, k) * matrix_at(X, i, k)
+                    k = k + 1
+                }
+                norm_sq = norm_sq + 1.0
+
+                # PA-I: tau = min(C, loss / norm_sq)
+                let tau: f32 = C
+                let tau_candidate: f32 = loss / norm_sq
+                if tau_candidate < tau { tau = tau_candidate }
+
+                let sign: f32 = 0.0
+                if y[i] > pred { sign = 1.0 }
+                if y[i] < pred { sign = -1.0 }
+
+                let mut k2: i32 = 0
+                while k2 < n_features {
+                    coef[k2] = coef[k2] + tau * sign * matrix_at(X, i, k2)
+                    k2 = k2 + 1
+                }
+                intercept = intercept + tau * sign
+            }
+            i = i + 1
+        }
+        epoch = epoch + 1
+    }
+
+    let result: PassiveAggressiveRegressor = PassiveAggressiveRegressor {
+        coef: coef,
+        intercept: intercept,
+        n_features: n_features,
+        fitted: true
+    }
+    return result
+}
+
+export function passive_aggressive_regressor_predict(model: PassiveAggressiveRegressor, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    let mut i: i32 = 0
+    while i < n {
+        let mut pred: f32 = model.intercept
+        let mut j: i32 = 0
+        while j < model.n_features {
+            pred = pred + model.coef[j] * matrix_at(X, i, j)
+            j = j + 1
+        }
+        result[i] = pred
+        i = i + 1
+    }
+    return result
+}
+
+export function passive_aggressive_regressor_free(model: PassiveAggressiveRegressor) -> void {
+    array_free_f32(model.coef)
+}

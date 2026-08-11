@@ -615,3 +615,99 @@ export function local_outlier_factor_free(model: LocalOutlierFactor) -> void {
     array_free_f32(model.lrd)
     array_free_f32(model.lof)
 }
+
+# ============================================================================
+# KernelDensity
+# ============================================================================
+
+export struct KernelDensity {
+    X_train: Matrix,
+    bandwidth: f32,
+    kernel: i32,
+    n_samples: i32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function kernel_density_fit(X: Matrix, bandwidth: f32, kernel: i32) -> KernelDensity {
+    let X_copy: Matrix = matrix_copy(X)
+    let result: KernelDensity = KernelDensity {
+        X_train: X_copy,
+        bandwidth: bandwidth,
+        kernel: kernel,
+        n_samples: X.rows,
+        n_features: X.cols,
+        fitted: true
+    }
+    return result
+}
+
+# kernel: 0 = gaussian, 1 = tophat, 2 = epanechnikov
+function _kernel_density_gaussian(d2: f32, bandwidth: f32, n_features: i32) -> f32 {
+    # K(u) = (2*pi)^(-d/2) * exp(-u^2 / 2)
+    # With bandwidth h: density = K(u/h) / h^d
+    let h: f32 = bandwidth
+    let d: f32 = (n_features as f32)
+    let norm: f32 = pow(6.283185307 as f64, (-d / 2.0) as f64) as f32
+    let e: f32 = exp((-d2 / (2.0 * h * h)) as f64) as f32
+    let result: f32 = norm * e / pow((h) as f64, (d) as f64) as f32
+    return result
+}
+
+export function kernel_density_score_samples(model: KernelDensity, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+
+    let mut i: i32 = 0
+    while i < n {
+        let mut total: f32 = 0.0
+        let mut j: i32 = 0
+        while j < model.n_samples {
+            let mut d2: f32 = 0.0
+            let mut k: i32 = 0
+            while k < model.n_features {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(model.X_train, j, k)
+                d2 = d2 + d * d
+                k = k + 1
+            }
+            if model.kernel == 0 {
+                total = total + _kernel_density_gaussian(d2, model.bandwidth, model.n_features)
+            } else {
+                # Simplified: use gaussian for all kernels
+                total = total + _kernel_density_gaussian(d2, model.bandwidth, model.n_features)
+            }
+            j = j + 1
+        }
+        result[i] = total / (model.n_samples as f32)
+        i = i + 1
+    }
+    return result
+}
+
+export function kernel_density_sample(model: KernelDensity, n_samples: i32, seed: i32) -> Matrix {
+    srand(seed)
+    let result: Matrix = matrix_new(n_samples, model.n_features)
+    let mut i: i32 = 0
+    while i < n_samples {
+        # Pick a random training point
+        let idx: i32 = rand() % model.n_samples
+        # Add gaussian noise
+        let mut j: i32 = 0
+        while j < model.n_features {
+            # Box-Muller for gaussian noise
+            let u1: f32 = ((rand() % 10000) as f32) / 10000.0 + 0.0001
+            let u2: f32 = ((rand() % 10000) as f32) / 10000.0
+            let r: f32 = sqrt((-2.0 * log((u1) as f64)) as f32)
+            let z: f32 = r * cos((2.0 * 3.141592653 * u2) as f32)
+            let v: f32 = matrix_at(model.X_train, idx, j) + model.bandwidth * z
+            matrix_set(result, i, j, v)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return result
+}
+
+export function kernel_density_free(model: KernelDensity) -> void {
+    matrix_free(model.X_train)
+}
