@@ -717,3 +717,449 @@ export function one_class_svm_free(model: OneClassSVM) -> void {
     matrix_free(model.X_train)
     array_free_f32(model.alphas)
 }
+
+# ============================================================================
+# SVC (Support Vector Classification) with kernel support via SMO
+# Kernels: RBF, linear, polynomial, sigmoid
+# Multi-class via one-vs-rest
+# ============================================================================
+
+export const KERNEL_POLY: i32 = 2
+export const KERNEL_SIGMOID: i32 = 3
+
+struct SMOResult {
+    alphas: ptr<f32>,
+    b: f32
+}
+
+export struct SVC {
+    X_train: Matrix,
+    alphas: ptr<f32>,
+    y_dual: ptr<f32>,
+    b: ptr<f32>,
+    n_samples: i32,
+    n_features: i32,
+    classes: ptr<f32>,
+    n_classes: i32,
+    gamma: f32,
+    C: f32,
+    kernel: i32,
+    degree: i32,
+    coef0: f32,
+    fitted: bool
+}
+
+export struct SVR {
+    X_train: Matrix,
+    alpha_diff: ptr<f32>,
+    b: f32,
+    n_samples: i32,
+    n_features: i32,
+    gamma: f32,
+    C: f32,
+    epsilon: f32,
+    kernel: i32,
+    degree: i32,
+    coef0: f32,
+    fitted: bool
+}
+
+function _svm_pow_f32(base: f32, exp: i32) -> f32 {
+    let mut result: f32 = 1.0
+    for _ in 0 to exp {
+        result = result * base
+    }
+    return result
+}
+
+function _svm_tanh_f32(x: f32) -> f32 {
+    let e1: f64 = exp(x as f64)
+    let e2: f64 = exp((0.0 - x) as f64)
+    let val: f32 = ((e1 - e2) / (e1 + e2)) as f32
+    return val
+}
+
+function _svm_kernel_rows(X1: Matrix, i1: i32, X2: Matrix, i2: i32, n_features: i32, kernel: i32, gamma: f32, degree: i32, coef0: f32) -> f32 {
+    if kernel == KERNEL_LINEAR {
+        let mut s: f32 = 0.0
+        for k in 0 to n_features {
+            s = s + matrix_at(X1, i1, k) * matrix_at(X2, i2, k)
+        }
+        return s
+    }
+    if kernel == KERNEL_POLY {
+        let mut s: f32 = 0.0
+        for k in 0 to n_features {
+            s = s + matrix_at(X1, i1, k) * matrix_at(X2, i2, k)
+        }
+        let base: f32 = gamma * s + coef0
+        let val: f32 = _svm_pow_f32(base, degree)
+        return val
+    }
+    if kernel == KERNEL_RBF {
+        let mut s: f32 = 0.0
+        for k in 0 to n_features {
+            let d: f32 = matrix_at(X1, i1, k) - matrix_at(X2, i2, k)
+            s = s + d * d
+        }
+        let val: f32 = exp((0.0 - gamma * s) as f64) as f32
+        return val
+    }
+    if kernel == KERNEL_SIGMOID {
+        let mut s: f32 = 0.0
+        for k in 0 to n_features {
+            s = s + matrix_at(X1, i1, k) * matrix_at(X2, i2, k)
+        }
+        let val: f32 = _svm_tanh_f32(gamma * s + coef0)
+        return val
+    }
+    let mut s: f32 = 0.0
+    for k in 0 to n_features {
+        s = s + matrix_at(X1, i1, k) * matrix_at(X2, i2, k)
+    }
+    return s
+}
+
+function _svm_kernel_matrix(X: Matrix, kernel: i32, gamma: f32, degree: i32, coef0: f32) -> Matrix {
+    let n: i32 = X.rows
+    let K: Matrix = matrix_new(n, n)
+    for i in 0 to n {
+        for j in 0 to n {
+            let val: f32 = _svm_kernel_rows(X, i, X, j, X.cols, kernel, gamma, degree, coef0)
+            matrix_set(K, i, j, val)
+        }
+    }
+    return K
+}
+
+function _smo_train(K: Matrix, y_dual: ptr<f32>, n: i32, C: f32, max_iter: i32) -> SMOResult {
+    let alphas: ptr<f32> = array_new_f32(n)
+    let mut b: f32 = 0.0
+    let tol: f32 = 0.001
+
+    let mut iter: i32 = 0
+    while iter < max_iter {
+        let mut num_changed: i32 = 0
+
+        for i in 0 to n {
+            let mut ei: f32 = 0.0
+            for j in 0 to n {
+                ei = ei + alphas[j] * y_dual[j] * matrix_at(K, i, j)
+            }
+            ei = ei + b - y_dual[i]
+
+            let yi_ei: f32 = y_dual[i] * ei
+            if (yi_ei < -tol && alphas[i] < C) || (yi_ei > tol && alphas[i] > 0.0) {
+                let mut j: i32 = (iter * 7 + i * 13 + 3) % n
+                if j < 0 {
+                    j = j + n
+                }
+                if j == i {
+                    j = (j + 1) % n
+                }
+
+                let mut ej: f32 = 0.0
+                for k in 0 to n {
+                    ej = ej + alphas[k] * y_dual[k] * matrix_at(K, j, k)
+                }
+                ej = ej + b - y_dual[j]
+
+                let alpha_i_old: f32 = alphas[i]
+                let alpha_j_old: f32 = alphas[j]
+
+                let mut L: f32 = 0.0
+                let mut H: f32 = C
+                if y_dual[i] == y_dual[j] {
+                    L = alpha_i_old + alpha_j_old - C
+                    H = alpha_i_old + alpha_j_old
+                    if L < 0.0 {
+                        L = 0.0
+                    }
+                    if H > C {
+                        H = C
+                    }
+                } else {
+                    L = alpha_i_old - alpha_j_old
+                    H = alpha_i_old - alpha_j_old + C
+                    if L < 0.0 {
+                        L = 0.0
+                    }
+                    if H > C {
+                        H = C
+                    }
+                }
+
+                if L == H {
+                    continue
+                }
+
+                let eta: f32 = 2.0 * matrix_at(K, i, j) - matrix_at(K, i, i) - matrix_at(K, j, j)
+                if eta >= 0.0 {
+                    continue
+                }
+
+                let mut alpha_j_new: f32 = alpha_j_old - y_dual[j] * (ei - ej) / eta
+                if alpha_j_new < L {
+                    alpha_j_new = L
+                }
+                if alpha_j_new > H {
+                    alpha_j_new = H
+                }
+
+                let alpha_i_new: f32 = alpha_i_old + y_dual[i] * y_dual[j] * (alpha_j_old - alpha_j_new)
+
+                alphas[i] = alpha_i_new
+                alphas[j] = alpha_j_new
+
+                let b1: f32 = b - ei - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(K, i, i) - y_dual[j] * (alpha_j_new - alpha_j_old) * matrix_at(K, i, j)
+                let b2: f32 = b - ej - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(K, i, j) - y_dual[j] * (alpha_j_new - alpha_j_old) * matrix_at(K, j, j)
+
+                if alpha_i_new > 0.0 && alpha_i_new < C {
+                    b = b1
+                } elif alpha_j_new > 0.0 && alpha_j_new < C {
+                    b = b2
+                } else {
+                    b = (b1 + b2) / 2.0
+                }
+
+                num_changed = num_changed + 1
+            }
+        }
+
+        iter = iter + 1
+        if num_changed == 0 {
+            break
+        }
+    }
+
+    let result: SMOResult = SMOResult { alphas: alphas, b: b }
+    return result
+}
+
+export function svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, kernel: i32, gamma: f32, degree: i32, coef0: f32) -> SVC {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let K: Matrix = _svm_kernel_matrix(X, kernel, gamma, degree, coef0)
+
+    let total_size: i32 = n_classes * n
+    let alphas_all: ptr<f32> = array_new_f32(total_size)
+    let y_dual_all: ptr<f32> = array_new_f32(total_size)
+    let b_all: ptr<f32> = array_new_f32(n_classes)
+
+    let max_iter: i32 = 1000
+
+    for c in 0 to n_classes {
+        let y_dual: ptr<f32> = array_new_f32(n)
+        for i in 0 to n {
+            if y[i] == classes[c] {
+                y_dual[i] = 1.0
+            } else {
+                y_dual[i] = -1.0
+            }
+        }
+
+        let smo: SMOResult = _smo_train(K, y_dual, n, C, max_iter)
+
+        for i in 0 to n {
+            alphas_all[c * n + i] = smo.alphas[i]
+            y_dual_all[c * n + i] = y_dual[i]
+        }
+        b_all[c] = smo.b
+
+        array_free_f32(smo.alphas)
+        array_free_f32(y_dual)
+    }
+
+    matrix_free(K)
+
+    let result: SVC = SVC {
+        X_train: matrix_copy(X),
+        alphas: alphas_all,
+        y_dual: y_dual_all,
+        b: b_all,
+        n_samples: n,
+        n_features: n_features,
+        classes: classes,
+        n_classes: n_classes,
+        gamma: gamma,
+        C: C,
+        kernel: kernel,
+        degree: degree,
+        coef0: coef0,
+        fitted: true
+    }
+    return result
+}
+
+export function svc_decision_function(model: SVC, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let scores: ptr<f32> = array_new_f32(n * model.n_classes)
+
+    for i in 0 to n {
+        for c in 0 to model.n_classes {
+            let mut sum: f32 = model.b[c]
+            for j in 0 to model.n_samples {
+                let a: f32 = model.alphas[c * model.n_samples + j]
+                if a > 0.0 {
+                    let k_val: f32 = _svm_kernel_rows(X, i, model.X_train, j, model.n_features, model.kernel, model.gamma, model.degree, model.coef0)
+                    let yd: f32 = model.y_dual[c * model.n_samples + j]
+                    sum = sum + a * yd * k_val
+                }
+            }
+            scores[i * model.n_classes + c] = sum
+        }
+    }
+
+    return scores
+}
+
+export function svc_predict(model: SVC, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let scores: ptr<f32> = svc_decision_function(model, X)
+    let labels: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best_score: f32 = scores[i * model.n_classes + 0]
+        for c in 1 to model.n_classes {
+            let s: f32 = scores[i * model.n_classes + c]
+            if s > best_score {
+                best_score = s
+                best_c = c
+            }
+        }
+        labels[i] = model.classes[best_c]
+    }
+
+    array_free_f32(scores)
+    return labels
+}
+
+export function svc_free(model: SVC) -> void {
+    matrix_free(model.X_train)
+    array_free_f32(model.alphas)
+    array_free_f32(model.y_dual)
+    array_free_f32(model.b)
+    array_free_f32(model.classes)
+}
+
+# ============================================================================
+# SVR (Support Vector Regression) with epsilon-tube loss and kernel support
+# ============================================================================
+
+export function svr_fit(X: Matrix, y: ptr<f32>, C: f32, epsilon: f32, kernel: i32, gamma: f32, degree: i32, coef0: f32) -> SVR {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    let K: Matrix = _svm_kernel_matrix(X, kernel, gamma, degree, coef0)
+
+    let alpha_diff: ptr<f32> = array_new_f32(n)
+    let mut b: f32 = 0.0
+
+    let max_iter: i32 = 1000
+    let step: f32 = 0.01
+
+    for iter in 0 to max_iter {
+        let mut num_changed: i32 = 0
+        for i in 0 to n {
+            let mut f_i: f32 = b
+            for j in 0 to n {
+                f_i = f_i + alpha_diff[j] * matrix_at(K, i, j)
+            }
+
+            let g_i: f32 = y[i] - f_i
+
+            if g_i > epsilon && alpha_diff[i] < C {
+                alpha_diff[i] = alpha_diff[i] + step
+                if alpha_diff[i] > C {
+                    alpha_diff[i] = C
+                }
+                num_changed = num_changed + 1
+            } elif g_i < -epsilon && alpha_diff[i] > -C {
+                alpha_diff[i] = alpha_diff[i] - step
+                if alpha_diff[i] < -C {
+                    alpha_diff[i] = -C
+                }
+                num_changed = num_changed + 1
+            }
+        }
+        if num_changed == 0 {
+            break
+        }
+    }
+
+    let mut b_sum: f32 = 0.0
+    let mut b_count: i32 = 0
+    for i in 0 to n {
+        let ad: f32 = fabs((alpha_diff[i]) as f64) as f32
+        if ad > 0.001 {
+            let mut f_i: f32 = 0.0
+            for j in 0 to n {
+                f_i = f_i + alpha_diff[j] * matrix_at(K, i, j)
+            }
+            b_sum = b_sum + (y[i] - f_i)
+            b_count = b_count + 1
+        }
+    }
+    if b_count > 0 {
+        b = b_sum / (b_count as f32)
+    }
+
+    matrix_free(K)
+
+    let result: SVR = SVR {
+        X_train: matrix_copy(X),
+        alpha_diff: alpha_diff,
+        b: b,
+        n_samples: n,
+        n_features: n_features,
+        gamma: gamma,
+        C: C,
+        epsilon: epsilon,
+        kernel: kernel,
+        degree: degree,
+        coef0: coef0,
+        fitted: true
+    }
+    return result
+}
+
+export function svr_predict(model: SVR, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let preds: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut sum: f32 = model.b
+        for j in 0 to model.n_samples {
+            let ad: f32 = fabs((model.alpha_diff[j]) as f64) as f32
+            if ad > 0.0 {
+                let k_val: f32 = _svm_kernel_rows(X, i, model.X_train, j, model.n_features, model.kernel, model.gamma, model.degree, model.coef0)
+                sum = sum + model.alpha_diff[j] * k_val
+            }
+        }
+        preds[i] = sum
+    }
+
+    return preds
+}
+
+export function svr_free(model: SVR) -> void {
+    matrix_free(model.X_train)
+    array_free_f32(model.alpha_diff)
+}

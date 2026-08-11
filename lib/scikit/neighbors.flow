@@ -344,6 +344,63 @@ export function radius_neighbors_classifier_free(model: RadiusNeighborsClassifie
 }
 
 # ============================================================================
+# RadiusNeighborsRegressor
+# ============================================================================
+
+export struct RadiusNeighborsRegressor {
+    X_train: Matrix,
+    y_train: ptr<f32>,
+    radius: f32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function radius_neighbors_regressor_fit(X: Matrix, y: ptr<f32>, radius: f32) -> RadiusNeighborsRegressor {
+    let result: RadiusNeighborsRegressor = RadiusNeighborsRegressor {
+        X_train: X,
+        y_train: y,
+        radius: radius,
+        n_features: X.cols,
+        fitted: true
+    }
+    return result
+}
+
+export function radius_neighbors_regressor_predict(model: RadiusNeighborsRegressor, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut sum: f32 = 0.0
+        let mut count: i32 = 0
+
+        for j in 0 to model.X_train.rows {
+            let mut s: f32 = 0.0
+            for k in 0 to model.n_features {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(model.X_train, j, k)
+                s = s + d * d
+            }
+            if (sqrt((s as f64)) as f32) <= model.radius {
+                sum = sum + model.y_train[j]
+                count = count + 1
+            }
+        }
+
+        if count > 0 {
+            result[i] = sum / (count as f32)
+        } else {
+            result[i] = 0.0
+        }
+    }
+
+    return result
+}
+
+export function radius_neighbors_regressor_free(model: RadiusNeighborsRegressor) -> void {
+    # X_train and y_train are borrowed, not owned
+}
+
+# ============================================================================
 # NearestCentroid
 # ============================================================================
 

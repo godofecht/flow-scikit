@@ -7,6 +7,7 @@ extern {
     function malloc(size: i64) -> ptr<void>
     function free(p: ptr<void>) -> void
     function fabs(x: f64) -> f64
+    function printf(fmt: string, ...) -> i32
 }
 
 export const TREE_MAX_DEPTH: i32 = 50
@@ -906,4 +907,60 @@ export function extra_tree_regressor_predict(model: ExtraTreeRegressor, X: Matri
 
 export function extra_tree_regressor_free(model: ExtraTreeRegressor) -> void {
     free(model.nodes as ptr<void>)
+}
+
+# ============================================================================
+# Tree visualization: export_text
+# ============================================================================
+
+export function export_tree_text(model: DecisionTreeClassifier, max_depth: i32) -> void {
+    _export_tree_text_recursive(model.nodes, 0, 0, max_depth, true, true)
+}
+
+export function export_tree_text_reg(model: DecisionTreeRegressor, max_depth: i32) -> void {
+    _export_tree_text_recursive(model.nodes, 0, 0, max_depth, false, true)
+}
+
+function _export_tree_text_recursive(
+    nodes: ptr<TreeNode>, node_idx: i32, depth: i32,
+    max_depth: i32, is_classifier: bool, is_left: bool
+) -> void {
+    if max_depth > 0 && depth >= max_depth {
+        return
+    }
+    let node: TreeNode = nodes[node_idx]
+    let mut i: i32 = 0
+    while i < depth {
+        print("  ")
+        i = i + 1
+    }
+    if depth > 0 {
+        if is_left {
+            print("L: ")
+        } else {
+            print("R: ")
+        }
+    }
+    if node.is_leaf {
+        if is_classifier {
+            print("class = ")
+            printf("%.0f", node.value)
+        } else {
+            print("value = ")
+            printf("%.4f", node.value)
+        }
+        print(" (n=")
+        print(node.n_samples)
+        println(")")
+    } else {
+        print("feature ")
+        print(node.feature)
+        print(" <= ")
+        printf("%.4f", node.threshold)
+        print("  (n=")
+        print(node.n_samples)
+        println(")")
+        _export_tree_text_recursive(nodes, node.left, depth + 1, max_depth, is_classifier, true)
+        _export_tree_text_recursive(nodes, node.right, depth + 1, max_depth, is_classifier, false)
+    }
 }

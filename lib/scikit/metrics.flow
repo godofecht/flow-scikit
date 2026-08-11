@@ -1471,3 +1471,197 @@ export function multiclass_recall_ovo(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32
 export function ovo_result_free(r: OvOResult) -> void {
     array_free_f32(r.scores)
 }
+
+# ============================================================================
+# Additional classification metrics
+# ============================================================================
+
+export function zero_one_loss(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
+    let mut errors: i32 = 0
+    for i in 0 to n {
+        if y_true[i] != y_pred[i] {
+            errors = errors + 1
+        }
+    }
+    return (errors as f32) / (n as f32)
+}
+
+export function zero_one_loss_count(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> i32 {
+    let mut errors: i32 = 0
+    for i in 0 to n {
+        if y_true[i] != y_pred[i] {
+            errors = errors + 1
+        }
+    }
+    return errors
+}
+
+export function hamming_loss(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
+    let mut mismatches: i32 = 0
+    for i in 0 to n {
+        if y_true[i] != y_pred[i] {
+            mismatches = mismatches + 1
+        }
+    }
+    return (mismatches as f32) / (n as f32)
+}
+
+# ============================================================================
+# Ranking metrics
+# ============================================================================
+
+export function dcg_score(y_true: ptr<f32>, y_score: ptr<f32>, n: i32) -> f32 {
+    let mut sum: f32 = 0.0
+    for i in 0 to n {
+        let gain: f32 = pow((2.0 as f64), (y_true[i] as f64)) as f32 - 1.0
+        let discount: f32 = log((((i + 2) as f64)) as f32) / log(2.0 as f64) as f32
+        sum = sum + gain / discount
+    }
+    return sum
+}
+
+export function ndcg_score(y_true: ptr<f32>, y_score: ptr<f32>, n: i32) -> f32 {
+    # Sort by score descending, get permutation
+    let indices: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        indices[i] = i
+    }
+    # Simple selection sort by y_score descending
+    for i in 0 to n {
+        let mut max_idx: i32 = i
+        for j in i + 1 to n {
+            if y_score[indices[j]] > y_score[indices[max_idx]] {
+                max_idx = j
+            }
+        }
+        let tmp: i32 = indices[i]
+        indices[i] = indices[max_idx]
+        indices[max_idx] = tmp
+    }
+
+    # DCG with predicted ordering
+    let mut dcg: f32 = 0.0
+    for i in 0 to n {
+        let gain: f32 = pow((2.0 as f64), (y_true[indices[i]] as f64)) as f32 - 1.0
+        let discount: f32 = log((((i + 2) as f64)) as f32) / log(2.0 as f64) as f32
+        dcg = dcg + gain / discount
+    }
+
+    # Ideal DCG: sort y_true descending
+    let sorted_y: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        sorted_y[i] = y_true[i]
+    }
+    for i in 0 to n {
+        let mut max_idx: i32 = i
+        for j in i + 1 to n {
+            if sorted_y[j] > sorted_y[max_idx] {
+                max_idx = j
+            }
+        }
+        let tmp: f32 = sorted_y[i]
+        sorted_y[i] = sorted_y[max_idx]
+        sorted_y[max_idx] = tmp
+    }
+
+    let mut idcg: f32 = 0.0
+    for i in 0 to n {
+        let gain: f32 = pow((2.0 as f64), (sorted_y[i] as f64)) as f32 - 1.0
+        let discount: f32 = log((((i + 2) as f64)) as f32) / log(2.0 as f64) as f32
+        idcg = idcg + gain / discount
+    }
+
+    free(indices as ptr<void>)
+    array_free_f32(sorted_y)
+
+    if idcg < 0.0000000001 {
+        return 0.0
+    }
+    return dcg / idcg
+}
+
+export function coverage_error(y_true: ptr<f32>, y_score: ptr<f32>, n: i32, n_labels: i32) -> f32 {
+    # For each sample, coverage is the fraction of labels that must be
+    # predicted to cover all true labels. y_true and y_score are
+    # flattened n*n_labels arrays.
+    let mut total_coverage: f32 = 0.0
+    for i in 0 to n {
+        # Count true labels for this sample
+        let mut n_true: i32 = 0
+        for j in 0 to n_labels {
+            if y_true[i * n_labels + j] > 0.5 {
+                n_true = n_true + 1
+            }
+        }
+        if n_true == 0 {
+            continue
+        }
+        # Sort label scores descending, find how many we need
+        let scores: ptr<f32> = array_new_f32(n_labels)
+        let label_true: ptr<f32> = array_new_f32(n_labels)
+        for j in 0 to n_labels {
+            scores[j] = y_score[i * n_labels + j]
+            label_true[j] = y_true[i * n_labels + j]
+        }
+        # Selection sort descending
+        for j in 0 to n_labels {
+            let mut max_idx: i32 = j
+            for k in j + 1 to n_labels {
+                if scores[k] > scores[max_idx] {
+                    max_idx = k
+                }
+            }
+            let tmp_s: f32 = scores[j]
+            scores[j] = scores[max_idx]
+            scores[max_idx] = tmp_s
+            let tmp_t: f32 = label_true[j]
+            label_true[j] = label_true[max_idx]
+            label_true[max_idx] = tmp_t
+        }
+        # Count how many labels until all true are covered
+        let mut covered: i32 = 0
+        let mut found_true: i32 = 0
+        for j in 0 to n_labels {
+            covered = covered + 1
+            if label_true[j] > 0.5 {
+                found_true = found_true + 1
+            }
+            if found_true >= n_true {
+                break
+            }
+        }
+        total_coverage = total_coverage + (covered as f32) / (n_labels as f32)
+        array_free_f32(scores)
+        array_free_f32(label_true)
+    }
+    return total_coverage / (n as f32)
+}
+
+export function label_ranking_loss(y_true: ptr<f32>, y_score: ptr<f32>, n: i32, n_labels: i32) -> f32 {
+    # For each sample, fraction of incorrectly ordered label pairs.
+    # A pair (i, j) is incorrectly ordered if y_true[i] > y_true[j]
+    # but y_score[i] <= y_score[j].
+    let mut total_loss: f32 = 0.0
+    for i in 0 to n {
+        let mut n_incorrect: i32 = 0
+        let mut n_pairs: i32 = 0
+        for j in 0 to n_labels {
+            for k in j + 1 to n_labels {
+                let tj: f32 = y_true[i * n_labels + j]
+                let tk: f32 = y_true[i * n_labels + k]
+                let sj: f32 = y_score[i * n_labels + j]
+                let sk: f32 = y_score[i * n_labels + k]
+                if tj != tk {
+                    n_pairs = n_pairs + 1
+                    if (tj > tk && sj <= sk) || (tj < tk && sj >= sk) {
+                        n_incorrect = n_incorrect + 1
+                    }
+                }
+            }
+        }
+        if n_pairs > 0 {
+            total_loss = total_loss + (n_incorrect as f32) / (n_pairs as f32)
+        }
+    }
+    return total_loss / (n as f32)
+}

@@ -800,6 +800,164 @@ export function sparse_pca_free(model: SparsePCA) -> void {
 }
 
 # ============================================================================
+# MiniBatchSparsePCA
+# ============================================================================
+
+export struct MiniBatchSparsePCA {
+    components: ptr<ptr<f32> >,
+    n_components: i32,
+    n_features: i32,
+    mean: ptr<f32>,
+    alpha: f32,
+    n_iter: i32,
+    batch_size: i32,
+    fitted: bool
+}
+
+export function minibatch_sparse_pca_fit(
+    X: Matrix, n_components: i32, alpha: f32,
+    max_iter: i32, batch_size: i32, tol: f32, seed: i32
+) -> MiniBatchSparsePCA {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let mean: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let mut m: f32 = 0.0
+        for i in 0 to n {
+            m = m + matrix_at(X, i, j)
+        }
+        mean[j] = m / (n as f32)
+    }
+
+    let Xc: Matrix = matrix_new(n, p)
+    for i in 0 to n {
+        for j in 0 to p {
+            matrix_set(Xc, i, j, matrix_at(X, i, j) - mean[j])
+        }
+    }
+
+    srand(seed)
+
+    let components: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+    let mut n_iter: i32 = 0
+
+    for c in 0 to n_components {
+        components[c] = array_new_f32(p)
+        for j in 0 to p {
+            components[c][j] = ((rand() % 1000) as f32) / 500.0 - 1.0
+        }
+        let mut norm: f32 = 0.0
+        for j in 0 to p {
+            norm = norm + components[c][j] * components[c][j]
+        }
+        norm = sqrt((norm as f64)) as f32
+        if norm > 0.0000000001 {
+            for j in 0 to p {
+                components[c][j] = components[c][j] / norm
+            }
+        }
+
+        for iter in 0 to max_iter {
+            n_iter = iter + 1
+
+            # Sample mini-batch
+            let actual_batch: i32 = batch_size
+            if actual_batch > n { actual_batch = n }
+
+            let grad: ptr<f32> = array_new_f32(p)
+            for b in 0 to actual_batch {
+                let idx: i32 = rand() % n
+                let mut dot: f32 = 0.0
+                for j in 0 to p {
+                    dot = dot + components[c][j] * matrix_at(Xc, idx, j)
+                }
+                for j in 0 to p {
+                    grad[j] = grad[j] - dot * matrix_at(Xc, idx, j)
+                }
+            }
+
+            for j in 0 to p {
+                grad[j] = grad[j] / (actual_batch as f32)
+            }
+
+            let lr: f32 = 0.01
+            for j in 0 to p {
+                components[c][j] = components[c][j] - lr * grad[j]
+            }
+
+            # Soft-thresholding
+            for j in 0 to p {
+                if components[c][j] > alpha {
+                    components[c][j] = components[c][j] - alpha
+                } elif components[c][j] < -alpha {
+                    components[c][j] = components[c][j] + alpha
+                } else {
+                    components[c][j] = 0.0
+                }
+            }
+
+            # Normalize
+            let mut norm2: f32 = 0.0
+            for j in 0 to p {
+                norm2 = norm2 + components[c][j] * components[c][j]
+            }
+            norm2 = sqrt((norm2 as f64)) as f32
+            if norm2 > 0.0000000001 {
+                for j in 0 to p {
+                    components[c][j] = components[c][j] / norm2
+                }
+            }
+
+            array_free_f32(grad)
+
+            if iter > 0 && iter % 10 == 0 {
+                let mut change: f32 = 0.0
+                for j in 0 to p {
+                    change = change + fabs((grad[j]) as f64) as f32
+                }
+                if change / (p as f32) < tol { break }
+            }
+        }
+    }
+
+    matrix_free(Xc)
+
+    return MiniBatchSparsePCA {
+        components: components,
+        n_components: n_components,
+        n_features: p,
+        mean: mean,
+        alpha: alpha,
+        n_iter: n_iter,
+        batch_size: batch_size,
+        fitted: true
+    }
+}
+
+export function minibatch_sparse_pca_transform(model: MiniBatchSparsePCA, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, model.n_components)
+    for i in 0 to X.rows {
+        for c in 0 to model.n_components {
+            let mut s: f32 = 0.0
+            for j in 0 to model.n_features {
+                s = s + (matrix_at(X, i, j) - model.mean[j]) * model.components[c][j]
+            }
+            matrix_set(result, i, c, s)
+        }
+    }
+    return result
+}
+
+export function minibatch_sparse_pca_free(model: MiniBatchSparsePCA) -> void {
+    for c in 0 to model.n_components {
+        array_free_f32(model.components[c])
+    }
+    free(model.components as ptr<void>)
+    array_free_f32(model.mean)
+}
+
+# ============================================================================
 # KernelPCA
 # ============================================================================
 

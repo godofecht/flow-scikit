@@ -1553,17 +1553,16 @@ export function stacking_classifier_free(model: StackingClassifier) -> void {
 
 export struct HistGradientBoostingClassifier {
     init_score: f32,
-    tree_depths: ptr<i32>,
+    trees: ptr<DecisionTreeRegressor>,
     n_trees: i32,
     n_classes: i32,
     learning_rate: f32,
-    base_predictions: ptr<f32>,
-    n_samples: i32,
+    n_features: i32,
     fitted: bool
 }
 
 export function hist_gradient_boosting_classifier_fit(
-    y: ptr<f32>,
+    X: Matrix, y: ptr<f32>,
     n_samples: i32,
     n_classes: i32,
     n_trees: i32,
@@ -1574,63 +1573,86 @@ export function hist_gradient_boosting_classifier_fit(
     for i in 0 to n_samples {
         if y[i] == 1.0 { pos = pos + 1 }
     }
-    let init_score: f32 = log(((pos as f32) / ((n_samples - pos) as f32 + 1e-10)) as f64) as f32
+    let init_score: f32 = log(((pos as f32) / ((n_samples - pos) as f32 + 0.0000000001)) as f64) as f32
 
-    let tree_depths: ptr<i32> = malloc((n_trees as i64) * 4) as ptr<i32>
-    for t in 0 to n_trees {
-        tree_depths[t] = max_depth
-    }
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeRegressor>
 
-    let base_predictions: ptr<f32> = array_new_f32(n_samples)
+    let current_pred: ptr<f32> = array_new_f32(n_samples)
     for i in 0 to n_samples {
-        base_predictions[i] = init_score
+        current_pred[i] = init_score
     }
 
     for t in 0 to n_trees {
         let gradients: ptr<f32> = array_new_f32(n_samples)
         for i in 0 to n_samples {
-            let p: f32 = 1.0 / (1.0 + exp((-base_predictions[i]) as f64) as f32)
+            let p: f32 = 1.0 / (1.0 + exp((-current_pred[i]) as f64) as f32)
             let target: f32 = 0.0
             if y[i] == 1.0 { target = 1.0 }
             gradients[i] = target - p
         }
 
-        let mut mean_grad: f32 = 0.0
-        for i in 0 to n_samples { mean_grad = mean_grad + gradients[i] }
-        mean_grad = mean_grad / (n_samples as f32)
-
+        # Fit a regression tree on the gradients (negative gradient as target)
+        let neg_grad: ptr<f32> = array_new_f32(n_samples)
         for i in 0 to n_samples {
-            base_predictions[i] = base_predictions[i] + learning_rate * mean_grad
+            neg_grad[i] = gradients[i]
         }
+        trees[t] = decision_tree_regressor_fit(X, neg_grad, max_depth, CRITERION_MSE)
+
+        # Update predictions
+        let tree_preds: ptr<f32> = decision_tree_regressor_predict(trees[t], X)
+        for i in 0 to n_samples {
+            current_pred[i] = current_pred[i] + learning_rate * tree_preds[i]
+        }
+
         array_free_f32(gradients)
+        array_free_f32(neg_grad)
+        array_free_f32(tree_preds)
     }
+
+    array_free_f32(current_pred)
 
     return HistGradientBoostingClassifier {
         init_score: init_score,
-        tree_depths: tree_depths,
+        trees: trees,
         n_trees: n_trees,
         n_classes: n_classes,
         learning_rate: learning_rate,
-        base_predictions: base_predictions,
-        n_samples: n_samples,
+        n_features: X.cols,
         fitted: true
     }
 }
 
-export function hist_gradient_boosting_classifier_predict(model: HistGradientBoostingClassifier) -> ptr<f32> {
-    let result: ptr<f32> = array_new_f32(model.n_samples)
-    for i in 0 to model.n_samples {
-        let p: f32 = 1.0 / (1.0 + exp((-model.base_predictions[i]) as f64) as f32)
+export function hist_gradient_boosting_classifier_predict(model: HistGradientBoostingClassifier, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    let current_pred: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        current_pred[i] = model.init_score
+    }
+
+    for t in 0 to model.n_trees {
+        let tree_preds: ptr<f32> = decision_tree_regressor_predict(model.trees[t], X)
+        for i in 0 to n {
+            current_pred[i] = current_pred[i] + model.learning_rate * tree_preds[i]
+        }
+        array_free_f32(tree_preds)
+    }
+
+    for i in 0 to n {
+        let p: f32 = 1.0 / (1.0 + exp((-current_pred[i]) as f64) as f32)
         if p > 0.5 {
             result[i] = 1.0
         } else {
             result[i] = 0.0
         }
     }
+    array_free_f32(current_pred)
     return result
 }
 
 export function hist_gradient_boosting_classifier_free(model: HistGradientBoostingClassifier) -> void {
-    free(model.tree_depths as ptr<void>)
-    array_free_f32(model.base_predictions)
+    for t in 0 to model.n_trees {
+        decision_tree_regressor_free(model.trees[t])
+    }
+    free(model.trees as ptr<void>)
 }
