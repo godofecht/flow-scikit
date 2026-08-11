@@ -7,6 +7,7 @@
 #   - No more degenerate noisy curves from naive n_bins usage
 
 import "lib/scikit/matrix.flow"
+import "lib/scikit/tree.flow"
 
 extern {
     function sqrt(x: f64) -> f64
@@ -278,4 +279,161 @@ export function print_calibration_result(result: CalibrationResult) -> void {
 
 export function calibration_result_free(result: CalibrationResult) -> void {
     free(result.bins as ptr<void>)
+}
+
+
+export struct CalibratedClassifierCV {
+    models: ptr<DecisionTreeClassifier>,
+    calib_a: ptr<f32>,
+    calib_b: ptr<f32>,
+    n_folds: i32,
+    n_classes: i32,
+    n_models: i32,
+    fitted: bool
+}
+
+function _calib_sigmoid(z: f32) -> f32 {
+    let e: f32 = exp((-z) as f64) as f32
+    let result: f32 = 1.0 / (1.0 + e)
+    return result
+}
+
+export function calibrated_classifier_cv_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_folds: i32, method: i32) -> CalibratedClassifierCV {
+    let n: i32 = X.rows
+    let models: ptr<DecisionTreeClassifier> = malloc((n_folds as i64) * 64) as ptr<DecisionTreeClassifier>
+    let calib_a: ptr<f32> = array_new_f32(n_folds)
+    let calib_b: ptr<f32> = array_new_f32(n_folds)
+
+    let fold_size: i32 = n / n_folds
+    let mut fold: i32 = 0
+    while fold < n_folds {
+        let test_start: i32 = fold * fold_size
+        let test_end: i32 = test_start + fold_size
+        if fold == n_folds - 1 {
+            test_end = n
+        }
+        let n_train: i32 = n - (test_end - test_start)
+
+        let X_train: Matrix = matrix_new(n_train, X.cols)
+        let y_train: ptr<f32> = array_new_f32(n_train)
+        let mut idx: i32 = 0
+        let mut i: i32 = 0
+        while i < n {
+            if i < test_start || i >= test_end {
+                let mut j: i32 = 0
+                while j < X.cols {
+                    matrix_set(X_train, idx, j, matrix_at(X, i, j))
+                    j = j + 1
+                }
+                y_train[idx] = y[i]
+                idx = idx + 1
+            }
+            i = i + 1
+        }
+
+        let tree: DecisionTreeClassifier = decision_tree_classifier_fit(X_train, y_train, n_classes, 5, 0)
+        models[fold] = tree
+
+        let n_test: i32 = test_end - test_start
+        let X_test: Matrix = matrix_new(n_test, X.cols)
+        let y_test: ptr<f32> = array_new_f32(n_test)
+        let mut tidx: i32 = 0
+        i = test_start
+        while i < test_end {
+            let mut j2: i32 = 0
+            while j2 < X.cols {
+                matrix_set(X_test, tidx, j2, matrix_at(X, i, j2))
+                j2 = j2 + 1
+            }
+            y_test[tidx] = y[i]
+            tidx = tidx + 1
+            i = i + 1
+        }
+
+        let preds: ptr<f32> = decision_tree_classifier_predict(tree, X_test)
+
+        if method == 0 {
+            let mut a: f32 = 0.0
+            let mut b: f32 = 0.0
+            let lr: f32 = 0.01
+            let mut iter: i32 = 0
+            while iter < 200 {
+                let mut ga: f32 = 0.0
+                let mut gb: f32 = 0.0
+                let mut k: i32 = 0
+                while k < n_test {
+                    let z: f32 = a * preds[k] + b
+                    let p: f32 = _calib_sigmoid(z)
+                    let target: f32 = y_test[k]
+                    ga = ga + (p - target) * preds[k]
+                    gb = gb + (p - target)
+                    k = k + 1
+                }
+                a = a - lr * ga / (n_test as f32)
+                b = b - lr * gb / (n_test as f32)
+                iter = iter + 1
+            }
+            calib_a[fold] = a
+            calib_b[fold] = b
+        } else {
+            calib_a[fold] = 1.0
+            calib_b[fold] = 0.0
+        }
+
+        array_free_f32(preds)
+        matrix_free(X_test)
+        array_free_f32(y_test)
+        matrix_free(X_train)
+        array_free_f32(y_train)
+
+        fold = fold + 1
+    }
+
+    let result: CalibratedClassifierCV = CalibratedClassifierCV {
+        models: models,
+        calib_a: calib_a,
+        calib_b: calib_b,
+        n_folds: n_folds,
+        n_classes: n_classes,
+        n_models: n_folds,
+        fitted: true
+    }
+    return result
+}
+
+export function calibrated_classifier_cv_predict(model: CalibratedClassifierCV, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    let mut i: i32 = 0
+    while i < n {
+        let mut sum_prob: f32 = 0.0
+        let mut fold: i32 = 0
+        while fold < model.n_models {
+            let preds: ptr<f32> = decision_tree_classifier_predict(model.models[fold], X)
+            let z: f32 = model.calib_a[fold] * preds[i] + model.calib_b[fold]
+            let p: f32 = _calib_sigmoid(z)
+            sum_prob = sum_prob + p
+            array_free_f32(preds)
+            fold = fold + 1
+        }
+        let mean_prob: f32 = sum_prob / (model.n_models as f32)
+        if mean_prob > 0.5 {
+            result[i] = 1.0
+        } else {
+            result[i] = 0.0
+        }
+        i = i + 1
+    }
+    return result
+}
+
+export function calibrated_classifier_cv_free(model: CalibratedClassifierCV) -> void {
+    let mut i: i32 = 0
+    while i < model.n_models {
+        decision_tree_classifier_free(model.models[i])
+        i = i + 1
+    }
+    free(model.models as ptr<void>)
+    array_free_f32(model.calib_a)
+    array_free_f32(model.calib_b)
 }

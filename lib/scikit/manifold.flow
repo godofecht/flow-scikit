@@ -725,3 +725,157 @@ export function mds_embedding(model: MDS) -> Matrix {
 export function mds_free(model: MDS) -> void {
     array_free_f32(model.embedding)
 }
+
+# ============================================================================
+# Trustworthiness
+# ============================================================================
+
+export function trustworthiness(X: Matrix, X_embedded: Matrix, n_neighbors: i32) -> f32 {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    # Compute pairwise distances in original space
+    let dist_orig: ptr<f32> = array_new_f32(n * n)
+    let mut i: i32 = 0
+    while i < n {
+        let mut j: i32 = 0
+        while j < n {
+            let mut s: f32 = 0.0
+            let mut k: i32 = 0
+            while k < n_features {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                s = s + d * d
+                k = k + 1
+            }
+            dist_orig[i * n + j] = sqrt((s) as f64) as f32
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    # Compute pairwise distances in embedded space
+    let n_emb: i32 = X_embedded.cols
+    let dist_emb: ptr<f32> = array_new_f32(n * n)
+    i = 0
+    while i < n {
+        let mut j: i32 = 0
+        while j < n {
+            let mut s: f32 = 0.0
+            let mut k: i32 = 0
+            while k < n_emb {
+                let d: f32 = matrix_at(X_embedded, i, k) - matrix_at(X_embedded, j, k)
+                s = s + d * d
+                k = k + 1
+            }
+            dist_emb[i * n + j] = sqrt((s) as f64) as f32
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    # For each point, rank neighbors in embedded space
+    # Then check if neighbors in embedded space are also close in original space
+    let mut total: f32 = 0.0
+    i = 0
+    while i < n {
+        # Rank points by embedded distance (excluding self)
+        let rank_emb: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+        let mut j: i32 = 0
+        while j < n {
+            rank_emb[j] = j
+            j = j + 1
+        }
+
+        # Selection sort by embedded distance
+        let mut a: i32 = 0
+        while a < n {
+            let mut min_idx: i32 = a
+            let mut b: i32 = a + 1
+            while b < n {
+                if dist_emb[i * n + rank_emb[b]] < dist_emb[i * n + rank_emb[min_idx]] {
+                    min_idx = b
+                }
+                b = b + 1
+            }
+            let tmp: i32 = rank_emb[a]
+            rank_emb[a] = rank_emb[min_idx]
+            rank_emb[min_idx] = tmp
+            a = a + 1
+        }
+
+        # rank_emb[0] should be i itself (distance 0). Skip it.
+        # For each neighbor in embedded space beyond n_neighbors,
+        # check if it is also a neighbor in original space.
+        # If not, add penalty proportional to rank difference.
+
+        # Build original-space neighbor set (indices of n_neighbors closest)
+        let orig_neighbors: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+        let mut j2: i32 = 0
+        while j2 < n {
+            orig_neighbors[j2] = j2
+            j2 = j2 + 1
+        }
+
+        # Sort by original distance
+        let mut a2: i32 = 0
+        while a2 < n {
+            let mut min_idx2: i32 = a2
+            let mut b2: i32 = a2 + 1
+            while b2 < n {
+                if dist_orig[i * n + orig_neighbors[b2]] < dist_orig[i * n + orig_neighbors[min_idx2]] {
+                    min_idx2 = b2
+                }
+                b2 = b2 + 1
+            }
+            let tmp2: i32 = orig_neighbors[a2]
+            orig_neighbors[a2] = orig_neighbors[min_idx2]
+            orig_neighbors[min_idx2] = tmp2
+            a2 = a2 + 1
+        }
+
+        # For each point in the embedded ranking beyond n_neighbors,
+        # check if it is in the original n_neighbors. If not, add penalty.
+        let mut rank: i32 = 1  # skip self at rank 0
+        while rank < n {
+            if rank <= n_neighbors {
+                # These are the close neighbors in embedded space, no penalty
+                rank = rank + 1
+            } else {
+                let neighbor_idx: i32 = rank_emb[rank]
+                if neighbor_idx == i {
+                    rank = rank + 1
+                } else {
+                    # Check if neighbor_idx is in original top n_neighbors
+                    let mut in_orig: bool = false
+                    let mut kk: i32 = 1
+                    while kk <= n_neighbors {
+                        if orig_neighbors[kk] == neighbor_idx {
+                            in_orig = true
+                        }
+                        kk = kk + 1
+                    }
+                    if not in_orig {
+                        # Penalty: (rank - n_neighbors) / (n - n_neighbors - 1)
+                        let penalty: f32 = ((rank - n_neighbors) as f32) / ((n - n_neighbors - 1) as f32)
+                        total = total + penalty
+                    }
+                    rank = rank + 1
+                }
+            }
+        }
+
+        free(rank_emb as ptr<void>)
+        free(orig_neighbors as ptr<void>)
+        i = i + 1
+    }
+
+    array_free_f32(dist_orig)
+    array_free_f32(dist_emb)
+
+    # T = 1 - (2 / (n * (2 * n_neighbors))) * total
+    let denom: f32 = (n as f32) * (2.0 * (n_neighbors as f32))
+    let mut result: f32 = 1.0 - (2.0 / denom) * total
+    if result < 0.0 { result = 0.0 }
+    if result > 1.0 { result = 1.0 }
+    return result
+}

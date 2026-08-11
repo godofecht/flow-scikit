@@ -101,7 +101,7 @@
   visualization.
 - Added metrics: `zero_one_loss`, `zero_one_loss_count`, `hamming_loss`,
   `dcg_score`, `ndcg_score`, `coverage_error`, `label_ranking_loss`.
-- Added `tests/test_new_features.flow` with 24 tests covering all new
+- Added `tests/test_new_features.flow` with 33 tests covering all new
   estimators and metrics.
 
 ### Additional estimators and utilities
@@ -116,6 +116,18 @@
   `class_likelihood_ratios`, `class_balance_accuracy`.
 - Added model selection: `cross_val_score`, `repeated_k_fold`, `check_cv`,
   `permutation_test_score`.
+- Added `HDBSCAN` with mutual reachability, MST, and single-linkage clustering.
+- Added `FeatureAgglomeration` with correlation-based feature clustering.
+- Added `GraphicalLassoCV` with alpha selection via log-likelihood.
+- Added `BernoulliRBM` with contrastive divergence training.
+- Added `CalibratedClassifierCV` with Platt scaling calibration.
+- Added `partial_dependence` for tree models.
+- Added `trustworthiness` for manifold learning evaluation.
+- Added feature selection: `SelectPercentile`, `SelectFdr`, `SelectFpr`,
+  `SelectFwe`, `GenericUnivariateSelect`, `mutual_info_classif`,
+  `mutual_info_regression`.
+- Filed Flow compiler bug #421: inline `exp()` in nested while loop causes
+  bus error. Workaround: extract to helper function.
 
 ## 0.2.0
 

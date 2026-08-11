@@ -709,6 +709,296 @@ function test_repeated_k_fold() -> i32 {
     return 0
 }
 
+function test_hdbscan() -> i32 {
+    println("Test: HDBSCAN")
+    let n: i32 = 20
+    let X: Matrix = matrix_new(n, 2)
+    let mut i: i32 = 0
+    while i < 10 {
+        matrix_set(X, i, 0, 1.0 + (i as f32) * 0.1)
+        matrix_set(X, i, 1, 2.0 + (i as f32) * 0.1)
+        i = i + 1
+    }
+    while i < 20 {
+        matrix_set(X, i, 0, 8.0 + ((i - 10) as f32) * 0.1)
+        matrix_set(X, i, 1, 9.0 + ((i - 10) as f32) * 0.1)
+        i = i + 1
+    }
+
+    let model: HDBSCAN = hdbscan_fit(X, 3, 3)
+    let labels: ptr<f32> = hdbscan_labels(model)
+
+    if model.n_clusters < 1 {
+        println("  FAIL: should find at least 1 cluster")
+        return 1
+    }
+    print("  OK: n_clusters = ")
+    print(model.n_clusters)
+    println("")
+    array_free_f32(labels)
+    hdbscan_free(model)
+    matrix_free(X)
+    return 0
+}
+
+function test_feature_agglomeration() -> i32 {
+    println("Test: FeatureAgglomeration")
+    let n: i32 = 20
+    let X: Matrix = matrix_new(n, 4)
+    srand(42)
+    let mut i: i32 = 0
+    while i < n {
+        let v0: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 0, v0)
+        matrix_set(X, i, 1, v0 + 0.01)
+        let v2: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 2, v2)
+        matrix_set(X, i, 3, v2 + 0.01)
+        i = i + 1
+    }
+
+    let model: FeatureAgglomeration = feature_agglomeration_fit(X, 2)
+    let transformed: Matrix = feature_agglomeration_transform(model, X)
+
+    if transformed.cols != 2 {
+        println("  FAIL: should have 2 clusters")
+        return 1
+    }
+    print("  OK: n_clusters = ")
+    print(model.n_clusters)
+    println("")
+    matrix_free(transformed)
+    feature_agglomeration_free(model)
+    matrix_free(X)
+    return 0
+}
+
+function test_graphical_lasso_cv() -> i32 {
+    println("Test: GraphicalLassoCV")
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 3)
+    srand(42)
+    let mut i: i32 = 0
+    while i < n {
+        let v0: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 0, v0)
+        matrix_set(X, i, 1, 2.0 * v0 + 0.1)
+        matrix_set(X, i, 2, ((rand() % 100) as f32) / 10.0)
+        i = i + 1
+    }
+
+    let model: GraphicalLassoCV = graphical_lasso_cv_fit(X, 5, 3, 50)
+
+    if model.alpha <= 0.0 {
+        println("  FAIL: alpha should be positive")
+        return 1
+    }
+    print("  OK: alpha = ")
+    printf("%.4f", model.alpha)
+    println("")
+    graphical_lasso_cv_free(model)
+    matrix_free(X)
+    return 0
+}
+
+function test_bernoulli_rbm() -> i32 {
+    println("Test: BernoulliRBM")
+    let n: i32 = 20
+    let X: Matrix = matrix_new(n, 4)
+    srand(42)
+    let mut i: i32 = 0
+    while i < n {
+        let mut j: i32 = 0
+        while j < 4 {
+            let v: f32 = ((rand() % 100) as f32) / 100.0
+            if v > 0.5 {
+                matrix_set(X, i, j, 1.0)
+            } else {
+                matrix_set(X, i, j, 0.0)
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    let model: BernoulliRBM = bernoulli_rbm_fit(X, 2, 0.01, 50, 10, 42)
+    let transformed: Matrix = bernoulli_rbm_transform(model, X)
+
+    if transformed.rows != n || transformed.cols != 2 {
+        println("  FAIL: wrong output shape")
+        return 1
+    }
+    println("  OK: 20x2 output")
+    matrix_free(transformed)
+    bernoulli_rbm_free(model)
+    matrix_free(X)
+    return 0
+}
+
+function test_calibrated_classifier_cv() -> i32 {
+    println("Test: CalibratedClassifierCV")
+    let ds: Dataset = make_classification(60, 4, 2, 4, 0, 2.0, 42)
+    let model: CalibratedClassifierCV = calibrated_classifier_cv_fit(ds.X, ds.y, 2, 3, 0)
+    let preds: ptr<f32> = calibrated_classifier_cv_predict(model, ds.X)
+    let acc: f32 = accuracy_score(ds.y, preds, 60)
+
+    if acc < 0.5 {
+        println("  FAIL: accuracy should be > 0.5")
+        return 1
+    }
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+    array_free_f32(preds)
+    calibrated_classifier_cv_free(model)
+    dataset_free(ds)
+    return 0
+}
+
+function test_partial_dependence() -> i32 {
+    println("Test: partial_dependence")
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 2)
+    let y: ptr<f32> = array_new_f32(n)
+    srand(42)
+    let mut i: i32 = 0
+    while i < n {
+        let x0: f32 = ((rand() % 100) as f32) / 10.0
+        let x1: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 0, x0)
+        matrix_set(X, i, 1, x1)
+        if x0 > 5.0 {
+            y[i] = 1.0
+        } else {
+            y[i] = 0.0
+        }
+        i = i + 1
+    }
+
+    let tree: DecisionTreeClassifier = decision_tree_classifier_fit(X, y, 2, 3, CRITERION_GINI)
+    let pd: PartialDependenceResult = partial_dependence(tree, X, 0, 10)
+
+    if pd.n_grid != 10 {
+        println("  FAIL: should have 10 grid points")
+        return 1
+    }
+    print("  OK: 10 grid points")
+    println("")
+    partial_dependence_free(pd)
+    decision_tree_classifier_free(tree)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
+function test_trustworthiness() -> i32 {
+    println("Test: trustworthiness")
+    let n: i32 = 20
+    let X: Matrix = matrix_new(n, 3)
+    let X_embedded: Matrix = matrix_new(n, 2)
+    srand(42)
+    let mut i: i32 = 0
+    while i < n {
+        let v0: f32 = ((rand() % 100) as f32) / 10.0
+        let v1: f32 = ((rand() % 100) as f32) / 10.0
+        let v2: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 0, v0)
+        matrix_set(X, i, 1, v1)
+        matrix_set(X, i, 2, v2)
+        matrix_set(X_embedded, i, 0, v0)
+        matrix_set(X_embedded, i, 1, v1)
+        i = i + 1
+    }
+
+    let t: f32 = trustworthiness(X, X_embedded, 5)
+
+    if t < 0.0 || t > 1.0 {
+        println("  FAIL: trustworthiness out of range")
+        return 1
+    }
+    print("  OK: T = ")
+    printf("%.4f", t)
+    println("")
+    matrix_free(X)
+    matrix_free(X_embedded)
+    return 0
+}
+
+function test_select_percentile() -> i32 {
+    println("Test: SelectPercentile")
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 5)
+    let y: ptr<f32> = array_new_f32(n)
+    srand(42)
+    let mut i: i32 = 0
+    while i < n {
+        let v0: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 0, v0)
+        matrix_set(X, i, 1, ((rand() % 100) as f32) / 10.0)
+        matrix_set(X, i, 2, v0 * 2.0)
+        matrix_set(X, i, 3, ((rand() % 100) as f32) / 10.0)
+        matrix_set(X, i, 4, ((rand() % 100) as f32) / 10.0)
+        if v0 > 5.0 {
+            y[i] = 1.0
+        } else {
+            y[i] = 0.0
+        }
+        i = i + 1
+    }
+
+    let model: SelectPercentile = select_percentile_fit(X, y, 40)
+    let transformed: Matrix = select_percentile_transform(model, X)
+
+    if transformed.cols < 1 {
+        println("  FAIL: should select at least 1 feature")
+        return 1
+    }
+    print("  OK: selected ")
+    print(model.n_selected)
+    print(" features")
+    println("")
+    matrix_free(transformed)
+    select_percentile_free(model)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
+function test_mutual_info() -> i32 {
+    println("Test: mutual_info_classif")
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 3)
+    let y: ptr<f32> = array_new_f32(n)
+    srand(42)
+    let mut i: i32 = 0
+    while i < n {
+        let v0: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 0, v0)
+        matrix_set(X, i, 1, ((rand() % 100) as f32) / 10.0)
+        matrix_set(X, i, 2, ((rand() % 100) as f32) / 10.0)
+        if v0 > 5.0 {
+            y[i] = 1.0
+        } else {
+            y[i] = 0.0
+        }
+        i = i + 1
+    }
+
+    let mi: ptr<f32> = mutual_info_classif(X, y, 3)
+
+    if mi[0] < 0.0 {
+        println("  FAIL: MI should be non-negative")
+        return 1
+    }
+    print("  OK: MI[0] = ")
+    printf("%.4f", mi[0])
+    println("")
+    array_free_f32(mi)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
 function main() -> i32 {
     println("=== New Features Tests ===")
     println("")
@@ -761,6 +1051,24 @@ function main() -> i32 {
     if test_cross_val_score() != 0 { failures = failures + 1 }
     println("")
     if test_repeated_k_fold() != 0 { failures = failures + 1 }
+    println("")
+    if test_hdbscan() != 0 { failures = failures + 1 }
+    println("")
+    if test_feature_agglomeration() != 0 { failures = failures + 1 }
+    println("")
+    if test_graphical_lasso_cv() != 0 { failures = failures + 1 }
+    println("")
+    if test_bernoulli_rbm() != 0 { failures = failures + 1 }
+    println("")
+    if test_calibrated_classifier_cv() != 0 { failures = failures + 1 }
+    println("")
+    if test_partial_dependence() != 0 { failures = failures + 1 }
+    println("")
+    if test_trustworthiness() != 0 { failures = failures + 1 }
+    println("")
+    if test_select_percentile() != 0 { failures = failures + 1 }
+    println("")
+    if test_mutual_info() != 0 { failures = failures + 1 }
 
     println("")
     println("----------------------------------------")

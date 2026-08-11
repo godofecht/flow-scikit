@@ -1407,3 +1407,455 @@ export function bisecting_kmeans_free(model: BisectingKMeans) -> void {
     free(model.centroids as ptr<void>)
     free(model.labels as ptr<void>)
 }
+
+# ============================================================================
+# HDBSCAN
+# ============================================================================
+
+export struct HDBSCAN {
+    labels: ptr<f32>,
+    n_clusters: i32,
+    n_samples: i32,
+    fitted: bool
+}
+
+export function hdbscan_fit(X: Matrix, min_cluster_size: i32, min_samples: i32) -> HDBSCAN {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+    let labels: ptr<f32> = array_new_f32(n)
+
+    # Compute core distances (distance to min_samples-th nearest neighbor)
+    let core_dist: ptr<f32> = array_new_f32(n)
+    let mut i: i32 = 0
+    while i < n {
+        # Compute distances from point i to all others
+        let dists: ptr<f32> = array_new_f32(n)
+        let mut j: i32 = 0
+        while j < n {
+            let mut s: f32 = 0.0
+            let mut k: i32 = 0
+            while k < n_features {
+                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                s = s + d * d
+                k = k + 1
+            }
+            dists[j] = sqrt((s) as f64) as f32
+            j = j + 1
+        }
+        # Sort to find min_samples-th nearest
+        let mut a: i32 = 0
+        while a < n {
+            let mut min_idx: i32 = a
+            let mut b: i32 = a + 1
+            while b < n {
+                if dists[b] < dists[min_idx] {
+                    min_idx = b
+                }
+                b = b + 1
+            }
+            let tmp: f32 = dists[a]
+            dists[a] = dists[min_idx]
+            dists[min_idx] = tmp
+            a = a + 1
+        }
+        # dists[0] is self (0), dists[min_samples] is the core distance
+        if min_samples < n {
+            core_dist[i] = dists[min_samples]
+        } else {
+            core_dist[i] = dists[n - 1]
+        }
+        array_free_f32(dists)
+        i = i + 1
+    }
+
+    # Build mutual reachability distance matrix
+    # d_mreach(a,b) = max(core_dist[a], core_dist[b], dist(a,b))
+    # Then build MST via Prim's algorithm
+    let in_tree: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let min_edge: ptr<f32> = array_new_f32(n)
+    let parent: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    i = 0
+    while i < n {
+        in_tree[i] = 0
+        min_edge[i] = 999999.0
+        parent[i] = -1
+        i = i + 1
+    }
+    min_edge[0] = 0.0
+
+    # MST edges
+    let mst_u: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let mst_v: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let mst_w: ptr<f32> = array_new_f32(n)
+    let mut n_edges: i32 = 0
+
+    let mut step: i32 = 0
+    while step < n {
+        # Find minimum edge vertex not in tree
+        let mut u: i32 = -1
+        let mut best: f32 = 999999.0
+        i = 0
+        while i < n {
+            if in_tree[i] == 0 && min_edge[i] < best {
+                best = min_edge[i]
+                u = i
+            }
+            i = i + 1
+        }
+        if u == -1 {
+            step = step + 1
+        } else {
+            in_tree[u] = 1
+            if parent[u] != -1 {
+                mst_u[n_edges] = parent[u]
+                mst_v[n_edges] = u
+                mst_w[n_edges] = min_edge[u]
+                n_edges = n_edges + 1
+            }
+            # Update distances
+            let mut v: i32 = 0
+            while v < n {
+                if in_tree[v] == 0 {
+                    # Compute mutual reachability distance
+                    let mut s: f32 = 0.0
+                    let mut k: i32 = 0
+                    while k < n_features {
+                        let d: f32 = matrix_at(X, u, k) - matrix_at(X, v, k)
+                        s = s + d * d
+                        k = k + 1
+                    }
+                    let dist_uv: f32 = sqrt((s) as f64) as f32
+                    let mut mr: f32 = dist_uv
+                    if core_dist[u] > mr { mr = core_dist[u] }
+                    if core_dist[v] > mr { mr = core_dist[v] }
+                    if mr < min_edge[v] {
+                        min_edge[v] = mr
+                        parent[v] = u
+                    }
+                }
+                v = v + 1
+            }
+            step = step + 1
+        }
+    }
+
+    # Sort MST edges by weight descending (for single-linkage tree cutting)
+    let mut a2: i32 = 0
+    while a2 < n_edges {
+        let mut max_idx: i32 = a2
+        let mut b2: i32 = a2 + 1
+        while b2 < n_edges {
+            if mst_w[b2] > mst_w[max_idx] {
+                max_idx = b2
+            }
+            b2 = b2 + 1
+        }
+        let tmp_u: i32 = mst_u[a2]; mst_u[a2] = mst_u[max_idx]; mst_u[max_idx] = tmp_u
+        let tmp_v: i32 = mst_v[a2]; mst_v[a2] = mst_v[max_idx]; mst_v[max_idx] = tmp_v
+        let tmp_w: f32 = mst_w[a2]; mst_w[a2] = mst_w[max_idx]; mst_w[max_idx] = tmp_w
+        a2 = a2 + 1
+    }
+
+    # Cut the MST: edges with large weight separate clusters
+    # Use union-find to assign cluster labels
+    # Cut edges where weight > threshold based on min_cluster_size
+    let uf_parent: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let uf_size: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    i = 0
+    while i < n {
+        uf_parent[i] = i
+        uf_size[i] = 1
+        i = i + 1
+    }
+
+    # Add edges in order of increasing weight (build clusters)
+    let mut e: i32 = n_edges - 1
+    while e >= 0 {
+        let u: i32 = mst_u[e]
+        let v: i32 = mst_v[e]
+        # Find roots
+        let mut ru: i32 = u
+        while uf_parent[ru] != ru { ru = uf_parent[ru] }
+        let mut rv: i32 = v
+        while uf_parent[rv] != rv { rv = uf_parent[rv] }
+        if ru != rv {
+            # Merge smaller into larger
+            if uf_size[ru] < uf_size[rv] {
+                uf_parent[ru] = rv
+                uf_size[rv] = uf_size[rv] + uf_size[ru]
+            } else {
+                uf_parent[rv] = ru
+                uf_size[ru] = uf_size[ru] + uf_size[rv]
+            }
+        }
+        e = e - 1
+    }
+
+    # Assign labels: find root of each point, map roots to cluster IDs
+    # Only clusters with size >= min_cluster_size get a real label
+    let root_ids: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let mut n_clusters: i32 = 0
+    i = 0
+    while i < n {
+        let mut r: i32 = i
+        while uf_parent[r] != r { r = uf_parent[r] }
+        root_ids[i] = r
+        i = i + 1
+    }
+
+    # Find unique roots with size >= min_cluster_size
+    let unique_roots: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let cluster_map: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    i = 0
+    while i < n {
+        cluster_map[i] = -1
+        i = i + 1
+    }
+
+    i = 0
+    while i < n {
+        let r: i32 = root_ids[i]
+        if cluster_map[r] == -1 {
+            # Check if this cluster is large enough
+            if uf_size[r] >= min_cluster_size {
+                cluster_map[r] = n_clusters
+                unique_roots[n_clusters] = r
+                n_clusters = n_clusters + 1
+            }
+        }
+        i = i + 1
+    }
+
+    # Assign labels
+    i = 0
+    while i < n {
+        let r: i32 = root_ids[i]
+        if cluster_map[r] != -1 {
+            labels[i] = (cluster_map[r] as f32)
+        } else {
+            labels[i] = -1.0
+        }
+        i = i + 1
+    }
+
+    array_free_f32(core_dist)
+    free(in_tree as ptr<void>)
+    array_free_f32(min_edge)
+    free(parent as ptr<void>)
+    free(mst_u as ptr<void>)
+    free(mst_v as ptr<void>)
+    array_free_f32(mst_w)
+    free(uf_parent as ptr<void>)
+    free(uf_size as ptr<void>)
+    free(root_ids as ptr<void>)
+    free(unique_roots as ptr<void>)
+    free(cluster_map as ptr<void>)
+
+    let result: HDBSCAN = HDBSCAN {
+        labels: labels,
+        n_clusters: n_clusters,
+        n_samples: n,
+        fitted: true
+    }
+    return result
+}
+
+export function hdbscan_labels(model: HDBSCAN) -> ptr<f32> {
+    let result: ptr<f32> = array_copy_f32(model.labels, model.n_samples)
+    return result
+}
+
+export function hdbscan_free(model: HDBSCAN) -> void {
+    array_free_f32(model.labels)
+}
+
+# ============================================================================
+# FeatureAgglomeration
+# ============================================================================
+
+export struct FeatureAgglomeration {
+    n_clusters: i32,
+    labels: ptr<i32>,
+    n_features: i32,
+    fitted: bool
+}
+
+export function feature_agglomeration_fit(X: Matrix, n_clusters: i32) -> FeatureAgglomeration {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+    let labels: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+
+    # Compute correlation distance between features (1 - |corr|)
+    let dist: ptr<f32> = array_new_f32(n_features * n_features)
+    let mut i: i32 = 0
+    while i < n_features {
+        let mut j: i32 = 0
+        while j < n_features {
+            if i == j {
+                dist[i * n_features + j] = 0.0
+            } else {
+                # Compute correlation between column i and column j
+                let mut sum_i: f32 = 0.0
+                let mut sum_j: f32 = 0.0
+                let mut sum_ij: f32 = 0.0
+                let mut sum_i2: f32 = 0.0
+                let mut sum_j2: f32 = 0.0
+                let mut k: i32 = 0
+                while k < n {
+                    let xi: f32 = matrix_at(X, k, i)
+                    let xj: f32 = matrix_at(X, k, j)
+                    sum_i = sum_i + xi
+                    sum_j = sum_j + xj
+                    sum_ij = sum_ij + xi * xj
+                    sum_i2 = sum_i2 + xi * xi
+                    sum_j2 = sum_j2 + xj * xj
+                    k = k + 1
+                }
+                let mean_i: f32 = sum_i / (n as f32)
+                let mean_j: f32 = sum_j / (n as f32)
+                let cov: f32 = sum_ij / (n as f32) - mean_i * mean_j
+                let var_i: f32 = sum_i2 / (n as f32) - mean_i * mean_i
+                let var_j: f32 = sum_j2 / (n as f32) - mean_j * mean_j
+                let denom: f32 = sqrt((var_i * var_j) as f64) as f32
+                let corr: f32 = 0.0
+                if denom > 0.0000000001 {
+                    corr = cov / denom
+                }
+                dist[i * n_features + j] = 1.0 - fabs((corr) as f64) as f32
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    # Agglomerative clustering on features
+    # Each feature starts as its own cluster
+    let cluster_id: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    let mut n_current: i32 = n_features
+    i = 0
+    while i < n_features {
+        cluster_id[i] = i
+        labels[i] = i
+        i = i + 1
+    }
+
+    # Merge closest clusters until n_clusters remain
+    while n_current > n_clusters {
+        # Find closest pair of clusters (single linkage: min distance between members)
+        let mut best_dist: f32 = 999999.0
+        let mut best_a: i32 = -1
+        let mut best_b: i32 = -1
+        i = 0
+        while i < n_features {
+            let mut j: i32 = i + 1
+            while j < n_features {
+                if cluster_id[i] != cluster_id[j] {
+                    let d: f32 = dist[i * n_features + j]
+                    if d < best_dist {
+                        best_dist = d
+                        best_a = cluster_id[i]
+                        best_b = cluster_id[j]
+                    }
+                }
+                j = j + 1
+            }
+            i = i + 1
+        }
+        if best_a == -1 {
+            n_current = n_clusters
+        } else {
+            # Merge cluster best_b into best_a
+            i = 0
+            while i < n_features {
+                if cluster_id[i] == best_b {
+                    cluster_id[i] = best_a
+                }
+                i = i + 1
+            }
+            n_current = n_current - 1
+        }
+    }
+
+    # Relabel clusters to 0..n_clusters-1
+    let unique_ids: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    let mut n_unique: i32 = 0
+    i = 0
+    while i < n_features {
+        let mut found: bool = false
+        let mut k: i32 = 0
+        while k < n_unique {
+            if unique_ids[k] == cluster_id[i] {
+                found = true
+            }
+            k = k + 1
+        }
+        if not found {
+            unique_ids[n_unique] = cluster_id[i]
+            n_unique = n_unique + 1
+        }
+        i = i + 1
+    }
+
+    i = 0
+    while i < n_features {
+        let mut k: i32 = 0
+        while k < n_unique {
+            if unique_ids[k] == cluster_id[i] {
+                labels[i] = k
+            }
+            k = k + 1
+        }
+        i = i + 1
+    }
+
+    array_free_f32(dist)
+    free(cluster_id as ptr<void>)
+    free(unique_ids as ptr<void>)
+
+    let result: FeatureAgglomeration = FeatureAgglomeration {
+        n_clusters: n_unique,
+        labels: labels,
+        n_features: n_features,
+        fitted: true
+    }
+    return result
+}
+
+export function feature_agglomeration_transform(model: FeatureAgglomeration, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let result: Matrix = matrix_new(n, model.n_clusters)
+    let mut c: i32 = 0
+    while c < model.n_clusters {
+        # Find features in this cluster
+        let mut count: i32 = 0
+        let mut f: i32 = 0
+        while f < model.n_features {
+            if model.labels[f] == c {
+                count = count + 1
+            }
+            f = f + 1
+        }
+        # Average features in cluster
+        let mut i: i32 = 0
+        while i < n {
+            let mut sum: f32 = 0.0
+            let mut f2: i32 = 0
+            while f2 < model.n_features {
+                if model.labels[f2] == c {
+                    sum = sum + matrix_at(X, i, f2)
+                }
+                f2 = f2 + 1
+            }
+            if count > 0 {
+                matrix_set(result, i, c, sum / (count as f32))
+            }
+            i = i + 1
+        }
+        c = c + 1
+    }
+    return result
+}
+
+export function feature_agglomeration_free(model: FeatureAgglomeration) -> void {
+    free(model.labels as ptr<void>)
+}

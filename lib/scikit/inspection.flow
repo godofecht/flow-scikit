@@ -7,6 +7,7 @@
 # rather than callable predict/metric functions.
 
 import "lib/scikit/matrix.flow"
+import "lib/scikit/tree.flow"
 
 extern {
     function rand() -> i32
@@ -95,4 +96,84 @@ export function permutation_importance_print(result: PermutationImportanceResult
         printf("%.4f", result.importances_std[j])
         println("")
     }
+}
+
+# ============================================================================
+# Partial Dependence
+# ============================================================================
+
+export struct PartialDependenceResult {
+    values: ptr<f32>,
+    grid: ptr<f32>,
+    n_grid: i32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function partial_dependence(model: DecisionTreeClassifier, X: Matrix, feature_idx: i32, grid_resolution: i32) -> PartialDependenceResult {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    # Find min and max of the feature
+    let mut fmin: f32 = matrix_at(X, 0, feature_idx)
+    let mut fmax: f32 = matrix_at(X, 0, feature_idx)
+    let mut i: i32 = 1
+    while i < n {
+        let v: f32 = matrix_at(X, i, feature_idx)
+        if v < fmin { fmin = v }
+        if v > fmax { fmax = v }
+        i = i + 1
+    }
+
+    if fmax == fmin {
+        fmax = fmin + 1.0
+    }
+
+    # Build grid
+    let grid: ptr<f32> = array_new_f32(grid_resolution)
+    let mut g: i32 = 0
+    while g < grid_resolution {
+        grid[g] = fmin + (fmax - fmin) * ((g as f32) / ((grid_resolution - 1) as f32))
+        g = g + 1
+    }
+
+    # For each grid value, replace feature column and predict
+    let values: ptr<f32> = array_new_f32(grid_resolution)
+    let X_mod: Matrix = matrix_copy(X)
+    g = 0
+    while g < grid_resolution {
+        # Replace feature column with grid value
+        i = 0
+        while i < n {
+            matrix_set(X_mod, i, feature_idx, grid[g])
+            i = i + 1
+        }
+        # Predict and average
+        let preds: ptr<f32> = decision_tree_classifier_predict(model, X_mod)
+        let mut sum: f32 = 0.0
+        i = 0
+        while i < n {
+            sum = sum + preds[i]
+            i = i + 1
+        }
+        values[g] = sum / (n as f32)
+        array_free_f32(preds)
+        g = g + 1
+    }
+
+    matrix_free(X_mod)
+
+    let result: PartialDependenceResult = PartialDependenceResult {
+        values: values,
+        grid: grid,
+        n_grid: grid_resolution,
+        n_features: 1,
+        fitted: true
+    }
+    return result
+}
+
+export function partial_dependence_free(model: PartialDependenceResult) -> void {
+    array_free_f32(model.values)
+    array_free_f32(model.grid)
 }

@@ -659,3 +659,856 @@ export function sequential_feature_selector_transform(selector: SequentialFeatur
 export function sequential_feature_selector_free(selector: SequentialFeatureSelector) -> void {
     free(selector.selected_indices as ptr<void>)
 }
+
+# ============================================================================
+# Internal helpers: ANOVA F-scores, p-values, sorting
+# ============================================================================
+
+# Count the number of distinct classes in y.
+function _fs_count_classes(y: ptr<f32>, n: i32) -> i32 {
+    let classes: ptr<f32> = array_new_f32(n)
+    let mut n_classes: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for c in 0 to n_classes {
+            if classes[c] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_classes] = y[i]
+            n_classes = n_classes + 1
+        }
+    }
+    array_free_f32(classes)
+    return n_classes
+}
+
+# Compute one-way ANOVA F-score for each feature column of X given target y.
+# Fills scores[j] for j in 0 to X.cols - 1.
+function _fs_anova_f_scores(X: Matrix, y: ptr<f32>, scores: ptr<f32>) -> void {
+    let n_features: i32 = X.cols
+    let classes: ptr<f32> = array_new_f32(X.rows)
+    let mut n_classes: i32 = 0
+    for i in 0 to X.rows {
+        let mut found: bool = false
+        for c in 0 to n_classes {
+            if classes[c] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_classes] = y[i]
+            n_classes = n_classes + 1
+        }
+    }
+
+    for j in 0 to n_features {
+        let mut overall_mean: f32 = 0.0
+        for i in 0 to X.rows {
+            overall_mean = overall_mean + matrix_at(X, i, j)
+        }
+        overall_mean = overall_mean / (X.rows as f32)
+
+        let mut ss_between: f32 = 0.0
+        let mut ss_within: f32 = 0.0
+
+        for c in 0 to n_classes {
+            let mut group_mean: f32 = 0.0
+            let mut group_n: i32 = 0
+            for i in 0 to X.rows {
+                if y[i] == classes[c] {
+                    group_mean = group_mean + matrix_at(X, i, j)
+                    group_n = group_n + 1
+                }
+            }
+            if group_n > 0 {
+                group_mean = group_mean / (group_n as f32)
+                let diff: f32 = group_mean - overall_mean
+                ss_between = ss_between + (group_n as f32) * diff * diff
+                for i in 0 to X.rows {
+                    if y[i] == classes[c] {
+                        let d: f32 = matrix_at(X, i, j) - group_mean
+                        ss_within = ss_within + d * d
+                    }
+                }
+            }
+        }
+
+        if ss_within < 0.0000000001 {
+            scores[j] = 0.0
+        } else {
+            let df_between: f32 = (n_classes - 1) as f32
+            let mut df_within: f32 = (X.rows - n_classes) as f32
+            if df_within < 1.0 {
+                df_within = 1.0
+            }
+            scores[j] = (ss_between / df_between) / (ss_within / df_within)
+        }
+    }
+
+    array_free_f32(classes)
+}
+
+# Lanczos approximation of log(Gamma(x)) for x >= 0.5.
+function _fs_log_gamma(x: f64) -> f64 {
+    let mut xx: f64 = x
+    if xx < 0.5 {
+        xx = 0.5
+    }
+    let g: f64 = 7.0
+    let c: array<f64, 9> = [0.99999999999980993, 671.520238121407, -1259.1392167224028, 771.32342877765313, -176.6150291621406, 12.507343278686905, -0.13857109526572012, 0.0000099843695780195716, 0.00000015056327351493116]
+    let mut a: f64 = c[0]
+    let t: f64 = xx + g - 0.5
+    for i in 1 to 9 {
+        a = a + c[i] / (xx + (i as f64) - 1.0)
+    }
+    let result: f64 = 0.5 * log(2.0 * 3.14159265358979) + (xx - 0.5) * log(t) - t + log(a)
+    return result
+}
+
+# Continued fraction for the incomplete beta function (Numerical Recipes).
+function _fs_betacf(a: f64, b: f64, x: f64) -> f64 {
+    let MAXIT: i32 = 200
+    let EPS: f64 = 0.0000000000003
+    let FPMIN: f64 = 0.0000000000000001
+    let mut qab: f64 = a + b
+    let qap: f64 = a + 1.0
+    let qam: f64 = a - 1.0
+    let mut c: f64 = 1.0
+    let mut d: f64 = 1.0 - qab * x / qap
+    if fabs(d) < FPMIN {
+        d = FPMIN
+    }
+    d = 1.0 / d
+    let mut h: f64 = d
+    let mut m: i32 = 1
+    let mut done: bool = false
+    while m <= MAXIT && not done {
+        let m2: i32 = 2 * m
+        let mut aa: f64 = (m as f64) * (b - (m as f64)) * x / ((qam + (m2 as f64)) * (a + (m2 as f64)))
+        d = 1.0 + aa * d
+        if fabs(d) < FPMIN {
+            d = FPMIN
+        }
+        c = 1.0 + aa / c
+        if fabs(c) < FPMIN {
+            c = FPMIN
+        }
+        d = 1.0 / d
+        h = h * d * c
+        aa = 0.0 - (a + (m as f64)) * (qab + (m as f64)) * x / ((a + (m2 as f64)) * (qap + (m2 as f64)))
+        d = 1.0 + aa * d
+        if fabs(d) < FPMIN {
+            d = FPMIN
+        }
+        c = 1.0 + aa / c
+        if fabs(c) < FPMIN {
+            c = FPMIN
+        }
+        d = 1.0 / d
+        let del: f64 = d * c
+        h = h * del
+        if fabs(del - 1.0) < EPS {
+            done = true
+        }
+        m = m + 1
+    }
+    return h
+}
+
+# Regularized incomplete beta function I_x(a, b).
+function _fs_betai(a: f64, b: f64, x: f64) -> f64 {
+    if x <= 0.0 {
+        return 0.0
+    }
+    if x >= 1.0 {
+        return 1.0
+    }
+    let lbeta: f64 = _fs_log_gamma(a) + _fs_log_gamma(b) - _fs_log_gamma(a + b)
+    let bt: f64 = exp(lbeta + a * log(x) + b * log(1.0 - x))
+    if x < (a + 1.0) / (a + b + 2.0) {
+        let cf: f64 = _fs_betacf(a, b, x)
+        let result: f64 = bt * cf / a
+        return result
+    } else {
+        let cf: f64 = _fs_betacf(b, a, 1.0 - x)
+        let result: f64 = 1.0 - bt * cf / b
+        return result
+    }
+}
+
+# p-value (survival function) of the F-distribution with d1, d2 degrees of freedom.
+function _fs_f_pvalue(f: f32, d1: i32, d2: i32) -> f32 {
+    if d1 <= 0 {
+        return 1.0
+    }
+    if d2 <= 0 {
+        return 1.0
+    }
+    if f <= 0.0 {
+        return 1.0
+    }
+    let a: f64 = (d1 as f64) / 2.0
+    let b: f64 = (d2 as f64) / 2.0
+    let x: f64 = (d2 as f64) / ((d2 as f64) + (d1 as f64) * (f as f64))
+    let p: f64 = _fs_betai(b, a, x)
+    let mut pp: f64 = p
+    if pp < 0.0 {
+        pp = 0.0
+    }
+    if pp > 1.0 {
+        pp = 1.0
+    }
+    return pp as f32
+}
+
+# Sort feature indices by score descending, write the top k into selected.
+# Returns the clamped count actually written.
+function _fs_select_top_k_by_score(scores: ptr<f32>, n_features: i32, k: i32, selected: ptr<i32>) -> i32 {
+    let order: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    for j in 0 to n_features {
+        order[j] = j
+    }
+    for i in 0 to n_features {
+        let mut max_idx: i32 = i
+        for j in i + 1 to n_features {
+            if scores[order[j]] > scores[order[max_idx]] {
+                max_idx = j
+            }
+        }
+        let tmp: i32 = order[i]
+        order[i] = order[max_idx]
+        order[max_idx] = tmp
+    }
+    let mut kk: i32 = k
+    if kk < 1 {
+        kk = 1
+    }
+    if kk > n_features {
+        kk = n_features
+    }
+    for j in 0 to kk {
+        selected[j] = order[j]
+    }
+    free(order as ptr<void>)
+    return kk
+}
+
+# Sort feature indices by p-value ascending, write the top k into selected.
+# Returns the clamped count actually written.
+function _fs_select_top_k_by_pvalue(pvalues: ptr<f32>, n_features: i32, k: i32, selected: ptr<i32>) -> i32 {
+    let order: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    for j in 0 to n_features {
+        order[j] = j
+    }
+    for i in 0 to n_features {
+        let mut min_idx: i32 = i
+        for j in i + 1 to n_features {
+            if pvalues[order[j]] < pvalues[order[min_idx]] {
+                min_idx = j
+            }
+        }
+        let tmp: i32 = order[i]
+        order[i] = order[min_idx]
+        order[min_idx] = tmp
+    }
+    let mut kk: i32 = k
+    if kk < 0 {
+        kk = 0
+    }
+    if kk > n_features {
+        kk = n_features
+    }
+    for j in 0 to kk {
+        selected[j] = order[j]
+    }
+    free(order as ptr<void>)
+    return kk
+}
+
+# Benjamini-Hochberg: largest rank k where p(k) <= k/n * alpha.
+function _fs_bh_count(pvalues: ptr<f32>, n_features: i32, alpha: f32) -> i32 {
+    let order: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    for j in 0 to n_features {
+        order[j] = j
+    }
+    for i in 0 to n_features {
+        let mut min_idx: i32 = i
+        for j in i + 1 to n_features {
+            if pvalues[order[j]] < pvalues[order[min_idx]] {
+                min_idx = j
+            }
+        }
+        let tmp: i32 = order[i]
+        order[i] = order[min_idx]
+        order[min_idx] = tmp
+    }
+    let mut k: i32 = 0
+    for i in 0 to n_features {
+        let rank: i32 = i + 1
+        let threshold: f32 = ((rank as f32) / (n_features as f32)) * alpha
+        if pvalues[order[i]] <= threshold {
+            k = rank
+        }
+    }
+    free(order as ptr<void>)
+    return k
+}
+
+# ============================================================================
+# SelectPercentile
+# ============================================================================
+
+export struct SelectPercentile {
+    scores: ptr<f32>,
+    n_selected: i32,
+    percentile: i32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function select_percentile_fit(X: Matrix, y: ptr<f32>, percentile: i32) -> SelectPercentile {
+    let n_features: i32 = X.cols
+    let scores: ptr<f32> = array_new_f32(n_features)
+    _fs_anova_f_scores(X, y, scores)
+
+    let mut n_selected: i32 = (n_features * percentile) / 100
+    if n_selected < 1 {
+        n_selected = 1
+    }
+    if n_selected > n_features {
+        n_selected = n_features
+    }
+
+    let model: SelectPercentile = SelectPercentile {
+        scores: scores,
+        n_selected: n_selected,
+        percentile: percentile,
+        n_features: n_features,
+        fitted: true
+    }
+    return model
+}
+
+export function select_percentile_transform(model: SelectPercentile, X: Matrix) -> Matrix {
+    let selected: ptr<i32> = malloc((model.n_features as i64) * 4) as ptr<i32>
+    let n_sel: i32 = _fs_select_top_k_by_score(model.scores, model.n_features, model.n_selected, selected)
+    let result: Matrix = matrix_new(X.rows, n_sel)
+    for i in 0 to X.rows {
+        for j in 0 to n_sel {
+            matrix_set(result, i, j, matrix_at(X, i, selected[j]))
+        }
+    }
+    free(selected as ptr<void>)
+    return result
+}
+
+export function select_percentile_free(model: SelectPercentile) -> void {
+    array_free_f32(model.scores)
+}
+
+# ============================================================================
+# SelectFdr (false discovery rate, Benjamini-Hochberg)
+# ============================================================================
+
+export struct SelectFdr {
+    scores: ptr<f32>,
+    pvalues: ptr<f32>,
+    n_selected: i32,
+    alpha: f32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function select_fdr_fit(X: Matrix, y: ptr<f32>, alpha: f32) -> SelectFdr {
+    let n_features: i32 = X.cols
+    let scores: ptr<f32> = array_new_f32(n_features)
+    _fs_anova_f_scores(X, y, scores)
+
+    let n_classes: i32 = _fs_count_classes(y, X.rows)
+    let d1: i32 = n_classes - 1
+    let d2: i32 = X.rows - n_classes
+    let pvalues: ptr<f32> = array_new_f32(n_features)
+    for j in 0 to n_features {
+        pvalues[j] = _fs_f_pvalue(scores[j], d1, d2)
+    }
+
+    let n_selected: i32 = _fs_bh_count(pvalues, n_features, alpha)
+
+    let model: SelectFdr = SelectFdr {
+        scores: scores,
+        pvalues: pvalues,
+        n_selected: n_selected,
+        alpha: alpha,
+        n_features: n_features,
+        fitted: true
+    }
+    return model
+}
+
+export function select_fdr_transform(model: SelectFdr, X: Matrix) -> Matrix {
+    let selected: ptr<i32> = malloc((model.n_features as i64) * 4) as ptr<i32>
+    let n_sel: i32 = _fs_select_top_k_by_pvalue(model.pvalues, model.n_features, model.n_selected, selected)
+    let result: Matrix = matrix_new(X.rows, n_sel)
+    for i in 0 to X.rows {
+        for j in 0 to n_sel {
+            matrix_set(result, i, j, matrix_at(X, i, selected[j]))
+        }
+    }
+    free(selected as ptr<void>)
+    return result
+}
+
+export function select_fdr_free(model: SelectFdr) -> void {
+    array_free_f32(model.scores)
+    array_free_f32(model.pvalues)
+}
+
+# ============================================================================
+# SelectFpr (false positive rate)
+# ============================================================================
+
+export struct SelectFpr {
+    scores: ptr<f32>,
+    pvalues: ptr<f32>,
+    n_selected: i32,
+    alpha: f32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function select_fpr_fit(X: Matrix, y: ptr<f32>, alpha: f32) -> SelectFpr {
+    let n_features: i32 = X.cols
+    let scores: ptr<f32> = array_new_f32(n_features)
+    _fs_anova_f_scores(X, y, scores)
+
+    let n_classes: i32 = _fs_count_classes(y, X.rows)
+    let d1: i32 = n_classes - 1
+    let d2: i32 = X.rows - n_classes
+    let pvalues: ptr<f32> = array_new_f32(n_features)
+    let mut n_selected: i32 = 0
+    for j in 0 to n_features {
+        pvalues[j] = _fs_f_pvalue(scores[j], d1, d2)
+        if pvalues[j] < alpha {
+            n_selected = n_selected + 1
+        }
+    }
+
+    let model: SelectFpr = SelectFpr {
+        scores: scores,
+        pvalues: pvalues,
+        n_selected: n_selected,
+        alpha: alpha,
+        n_features: n_features,
+        fitted: true
+    }
+    return model
+}
+
+export function select_fpr_transform(model: SelectFpr, X: Matrix) -> Matrix {
+    let selected: ptr<i32> = malloc((model.n_features as i64) * 4) as ptr<i32>
+    let mut count: i32 = 0
+    for j in 0 to model.n_features {
+        if model.pvalues[j] < model.alpha {
+            selected[count] = j
+            count = count + 1
+        }
+    }
+    let result: Matrix = matrix_new(X.rows, count)
+    for i in 0 to X.rows {
+        for j in 0 to count {
+            matrix_set(result, i, j, matrix_at(X, i, selected[j]))
+        }
+    }
+    free(selected as ptr<void>)
+    return result
+}
+
+export function select_fpr_free(model: SelectFpr) -> void {
+    array_free_f32(model.scores)
+    array_free_f32(model.pvalues)
+}
+
+# ============================================================================
+# SelectFwe (family-wise error rate, Bonferroni correction)
+# ============================================================================
+
+export struct SelectFwe {
+    scores: ptr<f32>,
+    pvalues: ptr<f32>,
+    n_selected: i32,
+    alpha: f32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function select_fwe_fit(X: Matrix, y: ptr<f32>, alpha: f32) -> SelectFwe {
+    let n_features: i32 = X.cols
+    let scores: ptr<f32> = array_new_f32(n_features)
+    _fs_anova_f_scores(X, y, scores)
+
+    let n_classes: i32 = _fs_count_classes(y, X.rows)
+    let d1: i32 = n_classes - 1
+    let d2: i32 = X.rows - n_classes
+    let threshold: f32 = alpha / (n_features as f32)
+    let pvalues: ptr<f32> = array_new_f32(n_features)
+    let mut n_selected: i32 = 0
+    for j in 0 to n_features {
+        pvalues[j] = _fs_f_pvalue(scores[j], d1, d2)
+        if pvalues[j] < threshold {
+            n_selected = n_selected + 1
+        }
+    }
+
+    let model: SelectFwe = SelectFwe {
+        scores: scores,
+        pvalues: pvalues,
+        n_selected: n_selected,
+        alpha: alpha,
+        n_features: n_features,
+        fitted: true
+    }
+    return model
+}
+
+export function select_fwe_transform(model: SelectFwe, X: Matrix) -> Matrix {
+    let threshold: f32 = model.alpha / (model.n_features as f32)
+    let selected: ptr<i32> = malloc((model.n_features as i64) * 4) as ptr<i32>
+    let mut count: i32 = 0
+    for j in 0 to model.n_features {
+        if model.pvalues[j] < threshold {
+            selected[count] = j
+            count = count + 1
+        }
+    }
+    let result: Matrix = matrix_new(X.rows, count)
+    for i in 0 to X.rows {
+        for j in 0 to count {
+            matrix_set(result, i, j, matrix_at(X, i, selected[j]))
+        }
+    }
+    free(selected as ptr<void>)
+    return result
+}
+
+export function select_fwe_free(model: SelectFwe) -> void {
+    array_free_f32(model.scores)
+    array_free_f32(model.pvalues)
+}
+
+# ============================================================================
+# GenericUnivariateSelect
+# ============================================================================
+
+export const GUS_K_BEST: i32 = 0
+export const GUS_PERCENTILE: i32 = 1
+export const GUS_FPR: i32 = 2
+export const GUS_FDR: i32 = 3
+export const GUS_FWE: i32 = 4
+
+export struct GenericUnivariateSelect {
+    scores: ptr<f32>,
+    pvalues: ptr<f32>,
+    selected_indices: ptr<i32>,
+    n_selected: i32,
+    n_features: i32,
+    mode: i32,
+    param: f32,
+    fitted: bool
+}
+
+export function generic_univariate_select(X: Matrix, y: ptr<f32>, mode: i32, param: f32) -> GenericUnivariateSelect {
+    let n_features: i32 = X.cols
+    let scores: ptr<f32> = array_new_f32(n_features)
+    _fs_anova_f_scores(X, y, scores)
+
+    let n_classes: i32 = _fs_count_classes(y, X.rows)
+    let d1: i32 = n_classes - 1
+    let d2: i32 = X.rows - n_classes
+    let pvalues: ptr<f32> = array_new_f32(n_features)
+    for j in 0 to n_features {
+        pvalues[j] = _fs_f_pvalue(scores[j], d1, d2)
+    }
+
+    let selected: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    let mut n_selected: i32 = 0
+
+    if mode == GUS_K_BEST {
+        let k: i32 = param as i32
+        n_selected = _fs_select_top_k_by_score(scores, n_features, k, selected)
+    } elif mode == GUS_PERCENTILE {
+        let percentile: i32 = param as i32
+        let mut k: i32 = (n_features * percentile) / 100
+        if k < 1 {
+            k = 1
+        }
+        if k > n_features {
+            k = n_features
+        }
+        n_selected = _fs_select_top_k_by_score(scores, n_features, k, selected)
+    } elif mode == GUS_FPR {
+        for j in 0 to n_features {
+            if pvalues[j] < param {
+                selected[n_selected] = j
+                n_selected = n_selected + 1
+            }
+        }
+    } elif mode == GUS_FDR {
+        let k: i32 = _fs_bh_count(pvalues, n_features, param)
+        n_selected = _fs_select_top_k_by_pvalue(pvalues, n_features, k, selected)
+    } elif mode == GUS_FWE {
+        let threshold: f32 = param / (n_features as f32)
+        for j in 0 to n_features {
+            if pvalues[j] < threshold {
+                selected[n_selected] = j
+                n_selected = n_selected + 1
+            }
+        }
+    } else {
+        # Default to k_best with k = 1.
+        n_selected = _fs_select_top_k_by_score(scores, n_features, 1, selected)
+    }
+
+    let model: GenericUnivariateSelect = GenericUnivariateSelect {
+        scores: scores,
+        pvalues: pvalues,
+        selected_indices: selected,
+        n_selected: n_selected,
+        n_features: n_features,
+        mode: mode,
+        param: param,
+        fitted: true
+    }
+    return model
+}
+
+export function generic_univariate_select_transform(model: GenericUnivariateSelect, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, model.n_selected)
+    for i in 0 to X.rows {
+        for j in 0 to model.n_selected {
+            matrix_set(result, i, j, matrix_at(X, i, model.selected_indices[j]))
+        }
+    }
+    return result
+}
+
+export function generic_univariate_select_free(model: GenericUnivariateSelect) -> void {
+    array_free_f32(model.scores)
+    array_free_f32(model.pvalues)
+    free(model.selected_indices as ptr<void>)
+}
+
+# ============================================================================
+# mutual_info_classif (discrete target)
+# ============================================================================
+
+export function mutual_info_classif(X: Matrix, y: ptr<f32>, n_neighbors: i32) -> ptr<f32> {
+    let n_features: i32 = X.cols
+    let n: i32 = X.rows
+    let mi: ptr<f32> = array_new_f32(n_features)
+
+    let classes: ptr<f32> = array_new_f32(n)
+    let mut n_classes: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for c in 0 to n_classes {
+            if classes[c] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_classes] = y[i]
+            n_classes = n_classes + 1
+        }
+    }
+
+    let mut n_bins: i32 = 10
+    if n < 10 {
+        n_bins = n
+    }
+    if n_bins < 2 {
+        n_bins = 2
+    }
+
+    for j in 0 to n_features {
+        let mut fmin: f32 = matrix_at(X, 0, j)
+        let mut fmax: f32 = matrix_at(X, 0, j)
+        for i in 0 to n {
+            let v: f32 = matrix_at(X, i, j)
+            if v < fmin {
+                fmin = v
+            }
+            if v > fmax {
+                fmax = v
+            }
+        }
+        let range: f32 = fmax - fmin
+        let bin_width: f32 = range / (n_bins as f32)
+
+        if bin_width < 0.0000000001 {
+            mi[j] = 0.0
+        } else {
+            let joint: ptr<f32> = array_new_f32(n_bins * n_classes)
+            let bin_count: ptr<f32> = array_new_f32(n_bins)
+            let class_count: ptr<f32> = array_new_f32(n_classes)
+            for i in 0 to n {
+                let v: f32 = matrix_at(X, i, j)
+                let mut b: i32 = ((v - fmin) / bin_width) as i32
+                if b < 0 {
+                    b = 0
+                }
+                if b >= n_bins {
+                    b = n_bins - 1
+                }
+                let mut ci: i32 = 0
+                for c in 0 to n_classes {
+                    if classes[c] == y[i] {
+                        ci = c
+                    }
+                }
+                joint[b * n_classes + ci] = joint[b * n_classes + ci] + 1.0
+                bin_count[b] = bin_count[b] + 1.0
+                class_count[ci] = class_count[ci] + 1.0
+            }
+
+            let mut s: f32 = 0.0
+            for b in 0 to n_bins {
+                for c in 0 to n_classes {
+                    let nxy: f32 = joint[b * n_classes + c]
+                    if nxy > 0.0 {
+                        let pxy: f32 = nxy / (n as f32)
+                        let px: f32 = bin_count[b] / (n as f32)
+                        let py: f32 = class_count[c] / (n as f32)
+                        if px > 0.0 && py > 0.0 {
+                            s = s + pxy * log((pxy / (px * py)) as f64) as f32
+                        }
+                    }
+                }
+            }
+            if s < 0.0 {
+                s = 0.0
+            }
+            mi[j] = s
+
+            array_free_f32(joint)
+            array_free_f32(bin_count)
+            array_free_f32(class_count)
+        }
+    }
+
+    array_free_f32(classes)
+    return mi
+}
+
+# ============================================================================
+# mutual_info_regression (continuous target)
+# ============================================================================
+
+export function mutual_info_regression(X: Matrix, y: ptr<f32>, n_neighbors: i32) -> ptr<f32> {
+    let n_features: i32 = X.cols
+    let n: i32 = X.rows
+    let mi: ptr<f32> = array_new_f32(n_features)
+
+    let mut n_bins: i32 = 10
+    if n < 10 {
+        n_bins = n
+    }
+    if n_bins < 2 {
+        n_bins = 2
+    }
+
+    let mut ymin: f32 = y[0]
+    let mut ymax: f32 = y[0]
+    for i in 0 to n {
+        if y[i] < ymin {
+            ymin = y[i]
+        }
+        if y[i] > ymax {
+            ymax = y[i]
+        }
+    }
+    let yrange: f32 = ymax - ymin
+    let ybin_width: f32 = yrange / (n_bins as f32)
+    let ybin: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    if ybin_width < 0.0000000001 {
+        for i in 0 to n {
+            ybin[i] = 0
+        }
+    } else {
+        for i in 0 to n {
+            let mut b: i32 = ((y[i] - ymin) / ybin_width) as i32
+            if b < 0 {
+                b = 0
+            }
+            if b >= n_bins {
+                b = n_bins - 1
+            }
+            ybin[i] = b
+        }
+    }
+
+    for j in 0 to n_features {
+        let mut fmin: f32 = matrix_at(X, 0, j)
+        let mut fmax: f32 = matrix_at(X, 0, j)
+        for i in 0 to n {
+            let v: f32 = matrix_at(X, i, j)
+            if v < fmin {
+                fmin = v
+            }
+            if v > fmax {
+                fmax = v
+            }
+        }
+        let range: f32 = fmax - fmin
+        let bin_width: f32 = range / (n_bins as f32)
+
+        if bin_width < 0.0000000001 {
+            mi[j] = 0.0
+        } else {
+            let joint: ptr<f32> = array_new_f32(n_bins * n_bins)
+            let bin_count: ptr<f32> = array_new_f32(n_bins)
+            let ybin_count: ptr<f32> = array_new_f32(n_bins)
+            for i in 0 to n {
+                let v: f32 = matrix_at(X, i, j)
+                let mut b: i32 = ((v - fmin) / bin_width) as i32
+                if b < 0 {
+                    b = 0
+                }
+                if b >= n_bins {
+                    b = n_bins - 1
+                }
+                let yb: i32 = ybin[i]
+                joint[b * n_bins + yb] = joint[b * n_bins + yb] + 1.0
+                bin_count[b] = bin_count[b] + 1.0
+                ybin_count[yb] = ybin_count[yb] + 1.0
+            }
+
+            let mut s: f32 = 0.0
+            for b in 0 to n_bins {
+                for yb in 0 to n_bins {
+                    let nxy: f32 = joint[b * n_bins + yb]
+                    if nxy > 0.0 {
+                        let pxy: f32 = nxy / (n as f32)
+                        let px: f32 = bin_count[b] / (n as f32)
+                        let py: f32 = ybin_count[yb] / (n as f32)
+                        if px > 0.0 && py > 0.0 {
+                            s = s + pxy * log((pxy / (px * py)) as f64) as f32
+                        }
+                    }
+                }
+            }
+            if s < 0.0 {
+                s = 0.0
+            }
+            mi[j] = s
+
+            array_free_f32(joint)
+            array_free_f32(bin_count)
+            array_free_f32(ybin_count)
+        }
+    }
+
+    free(ybin as ptr<void>)
+    return mi
+}
