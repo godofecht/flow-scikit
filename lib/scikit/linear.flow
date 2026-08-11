@@ -3246,42 +3246,131 @@ export struct LassoLars {
     fitted: bool
 }
 
+# Helper: compute column means of X
+function _col_means(X: Matrix, n_features: i32) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(n_features)
+    let mut j: i32 = 0
+    while j < n_features {
+        let mut s: f32 = 0.0
+        let mut i: i32 = 0
+        while i < X.rows {
+            s = s + matrix_at(X, i, j)
+            i = i + 1
+        }
+        result[j] = s / (X.rows as f32)
+        j = j + 1
+    }
+    return result
+}
+
+# Helper: compute column norms squared of centered X
+function _col_norms_sq(X: Matrix, col_means: ptr<f32>, n_features: i32) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(n_features)
+    let mut j: i32 = 0
+    while j < n_features {
+        let mut s: f32 = 0.0
+        let mut i: i32 = 0
+        while i < X.rows {
+            let v: f32 = matrix_at(X, i, j) - col_means[j]
+            s = s + v * v
+            i = i + 1
+        }
+        result[j] = s
+        j = j + 1
+    }
+    return result
+}
+
+# Helper: compute dot product of centered column k with residual
+function _centered_col_dot(X: Matrix, col_means: ptr<f32>, residual: ptr<f32>, k: i32) -> f32 {
+    let mut s: f32 = 0.0
+    let mut i: i32 = 0
+    while i < X.rows {
+        s = s + (matrix_at(X, i, k) - col_means[k]) * residual[i]
+        i = i + 1
+    }
+    return s
+}
+
+# Helper: add/subtract w * centered_col_k to/from residual
+function _update_residual(X: Matrix, col_means: ptr<f32>, residual: ptr<f32>, k: i32, w: f32, sign: f32) -> void {
+    let mut i: i32 = 0
+    while i < X.rows {
+        residual[i] = residual[i] + sign * w * (matrix_at(X, i, k) - col_means[k])
+        i = i + 1
+    }
+}
+
+# Helper: soft threshold
+function _soft_threshold(rho: f32, threshold: f32) -> f32 {
+    if rho > threshold { return rho - threshold }
+    if rho < -threshold { return rho + threshold }
+    return 0.0
+}
+
 export function lasso_lars_fit(X: Matrix, y: ptr<f32>, alpha: f32, max_iter: i32) -> LassoLars {
     let n: i32 = X.rows
     let n_features: i32 = X.cols
 
-    # LassoLars: LARS with L1 penalty (alpha modification)
-    # Simplified: use LARS then apply soft-thresholding
-    let n_active: i32 = n_features
-    if max_iter < n_features {
-        n_active = max_iter
-    }
+    # LassoLars: coordinate descent with soft-thresholding.
+    # Produces the same L1-regularized solution as the LARS-Lasso path.
 
-    let lars_model: Lars = lars_fit(X, y, n_active)
+    let y_mean: f32 = array_mean(y, n)
+    let cmeans: ptr<f32> = _col_means(X, n_features)
+    let norms_sq: ptr<f32> = _col_norms_sq(X, cmeans, n_features)
+
     let weights: ptr<f32> = array_new_f32(n_features)
-
-    # Soft-threshold the LARS coefficients
+    let residual: ptr<f32> = array_new_f32(n)
     let mut i: i32 = 0
     while i < n_features {
-        let w: f32 = lars_model.weights[i]
-        if w > alpha {
-            weights[i] = w - alpha
-        } else {
-            if w < -alpha {
-                weights[i] = w + alpha
-            } else {
-                weights[i] = 0.0
-            }
-        }
+        weights[i] = 0.0
+        i = i + 1
+    }
+    i = 0
+    while i < n {
+        residual[i] = y[i] - y_mean
         i = i + 1
     }
 
-    let bias_copy: f32 = lars_model.bias
-    lars_free(lars_model)
+    let threshold: f32 = alpha * (n as f32)
+    let mut n_active: i32 = 0
+    let mut iter: i32 = 0
+
+    while iter < max_iter {
+        let mut n_changed: i32 = 0
+        let mut k: i32 = 0
+        while k < n_features {
+            if norms_sq[k] < 0.0000000001 { k = k + 1; continue }
+            let w_old: f32 = weights[k]
+            _update_residual(X, cmeans, residual, k, w_old, 1.0)
+            let rho: f32 = _centered_col_dot(X, cmeans, residual, k)
+            let w_new: f32 = _soft_threshold(rho, threshold) / norms_sq[k]
+            if w_new != w_old { n_changed = n_changed + 1 }
+            if w_old == 0.0 and w_new != 0.0 { n_active = n_active + 1 }
+            if w_old != 0.0 and w_new == 0.0 { n_active = n_active - 1 }
+            weights[k] = w_new
+            _update_residual(X, cmeans, residual, k, w_new, -1.0)
+            k = k + 1
+        }
+        if n_changed == 0 { break }
+        iter = iter + 1
+    }
+
+    # Compute bias
+    let bias: f32 = y_mean
+    let mut j: i32 = 0
+    while j < n_features {
+        bias = bias - weights[j] * cmeans[j]
+        j = j + 1
+    }
+
+    array_free_f32(cmeans)
+    array_free_f32(norms_sq)
+    array_free_f32(residual)
 
     let result: LassoLars = LassoLars {
         weights: weights,
-        bias: bias_copy,
+        bias: bias,
         n_features: n_features,
         n_active: n_active,
         alpha: alpha,

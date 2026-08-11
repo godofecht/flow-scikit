@@ -1586,6 +1586,114 @@ export function dictionary_learning_free(model: DictionaryLearning) -> void {
     free(model.dictionary as ptr<void>)
 }
 
+# Helper: OMP sparse coding and dictionary update for one sample
+function _omp_sparse_coding_update(components: Matrix, X_batch: Matrix, b: i32, n_components: i32, n_features: i32, iter: i32) -> void {
+    let n_nonzero: i32 = 5
+    if n_nonzero > n_components { n_nonzero = n_components }
+
+    let residual: ptr<f32> = array_new_f32(n_features)
+    let code: ptr<f32> = array_new_f32(n_components)
+    let active: ptr<i32> = malloc((n_nonzero as i64) * 4) as ptr<i32>
+    let mut n_active: i32 = 0
+
+    let mut j: i32 = 0
+    while j < n_features {
+        residual[j] = matrix_at(X_batch, b, j)
+        j = j + 1
+    }
+    j = 0
+    while j < n_components {
+        code[j] = 0.0
+        j = j + 1
+    }
+
+    let mut step: i32 = 0
+    while step < n_nonzero {
+        let mut best_atom: i32 = -1
+        let mut best_corr: f32 = 0.0
+        let mut k: i32 = 0
+        while k < n_components {
+            let mut is_active: bool = false
+            let mut a: i32 = 0
+            while a < n_active {
+                if active[a] == k { is_active = true }
+                a = a + 1
+            }
+            if is_active { k = k + 1; continue }
+            let mut corr: f32 = 0.0
+            let mut f: i32 = 0
+            while f < n_features {
+                corr = corr + residual[f] * matrix_at(components, k, f)
+                f = f + 1
+            }
+            let abs_c: f32 = corr
+            if corr < 0.0 { abs_c = -corr }
+            if abs_c > best_corr { best_corr = abs_c; best_atom = k }
+            k = k + 1
+        }
+        if best_atom < 0 { break }
+        if best_corr < 0.0000000001 { break }
+        active[n_active] = best_atom
+        n_active = n_active + 1
+
+        let mut norm_sq: f32 = 0.0
+        let mut f2: i32 = 0
+        while f2 < n_features { norm_sq = norm_sq + matrix_at(components, best_atom, f2) * matrix_at(components, best_atom, f2); f2 = f2 + 1 }
+        if norm_sq > 0.0000000001 {
+            let mut dot: f32 = 0.0
+            f2 = 0
+            while f2 < n_features { dot = dot + residual[f2] * matrix_at(components, best_atom, f2); f2 = f2 + 1 }
+            let coeff: f32 = dot / norm_sq
+            code[best_atom] = coeff
+            f2 = 0
+            while f2 < n_features { residual[f2] = residual[f2] - coeff * matrix_at(components, best_atom, f2); f2 = f2 + 1 }
+        }
+        step = step + 1
+    }
+
+    let lr: f32 = 1.0 / ((iter + 1) as f32)
+    let mut a2: i32 = 0
+    while a2 < n_active {
+        let atom_idx: i32 = active[a2]
+        let coeff: f32 = code[atom_idx]
+        if coeff != 0.0 {
+            let mut j3: i32 = 0
+            while j3 < n_features {
+                let target: f32 = matrix_at(X_batch, b, j3)
+                let cur: f32 = matrix_at(components, atom_idx, j3)
+                let v: f32 = cur + lr * coeff * (target - cur * coeff) / (coeff * coeff + 0.0000000001)
+                matrix_set(components, atom_idx, j3, v)
+                j3 = j3 + 1
+            }
+            _normalize_row(components, atom_idx, n_features)
+        }
+        a2 = a2 + 1
+    }
+
+    array_free_f32(residual)
+    array_free_f32(code)
+    free(active as ptr<void>)
+}
+
+# Helper: normalize a row of a matrix
+function _normalize_row(M: Matrix, row: i32, n_cols: i32) -> void {
+    let mut norm: f32 = 0.0
+    let mut j: i32 = 0
+    while j < n_cols {
+        let v: f32 = matrix_at(M, row, j)
+        norm = norm + v * v
+        j = j + 1
+    }
+    norm = sqrt((norm) as f64) as f32
+    if norm > 0.0000000001 {
+        j = 0
+        while j < n_cols {
+            matrix_set(M, row, j, matrix_at(M, row, j) / norm)
+            j = j + 1
+        }
+    }
+}
+
 # ============================================================================
 # MiniBatchDictionaryLearning
 # ============================================================================
@@ -1648,55 +1756,10 @@ export function minibatch_dictionary_learning_fit(X: Matrix, n_components: i32, 
             b = b + 1
         }
 
-        # Sparse coding: for each sample, find sparse code
-        # Simplified: just update dictionary atoms
+        # Sparse coding via OMP and dictionary update
         b = 0
         while b < batch_size {
-            # Find closest atom
-            let mut best_atom: i32 = 0
-            let mut best_dist: f32 = 999999.0
-            let mut k: i32 = 0
-            while k < n_components {
-                let mut dist: f32 = 0.0
-                let mut j2: i32 = 0
-                while j2 < n_features {
-                    let d: f32 = matrix_at(X_batch, b, j2) - matrix_at(components, k, j2)
-                    dist = dist + d * d
-                    j2 = j2 + 1
-                }
-                if dist < best_dist {
-                    best_dist = dist
-                    best_atom = k
-                }
-                k = k + 1
-            }
-
-            # Update atom: move towards the sample
-            let lr: f32 = 1.0 / ((iter + 1) as f32)
-            let mut j3: i32 = 0
-            while j3 < n_features {
-                let v: f32 = matrix_at(components, best_atom, j3) + lr * (matrix_at(X_batch, b, j3) - matrix_at(components, best_atom, j3))
-                matrix_set(components, best_atom, j3, v)
-                j3 = j3 + 1
-            }
-
-            # Renormalize atom
-            let mut norm: f32 = 0.0
-            j3 = 0
-            while j3 < n_features {
-                let v: f32 = matrix_at(components, best_atom, j3)
-                norm = norm + v * v
-                j3 = j3 + 1
-            }
-            norm = sqrt((norm) as f64) as f32
-            if norm > 0.0000000001 {
-                j3 = 0
-                while j3 < n_features {
-                    let v: f32 = matrix_at(components, best_atom, j3) / norm
-                    matrix_set(components, best_atom, j3, v)
-                    j3 = j3 + 1
-                }
-            }
+            _omp_sparse_coding_update(components, X_batch, b, n_components, n_features, iter)
             b = b + 1
         }
 
@@ -1750,6 +1813,102 @@ export struct LatentDirichletAllocation {
     fitted: bool
 }
 
+# Helper: digamma approximation
+function _digamma_approx(x: f32) -> f32 {
+    let mut val: f32 = x
+    let mut result: f32 = 0.0
+    while val < 6.0 { result = result - 1.0 / val; val = val + 1.0 }
+    result = result + log((val) as f64) as f32
+    result = result - 1.0 / (2.0 * val)
+    result = result - 1.0 / (12.0 * val * val)
+    return result
+}
+
+# Helper: safe exp
+function _safe_exp(x: f32) -> f32 {
+    if x > 50.0 { return 5184705528.0 }
+    if x < -50.0 { return 0.0000000001 }
+    return exp((x) as f64) as f32
+}
+
+# Helper: array sum
+function _array_sum_f32(arr: ptr<f32>, n: i32) -> f32 {
+    let mut s: f32 = 0.0
+    let mut i: i32 = 0
+    while i < n {
+        s = s + arr[i]
+        i = i + 1
+    }
+    return s
+}
+
+# Helper: variational E-step for one document
+# Updates suff_stats and returns nothing (modifies suff_stats in place)
+function _lda_estep_doc(
+    X: Matrix, d: i32, components: Matrix, suff_stats: Matrix,
+    n_topics: i32, n_features: i32, alpha: f32
+) -> void {
+    let gamma: ptr<f32> = array_new_f32(n_topics)
+    let mut t: i32 = 0
+    while t < n_topics {
+        gamma[t] = alpha + 1.0
+        t = t + 1
+    }
+
+    let mut inner: i32 = 0
+    while inner < 5 {
+        let gamma_sum: f32 = _array_sum_f32(gamma, n_topics)
+        let digamma_sum: f32 = _digamma_approx(gamma_sum)
+
+        let new_gamma: ptr<f32> = array_new_f32(n_topics)
+        let mut t2: i32 = 0
+        while t2 < n_topics {
+            new_gamma[t2] = alpha
+            t2 = t2 + 1
+        }
+
+        let mut w: i32 = 0
+        while w < n_features {
+            let x_dw: f32 = matrix_at(X, d, w)
+            if x_dw > 0.0000000001 {
+                let phi: ptr<f32> = array_new_f32(n_topics)
+                let mut phi_sum: f32 = 0.0
+                let mut t3: i32 = 0
+                while t3 < n_topics {
+                    let dg: f32 = _digamma_approx(gamma[t3])
+                    let lb: f32 = log((matrix_at(components, t3, w) + 0.0000000001) as f64) as f32
+                    let ep: f32 = _safe_exp(dg - digamma_sum + lb)
+                    phi[t3] = ep
+                    phi_sum = phi_sum + ep
+                    t3 = t3 + 1
+                }
+                if phi_sum > 0.0000000001 {
+                    let mut t4: i32 = 0
+                    while t4 < n_topics {
+                        phi[t4] = phi[t4] / phi_sum
+                        new_gamma[t4] = new_gamma[t4] + x_dw * phi[t4]
+                        let cur: f32 = matrix_at(suff_stats, t4, w)
+                        matrix_set(suff_stats, t4, w, cur + x_dw * phi[t4])
+                        t4 = t4 + 1
+                    }
+                }
+                array_free_f32(phi)
+            }
+            w = w + 1
+        }
+
+        let mut t5: i32 = 0
+        while t5 < n_topics {
+            gamma[t5] = new_gamma[t5]
+            t5 = t5 + 1
+        }
+        array_free_f32(new_gamma)
+        inner = inner + 1
+    }
+
+    array_free_f32(gamma)
+}
+
 export function lda_fit(X: Matrix, n_topics: i32, n_iter: i32, alpha: f32, eta: f32, seed: i32) -> LatentDirichletAllocation {
     let n: i32 = X.rows
     let n_features: i32 = X.cols
@@ -1759,120 +1918,67 @@ export function lda_fit(X: Matrix, n_topics: i32, n_iter: i32, alpha: f32, eta: 
     let components: Matrix = matrix_new(n_topics, n_features)
     let mut i: i32 = 0
     while i < n_topics {
+        let mut sum: f32 = 0.0
         let mut j: i32 = 0
         while j < n_features {
-            let v: f32 = ((rand() % 100) as f32) / 100.0 + 0.01
+            let v: f32 = ((rand() % 100) as f32) / 100.0 + eta
             matrix_set(components, i, j, v)
-            j = j + 1
-        }
-        # Normalize row
-        let mut sum: f32 = 0.0
-        j = 0
-        while j < n_features {
-            sum = sum + matrix_at(components, i, j)
+            sum = sum + v
             j = j + 1
         }
         if sum > 0.0000000001 {
             j = 0
             while j < n_features {
-                let v: f32 = matrix_at(components, i, j) / sum
-                matrix_set(components, i, j, v)
+                matrix_set(components, i, j, matrix_at(components, i, j) / sum)
                 j = j + 1
             }
         }
         i = i + 1
     }
 
-    # Simplified variational EM
+    # Variational Bayes EM
     let mut iter: i32 = 0
     while iter < n_iter {
-        # E-step: for each document, compute topic distribution
-        let doc_topic: Matrix = matrix_new(n, n_topics)
+        let suff_stats: Matrix = matrix_new(n_topics, n_features)
+        let mut t: i32 = 0
+        while t < n_topics {
+            let mut w: i32 = 0
+            while w < n_features {
+                matrix_set(suff_stats, t, w, 0.0)
+                w = w + 1
+            }
+            t = t + 1
+        }
+
+        # E-step
         let mut d: i32 = 0
         while d < n {
-            # Initialize topic distribution uniformly
-            let mut t: i32 = 0
-            while t < n_topics {
-                matrix_set(doc_topic, d, t, 1.0 / (n_topics as f32))
-                t = t + 1
-            }
-            # Update: topic_dist = normalize(sum over words of X[d,w] * components[:,w])
-            let mut topic_sum: ptr<f32> = array_new_f32(n_topics)
-            t = 0
-            while t < n_topics {
-                let mut s: f32 = 0.0
-                let mut w: i32 = 0
-                while w < n_features {
-                    s = s + matrix_at(X, d, w) * matrix_at(components, t, w)
-                    w = w + 1
-                }
-                topic_sum[t] = s + alpha
-                t = t + 1
-            }
-            # Normalize
-            let mut total: f32 = 0.0
-            t = 0
-            while t < n_topics {
-                total = total + topic_sum[t]
-                t = t + 1
-            }
-            if total > 0.0000000001 {
-                t = 0
-                while t < n_topics {
-                    matrix_set(doc_topic, d, t, topic_sum[t] / total)
-                    t = t + 1
-                }
-            }
-            array_free_f32(topic_sum)
+            _lda_estep_doc(X, d, components, suff_stats, n_topics, n_features, alpha)
             d = d + 1
         }
 
-        # M-step: update components
-        let new_components: Matrix = matrix_new(n_topics, n_features)
+        # M-step: update beta
         let mut t2: i32 = 0
         while t2 < n_topics {
+            let mut row_sum: f32 = 0.0
             let mut w: i32 = 0
             while w < n_features {
-                let mut s: f32 = 0.0
-                let mut d2: i32 = 0
-                while d2 < n {
-                    s = s + matrix_at(doc_topic, d2, t2) * matrix_at(X, d2, w)
-                    d2 = d2 + 1
-                }
-                matrix_set(new_components, t2, w, s + eta)
+                let val: f32 = matrix_at(suff_stats, t2, w) + eta
+                matrix_set(components, t2, w, val)
+                row_sum = row_sum + val
                 w = w + 1
             }
-            # Normalize
-            let mut sum: f32 = 0.0
-            w = 0
-            while w < n_features {
-                sum = sum + matrix_at(new_components, t2, w)
-                w = w + 1
-            }
-            if sum > 0.0000000001 {
+            if row_sum > 0.0000000001 {
                 w = 0
                 while w < n_features {
-                    let v: f32 = matrix_at(new_components, t2, w) / sum
-                    matrix_set(new_components, t2, w, v)
+                    matrix_set(components, t2, w, matrix_at(components, t2, w) / row_sum)
                     w = w + 1
                 }
             }
             t2 = t2 + 1
         }
 
-        # Copy new components
-        t2 = 0
-        while t2 < n_topics {
-            let mut w2: i32 = 0
-            while w2 < n_features {
-                matrix_set(components, t2, w2, matrix_at(new_components, t2, w2))
-                w2 = w2 + 1
-            }
-            t2 = t2 + 1
-        }
-
-        matrix_free(new_components)
-        matrix_free(doc_topic)
+        matrix_free(suff_stats)
         iter = iter + 1
     }
 

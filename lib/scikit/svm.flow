@@ -199,6 +199,18 @@ export struct KernelSVC {
     fitted: bool
 }
 
+# Helper: compute SVM decision function output for sample j
+function _svm_compute_ej(kernel: Matrix, alphas: ptr<f32>, y_dual: ptr<f32>, n: i32, b: f32, j: i32) -> f32 {
+    let mut ej: f32 = 0.0
+    let mut k: i32 = 0
+    while k < n {
+        ej = ej + alphas[k] * y_dual[k] * matrix_at(kernel, j, k)
+        k = k + 1
+    }
+    ej = ej + b - y_dual[j]
+    return ej
+}
+
 export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, gamma: f32, max_iter: i32) -> KernelSVC {
     let n: i32 = X.rows
     let n_features: i32 = X.cols
@@ -256,18 +268,26 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
 
             let yi_ei: f32 = y_dual[i] * ei
             if (yi_ei < -tol && alphas[i] < C) || (yi_ei > tol && alphas[i] > 0.0) {
-                let mut j2: i32 = (iter * 7 + i * 13 + 3) % n
-                if j2 == i {
-                    j2 = (j2 + 1) % n
+                # Second-order working set selection: pick j maximizing |Ei - Ej|
+                let mut best_j: i32 = (iter * 7 + i * 13 + 3) % n
+                if best_j == i { best_j = (best_j + 1) % n }
+                let mut best_gain: f32 = 0.0
+                let mut j_scan: i32 = 0
+                while j_scan < n {
+                    if j_scan == i { j_scan = j_scan + 1; continue }
+                    let ej_test: f32 = _svm_compute_ej(kernel, alphas, y_dual, n, b, j_scan)
+                    let diff: f32 = ei - ej_test
+                    let abs_diff: f32 = diff
+                    if diff < 0.0 { abs_diff = -diff }
+                    if abs_diff > best_gain {
+                        best_gain = abs_diff
+                        best_j = j_scan
+                    }
+                    j_scan = j_scan + 1
                 }
 
-                let mut ej: f32 = 0.0
-                let mut k: i32 = 0
-                while k < n {
-                    ej = ej + alphas[k] * y_dual[k] * matrix_at(kernel, j2, k)
-                    k = k + 1
-                }
-                ej = ej + b - y_dual[j2]
+                let j2: i32 = best_j
+                let ej: f32 = _svm_compute_ej(kernel, alphas, y_dual, n, b, j2)
 
                 let alpha_i_old: f32 = alphas[i]
                 let alpha_j_old: f32 = alphas[j2]
