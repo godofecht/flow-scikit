@@ -1,0 +1,528 @@
+import "lib/scikit/scikit.flow"
+
+extern {
+    function rand() -> i32
+    function srand(seed: u32) -> void
+}
+
+function _noise(seed: i32) -> f32 {
+    let v: f32 = ((seed * 37 + 13) % 100) as f32
+    return v / 100.0
+}
+
+function test_zero_one_loss() -> i32 {
+    println("Test: zero_one_loss")
+    let y_true: ptr<f32> = array_new_f32(5)
+    let y_pred: ptr<f32> = array_new_f32(5)
+    y_true[0] = 0.0; y_true[1] = 1.0; y_true[2] = 1.0; y_true[3] = 0.0; y_true[4] = 1.0
+    y_pred[0] = 0.0; y_pred[1] = 1.0; y_pred[2] = 0.0; y_pred[3] = 1.0; y_pred[4] = 1.0
+
+    let loss: f32 = zero_one_loss(y_true, y_pred, 5)
+    if fabs((loss - 0.4) as f64) as f32 > 0.001 {
+        println("  FAIL: zero_one_loss should be 0.4")
+        return 1
+    }
+    println("  OK: loss = 0.4000")
+    array_free_f32(y_true)
+    array_free_f32(y_pred)
+    return 0
+}
+
+function test_hamming_loss() -> i32 {
+    println("Test: hamming_loss")
+    let y_true: ptr<f32> = array_new_f32(4)
+    let y_pred: ptr<f32> = array_new_f32(4)
+    y_true[0] = 0.0; y_true[1] = 1.0; y_true[2] = 2.0; y_true[3] = 0.0
+    y_pred[0] = 0.0; y_pred[1] = 1.0; y_pred[2] = 2.0; y_pred[3] = 1.0
+
+    let loss: f32 = hamming_loss(y_true, y_pred, 4)
+    if fabs((loss - 0.25) as f64) as f32 > 0.001 {
+        println("  FAIL: hamming_loss should be 0.25")
+        return 1
+    }
+    println("  OK: loss = 0.2500")
+    array_free_f32(y_true)
+    array_free_f32(y_pred)
+    return 0
+}
+
+function test_dcg_ndcg() -> i32 {
+    println("Test: dcg_score / ndcg_score")
+    let y_true: ptr<f32> = array_new_f32(5)
+    let y_score: ptr<f32> = array_new_f32(5)
+    y_true[0] = 3.0; y_true[1] = 2.0; y_true[2] = 3.0; y_true[3] = 0.0; y_true[4] = 1.0
+    y_score[0] = 3.0; y_score[1] = 2.0; y_score[2] = 3.0; y_score[3] = 0.0; y_score[4] = 1.0
+
+    let dcg: f32 = dcg_score(y_true, y_score, 5)
+    let ndcg: f32 = ndcg_score(y_true, y_score, 5)
+
+    if ndcg < 0.99 {
+        println("  FAIL: ndcg should be ~1.0 for perfect ranking")
+        return 1
+    }
+    print("  OK: dcg = ")
+    printf("%.4f", dcg)
+    print(", ndcg = ")
+    printf("%.4f", ndcg)
+    println("")
+    array_free_f32(y_true)
+    array_free_f32(y_score)
+    return 0
+}
+
+function test_coverage_error() -> i32 {
+    println("Test: coverage_error")
+    let y_true: ptr<f32> = array_new_f32(12)
+    let y_score: ptr<f32> = array_new_f32(12)
+    y_true[0] = 1.0; y_true[1] = 1.0; y_true[2] = 0.0; y_true[3] = 0.0
+    y_score[0] = 0.9; y_score[1] = 0.8; y_score[2] = 0.3; y_score[3] = 0.1
+    y_true[4] = 0.0; y_true[5] = 0.0; y_true[6] = 1.0; y_true[7] = 0.0
+    y_score[4] = 0.1; y_score[5] = 0.2; y_score[6] = 0.7; y_score[7] = 0.3
+    y_true[8] = 1.0; y_true[9] = 0.0; y_true[10] = 0.0; y_true[11] = 1.0
+    y_score[8] = 0.8; y_score[9] = 0.4; y_score[10] = 0.2; y_score[11] = 0.9
+
+    let cov: f32 = coverage_error(y_true, y_score, 3, 4)
+    if cov < 0.0 || cov > 1.0 {
+        println("  FAIL: coverage_error out of range")
+        return 1
+    }
+    print("  OK: coverage = ")
+    printf("%.4f", cov)
+    println("")
+    array_free_f32(y_true)
+    array_free_f32(y_score)
+    return 0
+}
+
+function test_label_ranking_loss() -> i32 {
+    println("Test: label_ranking_loss")
+    let y_true: ptr<f32> = array_new_f32(6)
+    let y_score: ptr<f32> = array_new_f32(6)
+    y_true[0] = 3.0; y_true[1] = 2.0; y_true[2] = 1.0
+    y_score[0] = 0.9; y_score[1] = 0.5; y_score[2] = 0.1
+    y_true[3] = 1.0; y_true[4] = 2.0; y_true[5] = 3.0
+    y_score[3] = 0.9; y_score[4] = 0.5; y_score[5] = 0.1
+
+    let loss: f32 = label_ranking_loss(y_true, y_score, 2, 3)
+    if fabs((loss - 0.5) as f64) as f32 > 0.01 {
+        println("  FAIL: label_ranking_loss should be ~0.5")
+        return 1
+    }
+    print("  OK: loss = ")
+    printf("%.4f", loss)
+    println("")
+    array_free_f32(y_true)
+    array_free_f32(y_score)
+    return 0
+}
+
+function test_orthogonal_matching_pursuit() -> i32 {
+    println("Test: OrthogonalMatchingPursuit")
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 5)
+    let y: ptr<f32> = array_new_f32(n)
+    srand(42)
+    for i in 0 to n {
+        for j in 0 to 5 {
+            matrix_set(X, i, j, ((rand() % 100) as f32) / 10.0)
+        }
+        y[i] = 3.0 * matrix_at(X, i, 0) + 2.0 * matrix_at(X, i, 2) + _noise(i) * 0.01
+    }
+
+    let model: OrthogonalMatchingPursuit = orthogonal_matching_pursuit_fit(X, y, 2)
+    let preds: ptr<f32> = orthogonal_matching_pursuit_predict(model, X)
+    let r2: f32 = r2_score(y, preds, n)
+
+    if r2 < 0.95 {
+        println("  FAIL: OMP R2 should be > 0.95")
+        return 1
+    }
+    print("  OK: R2 = ")
+    printf("%.4f", r2)
+    println("")
+    orthogonal_matching_pursuit_free(model)
+    array_free_f32(preds)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
+function test_quantile_regressor() -> i32 {
+    println("Test: QuantileRegressor")
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 2)
+    let y: ptr<f32> = array_new_f32(n)
+    srand(42)
+    for i in 0 to n {
+        let x0: f32 = ((rand() % 100) as f32) / 10.0
+        let x1: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 0, x0)
+        matrix_set(X, i, 1, x1)
+        y[i] = 2.0 * x0 + 3.0 * x1 + 1.0
+    }
+
+    let model: QuantileRegressor = quantile_regressor_fit(X, y, 0.5, 0.01, 200, 0.01)
+    let preds: ptr<f32> = quantile_regressor_predict(model, X)
+    let r2: f32 = r2_score(y, preds, n)
+
+    if r2 < 0.8 {
+        println("  FAIL: QuantileRegressor R2 should be > 0.8")
+        return 1
+    }
+    print("  OK: R2 = ")
+    printf("%.4f", r2)
+    println("")
+    quantile_regressor_free(model)
+    array_free_f32(preds)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
+function test_multitask_lasso() -> i32 {
+    println("Test: MultiTaskLasso")
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 3)
+    let Y: Matrix = matrix_new(n, 2)
+    srand(42)
+    for i in 0 to n {
+        let x0: f32 = ((rand() % 100) as f32) / 10.0
+        let x1: f32 = ((rand() % 100) as f32) / 10.0
+        let x2: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 0, x0)
+        matrix_set(X, i, 1, x1)
+        matrix_set(X, i, 2, x2)
+        matrix_set(Y, i, 0, 2.0 * x0 + 1.0 * x1)
+        matrix_set(Y, i, 1, 1.0 * x0 + 3.0 * x2)
+    }
+
+    let model: MultiTaskLasso = multitask_lasso_fit(X, Y, 0.01, 200, 0.01)
+    let preds: Matrix = multitask_lasso_predict(model, X)
+
+    let mut ss_res: f32 = 0.0
+    let mut ss_tot: f32 = 0.0
+    for i in 0 to n {
+        for o in 0 to 2 {
+            let d: f32 = matrix_at(Y, i, o) - matrix_at(preds, i, o)
+            ss_res = ss_res + d * d
+            let dm: f32 = matrix_at(Y, i, o) - 5.0
+            ss_tot = ss_tot + dm * dm
+        }
+    }
+    let r2: f32 = 1.0 - ss_res / ss_tot
+
+    if r2 < 0.8 {
+        println("  FAIL: MultiTaskLasso R2 should be > 0.8")
+        return 1
+    }
+    print("  OK: R2 = ")
+    printf("%.4f", r2)
+    println("")
+    multitask_lasso_free(model)
+    matrix_free(preds)
+    matrix_free(X)
+    matrix_free(Y)
+    return 0
+}
+
+function test_multitask_elasticnet() -> i32 {
+    println("Test: MultiTaskElasticNet")
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 3)
+    let Y: Matrix = matrix_new(n, 2)
+    srand(42)
+    for i in 0 to n {
+        let x0: f32 = ((rand() % 100) as f32) / 10.0
+        let x1: f32 = ((rand() % 100) as f32) / 10.0
+        let x2: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 0, x0)
+        matrix_set(X, i, 1, x1)
+        matrix_set(X, i, 2, x2)
+        matrix_set(Y, i, 0, 2.0 * x0 + 1.0 * x1)
+        matrix_set(Y, i, 1, 1.0 * x0 + 3.0 * x2)
+    }
+
+    let model: MultiTaskElasticNet = multitask_elastic_net_fit(X, Y, 0.01, 0.5, 200, 0.01)
+    let preds: Matrix = multitask_elastic_net_predict(model, X)
+
+    let mut ss_res: f32 = 0.0
+    let mut ss_tot: f32 = 0.0
+    for i in 0 to n {
+        for o in 0 to 2 {
+            let d: f32 = matrix_at(Y, i, o) - matrix_at(preds, i, o)
+            ss_res = ss_res + d * d
+            let dm: f32 = matrix_at(Y, i, o) - 5.0
+            ss_tot = ss_tot + dm * dm
+        }
+    }
+    let r2: f32 = 1.0 - ss_res / ss_tot
+
+    if r2 < 0.8 {
+        println("  FAIL: MultiTaskElasticNet R2 should be > 0.8")
+        return 1
+    }
+    print("  OK: R2 = ")
+    printf("%.4f", r2)
+    println("")
+    multitask_elastic_net_free(model)
+    matrix_free(preds)
+    matrix_free(X)
+    matrix_free(Y)
+    return 0
+}
+
+function test_export_tree_text() -> i32 {
+    println("Test: export_tree_text")
+    let n: i32 = 20
+    let X: Matrix = matrix_new(n, 2)
+    let y: ptr<f32> = array_new_f32(n)
+    for i in 0 to 10 {
+        matrix_set(X, i, 0, 1.0 + (i as f32) * 0.1)
+        matrix_set(X, i, 1, 2.0 + (i as f32) * 0.1)
+        y[i] = 0.0
+    }
+    for i in 0 to 10 {
+        matrix_set(X, 10 + i, 0, 5.0 + (i as f32) * 0.1)
+        matrix_set(X, 10 + i, 1, 6.0 + (i as f32) * 0.1)
+        y[10 + i] = 1.0
+    }
+
+    let model: DecisionTreeClassifier = decision_tree_classifier_fit(X, y, 2, 3, CRITERION_GINI)
+    println("  Tree structure:")
+    export_tree_text(model, 5)
+
+    decision_tree_classifier_free(model)
+    matrix_free(X)
+    array_free_f32(y)
+    println("  OK: tree exported")
+    return 0
+}
+
+function test_radius_neighbors_regressor() -> i32 {
+    println("Test: RadiusNeighborsRegressor")
+    let n: i32 = 20
+    let X: Matrix = matrix_new(n, 2)
+    let y: ptr<f32> = array_new_f32(n)
+    srand(42)
+    let mut i: i32 = 0
+    while i < 10 {
+        matrix_set(X, i, 0, ((rand() % 10) as f32) / 10.0)
+        matrix_set(X, i, 1, ((rand() % 10) as f32) / 10.0)
+        y[i] = 1.0
+        i = i + 1
+    }
+    i = 0
+    while i < 10 {
+        matrix_set(X, 10 + i, 0, 5.0 + ((rand() % 10) as f32) / 10.0)
+        matrix_set(X, 10 + i, 1, 5.0 + ((rand() % 10) as f32) / 10.0)
+        y[10 + i] = 10.0
+        i = i + 1
+    }
+
+    let model: RadiusNeighborsRegressor = radius_neighbors_regressor_fit(X, y, 2.0)
+    let preds: ptr<f32> = radius_neighbors_regressor_predict(model, X)
+
+    let mut n_correct: i32 = 0
+    let mut j: i32 = 0
+    while j < n {
+        let diff: f32 = fabs((preds[j] - y[j]) as f64) as f32
+        if diff < 1.0 {
+            n_correct = n_correct + 1
+        }
+        j = j + 1
+    }
+    let acc: f32 = (n_correct as f32) / (n as f32)
+
+    if acc < 0.9 {
+        println("  FAIL: RadiusNeighborsRegressor should predict within 1.0 for most points")
+        return 1
+    }
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+    radius_neighbors_regressor_free(model)
+    array_free_f32(preds)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
+function test_minibatch_sparse_pca() -> i32 {
+    println("Test: MiniBatchSparsePCA")
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 5)
+    srand(42)
+    for i in 0 to n {
+        for j in 0 to 5 {
+            matrix_set(X, i, j, ((rand() % 100) as f32) / 10.0)
+        }
+    }
+
+    let model: MiniBatchSparsePCA = minibatch_sparse_pca_fit(X, 2, 0.1, 100, 10, 0.001, 42)
+    let transformed: Matrix = minibatch_sparse_pca_transform(model, X)
+
+    if transformed.rows != n || transformed.cols != 2 {
+        println("  FAIL: wrong output shape")
+        return 1
+    }
+    println("  OK: 30x2 output")
+    minibatch_sparse_pca_free(model)
+    matrix_free(transformed)
+    matrix_free(X)
+    return 0
+}
+
+function test_svc_rbf() -> i32 {
+    println("Test: SVC (RBF kernel)")
+    let ds: Dataset = make_classification(60, 4, 2, 4, 0, 2.0, 42)
+    let split: TrainTestSplit = train_test_split(ds.X, ds.y, 0.33, 0)
+
+    let model: SVC = svc_fit(split.X_train, split.y_train, 2, 1.0, 0, 0.5, 3, 0.0)
+    let preds: ptr<f32> = svc_predict(model, split.X_test)
+    let acc: f32 = accuracy_score(split.y_test, preds, split.n_test)
+
+    if acc < 0.6 {
+        println("  FAIL: SVC RBF accuracy should be > 0.6")
+        return 1
+    }
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+    svc_free(model)
+    array_free_f32(preds)
+    train_test_split_free(split)
+    dataset_free(ds)
+    return 0
+}
+
+function test_svc_linear() -> i32 {
+    println("Test: SVC (linear kernel)")
+    let ds: Dataset = make_classification(60, 4, 2, 4, 0, 2.0, 42)
+    let split: TrainTestSplit = train_test_split(ds.X, ds.y, 0.33, 0)
+
+    let model: SVC = svc_fit(split.X_train, split.y_train, 2, 1.0, 1, 0.5, 3, 0.0)
+    let preds: ptr<f32> = svc_predict(model, split.X_test)
+    let acc: f32 = accuracy_score(split.y_test, preds, split.n_test)
+
+    if acc < 0.6 {
+        println("  FAIL: SVC linear accuracy should be > 0.6")
+        return 1
+    }
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+    svc_free(model)
+    array_free_f32(preds)
+    train_test_split_free(split)
+    dataset_free(ds)
+    return 0
+}
+
+function test_svr_rbf() -> i32 {
+    println("Test: SVR (RBF kernel)")
+    let n: i32 = 40
+    let X: Matrix = matrix_new(n, 2)
+    let y: ptr<f32> = array_new_f32(n)
+    srand(42)
+    let mut i: i32 = 0
+    while i < n {
+        let x0: f32 = ((rand() % 100) as f32) / 10.0
+        let x1: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 0, x0)
+        matrix_set(X, i, 1, x1)
+        y[i] = 2.0 * x0 + 3.0 * x1 + 1.0
+        i = i + 1
+    }
+
+    let model: SVR = svr_fit(X, y, 10.0, 0.01, 0, 0.01, 3, 0.0)
+    let preds: ptr<f32> = svr_predict(model, X)
+    let r2: f32 = r2_score(y, preds, n)
+
+    if r2 < 0.5 {
+        println("  FAIL: SVR R2 should be > 0.5")
+        return 1
+    }
+    print("  OK: R2 = ")
+    printf("%.4f", r2)
+    println("")
+    svr_free(model)
+    array_free_f32(preds)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
+function test_hist_gradient_boosting() -> i32 {
+    println("Test: HistGradientBoostingClassifier")
+    let ds: Dataset = make_classification(60, 4, 2, 4, 0, 2.0, 42)
+    let split: TrainTestSplit = train_test_split(ds.X, ds.y, 0.33, 0)
+
+    let model: HistGradientBoostingClassifier = hist_gradient_boosting_classifier_fit(
+        split.X_train, split.y_train, split.n_train, 2, 20, 0.1, 3
+    )
+    let preds: ptr<f32> = hist_gradient_boosting_classifier_predict(model, split.X_test)
+    let acc: f32 = accuracy_score(split.y_test, preds, split.n_test)
+
+    if acc < 0.6 {
+        println("  FAIL: HistGB accuracy should be > 0.6")
+        return 1
+    }
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+    hist_gradient_boosting_classifier_free(model)
+    array_free_f32(preds)
+    train_test_split_free(split)
+    dataset_free(ds)
+    return 0
+}
+
+function main() -> i32 {
+    println("=== New Features Tests ===")
+    println("")
+    let mut failures: i32 = 0
+
+    if test_zero_one_loss() != 0 { failures = failures + 1 }
+    println("")
+    if test_hamming_loss() != 0 { failures = failures + 1 }
+    println("")
+    if test_dcg_ndcg() != 0 { failures = failures + 1 }
+    println("")
+    if test_coverage_error() != 0 { failures = failures + 1 }
+    println("")
+    if test_label_ranking_loss() != 0 { failures = failures + 1 }
+    println("")
+    if test_orthogonal_matching_pursuit() != 0 { failures = failures + 1 }
+    println("")
+    if test_quantile_regressor() != 0 { failures = failures + 1 }
+    println("")
+    if test_multitask_lasso() != 0 { failures = failures + 1 }
+    println("")
+    if test_multitask_elasticnet() != 0 { failures = failures + 1 }
+    println("")
+    if test_export_tree_text() != 0 { failures = failures + 1 }
+    println("")
+    if test_radius_neighbors_regressor() != 0 { failures = failures + 1 }
+    println("")
+    if test_minibatch_sparse_pca() != 0 { failures = failures + 1 }
+    println("")
+    if test_svc_rbf() != 0 { failures = failures + 1 }
+    println("")
+    if test_svc_linear() != 0 { failures = failures + 1 }
+    println("")
+    if test_svr_rbf() != 0 { failures = failures + 1 }
+    println("")
+    if test_hist_gradient_boosting() != 0 { failures = failures + 1 }
+
+    println("")
+    println("----------------------------------------")
+    if failures == 0 {
+        println("All new feature tests passed!")
+    } else {
+        print("FAILED: ")
+        print(failures)
+        println(" tests")
+    }
+    println("----------------------------------------")
+    return failures
+}

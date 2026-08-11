@@ -81,6 +81,29 @@
   across classes. Multinomial NB distinguishes by feature proportions, not
   magnitudes.
 
+### New estimators and metrics
+
+- Added `SVC` and `SVR` with kernel support (RBF, linear, polynomial, sigmoid)
+  via SMO algorithm. One-vs-rest for multi-class. `svc_fit`, `svc_predict`,
+  `svc_decision_function`, `svr_fit`, `svr_predict`.
+- Added `OrthogonalMatchingPursuit` with greedy atom selection and least
+  squares refit on the active set.
+- Added `QuantileRegressor` with pinball loss gradient descent.
+- Added `MultiTaskLasso` and `MultiTaskElasticNet` with group soft-thresholding
+  across tasks.
+- Added `RadiusNeighborsRegressor` for radius-based regression prediction.
+- Added `MiniBatchSparsePCA` with stochastic mini-batch gradient descent and
+  soft-thresholding.
+- Rewrote `HistGradientBoostingClassifier` to use real regression trees on
+  gradients instead of the mean-gradient stub. Now accepts X and builds
+  `DecisionTreeRegressor` instances per boosting iteration.
+- Added `export_tree_text` and `export_tree_text_reg` for text-based tree
+  visualization.
+- Added metrics: `zero_one_loss`, `zero_one_loss_count`, `hamming_loss`,
+  `dcg_score`, `ndcg_score`, `coverage_error`, `label_ranking_loss`.
+- Added `tests/test_new_features.flow` with 16 tests covering all new
+  estimators and metrics.
+
 ## 0.2.0
 
 - Added IsotonicRegression (pool-adjacent-violators algorithm)

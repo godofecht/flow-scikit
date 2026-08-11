@@ -1865,3 +1865,489 @@ export function ard_regression_free(model: ARDRegression) -> void {
     array_free_f32(model.weights)
     array_free_f32(model.alpha)
 }
+
+# ============================================================================
+# OrthogonalMatchingPursuit (greedy sparse approximation)
+# ============================================================================
+
+export struct OrthogonalMatchingPursuit {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    n_nonzero_coefs: i32,
+    active_features: ptr<i32>,
+    fitted: bool
+}
+
+export function orthogonal_matching_pursuit_fit(X: Matrix, y: ptr<f32>, n_nonzero_coefs: i32) -> OrthogonalMatchingPursuit {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    # Center X and y
+    let mean_x: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let mut s: f32 = 0.0
+        for i in 0 to n { s = s + matrix_at(X, i, j) }
+        mean_x[j] = s / (n as f32)
+    }
+    let mean_y: f32 = 0.0
+    for i in 0 to n { mean_y = mean_y + y[i] }
+    mean_y = mean_y / (n as f32)
+
+    let Xc: Matrix = matrix_new(n, p)
+    for i in 0 to n {
+        for j in 0 to p {
+            matrix_set(Xc, i, j, matrix_at(X, i, j) - mean_x[j])
+        }
+    }
+    let yc: ptr<f32> = array_new_f32(n)
+    let residual: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        yc[i] = y[i] - mean_y
+        residual[i] = y[i] - mean_y
+    }
+
+    let active: ptr<i32> = malloc((n_nonzero_coefs as i64) * 4) as ptr<i32>
+    let selected: ptr<bool> = calloc((p as i64), 1) as ptr<bool>
+    let weights: ptr<f32> = array_new_f32(p)
+    for j in 0 to p { weights[j] = 0.0 }
+
+    let mut n_active: i32 = 0
+    for step in 0 to n_nonzero_coefs {
+        # Find the atom most correlated with the residual
+        let mut best_j: i32 = -1
+        let mut best_corr: f32 = 0.0
+        for j in 0 to p {
+            if selected[j] { continue }
+            let mut corr: f32 = 0.0
+            for i in 0 to n {
+                corr = corr + matrix_at(Xc, i, j) * residual[i]
+            }
+            corr = fabs((corr) as f64) as f32
+            if corr > best_corr {
+                best_corr = corr
+                best_j = j
+            }
+        }
+
+        if best_j < 0 { break }
+        active[n_active] = best_j
+        selected[best_j] = true
+        n_active = n_active + 1
+
+        # Solve least squares on the active set via normal equations
+        # b_vec must use the original centered target, not the residual
+        let k: i32 = n_active
+        let A: ptr<f32> = array_new_f32(k * k)
+        let b_vec: ptr<f32> = array_new_f32(k)
+
+        for a in 0 to k {
+            let ja: i32 = active[a]
+            for b in 0 to k {
+                let jb: i32 = active[b]
+                let mut sum: f32 = 0.0
+                for i in 0 to n {
+                    sum = sum + matrix_at(Xc, i, ja) * matrix_at(Xc, i, jb)
+                }
+                A[a * k + b] = sum
+            }
+            let mut sum_b: f32 = 0.0
+            for i in 0 to n {
+                sum_b = sum_b + matrix_at(Xc, i, ja) * yc[i]
+            }
+            b_vec[a] = sum_b
+        }
+
+        # Gaussian elimination to solve A * coef = b_vec
+        for col in 0 to k {
+            let pivot: f32 = A[col * k + col]
+            let abs_pivot: f32 = fabs((pivot) as f64) as f32
+            if abs_pivot < 0.000000000001 {
+                continue
+            }
+            for j in 0 to k {
+                A[col * k + j] = A[col * k + j] / pivot
+            }
+            b_vec[col] = b_vec[col] / pivot
+            for row in 0 to k {
+                if row == col { continue }
+                let factor: f32 = A[row * k + col]
+                for j in 0 to k {
+                    A[row * k + j] = A[row * k + j] - factor * A[col * k + j]
+                }
+                b_vec[row] = b_vec[row] - factor * b_vec[col]
+            }
+        }
+
+        # Update weights and residual
+        for j in 0 to p { weights[j] = 0.0 }
+        for a in 0 to k {
+            weights[active[a]] = b_vec[a]
+        }
+        for i in 0 to n {
+            let mut pred: f32 = 0.0
+            for a in 0 to k {
+                pred = pred + b_vec[a] * matrix_at(Xc, i, active[a])
+            }
+            residual[i] = yc[i] - pred
+        }
+
+        array_free_f32(A)
+        array_free_f32(b_vec)
+    }
+
+    let bias: f32 = mean_y
+    for j in 0 to p {
+        bias = bias - weights[j] * mean_x[j]
+    }
+
+    matrix_free(Xc)
+    array_free_f32(yc)
+    array_free_f32(residual)
+    array_free_f32(mean_x)
+    free(selected as ptr<void>)
+
+    return OrthogonalMatchingPursuit {
+        weights: weights,
+        bias: bias,
+        n_features: p,
+        n_nonzero_coefs: n_active,
+        active_features: active,
+        fitted: true
+    }
+}
+
+export function orthogonal_matching_pursuit_predict(model: OrthogonalMatchingPursuit, X: Matrix) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut s: f32 = model.bias
+        for j in 0 to model.n_features {
+            s = s + model.weights[j] * matrix_at(X, i, j)
+        }
+        result[i] = s
+    }
+    return result
+}
+
+export function orthogonal_matching_pursuit_free(model: OrthogonalMatchingPursuit) -> void {
+    array_free_f32(model.weights)
+    free(model.active_features as ptr<void>)
+}
+
+# ============================================================================
+# QuantileRegressor (pinball loss with gradient descent)
+# ============================================================================
+
+export struct QuantileRegressor {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    quantile: f32,
+    alpha: f32,
+    fitted: bool
+}
+
+export function quantile_regressor_fit(X: Matrix, y: ptr<f32>, quantile: f32, alpha: f32, epochs: i32, lr: f32) -> QuantileRegressor {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let weights: ptr<f32> = array_new_f32(p)
+    let mut bias: f32 = 0.0
+
+    for epoch in 0 to epochs {
+        let grad_w: ptr<f32> = array_new_f32(p)
+        let mut grad_b: f32 = 0.0
+
+        for i in 0 to n {
+            let mut pred: f32 = bias
+            for j in 0 to p {
+                pred = pred + weights[j] * matrix_at(X, i, j)
+            }
+            let r: f32 = y[i] - pred
+            # Pinball loss gradient w.r.t. pred:
+            #   if r > 0: dL/dpred = -quantile
+            #   if r < 0: dL/dpred = (1.0 - quantile)
+            let mut grad_z: f32 = 0.0 - quantile
+            if r < 0.0 {
+                grad_z = 1.0 - quantile
+            }
+            if r == 0.0 {
+                grad_z = 0.0
+            }
+
+            for j in 0 to p {
+                grad_w[j] = grad_w[j] + grad_z * matrix_at(X, i, j)
+            }
+            grad_b = grad_b + grad_z
+        }
+
+        let inv_n: f32 = 1.0 / (n as f32)
+        for j in 0 to p {
+            grad_w[j] = grad_w[j] * inv_n + alpha * weights[j]
+            weights[j] = weights[j] - lr * grad_w[j]
+        }
+        bias = bias - lr * grad_b * inv_n
+        array_free_f32(grad_w)
+    }
+
+    return QuantileRegressor {
+        weights: weights,
+        bias: bias,
+        n_features: p,
+        quantile: quantile,
+        alpha: alpha,
+        fitted: true
+    }
+}
+
+export function quantile_regressor_predict(model: QuantileRegressor, X: Matrix) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut s: f32 = model.bias
+        for j in 0 to model.n_features {
+            s = s + model.weights[j] * matrix_at(X, i, j)
+        }
+        result[i] = s
+    }
+    return result
+}
+
+export function quantile_regressor_free(model: QuantileRegressor) -> void {
+    array_free_f32(model.weights)
+}
+
+# ============================================================================
+# MultiTaskLasso (L1 penalty across all tasks jointly)
+# Y is a Matrix with shape (n_samples, n_tasks). Predict returns Matrix.
+# ============================================================================
+
+export struct MultiTaskLasso {
+    weights: ptr<ptr<f32> >,
+    bias: ptr<f32>,
+    n_features: i32,
+    n_tasks: i32,
+    alpha: f32,
+    fitted: bool
+}
+
+export function multitask_lasso_fit(X: Matrix, Y: Matrix, alpha: f32, epochs: i32, lr: f32) -> MultiTaskLasso {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let t: i32 = Y.cols
+
+    let weights: ptr<ptr<f32> > = malloc((t as i64) * 8) as ptr<ptr<f32> >
+    let bias: ptr<f32> = array_new_f32(t)
+    for c in 0 to t {
+        weights[c] = array_new_f32(p)
+    }
+
+    for epoch in 0 to epochs {
+        let grads: ptr<ptr<f32> > = malloc((t as i64) * 8) as ptr<ptr<f32> >
+        let grad_b: ptr<f32> = array_new_f32(t)
+        for c in 0 to t {
+            grads[c] = array_new_f32(p)
+        }
+
+        for i in 0 to n {
+            for c in 0 to t {
+                let mut pred: f32 = bias[c]
+                for j in 0 to p {
+                    pred = pred + weights[c][j] * matrix_at(X, i, j)
+                }
+                let err: f32 = pred - matrix_at(Y, i, c)
+                for j in 0 to p {
+                    grads[c][j] = grads[c][j] + err * matrix_at(X, i, j)
+                }
+                grad_b[c] = grad_b[c] + err
+            }
+        }
+
+        let inv_n: f32 = 1.0 / (n as f32)
+        for c in 0 to t {
+            for j in 0 to p {
+                grads[c][j] = grads[c][j] * inv_n
+                weights[c][j] = weights[c][j] - lr * grads[c][j]
+            }
+            bias[c] = bias[c] - lr * grad_b[c] * inv_n
+        }
+
+        # Group soft-thresholding: for each feature j, compute the L2 norm
+        # across all tasks and shrink the whole group by alpha.
+        for j in 0 to p {
+            let mut norm: f32 = 0.0
+            for c in 0 to t {
+                norm = norm + weights[c][j] * weights[c][j]
+            }
+            norm = sqrt((norm) as f64) as f32
+            if norm > 0.0 {
+                let shrink: f32 = alpha
+                if norm <= shrink {
+                    for c in 0 to t {
+                        weights[c][j] = 0.0
+                    }
+                } else {
+                    let scale: f32 = 1.0 - shrink / norm
+                    for c in 0 to t {
+                        weights[c][j] = weights[c][j] * scale
+                    }
+                }
+            }
+        }
+
+        for c in 0 to t {
+            array_free_f32(grads[c])
+        }
+        free(grads as ptr<void>)
+        array_free_f32(grad_b)
+    }
+
+    return MultiTaskLasso {
+        weights: weights,
+        bias: bias,
+        n_features: p,
+        n_tasks: t,
+        alpha: alpha,
+        fitted: true
+    }
+}
+
+export function multitask_lasso_predict(model: MultiTaskLasso, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, model.n_tasks)
+    for i in 0 to X.rows {
+        for c in 0 to model.n_tasks {
+            let mut s: f32 = model.bias[c]
+            for j in 0 to model.n_features {
+                s = s + model.weights[c][j] * matrix_at(X, i, j)
+            }
+            matrix_set(result, i, c, s)
+        }
+    }
+    return result
+}
+
+export function multitask_lasso_free(model: MultiTaskLasso) -> void {
+    for c in 0 to model.n_tasks {
+        array_free_f32(model.weights[c])
+    }
+    free(model.weights as ptr<void>)
+    array_free_f32(model.bias)
+}
+
+# ============================================================================
+# MultiTaskElasticNet (combined L1+L2 penalty across tasks)
+# Y is a Matrix with shape (n_samples, n_tasks). Predict returns Matrix.
+# ============================================================================
+
+export struct MultiTaskElasticNet {
+    weights: ptr<ptr<f32> >,
+    bias: ptr<f32>,
+    n_features: i32,
+    n_tasks: i32,
+    alpha: f32,
+    l1_ratio: f32,
+    fitted: bool
+}
+
+export function multitask_elastic_net_fit(X: Matrix, Y: Matrix, alpha: f32, l1_ratio: f32, epochs: i32, lr: f32) -> MultiTaskElasticNet {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let t: i32 = Y.cols
+
+    let l1: f32 = alpha * l1_ratio
+    let l2: f32 = alpha * (1.0 - l1_ratio)
+
+    let weights: ptr<ptr<f32> > = malloc((t as i64) * 8) as ptr<ptr<f32> >
+    let bias: ptr<f32> = array_new_f32(t)
+    for c in 0 to t {
+        weights[c] = array_new_f32(p)
+    }
+
+    for epoch in 0 to epochs {
+        let grads: ptr<ptr<f32> > = malloc((t as i64) * 8) as ptr<ptr<f32> >
+        let grad_b: ptr<f32> = array_new_f32(t)
+        for c in 0 to t {
+            grads[c] = array_new_f32(p)
+        }
+
+        for i in 0 to n {
+            for c in 0 to t {
+                let mut pred: f32 = bias[c]
+                for j in 0 to p {
+                    pred = pred + weights[c][j] * matrix_at(X, i, j)
+                }
+                let err: f32 = pred - matrix_at(Y, i, c)
+                for j in 0 to p {
+                    grads[c][j] = grads[c][j] + err * matrix_at(X, i, j)
+                }
+                grad_b[c] = grad_b[c] + err
+            }
+        }
+
+        let inv_n: f32 = 1.0 / (n as f32)
+        for c in 0 to t {
+            for j in 0 to p {
+                grads[c][j] = grads[c][j] * inv_n + l2 * weights[c][j]
+                weights[c][j] = weights[c][j] - lr * grads[c][j]
+            }
+            bias[c] = bias[c] - lr * grad_b[c] * inv_n
+        }
+
+        # Group soft-thresholding with L1 portion
+        for j in 0 to p {
+            let mut norm: f32 = 0.0
+            for c in 0 to t {
+                norm = norm + weights[c][j] * weights[c][j]
+            }
+            norm = sqrt((norm) as f64) as f32
+            if norm > 0.0 {
+                if norm <= l1 {
+                    for c in 0 to t {
+                        weights[c][j] = 0.0
+                    }
+                } else {
+                    let scale: f32 = 1.0 - l1 / norm
+                    for c in 0 to t {
+                        weights[c][j] = weights[c][j] * scale
+                    }
+                }
+            }
+        }
+
+        for c in 0 to t {
+            array_free_f32(grads[c])
+        }
+        free(grads as ptr<void>)
+        array_free_f32(grad_b)
+    }
+
+    return MultiTaskElasticNet {
+        weights: weights,
+        bias: bias,
+        n_features: p,
+        n_tasks: t,
+        alpha: alpha,
+        l1_ratio: l1_ratio,
+        fitted: true
+    }
+}
+
+export function multitask_elastic_net_predict(model: MultiTaskElasticNet, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, model.n_tasks)
+    for i in 0 to X.rows {
+        for c in 0 to model.n_tasks {
+            let mut s: f32 = model.bias[c]
+            for j in 0 to model.n_features {
+                s = s + model.weights[c][j] * matrix_at(X, i, j)
+            }
+            matrix_set(result, i, c, s)
+        }
+    }
+    return result
+}
+
+export function multitask_elastic_net_free(model: MultiTaskElasticNet) -> void {
+    for c in 0 to model.n_tasks {
+        array_free_f32(model.weights[c])
+    }
+    free(model.weights as ptr<void>)
+    array_free_f32(model.bias)
+}
