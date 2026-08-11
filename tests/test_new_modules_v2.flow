@@ -251,7 +251,7 @@ function test_gaussian_mixture() -> i32 {
     println("Test: GaussianMixture")
     let ds: Dataset = make_blobs(60, 2, 3, 0.3, -3.0, 3.0, 42)
 
-    let gmm: GaussianMixture = gaussian_mixture_fit(ds.X, 3, 100, 1e-3, 42)
+    let gmm: GaussianMixture = gaussian_mixture_fit(ds.X, 3, 100, 0.001, 42)
     let labels: ptr<i32> = gaussian_mixture_predict(gmm, ds.X)
 
     let mut cluster_counts: array<i32, 3> = [0, 0, 0]
@@ -691,7 +691,7 @@ function test_bayesian_ridge() -> i32 {
         y[i] = 2.0 * x0 + 3.0 * x1 + _noise(i) * 0.1
     }
 
-    let model: BayesianRidge = bayesian_ridge_fit(X, y, 200, 1e-4)
+    let model: BayesianRidge = bayesian_ridge_fit(X, y, 200, 0.0001)
     let preds: ptr<f32> = bayesian_ridge_predict(model, X)
     let r2: f32 = r2_score(y, preds, n)
 
@@ -813,7 +813,7 @@ function test_fast_ica() -> i32 {
         matrix_set(X, i, 2, 0.1 * s1 + 0.4 * s2 + 0.9 * s3)
     }
 
-    let ica: FastICA = fast_ica_fit(X, 2, 100, 1e-4, 42)
+    let ica: FastICA = fast_ica_fit(X, 2, 100, 0.0001, 42)
     let transformed: Matrix = fast_ica_transform(ica, X)
 
     if transformed.cols != 2 {
@@ -859,7 +859,7 @@ function test_sparse_pca() -> i32 {
         matrix_set(X, i, 3, s2 + _noise(i + 30) * 0.05)
     }
 
-    let spca: SparsePCA = sparse_pca_fit(X, 2, 0.1, 200, 1e-4, 42)
+    let spca: SparsePCA = sparse_pca_fit(X, 2, 0.1, 200, 0.0001, 42)
     let transformed: Matrix = sparse_pca_transform(spca, X)
 
     if transformed.cols != 2 {
@@ -870,7 +870,7 @@ function test_sparse_pca() -> i32 {
     let mut n_zeros: i32 = 0
     for c in 0 to 2 {
         for j in 0 to 4 {
-            if (fabs((spca.components[c][j]) as f64) as f32) < 1e-6 {
+            if (fabs((spca.components[c][j]) as f64) as f32) < 0.000001 {
                 n_zeros = n_zeros + 1
             }
         }

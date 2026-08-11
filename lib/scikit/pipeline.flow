@@ -49,26 +49,28 @@ export struct Pipeline {
 # ============================================================================
 
 export function step_standard_scaler(name: string) -> PipelineStep {
-    return PipelineStep {
+    let pen: Penalty = penalty_none()
+    let result: PipelineStep = PipelineStep {
         kind: STEP_SCALER,
         name: name,
         scaler: StandardScaler { mean: null as ptr<f32>, std: null as ptr<f32>, n_features: 0, fitted: false },
         minmax: MinMaxScaler { min_vals: null as ptr<f32>, max_vals: null as ptr<f32>, n_features: 0, fitted: false },
         onehot: OneHotEncoder { categories: null as ptr<ptr<f32> >, n_categories: null as ptr<i32>, n_features: 0, total_output_cols: 0, handle_unknown: HANDLE_UNKNOWN_WARN, fitted: false },
         imputer: SimpleImputer { fill_values: null as ptr<f32>, n_features: 0, strategy: IMPUTE_STRATEGY_MEAN, constant_value: 0.0, fitted: false },
-        linear_reg: LinearRegression { weights: null as ptr<f32>, bias: 0.0, n_features: 0, penalty: penalty_none(), fitted: false },
-        logistic_reg: LogisticRegression { weights: null as ptr<f32>, bias: 0.0, n_features: 0, classes: null as ptr<f32>, n_classes: 0, penalty: penalty_none(), fitted: false },
+        linear_reg: LinearRegression { weights: null as ptr<f32>, bias: 0.0, n_features: 0, penalty: pen, fitted: false },
+        logistic_reg: LogisticRegression { weights: null as ptr<f32>, bias: 0.0, n_features: 0, classes: null as ptr<f32>, n_classes: 0, penalty: pen, fitted: false },
         handle_unknown: HANDLE_UNKNOWN_WARN,
         impute_strategy: IMPUTE_STRATEGY_MEAN,
         impute_constant: 0.0,
         n_classes: 0,
         epochs: 0,
         lr: 0.0,
-        penalty: penalty_none(),
+        penalty: pen,
         is_transformer: true,
         is_estimator: false,
         fitted: false
     }
+    return result
 }
 
 export function step_minmax_scaler(name: string) -> PipelineStep {
@@ -133,12 +135,13 @@ export function pipeline_new(steps: ptr<PipelineStep>, n_steps: i32) -> Pipeline
         cloned_steps[i].is_transformer = steps[i].is_transformer
         cloned_steps[i].is_estimator = steps[i].is_estimator
         cloned_steps[i].fitted = false
+        let pen2: Penalty = penalty_none()
         cloned_steps[i].scaler = StandardScaler { mean: null as ptr<f32>, std: null as ptr<f32>, n_features: 0, fitted: false }
         cloned_steps[i].minmax = MinMaxScaler { min_vals: null as ptr<f32>, max_vals: null as ptr<f32>, n_features: 0, fitted: false }
         cloned_steps[i].onehot = OneHotEncoder { categories: null as ptr<ptr<f32> >, n_categories: null as ptr<i32>, n_features: 0, total_output_cols: 0, handle_unknown: HANDLE_UNKNOWN_WARN, fitted: false }
         cloned_steps[i].imputer = SimpleImputer { fill_values: null as ptr<f32>, n_features: 0, strategy: IMPUTE_STRATEGY_MEAN, constant_value: 0.0, fitted: false }
-        cloned_steps[i].linear_reg = LinearRegression { weights: null as ptr<f32>, bias: 0.0, n_features: 0, penalty: penalty_none(), fitted: false }
-        cloned_steps[i].logistic_reg = LogisticRegression { weights: null as ptr<f32>, bias: 0.0, n_features: 0, classes: null as ptr<f32>, n_classes: 0, penalty: penalty_none(), fitted: false }
+        cloned_steps[i].linear_reg = LinearRegression { weights: null as ptr<f32>, bias: 0.0, n_features: 0, penalty: pen2, fitted: false }
+        cloned_steps[i].logistic_reg = LogisticRegression { weights: null as ptr<f32>, bias: 0.0, n_features: 0, classes: null as ptr<f32>, n_classes: 0, penalty: pen2, fitted: false }
     }
 
     return Pipeline { steps: cloned_steps, n_steps: n_steps, cloned: true }

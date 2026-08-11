@@ -63,7 +63,7 @@ export function label_propagation_fit(X: Matrix, y: ptr<i32>, n_classes: i32, ga
         # Zero-affinity rows get uniform transition probabilities.
         # Addresses sklearn #34351: zero-affinity fallback should be
         # a mathematically valid uniform distribution, not all-zeros.
-        if deg[i] < 1e-10 {
+        if deg[i] < 0.0000000001 {
             deg[i] = 1.0
             for j in 0 to n {
                 W[i][j] = 1.0 / (n as f32)
@@ -131,7 +131,7 @@ export function label_propagation_fit(X: Matrix, y: ptr<i32>, n_classes: i32, ga
     let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
     for i in 0 to n {
         let mut best_c: i32 = 0
-        let mut best_val: f32 = -1e30
+        let mut best_val: f32 = -9999999999.0
         for c in 0 to n_classes {
             if Y[i][c] > best_val {
                 best_val = Y[i][c]
@@ -178,7 +178,7 @@ export function label_propagation_predict_proba(model: LabelPropagation) -> ptr<
         for c in 0 to model.n_classes {
             s = s + model.label_distributions[i][c]
         }
-        if s < 1e-10 { s = 1.0 }
+        if s < 0.0000000001 { s = 1.0 }
         for c in 0 to model.n_classes {
             result[i][c] = model.label_distributions[i][c] / s
         }
@@ -222,7 +222,7 @@ export function label_spreading_fit(X: Matrix, y: ptr<i32>, n_classes: i32, gamm
         }
         # Zero-affinity rows get uniform transition probabilities.
         # Addresses sklearn #34351.
-        if deg[i] < 1e-10 {
+        if deg[i] < 0.0000000001 {
             deg[i] = 1.0
             for j in 0 to n {
                 W[i][j] = 1.0 / (n as f32)
@@ -285,7 +285,7 @@ export function label_spreading_fit(X: Matrix, y: ptr<i32>, n_classes: i32, gamm
     let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
     for i in 0 to n {
         let mut best_c: i32 = 0
-        let mut best_val: f32 = -1e30
+        let mut best_val: f32 = -9999999999.0
         for c in 0 to n_classes {
             if Y[i][c] > best_val {
                 best_val = Y[i][c]

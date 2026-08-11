@@ -149,7 +149,7 @@ export function isotonic_predict(model: IsotonicRegression, X: ptr<f32>, n: i32)
                 let x1: f32 = model.x_thresholds[hi]
                 let y0: f32 = model.y_values[lo]
                 let y1: f32 = model.y_values[hi]
-                if x1 - x0 < 1e-10 {
+                if x1 - x0 < 0.0000000001 {
                     result[i] = y0
                 } else {
                     let t: f32 = (x - x0) / (x1 - x0)

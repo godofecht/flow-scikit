@@ -271,11 +271,11 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
                 }
                 let mut loss: f32 = 0.0
                 if label > 0.5 {
-                    if p > 1e-10 {
+                    if p > 0.0000000001 {
                         loss = -log(p as f64) as f32
                     }
                 } else {
-                    if p < 1.0 - 1e-10 {
+                    if p < 1.0 - 0.0000000001 {
                         loss = -log((1.0 - p) as f64) as f32
                     }
                 }
@@ -1230,8 +1230,8 @@ export function bayesian_ridge_fit(X: Matrix, y: ptr<f32>, max_iter: i32, tol: f
             w_sq = w_sq + weights[j] * weights[j]
         }
 
-        let new_alpha: f32 = (p as f32) / (w_sq + 1e-10)
-        let new_beta: f32 = (n as f32) / (ss_res + 1e-10)
+        let new_alpha: f32 = (p as f32) / (w_sq + 0.0000000001)
+        let new_beta: f32 = (n as f32) / (ss_res + 0.0000000001)
 
         let da: f32 = fabs((alpha - new_alpha) as f64) as f32
         let db: f32 = fabs((beta - new_beta) as f64) as f32
@@ -1704,7 +1704,7 @@ export function lars_fit(X: Matrix, y: ptr<f32>, n_features_to_select: i32) -> L
             dot_xx = dot_xx + matrix_at(Xc, i, best_j) * matrix_at(Xc, i, best_j)
             dot_xy = dot_xy + matrix_at(Xc, i, best_j) * yc[i]
         }
-        if dot_xx > 1e-10 {
+        if dot_xx > 0.0000000001 {
             let coef: f32 = dot_xy / dot_xx
             weights[best_j] = coef
             for i in 0 to n {
@@ -1813,7 +1813,7 @@ export function ard_regression_fit(X: Matrix, y: ptr<f32>, max_iter: i32, tol: f
                 let pred: f32 = weights[j] * matrix_at(Xc, i, j)
                 residual_sq = residual_sq + (yc[i] - pred) * (yc[i] - pred)
             }
-            alpha[j] = gamma / (weights[j] * weights[j] + 1e-10)
+            alpha[j] = gamma / (weights[j] * weights[j] + 0.0000000001)
         }
 
         let mut ss_res: f32 = 0.0
@@ -1824,7 +1824,7 @@ export function ard_regression_fit(X: Matrix, y: ptr<f32>, max_iter: i32, tol: f
             }
             ss_res = ss_res + (yc[i] - pred) * (yc[i] - pred)
         }
-        beta = (n as f32 - p as f32) / (ss_res + 1e-10)
+        beta = (n as f32 - p as f32) / (ss_res + 0.0000000001)
 
         if ss_res / (n as f32) < tol { break }
     }

@@ -308,7 +308,7 @@ export function r2_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
         let d_tot: f32 = y_true[i] - mean
         ss_tot = ss_tot + d_tot * d_tot
     }
-    if ss_tot < 1e-10 {
+    if ss_tot < 0.0000000001 {
         return 0.0
     }
     return 1.0 - ss_res / ss_tot
@@ -555,11 +555,11 @@ export function log_loss(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, pos_label: 
     let mut sum: f32 = 0.0
     for i in 0 to n {
         let p: f32 = y_pred[i]
-        if p > 1.0 - 1e-10 {
-            p = 1.0 - 1e-10
+        if p > 1.0 - 0.0000000001 {
+            p = 1.0 - 0.0000000001
         }
-        if p < 1e-10 {
-            p = 1e-10
+        if p < 0.0000000001 {
+            p = 0.0000000001
         }
         if y_true[i] == pos_label {
             sum = sum - log(p as f64) as f32
@@ -596,7 +596,7 @@ export function cohen_kappa(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, classes:
 
     confusion_matrix_free(cm)
 
-    if pe > 1.0 - 1e-10 {
+    if pe > 1.0 - 0.0000000001 {
         return 0.0
     }
     return (po - pe) / (1.0 - pe)
@@ -630,7 +630,7 @@ export function matthews_corrcoef(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, po
     let numerator: f32 = ((tp as f32) * (tn as f32) - (fp as f32) * (fn as f32))
     let denominator: f32 = sqrt((((tp + fp) as f32) * ((tp + fn) as f32) * ((tn + fp) as f32) * ((tn + fn) as f32)) as f64) as f32
 
-    if denominator < 1e-10 {
+    if denominator < 0.0000000001 {
         return 0.0
     }
     return numerator / denominator
@@ -675,7 +675,7 @@ export function explained_variance_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: 
         var_diff = var_diff + d_diff * d_diff
         var_true = var_true + d_true * d_true
     }
-    if var_true < 1e-10 {
+    if var_true < 0.0000000001 {
         print("[flow-scikit] WARNING: explained_variance_score ill-defined (zero variance in y_true), returning NaN")
         return 0.0 / 0.0
     }
@@ -802,7 +802,7 @@ export function silhouette_score(X: Matrix, labels: ptr<i32>, n: i32) -> f32 {
             a_i = a_i / (count_same as f32)
         }
 
-        let mut best_b: f32 = 1e10
+        let mut best_b: f32 = 10000000000.0
         let mut found_other: bool = false
         for c in 0 to 100 {
             let mut has_cluster: bool = false
@@ -980,7 +980,7 @@ export function normalized_mutual_info(labels_true: ptr<f32>, labels_pred: ptr<f
     }
 
     let denom: f32 = (h_a + h_b) / 2.0
-    if denom < 1e-10 { return 0.0 }
+    if denom < 0.0000000001 { return 0.0 }
     return mi / denom
 }
 
@@ -1039,7 +1039,7 @@ export function v_measure_score(labels_true: ptr<f32>, labels_pred: ptr<f32>, n:
         h_c = h_c - p_c * log((p_c) as f64) as f32
     }
 
-    let homogeneity: f32 = 1.0 - h_c_k / (h_c + 1e-10)
+    let homogeneity: f32 = 1.0 - h_c_k / (h_c + 0.0000000001)
 
     let mut h_k_c: f32 = 0.0
     for c in 0 to n_classes {
@@ -1059,9 +1059,9 @@ export function v_measure_score(labels_true: ptr<f32>, labels_pred: ptr<f32>, n:
         h_k = h_k - p_k * log((p_k) as f64) as f32
     }
 
-    let completeness: f32 = 1.0 - h_k_c / (h_k + 1e-10)
+    let completeness: f32 = 1.0 - h_k_c / (h_k + 0.0000000001)
 
-    if homogeneity + completeness < 1e-10 { return 0.0 }
+    if homogeneity + completeness < 0.0000000001 { return 0.0 }
     return 2.0 * homogeneity * completeness / (homogeneity + completeness)
 }
 
@@ -1137,7 +1137,7 @@ export function cosine_distances(X: Matrix, Y: Matrix) -> Matrix {
             norm_x = norm_x + matrix_at(X, i, k) * matrix_at(X, i, k)
         }
         norm_x = sqrt((norm_x as f64)) as f32
-        if norm_x < 1e-10 { norm_x = 1e-10 }
+        if norm_x < 0.0000000001 { norm_x = 0.0000000001 }
 
         for j in 0 to Y.rows {
             let mut dot: f32 = 0.0
@@ -1147,7 +1147,7 @@ export function cosine_distances(X: Matrix, Y: Matrix) -> Matrix {
                 norm_y = norm_y + matrix_at(Y, j, k) * matrix_at(Y, j, k)
             }
             norm_y = sqrt((norm_y as f64)) as f32
-            if norm_y < 1e-10 { norm_y = 1e-10 }
+            if norm_y < 0.0000000001 { norm_y = 0.0000000001 }
             let cos_sim: f32 = dot / (norm_x * norm_y)
             matrix_set(result, i, j, 1.0 - cos_sim)
         }

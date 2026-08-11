@@ -26,7 +26,7 @@ export function ensure_all_finite(m: Matrix) -> ValidationResult {
         if d != d {
             return ValidationResult { ok: false, code: ENSURE_ERR_NAN, message: "NaN found in matrix" }
         }
-        if d > 1e30 || d < -1e30 {
+        if d > 9999999999.0 || d < -9999999999.0 {
             if d == d {
                 return ValidationResult { ok: false, code: ENSURE_ERR_NOT_FINITE, message: "Inf or very large value found in matrix" }
             }

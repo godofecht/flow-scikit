@@ -20,7 +20,7 @@ extern {
 function _gauss(seed: i32) -> f32 {
     let u1: f32 = ((rand() % 10000) as f32) / 10000.0
     let u2: f32 = ((rand() % 10000) as f32) / 10000.0
-    if u1 < 1e-6 { u1 = 1e-6 }
+    if u1 < 0.000001 { u1 = 0.000001 }
     let r: f32 = sqrt((0.0 - 2.0 * log(u1 as f64)) as f64) as f32
     let theta: f32 = 2.0 * 3.14159265 * u2
     return r * cos(theta as f64) as f32

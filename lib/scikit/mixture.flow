@@ -33,7 +33,7 @@ function _log_gaussian(x: ptr<f32>, mean: ptr<f32>, var: ptr<f32>, n_features: i
     for j in 0 to n_features {
         let d: f32 = x[j] - mean[j]
         let v: f32 = var[j]
-        if v < 1e-10 { v = 1e-10 }
+        if v < 0.0000000001 { v = 0.0000000001 }
         log_prob = log_prob - 0.5 * log((2.0 * 3.14159265 * v) as f64) as f32
         log_prob = log_prob - 0.5 * d * d / v
     }
@@ -66,7 +66,7 @@ export function gaussian_mixture_fit(X: Matrix, n_components: i32, max_iter: i32
         resp[i] = array_new_f32(n_components)
     }
 
-    let mut prev_ll: f32 = -1e10
+    let mut prev_ll: f32 = -10000000000.0
     let mut n_iter: i32 = 0
     let mut converged: bool = false
 
@@ -81,7 +81,7 @@ export function gaussian_mixture_fit(X: Matrix, n_components: i32, max_iter: i32
                 x_row[j] = matrix_at(X, i, j)
             }
 
-            let mut max_log: f32 = -1e10
+            let mut max_log: f32 = -10000000000.0
             for k in 0 to n_components {
                 let lg: f32 = log((weights[k] as f64)) as f32 + _log_gaussian(x_row, means[k], variances[k], n_features)
                 resp[i][k] = lg
@@ -124,7 +124,7 @@ export function gaussian_mixture_fit(X: Matrix, n_components: i32, max_iter: i32
                 for i in 0 to n {
                     mean_j = mean_j + resp[i][k] * matrix_at(X, i, j)
                 }
-                if nk > 1e-10 {
+                if nk > 0.0000000001 {
                     means[k][j] = mean_j / nk
                 }
 
@@ -133,11 +133,11 @@ export function gaussian_mixture_fit(X: Matrix, n_components: i32, max_iter: i32
                     let d: f32 = matrix_at(X, i, j) - means[k][j]
                     var_j = var_j + resp[i][k] * d * d
                 }
-                if nk > 1e-10 {
+                if nk > 0.0000000001 {
                     variances[k][j] = var_j / nk
                 }
-                if variances[k][j] < 1e-6 {
-                    variances[k][j] = 1e-6
+                if variances[k][j] < 0.000001 {
+                    variances[k][j] = 0.000001
                 }
             }
         }
@@ -168,7 +168,7 @@ export function gaussian_mixture_predict(model: GaussianMixture, X: Matrix) -> p
         }
 
         let mut best_k: i32 = 0
-        let mut best_log: f32 = -1e10
+        let mut best_log: f32 = -10000000000.0
         for k in 0 to model.n_components {
             let lg: f32 = log((model.weights[k] as f64)) as f32 + _log_gaussian(x_row, model.means[k], model.variances[k], model.n_features)
             if lg > best_log {
@@ -194,7 +194,7 @@ export function gaussian_mixture_predict_proba(model: GaussianMixture, X: Matrix
             x_row[j] = matrix_at(X, i, j)
         }
 
-        let mut max_log: f32 = -1e10
+        let mut max_log: f32 = -10000000000.0
         for k in 0 to model.n_components {
             let lg: f32 = log((model.weights[k] as f64)) as f32 + _log_gaussian(x_row, model.means[k], model.variances[k], model.n_features)
             matrix_set(result, i, k, lg)
@@ -227,7 +227,7 @@ export function gaussian_mixture_score(model: GaussianMixture, X: Matrix) -> f32
             x_row[j] = matrix_at(X, i, j)
         }
 
-        let mut max_log: f32 = -1e10
+        let mut max_log: f32 = -10000000000.0
         for k in 0 to model.n_components {
             let lg: f32 = log((model.weights[k] as f64)) as f32 + _log_gaussian(x_row, model.means[k], model.variances[k], model.n_features)
             if lg > max_log { max_log = lg }
@@ -306,13 +306,13 @@ export function bayesian_gaussian_mixture_fit(X: Matrix, n_components: i32, max_
                 for j in 0 to p {
                     let d: f32 = matrix_at(X, i, j) - means[k][j]
                     let v: f32 = variances[k][j]
-                    if v < 1e-10 { v = 1e-10 }
+                    if v < 0.0000000001 { v = 0.0000000001 }
                     log_lik = log_lik - 0.5 * d * d / v - 0.5 * log((v) as f64) as f32
                 }
                 resp[i][k] = exp((log_lik) as f64) as f32
                 total = total + resp[i][k]
             }
-            if total < 1e-10 { total = 1e-10 }
+            if total < 0.0000000001 { total = 0.0000000001 }
             for k in 0 to n_components {
                 resp[i][k] = resp[i][k] / total
             }
@@ -331,14 +331,14 @@ export function bayesian_gaussian_mixture_fit(X: Matrix, n_components: i32, max_
                 for i in 0 to n {
                     mean_kj = mean_kj + resp[i][k] * matrix_at(X, i, j)
                 }
-                if nk > 1e-10 { mean_kj = mean_kj / nk }
+                if nk > 0.0000000001 { mean_kj = mean_kj / nk }
 
                 let mut var_kj: f32 = 0.0
                 for i in 0 to n {
                     let d: f32 = matrix_at(X, i, j) - mean_kj
                     var_kj = var_kj + resp[i][k] * d * d
                 }
-                if nk > 1e-10 { var_kj = var_kj / nk + 1e-3 }
+                if nk > 0.0000000001 { var_kj = var_kj / nk + 0.001 }
 
                 let change_m: f32 = fabs((mean_kj - means[k][j]) as f64) as f32
                 let change_v: f32 = fabs((var_kj - variances[k][j]) as f64) as f32
@@ -377,13 +377,13 @@ export function bayesian_gaussian_mixture_predict(model: BayesianGaussianMixture
 
     for i in 0 to n {
         let mut best_k: i32 = 0
-        let mut best_lik: f32 = -1e30
+        let mut best_lik: f32 = -9999999999.0
         for k in 0 to model.n_components {
             let mut lik: f32 = log((model.weights[k]) as f64) as f32
             for j in 0 to model.n_features {
                 let d: f32 = matrix_at(X, i, j) - model.means[k][j]
                 let v: f32 = model.variances[k][j]
-                if v < 1e-10 { v = 1e-10 }
+                if v < 0.0000000001 { v = 0.0000000001 }
                 lik = lik - 0.5 * d * d / v
             }
             if lik > best_lik {

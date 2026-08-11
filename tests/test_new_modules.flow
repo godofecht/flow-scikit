@@ -201,7 +201,7 @@ function test_pls_regression() -> i32 {
         matrix_set(Y, i, 1, data.y[i * 2 + 1])
     }
 
-    let model: PLSRegression = pls_fit(data.X, Y, 2, 500, 1e-6)
+    let model: PLSRegression = pls_fit(data.X, Y, 2, 500, 0.000001)
     let preds: Matrix = pls_predict(model, data.X)
 
     let mut ss_res: f32 = 0.0
@@ -260,7 +260,7 @@ function test_tsne() -> i32 {
     let mut all_zero: bool = true
     for i in 0 to result.rows {
         for j in 0 to result.cols {
-            if fabs(matrix_at(result, i, j) as f64) as f32 > 1e-10 {
+            if fabs(matrix_at(result, i, j) as f64) as f32 > 0.0000000001 {
                 all_zero = false
             }
         }

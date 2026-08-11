@@ -471,7 +471,7 @@ export function minibatch_kmeans_fit(X: Matrix, n_clusters: i32, batch_size: i32
         }
     }
 
-    let mut prev_inertia: f32 = 1e10
+    let mut prev_inertia: f32 = 10000000000.0
 
     for iter in 0 to max_iter {
         let batch_indices: ptr<i32> = malloc((batch_size as i64) * 4) as ptr<i32>
@@ -488,7 +488,7 @@ export function minibatch_kmeans_fit(X: Matrix, n_clusters: i32, batch_size: i32
         for bi in 0 to batch_size {
             let idx: i32 = batch_indices[bi]
             let mut best_k: i32 = 0
-            let mut best_dist: f32 = 1e10
+            let mut best_dist: f32 = 10000000000.0
             for k in 0 to n_clusters {
                 let mut dist: f32 = 0.0
                 for j in 0 to n_features {
@@ -532,7 +532,7 @@ export function minibatch_kmeans_predict(model: MiniBatchKMeans, X: Matrix) -> p
     let labels: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
     for i in 0 to X.rows {
         let mut best_k: i32 = 0
-        let mut best_dist: f32 = 1e10
+        let mut best_dist: f32 = 10000000000.0
         for k in 0 to model.n_clusters {
             let mut dist: f32 = 0.0
             for j in 0 to model.n_features {
@@ -675,7 +675,7 @@ export function mean_shift_predict(model: MeanShift, X: Matrix) -> ptr<i32> {
 
     for i in 0 to n {
         let mut best_c: i32 = 0
-        let mut best_dist: f32 = 1e10
+        let mut best_dist: f32 = 10000000000.0
         for c in 0 to model.n_clusters {
             let mut dist_sq: f32 = 0.0
             for k in 0 to model.n_features {
@@ -728,7 +728,7 @@ export function birch_fit(X: Matrix, threshold: f32, branching_factor: i32) -> B
 
     for i in 0 to n {
         let mut best_c: i32 = -1
-        let mut best_dist: f32 = 1e10
+        let mut best_dist: f32 = 10000000000.0
 
         for c in 0 to n_clusters {
             let mut dist_sq: f32 = 0.0
@@ -778,7 +778,7 @@ export function birch_predict(model: Birch, X: Matrix) -> ptr<i32> {
 
     for i in 0 to n {
         let mut best_c: i32 = 0
-        let mut best_dist: f32 = 1e10
+        let mut best_dist: f32 = 10000000000.0
         for c in 0 to model.n_clusters {
             let mut dist_sq: f32 = 0.0
             for k in 0 to model.n_features {

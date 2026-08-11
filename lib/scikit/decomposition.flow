@@ -72,7 +72,7 @@ export function pca_fit(X: Matrix, n_components: i32) -> PCA {
                 norm = norm + new_vec[j] * new_vec[j]
             }
             norm = sqrt(norm as f64) as f32
-            if norm < 1e-10 {
+            if norm < 0.0000000001 {
                 norm = 1.0
             }
             for j in 0 to n_features {
@@ -113,7 +113,7 @@ export function pca_fit(X: Matrix, n_components: i32) -> PCA {
 
     let explained_variance_ratio: ptr<f32> = array_new_f32(n_components)
     for c in 0 to n_components {
-        if total_var > 1e-10 {
+        if total_var > 0.0000000001 {
             explained_variance_ratio[c] = explained_variance[c] / total_var
         } else {
             explained_variance_ratio[c] = 0.0
@@ -219,7 +219,7 @@ export function nmf_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f32, s
         H[i] = ((rand() % 100) as f32) / 100.0 + 0.01
     }
 
-    let mut prev_err: f32 = 1e10
+    let mut prev_err: f32 = 10000000000.0
 
     for iter in 0 to max_iter {
         let H_new: ptr<f32> = array_new_f32(k * p)
@@ -235,7 +235,7 @@ export function nmf_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f32, s
                     numerator = numerator + W[i * k + a] * matrix_at(X, i, b)
                     denominator = denominator + W[i * k + a] * wh
                 }
-                if denominator < 1e-10 { denominator = 1e-10 }
+                if denominator < 0.0000000001 { denominator = 0.0000000001 }
                 H_new[a * p + b] = H[a * p + b] * numerator / denominator
             }
         }
@@ -257,7 +257,7 @@ export function nmf_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f32, s
                     numerator = numerator + H[a * p + b] * matrix_at(X, i, b)
                     denominator = denominator + wh * H[a * p + b]
                 }
-                if denominator < 1e-10 { denominator = 1e-10 }
+                if denominator < 0.0000000001 { denominator = 0.0000000001 }
                 W_new[i * k + a] = W[i * k + a] * numerator / denominator
             }
         }
@@ -365,7 +365,7 @@ export function truncated_svd_fit(X: Matrix, n_components: i32) -> TruncatedSVD 
                 norm = norm + new_vec[j] * new_vec[j]
             }
             norm = sqrt(norm as f64) as f32
-            if norm < 1e-10 { norm = 1.0 }
+            if norm < 0.0000000001 { norm = 1.0 }
             for j in 0 to p {
                 eigvec[j] = new_vec[j] / norm
             }
@@ -404,7 +404,7 @@ export function truncated_svd_fit(X: Matrix, n_components: i32) -> TruncatedSVD 
 
     let explained_variance_ratio: ptr<f32> = array_new_f32(n_components)
     for c in 0 to n_components {
-        if total_var > 1e-10 {
+        if total_var > 0.0000000001 {
             explained_variance_ratio[c] = explained_variance[c] / total_var
         } else {
             explained_variance_ratio[c] = 0.0
@@ -482,7 +482,7 @@ function _gram_schmidt(row: ptr<f32>, basis: ptr<ptr<f32> >, n_basis: i32, n_fea
         norm = norm + row[j] * row[j]
     }
     norm = sqrt((norm as f64)) as f32
-    if norm > 1e-10 {
+    if norm > 0.0000000001 {
         for j in 0 to n_features {
             row[j] = row[j] / norm
         }
@@ -526,7 +526,7 @@ export function fast_ica_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f
     for c in 0 to n_components {
         whitening[c] = array_new_f32(p)
         let ev: f32 = pca_model.explained_variance[c]
-        if ev < 1e-10 { ev = 1e-10 }
+        if ev < 0.0000000001 { ev = 0.0000000001 }
         for j in 0 to p {
             whitening[c][j] = pca_model.components[c][j] / sqrt((ev as f64)) as f32
         }
@@ -702,7 +702,7 @@ export function sparse_pca_fit(X: Matrix, n_components: i32, alpha: f32, max_ite
             norm = norm + components[c][j] * components[c][j]
         }
         norm = sqrt((norm as f64)) as f32
-        if norm > 1e-10 {
+        if norm > 0.0000000001 {
             for j in 0 to p {
                 components[c][j] = components[c][j] / norm
             }
@@ -746,7 +746,7 @@ export function sparse_pca_fit(X: Matrix, n_components: i32, alpha: f32, max_ite
                 norm = norm + components[c][j] * components[c][j]
             }
             norm = sqrt((norm as f64)) as f32
-            if norm > 1e-10 {
+            if norm > 0.0000000001 {
                 for j in 0 to p {
                     components[c][j] = components[c][j] / norm
                 }
@@ -1077,7 +1077,7 @@ export function kernel_pca_fit(X: Matrix, n_components: i32, kernel: i32, gamma:
             let mut norm: f32 = 0.0
             for i in 0 to n { norm = norm + Av[i] * Av[i] }
             norm = sqrt((norm as f64)) as f32
-            if norm < 1e-10 { norm = 1e-10 }
+            if norm < 0.0000000001 { norm = 0.0000000001 }
 
             let mut change: f32 = 0.0
             for i in 0 to n {
@@ -1087,7 +1087,7 @@ export function kernel_pca_fit(X: Matrix, n_components: i32, kernel: i32, gamma:
                 eigenvectors[c][i] = new_val
             }
             array_free_f32(Av)
-            if change < 1e-6 { break }
+            if change < 0.000001 { break }
         }
 
         let mut lambda: f32 = 0.0
@@ -1099,7 +1099,7 @@ export function kernel_pca_fit(X: Matrix, n_components: i32, kernel: i32, gamma:
             lambda = lambda + eigenvectors[c][i] * s
         }
         eigenvalues[c] = lambda
-        if eigenvalues[c] < 1e-10 { eigenvalues[c] = 1e-10 }
+        if eigenvalues[c] < 0.0000000001 { eigenvalues[c] = 0.0000000001 }
     }
 
     for c in 0 to n_components {
@@ -1227,7 +1227,7 @@ export function factor_analysis_fit(X: Matrix, n_components: i32, max_iter: i32,
 
         let inv_psi: ptr<f32> = array_new_f32(p)
         for j in 0 to p {
-            if noise_variance[j] < 1e-10 { noise_variance[j] = 1e-10 }
+            if noise_variance[j] < 0.0000000001 { noise_variance[j] = 0.0000000001 }
             inv_psi[j] = 1.0 / noise_variance[j]
         }
 
@@ -1249,7 +1249,7 @@ export function factor_analysis_fit(X: Matrix, n_components: i32, max_iter: i32,
 
                 let mut beta_sq: f32 = 0.0
                 for j in 0 to p { beta_sq = beta_sq + beta[j] * beta[j] * inv_psi[j] }
-                if beta_sq < 1e-10 { beta_sq = 1e-10 }
+                if beta_sq < 0.0000000001 { beta_sq = 0.0000000001 }
 
                 for j in 0 to p {
                     w[j] = beta[j] / sqrt((1.0 + beta_sq) as f64) as f32
@@ -1308,7 +1308,7 @@ export function factor_analysis_transform(model: FactorAnalysis, X: Matrix) -> M
 
     let inv_psi: ptr<f32> = array_new_f32(p)
     for j in 0 to p {
-        if model.noise_variance[j] < 1e-10 { inv_psi[j] = 1e10 }
+        if model.noise_variance[j] < 0.0000000001 { inv_psi[j] = 10000000000.0 }
         else { inv_psi[j] = 1.0 / model.noise_variance[j] }
     }
 
@@ -1394,7 +1394,7 @@ export function incremental_pca_partial_fit(model: IncrementalPCA, X: Matrix) ->
         let mut norm: f32 = 0.0
         for j in 0 to p { norm = norm + Av[j] * Av[j] }
         norm = sqrt((norm as f64)) as f32
-        if norm < 1e-10 { norm = 1e-10 }
+        if norm < 0.0000000001 { norm = 0.0000000001 }
 
         for j in 0 to p {
             model.components[c][j] = Av[j] / norm
@@ -1488,7 +1488,7 @@ export function dictionary_learning_fit(X: Matrix, n_components: i32, alpha: f32
         let mut norm: f32 = 0.0
         for j in 0 to p { norm = norm + dictionary[c][j] * dictionary[c][j] }
         norm = sqrt((norm as f64)) as f32
-        if norm > 1e-10 {
+        if norm > 0.0000000001 {
             for j in 0 to p { dictionary[c][j] = dictionary[c][j] / norm }
         }
     }
@@ -1518,7 +1518,7 @@ export function dictionary_learning_fit(X: Matrix, n_components: i32, alpha: f32
             }
 
             for c in 0 to n_components {
-                if (fabs((codes[c]) as f64) as f32) < 1e-10 { continue }
+                if (fabs((codes[c]) as f64) as f32) < 0.0000000001 { continue }
                 let old: ptr<f32> = array_copy_f32(dictionary[c], p)
                 for j in 0 to p {
                     let residual: f32 = matrix_at(X, i, j) - codes[c] * dictionary[c][j]
@@ -1527,7 +1527,7 @@ export function dictionary_learning_fit(X: Matrix, n_components: i32, alpha: f32
                 let mut norm: f32 = 0.0
                 for j in 0 to p { norm = norm + dictionary[c][j] * dictionary[c][j] }
                 norm = sqrt((norm as f64)) as f32
-                if norm > 1e-10 {
+                if norm > 0.0000000001 {
                     for j in 0 to p { dictionary[c][j] = dictionary[c][j] / norm }
                 }
                 let mut change: f32 = 0.0

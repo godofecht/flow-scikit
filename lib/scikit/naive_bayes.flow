@@ -98,7 +98,7 @@ export function gaussian_nb_predict(model: GaussianNB, X: Matrix) -> ptr<f32> {
 
     for i in 0 to X.rows {
         let mut best_class: i32 = 0
-        let mut best_log_prob: f32 = -1e30
+        let mut best_log_prob: f32 = -9999999999.0
 
         for c in 0 to model.n_classes {
             let mut log_prob: f32 = log(model.priors[c] as f64) as f32
@@ -129,7 +129,7 @@ export function gaussian_nb_predict_proba(model: GaussianNB, X: Matrix) -> Matri
 
     for i in 0 to X.rows {
         let log_probs: ptr<f32> = array_new_f32(model.n_classes)
-        let mut max_lp: f32 = -1e30
+        let mut max_lp: f32 = -9999999999.0
 
         for c in 0 to model.n_classes {
             let mut lp: f32 = log(model.priors[c] as f64) as f32
@@ -261,7 +261,7 @@ export function multinomial_nb_predict(model: MultinomialNB, X: Matrix) -> ptr<f
 
     for i in 0 to n {
         let mut best_c: i32 = 0
-        let mut best_score: f32 = -1e10
+        let mut best_score: f32 = -10000000000.0
         for c in 0 to model.n_classes {
             let mut score: f32 = model.class_log_prior[c]
             for j in 0 to model.n_features {
@@ -284,7 +284,7 @@ export function multinomial_nb_predict_proba(model: MultinomialNB, X: Matrix) ->
 
     for i in 0 to n {
         let log_probs: ptr<f32> = array_new_f32(model.n_classes)
-        let mut max_lp: f32 = -1e10
+        let mut max_lp: f32 = -10000000000.0
 
         for c in 0 to model.n_classes {
             let mut score: f32 = model.class_log_prior[c]
@@ -404,7 +404,7 @@ export function bernoulli_nb_predict(model: BernoulliNB, X: Matrix) -> ptr<f32> 
 
     for i in 0 to n {
         let mut best_c: i32 = 0
-        let mut best_score: f32 = -1e10
+        let mut best_score: f32 = -10000000000.0
         for c in 0 to model.n_classes {
             let mut score: f32 = model.class_log_prior[c]
             for j in 0 to model.n_features {
@@ -465,7 +465,7 @@ export function complement_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, alpha:
         if count > 0 {
             class_log_prior[c] = log((count as f64) as f32 as f64) as f32
         } else {
-            class_log_prior[c] = -1e10
+            class_log_prior[c] = -10000000000.0
         }
     }
 
@@ -529,7 +529,7 @@ export function complement_nb_predict(model: ComplementNB, X: Matrix) -> ptr<f32
 
     for i in 0 to n {
         let mut best_c: i32 = 0
-        let mut best_score: f32 = -1e30
+        let mut best_score: f32 = -9999999999.0
         for c in 0 to model.n_classes {
             let mut score: f32 = model.class_log_prior[c]
             for j in 0 to model.n_features {
@@ -584,7 +584,7 @@ export function categorical_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_cat
         if count > 0 {
             class_log_prior[c] = log((count as f64) as f32 as f64) as f32
         } else {
-            class_log_prior[c] = -1e10
+            class_log_prior[c] = -10000000000.0
         }
     }
 
@@ -637,7 +637,7 @@ export function categorical_nb_predict(model: CategoricalNB, X: Matrix) -> ptr<f
 
     for i in 0 to n {
         let mut best_c: i32 = 0
-        let mut best_score: f32 = -1e30
+        let mut best_score: f32 = -9999999999.0
         for c in 0 to model.n_classes {
             let mut score: f32 = model.class_log_prior[c]
             for j in 0 to model.n_features {

@@ -92,7 +92,7 @@ export function knn_imputer_fit(X: Matrix, n_neighbors: i32, weights: i32) -> KN
                     let w: f32 = 1.0
                     if weights == KNN_WEIGHTS_DISTANCE {
                         let d: f32 = best_dists[a]
-                        if d < 1e-10 {
+                        if d < 0.0000000001 {
                             w = 1.0
                         } else {
                             w = 1.0 / d
@@ -261,7 +261,7 @@ export function iterative_imputer_fit(X: Matrix, max_iter: i32, tol: f32, seed: 
                     cov_jk = cov_jk + dj * dk
                     var_k = var_k + dk * dk
                 }
-                if var_k > 1e-10 {
+                if var_k > 0.0000000001 {
                     weights[k] = cov_jk / var_k
                 } else {
                     weights[k] = 0.0

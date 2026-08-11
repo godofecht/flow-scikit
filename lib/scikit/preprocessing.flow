@@ -36,7 +36,7 @@ export function standard_scaler_fit(X: Matrix) -> StandardScaler {
         }
         mean[j] = array_mean(col, X.rows)
         std[j] = array_std(col, X.rows, mean[j])
-        if std[j] < 1e-10 {
+        if std[j] < 0.0000000001 {
             std[j] = 1.0
         }
         array_free_f32(col)
@@ -101,7 +101,7 @@ export function minmax_scaler_transform(scaler: MinMaxScaler, X: Matrix) -> Matr
     for i in 0 to X.rows {
         for j in 0 to X.cols {
             let range: f32 = scaler.max_vals[j] - scaler.min_vals[j]
-            if range < 1e-10 {
+            if range < 0.0000000001 {
                 matrix_set(result, i, j, 0.0)
             } else {
                 let val: f32 = (matrix_at(X, i, j) - scaler.min_vals[j]) / range
@@ -431,7 +431,7 @@ export function robust_scaler_fit(X: Matrix) -> RobustScaler {
         let q1: f32 = col[q1_idx]
         let q3: f32 = col[q3_idx]
         iqr[j] = q3 - q1
-        if iqr[j] < 1e-10 {
+        if iqr[j] < 0.0000000001 {
             iqr[j] = 1.0
         }
         array_free_f32(col)
@@ -496,7 +496,7 @@ export function maxabs_scaler_fit(X: Matrix) -> MaxAbsScaler {
                 }
             }
         }
-        if m < 1e-10 {
+        if m < 0.0000000001 {
             m = 1.0
         }
         max_abs[j] = m
@@ -550,7 +550,7 @@ export function normalizer_transform(normalizer: Normalizer, X: Matrix) -> Matri
                     sum = sum + val
                 }
             }
-            if sum < 1e-10 {
+            if sum < 0.0000000001 {
                 sum = 1.0
             }
             for j in 0 to X.cols {
@@ -563,7 +563,7 @@ export function normalizer_transform(normalizer: Normalizer, X: Matrix) -> Matri
                 sum_sq = sum_sq + val * val
             }
             let norm_val: f32 = sqrt(sum_sq as f64) as f32
-            if norm_val < 1e-10 {
+            if norm_val < 0.0000000001 {
                 norm_val = 1.0
             }
             for j in 0 to X.cols {
@@ -581,7 +581,7 @@ export function normalizer_transform(normalizer: Normalizer, X: Matrix) -> Matri
                     m = abs_val
                 }
             }
-            if m < 1e-10 {
+            if m < 0.0000000001 {
                 m = 1.0
             }
             for j in 0 to X.cols {
@@ -835,7 +835,7 @@ export function kbins_discretizer_fit(X: Matrix, n_bins: i32, strategy: i32) -> 
             let min_val: f32 = col[0]
             let max_val: f32 = col[X.rows - 1]
             let range: f32 = max_val - min_val
-            if range < 1e-10 {
+            if range < 0.0000000001 {
                 range = 1.0
             }
             for b in 0 to n_bins + 1 {
@@ -1107,7 +1107,7 @@ export function function_transformer_transform(ft: FunctionTransformer, X: Matri
                     matrix_set(result, i, j, val)
                 }
             } elif ft.func_kind == FUNC_RECIPROCAL {
-                if val > 1e-10 || val < -1e-10 {
+                if val > 0.0000000001 || val < -0.0000000001 {
                     matrix_set(result, i, j, 1.0 / val)
                 } else {
                     matrix_set(result, i, j, 0.0)
@@ -1136,7 +1136,7 @@ export function function_transformer_inverse_transform(ft: FunctionTransformer, 
             } elif ft.func_kind == FUNC_ABS {
                 matrix_set(result, i, j, val)
             } elif ft.func_kind == FUNC_RECIPROCAL {
-                if val > 1e-10 || val < -1e-10 {
+                if val > 0.0000000001 || val < -0.0000000001 {
                     matrix_set(result, i, j, 1.0 / val)
                 } else {
                     matrix_set(result, i, j, 0.0)
@@ -1163,12 +1163,12 @@ export const POWER_BOX_COX: i32 = 1
 
 function _yeo_johnson(x: f32, lambda: f32) -> f32 {
     if x >= 0.0 {
-        if (fabs((lambda) as f64) as f32) < 1e-10 {
+        if (fabs((lambda) as f64) as f32) < 0.0000000001 {
             return log((x + 1.0) as f64) as f32
         }
         return (pow((x + 1.0) as f64, lambda as f64) as f32 - 1.0) / lambda
     } else {
-        if (fabs((lambda - 2.0) as f64) as f32) < 1e-10 {
+        if (fabs((lambda - 2.0) as f64) as f32) < 0.0000000001 {
             return 0.0 - log((1.0 - x) as f64) as f32
         }
         return 0.0 - ((pow((1.0 - x) as f64, (2.0 - lambda) as f64) as f32 - 1.0) / (2.0 - lambda))
@@ -1183,7 +1183,7 @@ export function power_transformer_fit(X: Matrix, method: i32) -> PowerTransforme
     let lambdas_to_try: array<f32, 9> = [-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0, 0.25]
 
     for j in 0 to p {
-        let best_ll: f32 = -1e10
+        let best_ll: f32 = -10000000000.0
         let best_lambda: f32 = 0.0
 
         for li in 0 to 9 {
@@ -1194,7 +1194,7 @@ export function power_transformer_fit(X: Matrix, method: i32) -> PowerTransforme
             for i in 0 to n {
                 let x: f32 = matrix_at(X, i, j)
                 let transformed: f32 = _yeo_johnson(x, lambda)
-                if transformed > 1e-10 || transformed < -1e-10 {
+                if transformed > 0.0000000001 || transformed < -0.0000000001 {
                     ll = ll + log((fabs((transformed) as f64)) as f64) as f32
                 } else {
                     valid = false
@@ -1237,7 +1237,7 @@ export function power_transformer_transform(model: PowerTransformer, X: Matrix) 
             std = std + d * d
         }
         std = sqrt((std / (X.rows as f32)) as f64) as f32
-        if std < 1e-10 { std = 1.0 }
+        if std < 0.0000000001 { std = 1.0 }
 
         for i in 0 to X.rows {
             matrix_set(result, i, j, (matrix_at(result, i, j) - mean) / std)
@@ -1374,7 +1374,7 @@ export function quantile_transformer_transform(model: QuantileTransformer, X: Ma
                         let lo: f32 = model.quantiles[j][k - 1]
                         let hi: f32 = model.quantiles[j][k]
                         let frac: f32 = 0.5
-                        if hi - lo > 1e-10 {
+                        if hi - lo > 0.0000000001 {
                             frac = (val - lo) / (hi - lo)
                         }
                         q = model.references[j][k - 1] * (1.0 - frac) + model.references[j][k] * frac

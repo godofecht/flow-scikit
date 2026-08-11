@@ -74,9 +74,9 @@ export function empirical_covariance_get_precision(model: EmpiricalCovariance) -
         det = det * model.covariance[i][i]
     }
 
-    if (fabs((det) as f64) as f32) < 1e-10 {
+    if (fabs((det) as f64) as f32) < 0.0000000001 {
         for i in 0 to p {
-            inv[i][i] = 1.0 / (model.covariance[i][i] + 1e-6)
+            inv[i][i] = 1.0 / (model.covariance[i][i] + 0.000001)
         }
     } else {
         for i in 0 to p {
@@ -265,7 +265,7 @@ export function oas_estimate(X: Matrix) -> f32 {
     let numerator: f32 = (1.0 - 2.0 / (p as f32)) * trace_cov_sq + trace * trace
     let denominator: f32 = (n as f32 + 1.0 - 2.0 / (p as f32)) * (trace_cov_sq - trace_sq / (p as f32))
 
-    if (fabs((denominator) as f64) as f32) < 1e-10 {
+    if (fabs((denominator) as f64) as f32) < 0.0000000001 {
         return 0.0
     }
     let rho: f32 = numerator / denominator
@@ -358,7 +358,7 @@ export function ledoit_wolf_estimate(X: Matrix) -> f32 {
     free(emp_cov as ptr<void>)
     array_free_f32(mean)
 
-    if d_sq < 1e-10 {
+    if d_sq < 0.0000000001 {
         return 1.0
     }
 
@@ -383,7 +383,7 @@ export function ledoit_wolf_estimate_weighted(X: Matrix, sample_weights: ptr<f32
     for i in 0 to n {
         total_w = total_w + sample_weights[i]
     }
-    if total_w < 1e-10 {
+    if total_w < 0.0000000001 {
         return 1.0
     }
 
@@ -455,7 +455,7 @@ export function ledoit_wolf_estimate_weighted(X: Matrix, sample_weights: ptr<f32
     free(emp_cov as ptr<void>)
     array_free_f32(mean)
 
-    if d_sq < 1e-10 {
+    if d_sq < 0.0000000001 {
         return 1.0
     }
 
@@ -483,7 +483,7 @@ export function ledoit_wolf_fit_weighted(X: Matrix, sample_weights: ptr<f32>) ->
     for i in 0 to n {
         total_w = total_w + sample_weights[i]
     }
-    if total_w < 1e-10 {
+    if total_w < 0.0000000001 {
         total_w = 1.0
     }
 
@@ -699,7 +699,7 @@ export function min_cov_det_fit(X: Matrix, h_fraction: f32, max_iter: i32, seed:
     srand(seed)
 
     let best_det: ptr<f32> = array_new_f32(1)
-    best_det[0] = 1e30
+    best_det[0] = 9999999999.0
 
     let best_location: ptr<f32> = array_new_f32(p)
     let best_cov: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
@@ -741,7 +741,7 @@ export function min_cov_det_fit(X: Matrix, h_fraction: f32, max_iter: i32, seed:
 
         let mut det: f32 = 1.0
         for i in 0 to p {
-            det = det * (cov[i][i] + 1e-10)
+            det = det * (cov[i][i] + 0.0000000001)
         }
         det = fabs((det) as f64) as f32
 
@@ -771,7 +771,7 @@ export function min_cov_det_fit(X: Matrix, h_fraction: f32, max_iter: i32, seed:
         let mut s: f32 = 0.0
         for a in 0 to p {
             let d: f32 = matrix_at(X, i, a) - best_location[a]
-            s = s + d * d / (best_cov[a][a] + 1e-10)
+            s = s + d * d / (best_cov[a][a] + 0.0000000001)
         }
         dists[i] = s
     }

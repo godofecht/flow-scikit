@@ -88,7 +88,7 @@ function main() -> i32 {
         matrix_set(Y, i, 0, y[i])
         matrix_set(Y, i, 1, y[i] * 0.5 + 2.0)
     }
-    let pls: PLSRegression = pls_fit(X, Y, 2, 500, 1e-6)
+    let pls: PLSRegression = pls_fit(X, Y, 2, 500, 0.000001)
     let pls_preds: Matrix = pls_predict(pls, X)
     let pls_trans: Matrix = pls_transform(pls, X)
     print("  First 3 transformed samples: ")
@@ -118,7 +118,7 @@ function main() -> i32 {
             }
         }
     }
-    let nmf_model: NMF = nmf_fit(X_nonneg, 2, 200, 1e-4, 42)
+    let nmf_model: NMF = nmf_fit(X_nonneg, 2, 200, 0.0001, 42)
     print("  Reconstruction error = ")
     printf("%.4f", nmf_model.reconstruction_err)
     println("")

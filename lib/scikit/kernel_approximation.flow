@@ -38,7 +38,7 @@ export function rbf_sampler_fit(n_features: i32, gamma: f32, n_components: i32, 
             let r1: f32 = ((rand() % 10000) as f32) / 10000.0
             let r2: f32 = ((rand() % 10000) as f32) / 10000.0
             let u1: f32 = r1
-            if u1 < 1e-10 { u1 = 1e-10 }
+            if u1 < 0.0000000001 { u1 = 0.0000000001 }
             let z: f32 = sqrt((-2.0 * log((u1) as f64)) as f64) as f32 * cos((6.28318 * r2) as f64) as f32
             weights[c][j] = z * sqrt((2.0 * gamma) as f64) as f32
         }
@@ -158,7 +158,7 @@ export function nystroem_fit(X: Matrix, n_components: i32, gamma: f32, kernel: i
     let eigvals: ptr<f32> = array_new_f32(n_comp)
     for i in 0 to n_comp {
         eigvals[i] = K.data[i * n_comp + i]
-        if eigvals[i] < 1e-10 { eigvals[i] = 1e-10 }
+        if eigvals[i] < 0.0000000001 { eigvals[i] = 0.0000000001 }
     }
 
     let normalization: ptr<f32> = array_new_f32(n_comp)
@@ -254,7 +254,7 @@ export function additive_chi2_sampler_transform(model: AdditiveChi2Sampler, X: M
             }
             for k in 0 to model.sample_steps {
                 let t: f32 = (4.0 * (k as f32) + 2.0) * 3.14159 / (4.0 * (model.sample_steps as f32))
-                matrix_set(result, i, col, x * cos((t) as f64) as f32 / sqrt((x + 1e-10) as f64) as f32)
+                matrix_set(result, i, col, x * cos((t) as f64) as f32 / sqrt((x + 0.0000000001) as f64) as f32)
                 col = col + 1
             }
         }

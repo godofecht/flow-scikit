@@ -127,7 +127,7 @@ function main() -> i32 {
     array_free_f32(gb_preds)
 
     # 10. Gaussian NB
-    let nb: GaussianNB = gaussian_nb_fit(split.X_train, split.y_train, 3, 1e-9)
+    let nb: GaussianNB = gaussian_nb_fit(split.X_train, split.y_train, 3, 0.000000001)
     let nb_preds: ptr<f32> = gaussian_nb_predict(nb, split.X_test)
     let nb_acc: f32 = accuracy_score(split.y_test, nb_preds, split.n_test)
     print("   GaussianNB accuracy = ")
@@ -151,7 +151,7 @@ function main() -> i32 {
     # 12. KMeans clustering
     println("")
     println("4. Clustering")
-    let km: KMeans = kmeans_fit(X_scaled, 3, 100, 1e-4, 42)
+    let km: KMeans = kmeans_fit(X_scaled, 3, 100, 0.0001, 42)
     print("   KMeans: ")
     print(km.n_clusters)
     print(" clusters, inertia = ")
