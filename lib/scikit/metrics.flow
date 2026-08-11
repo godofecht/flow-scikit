@@ -2464,3 +2464,94 @@ export function d2_absolute_error_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i
     let result: f32 = 1.0 - sum_abs_error / sum_abs_dev
     return result
 }
+
+# ============================================================================
+# silhouette_samples - Per-sample silhouette coefficients
+# ============================================================================
+
+export function silhouette_samples(X: Matrix, labels: ptr<i32>, n: i32) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let label_i: i32 = labels[i]
+
+        let mut a_i: f32 = 0.0
+        let mut count_same: i32 = 0
+        for j in 0 to n {
+            if i != j && labels[j] == label_i {
+                let mut dist: f32 = 0.0
+                for k in 0 to X.cols {
+                    let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                    dist = dist + d * d
+                }
+                a_i = a_i + sqrt(dist as f64) as f32
+                count_same = count_same + 1
+            }
+        }
+        if count_same > 0 { a_i = a_i / (count_same as f32) }
+
+        let mut best_b: f32 = 10000000000.0
+        let mut found_other: bool = false
+        for c in 0 to 100 {
+            let mut has_cluster: bool = false
+            for j in 0 to n {
+                if labels[j] == c && c != label_i { has_cluster = true; break }
+            }
+            if not has_cluster { continue }
+
+            let mut b_i: f32 = 0.0
+            let mut count_other: i32 = 0
+            for j in 0 to n {
+                if labels[j] == c {
+                    let mut dist: f32 = 0.0
+                    for k in 0 to X.cols {
+                        let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                        dist = dist + d * d
+                    }
+                    b_i = b_i + sqrt(dist as f64) as f32
+                    count_other = count_other + 1
+                }
+            }
+            if count_other > 0 {
+                b_i = b_i / (count_other as f32)
+                if b_i < best_b { best_b = b_i; found_other = true }
+            }
+        }
+
+        if not found_other {
+            result[i] = 0.0
+        } else {
+            let denom: f32 = a_i
+            if best_b > denom {
+                result[i] = (best_b - a_i) / best_b
+            } else {
+                result[i] = (best_b - a_i) / denom
+            }
+        }
+    }
+    return result
+}
+
+# ============================================================================
+# rand_score - Unadjusted Rand Index
+# ============================================================================
+
+export function rand_score(labels_true: ptr<f32>, labels_pred: ptr<f32>, n: i32) -> f32 {
+    let mut a: f32 = 0.0
+    let mut b: f32 = 0.0
+    let mut i: i32 = 0
+    while i < n {
+        let mut j: i32 = i + 1
+        while j < n {
+            let same_true: bool = labels_true[i] == labels_true[j]
+            let same_pred: bool = labels_pred[i] == labels_pred[j]
+            if same_true && same_pred { a = a + 1.0 }
+            if not same_true && not same_pred { b = b + 1.0 }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    let total: f32 = (n as f32) * ((n as f32) - 1.0) / 2.0
+    if total < 0.0000000001 { return 1.0 }
+    return (a + b) / total
+}

@@ -1859,3 +1859,142 @@ export function feature_agglomeration_transform(model: FeatureAgglomeration, X: 
 export function feature_agglomeration_free(model: FeatureAgglomeration) -> void {
     free(model.labels as ptr<void>)
 }
+
+# ============================================================================
+# estimate_bandwidth - Estimate bandwidth for MeanShift
+# ============================================================================
+
+export function estimate_bandwidth(X: Matrix, quantile: f32, n_samples: i32, seed: i32) -> f32 {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let use_n: i32 = n_samples
+    if use_n > n { use_n = n }
+
+    srand(seed)
+
+    let distances: ptr<f32> = array_new_f32(use_n)
+    let mut d_idx: i32 = 0
+
+    let mut i: i32 = 0
+    while i < use_n {
+        let idx: i32 = rand() % n
+        let mut j: i32 = 0
+        while j < use_n {
+            if i != j {
+                let jdx: i32 = rand() % n
+                let mut dist: f32 = 0.0
+                let mut k: i32 = 0
+                while k < p {
+                    let d: f32 = matrix_at(X, idx, k) - matrix_at(X, jdx, k)
+                    dist = dist + d * d
+                    k = k + 1
+                }
+                if d_idx < use_n {
+                    distances[d_idx] = sqrt(dist as f64) as f32
+                    d_idx = d_idx + 1
+                }
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    let mut sorted: ptr<f32> = array_copy_f32(distances, d_idx)
+    let mut a: i32 = 1
+    while a < d_idx {
+        let key: f32 = sorted[a]
+        let mut b: i32 = a - 1
+        while b >= 0 && sorted[b] > key {
+            sorted[b + 1] = sorted[b]
+            b = b - 1
+        }
+        sorted[b + 1] = key
+        a = a + 1
+    }
+
+    let q_idx: i32 = ((d_idx as f32) * quantile) as i32
+    if q_idx >= d_idx { q_idx = d_idx - 1 }
+    if q_idx < 0 { q_idx = 0 }
+
+    let bandwidth: f32 = sorted[q_idx]
+    if bandwidth < 0.0000000001 { bandwidth = 1.0 }
+
+    array_free_f32(distances)
+    array_free_f32(sorted)
+    return bandwidth
+}
+
+# ============================================================================
+# kmeans_plusplus_init - K-Means++ initialization
+# ============================================================================
+
+export function kmeans_plusplus_init(X: Matrix, n_clusters: i32, seed: i32) -> Matrix {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let centers: Matrix = matrix_new(n_clusters, p)
+
+    srand(seed)
+
+    let first: i32 = rand() % n
+    let mut j: i32 = 0
+    while j < p {
+        matrix_set(centers, 0, j, matrix_at(X, first, j))
+        j = j + 1
+    }
+
+    let dists: ptr<f32> = array_new_f32(n)
+    let mut c: i32 = 1
+    while c < n_clusters {
+        let mut total_dist: f32 = 0.0
+        let mut i: i32 = 0
+        while i < n {
+            let mut min_dist: f32 = 10000000000.0
+            let mut k: i32 = 0
+            while k < c {
+                let mut d: f32 = 0.0
+                let mut f: i32 = 0
+                while f < p {
+                    let diff: f32 = matrix_at(X, i, f) - matrix_at(centers, k, f)
+                    d = d + diff * diff
+                    f = f + 1
+                }
+                if d < min_dist { min_dist = d }
+                k = k + 1
+            }
+            dists[i] = min_dist
+            total_dist = total_dist + min_dist
+            i = i + 1
+        }
+
+        if total_dist < 0.0000000001 {
+            let idx: i32 = rand() % n
+            let mut f: i32 = 0
+            while f < p {
+                matrix_set(centers, c, f, matrix_at(X, idx, f))
+                f = f + 1
+            }
+        } else {
+            let r: f32 = ((rand() % 10000) as f32) / 10000.0 * total_dist
+            let mut cum: f32 = 0.0
+            let mut chosen: i32 = n - 1
+            let mut i: i32 = 0
+            while i < n {
+                cum = cum + dists[i]
+                if cum >= r {
+                    chosen = i
+                    break
+                }
+                i = i + 1
+            }
+            let mut f: i32 = 0
+            while f < p {
+                matrix_set(centers, c, f, matrix_at(X, chosen, f))
+                f = f + 1
+            }
+        }
+        c = c + 1
+    }
+
+    array_free_f32(dists)
+    return centers
+}

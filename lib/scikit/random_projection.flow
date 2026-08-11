@@ -24,6 +24,11 @@ export struct GaussianRandomProjection {
     fitted: bool
 }
 
+export function johnson_lindenstrauss_min_dim(n_samples: i32, eps: f32) -> i32 {
+    let val: f32 = 4.0 * log(((n_samples as f32) * log((1.0 / (1.0 - eps * eps)) as f64) as f32) as f64) as f64 / (eps * eps)
+    return val as i32
+}
+
 function _johnson_lindenstrauss_min_dim(n_samples: i32, eps: f32) -> i32 {
     let val: f32 = 4.0 * log(((n_samples as f32) * log((1.0 / (1.0 - eps * eps)) as f64) as f32) as f64) as f64 / (eps * eps)
     return val as i32

@@ -310,3 +310,167 @@ export function transformed_target_regressor_predict(model: TransformedTargetReg
 export function transformed_target_regressor_free(model: TransformedTargetRegressor) -> void {
     linear_regression_free(model.model)
 }
+
+# ============================================================================
+# FeatureUnion - Concatenates results of multiple transformer objects
+# ============================================================================
+
+export const FU_TRANSFORMER_STANDARD_SCALER: i32 = 0
+export const FU_TRANSFORMER_MINMAX_SCALER: i32 = 1
+export const FU_TRANSFORMER_PASSTHROUGH: i32 = 2
+export const FU_TRANSFORMER_POLYNOMIAL: i32 = 3
+
+export struct FeatureUnion {
+    n_transformers: i32,
+    transformer_types: ptr<i32>,
+    scalers: ptr<StandardScaler>,
+    minmax_scalers: ptr<MinMaxScaler>,
+    poly_degrees: ptr<i32>,
+    n_output_features: i32,
+    fitted: bool
+}
+
+export function feature_union_init(n_transformers: i32) -> FeatureUnion {
+    let transformer_types: ptr<i32> = malloc((n_transformers as i64) * 4) as ptr<i32>
+    let scalers: ptr<StandardScaler> = malloc((n_transformers as i64) * 32) as ptr<StandardScaler>
+    let minmax_scalers: ptr<MinMaxScaler> = malloc((n_transformers as i64) * 32) as ptr<MinMaxScaler>
+    let poly_degrees: ptr<i32> = malloc((n_transformers as i64) * 4) as ptr<i32>
+
+    let mut i: i32 = 0
+    while i < n_transformers {
+        transformer_types[i] = FU_TRANSFORMER_PASSTHROUGH
+        poly_degrees[i] = 2
+        i = i + 1
+    }
+
+    let result: FeatureUnion = FeatureUnion {
+        n_transformers: n_transformers,
+        transformer_types: transformer_types,
+        scalers: scalers,
+        minmax_scalers: minmax_scalers,
+        poly_degrees: poly_degrees,
+        n_output_features: 0,
+        fitted: false
+    }
+    return result
+}
+
+export function feature_union_set_transformer(fu: FeatureUnion, idx: i32, transformer_type: i32, degree: i32) -> void {
+    fu.transformer_types[idx] = transformer_type
+    fu.poly_degrees[idx] = degree
+}
+
+export function feature_union_fit(fu: FeatureUnion, X: Matrix) -> FeatureUnion {
+    let mut n_output: i32 = 0
+    let p: i32 = X.cols
+
+    let mut s: i32 = 0
+    while s < fu.n_transformers {
+        if fu.transformer_types[s] == FU_TRANSFORMER_STANDARD_SCALER {
+            fu.scalers[s] = standard_scaler_fit(X)
+            n_output = n_output + p
+        } elif fu.transformer_types[s] == FU_TRANSFORMER_MINMAX_SCALER {
+            fu.minmax_scalers[s] = minmax_scaler_fit(X)
+            n_output = n_output + p
+        } elif fu.transformer_types[s] == FU_TRANSFORMER_PASSTHROUGH {
+            n_output = n_output + p
+        } elif fu.transformer_types[s] == FU_TRANSFORMER_POLYNOMIAL {
+            n_output = n_output + p * fu.poly_degrees[s]
+        }
+        s = s + 1
+    }
+
+    fu.n_output_features = n_output
+    fu.fitted = true
+    return fu
+}
+
+export function feature_union_transform(fu: FeatureUnion, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let result: Matrix = matrix_new(n, fu.n_output_features)
+    let mut out_col: i32 = 0
+
+    let mut s: i32 = 0
+    while s < fu.n_transformers {
+        if fu.transformer_types[s] == FU_TRANSFORMER_STANDARD_SCALER {
+            let transformed: Matrix = standard_scaler_transform(fu.scalers[s], X)
+            let mut i: i32 = 0
+            while i < n {
+                let mut j: i32 = 0
+                while j < p {
+                    matrix_set(result, i, out_col + j, matrix_at(transformed, i, j))
+                    j = j + 1
+                }
+                i = i + 1
+            }
+            matrix_free(transformed)
+            out_col = out_col + p
+        } elif fu.transformer_types[s] == FU_TRANSFORMER_MINMAX_SCALER {
+            let transformed: Matrix = minmax_scaler_transform(fu.minmax_scalers[s], X)
+            let mut i: i32 = 0
+            while i < n {
+                let mut j: i32 = 0
+                while j < p {
+                    matrix_set(result, i, out_col + j, matrix_at(transformed, i, j))
+                    j = j + 1
+                }
+                i = i + 1
+            }
+            matrix_free(transformed)
+            out_col = out_col + p
+        } elif fu.transformer_types[s] == FU_TRANSFORMER_PASSTHROUGH {
+            let mut i: i32 = 0
+            while i < n {
+                let mut j: i32 = 0
+                while j < p {
+                    matrix_set(result, i, out_col + j, matrix_at(X, i, j))
+                    j = j + 1
+                }
+                i = i + 1
+            }
+            out_col = out_col + p
+        } elif fu.transformer_types[s] == FU_TRANSFORMER_POLYNOMIAL {
+            let deg: i32 = fu.poly_degrees[s]
+            let mut i: i32 = 0
+            while i < n {
+                let mut j: i32 = 0
+                while j < p {
+                    let val: f32 = matrix_at(X, i, j)
+                    let mut d: i32 = 1
+                    while d <= deg {
+                        let mut powered: f32 = 1.0
+                        let mut k: i32 = 0
+                        while k < d {
+                            powered = powered * val
+                            k = k + 1
+                        }
+                        matrix_set(result, i, out_col + j * deg + (d - 1), powered)
+                        d = d + 1
+                    }
+                    j = j + 1
+                }
+                i = i + 1
+            }
+            out_col = out_col + p * deg
+        }
+        s = s + 1
+    }
+    return result
+}
+
+export function feature_union_free(fu: FeatureUnion) -> void {
+    let mut s: i32 = 0
+    while s < fu.n_transformers {
+        if fu.transformer_types[s] == FU_TRANSFORMER_STANDARD_SCALER {
+            standard_scaler_free(fu.scalers[s])
+        } elif fu.transformer_types[s] == FU_TRANSFORMER_MINMAX_SCALER {
+            minmax_scaler_free(fu.minmax_scalers[s])
+        }
+        s = s + 1
+    }
+    free(fu.transformer_types as ptr<void>)
+    free(fu.scalers as ptr<void>)
+    free(fu.minmax_scalers as ptr<void>)
+    free(fu.poly_degrees as ptr<void>)
+}

@@ -1682,3 +1682,75 @@ export function spline_transformer_transform(model: SplineTransformer, X: Matrix
 export function spline_transformer_free(model: SplineTransformer) -> void {
     array_free_f32(model.knots)
 }
+
+# ============================================================================
+# LabelBinarizer
+# Binarize labels in a one-vs-all fashion.
+# ============================================================================
+
+export struct LabelBinarizer {
+    classes: ptr<f32>,
+    n_classes: i32,
+    neg_label: f32,
+    pos_label: f32,
+    fitted: bool
+}
+
+export function label_binarizer_fit(y: ptr<f32>, n: i32, neg_label: f32, pos_label: f32) -> LabelBinarizer {
+    let classes: ptr<f32> = array_new_f32(n)
+    let mut n_classes: i32 = 0
+
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_classes {
+            if classes[k] == y[i] { found = true }
+        }
+        if not found {
+            classes[n_classes] = y[i]
+            n_classes = n_classes + 1
+        }
+    }
+
+    _insertion_sort(classes, n_classes)
+
+    let result: LabelBinarizer = LabelBinarizer {
+        classes: classes, n_classes: n_classes,
+        neg_label: neg_label, pos_label: pos_label,
+        fitted: true
+    }
+    return result
+}
+
+export function label_binarizer_transform(model: LabelBinarizer, y: ptr<f32>, n: i32) -> Matrix {
+    let result: Matrix = matrix_new(n, model.n_classes)
+    for i in 0 to n {
+        for c in 0 to model.n_classes {
+            if y[i] == model.classes[c] {
+                matrix_set(result, i, c, model.pos_label)
+            } else {
+                matrix_set(result, i, c, model.neg_label)
+            }
+        }
+    }
+    return result
+}
+
+export function label_binarizer_inverse_transform(model: LabelBinarizer, Y: Matrix, n: i32) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best_val: f32 = matrix_at(Y, i, 0)
+        for c in 1 to model.n_classes {
+            if matrix_at(Y, i, c) > best_val {
+                best_val = matrix_at(Y, i, c)
+                best_c = c
+            }
+        }
+        result[i] = model.classes[best_c]
+    }
+    return result
+}
+
+export function label_binarizer_free(model: LabelBinarizer) -> void {
+    array_free_f32(model.classes)
+}

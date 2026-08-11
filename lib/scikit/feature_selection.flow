@@ -1512,3 +1512,214 @@ export function mutual_info_regression(X: Matrix, y: ptr<f32>, n_neighbors: i32)
     free(ybin as ptr<void>)
     return mi
 }
+
+# ============================================================================
+# chi2 - Chi-squared stats of non-negative features for classification tasks
+# ============================================================================
+
+export function chi2(X: Matrix, y: ptr<f32>) -> Chi2Result {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let scores: ptr<f32> = array_new_f32(p)
+    let pvalues: ptr<f32> = array_new_f32(p)
+
+    let classes: ptr<f32> = array_new_f32(n)
+    let mut n_classes: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for c in 0 to n_classes {
+            if classes[c] == y[i] { found = true }
+        }
+        if not found {
+            classes[n_classes] = y[i]
+            n_classes = n_classes + 1
+        }
+    }
+
+    for j in 0 to p {
+        let mut observed: ptr<f32> = array_new_f32(n_classes)
+        let mut feat_sum: f32 = 0.0
+        for i in 0 to n {
+            let val: f32 = matrix_at(X, i, j)
+            if val < 0.0 { val = 0.0 }
+            feat_sum = feat_sum + val
+            for c in 0 to n_classes {
+                if y[i] == classes[c] {
+                    observed[c] = observed[c] + val
+                }
+            }
+        }
+
+        let mut class_sums: ptr<f32> = array_new_f32(n_classes)
+        let mut total: f32 = 0.0
+        for c in 0 to n_classes {
+            for i in 0 to n {
+                if y[i] == classes[c] {
+                    let val: f32 = matrix_at(X, i, j)
+                    if val < 0.0 { val = 0.0 }
+                    class_sums[c] = class_sums[c] + val
+                }
+            }
+            total = total + class_sums[c]
+        }
+
+        let mut chi2_stat: f32 = 0.0
+        if total > 0.0000000001 {
+            for c in 0 to n_classes {
+                let expected: f32 = (feat_sum * class_sums[c]) / total
+                if expected > 0.0000000001 {
+                    let diff: f32 = observed[c] - expected
+                    chi2_stat = chi2_stat + diff * diff / expected
+                }
+            }
+        }
+        scores[j] = chi2_stat
+        pvalues[j] = 0.0
+
+        array_free_f32(observed)
+        array_free_f32(class_sums)
+    }
+
+    array_free_f32(classes)
+
+    let result: Chi2Result = Chi2Result { scores: scores, pvalues: pvalues, n_features: p }
+    return result
+}
+
+export struct Chi2Result {
+    scores: ptr<f32>,
+    pvalues: ptr<f32>,
+    n_features: i32
+}
+
+export function chi2_result_free(result: Chi2Result) -> void {
+    array_free_f32(result.scores)
+    array_free_f32(result.pvalues)
+}
+
+# ============================================================================
+# f_classif - ANOVA F-value between label/feature for classification tasks
+# ============================================================================
+
+export function f_classif(X: Matrix, y: ptr<f32>) -> FResult {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let scores: ptr<f32> = array_new_f32(p)
+    let pvalues: ptr<f32> = array_new_f32(p)
+
+    let classes: ptr<f32> = array_new_f32(n)
+    let mut n_classes: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for c in 0 to n_classes {
+            if classes[c] == y[i] { found = true }
+        }
+        if not found {
+            classes[n_classes] = y[i]
+            n_classes = n_classes + 1
+        }
+    }
+
+    for j in 0 to p {
+        let mut overall_mean: f32 = 0.0
+        for i in 0 to n { overall_mean = overall_mean + matrix_at(X, i, j) }
+        overall_mean = overall_mean / (n as f32)
+
+        let mut ss_between: f32 = 0.0
+        let mut ss_within: f32 = 0.0
+
+        for c in 0 to n_classes {
+            let mut group_mean: f32 = 0.0
+            let mut group_n: i32 = 0
+            for i in 0 to n {
+                if y[i] == classes[c] {
+                    group_mean = group_mean + matrix_at(X, i, j)
+                    group_n = group_n + 1
+                }
+            }
+            if group_n > 0 {
+                group_mean = group_mean / (group_n as f32)
+                let diff: f32 = group_mean - overall_mean
+                ss_between = ss_between + (group_n as f32) * diff * diff
+                for i in 0 to n {
+                    if y[i] == classes[c] {
+                        let d: f32 = matrix_at(X, i, j) - group_mean
+                        ss_within = ss_within + d * d
+                    }
+                }
+            }
+        }
+
+        if ss_within < 0.0000000001 {
+            scores[j] = 0.0
+        } else {
+            let df_between: f32 = (n_classes - 1) as f32
+            let df_within: f32 = (n - n_classes) as f32
+            if df_within < 1.0 { df_within = 1.0 }
+            scores[j] = (ss_between / df_between) / (ss_within / df_within)
+        }
+        pvalues[j] = 0.0
+    }
+
+    array_free_f32(classes)
+
+    let result: FResult = FResult { scores: scores, pvalues: pvalues, n_features: p }
+    return result
+}
+
+export struct FResult {
+    scores: ptr<f32>,
+    pvalues: ptr<f32>,
+    n_features: i32
+}
+
+export function f_result_free(result: FResult) -> void {
+    array_free_f32(result.scores)
+    array_free_f32(result.pvalues)
+}
+
+# ============================================================================
+# f_regression - F-value between label/feature for regression tasks
+# ============================================================================
+
+export function f_regression(X: Matrix, y: ptr<f32>) -> FResult {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let scores: ptr<f32> = array_new_f32(p)
+    let pvalues: ptr<f32> = array_new_f32(p)
+
+    let y_mean: f32 = array_mean(y, n)
+
+    for j in 0 to p {
+        let col: ptr<f32> = array_new_f32(n)
+        for i in 0 to n { col[i] = matrix_at(X, i, j) }
+        let x_mean: f32 = array_mean(col, n)
+
+        let mut ss_xy: f32 = 0.0
+        let mut ss_xx: f32 = 0.0
+        let mut ss_yy: f32 = 0.0
+        for i in 0 to n {
+            let dx: f32 = col[i] - x_mean
+            let dy: f32 = y[i] - y_mean
+            ss_xy = ss_xy + dx * dy
+            ss_xx = ss_xx + dx * dx
+            ss_yy = ss_yy + dy * dy
+        }
+
+        if ss_xx < 0.0000000001 || ss_yy < 0.0000000001 {
+            scores[j] = 0.0
+        } else {
+            let r: f32 = ss_xy / sqrt((ss_xx * ss_yy) as f64) as f32
+            let mut r_sq: f32 = r * r
+            if r_sq > 1.0 - 0.0000000001 { r_sq = 1.0 - 0.0000000001 }
+            let df: f32 = (n - 2) as f32
+            if df < 1.0 { df = 1.0 }
+            scores[j] = (r_sq / df) / ((1.0 - r_sq) / df)
+        }
+        pvalues[j] = 0.0
+        array_free_f32(col)
+    }
+
+    let result: FResult = FResult { scores: scores, pvalues: pvalues, n_features: p }
+    return result
+}

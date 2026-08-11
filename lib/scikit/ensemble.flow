@@ -1900,3 +1900,108 @@ export function stacking_regressor_predict(model: StackingRegressor, X: Matrix) 
 export function stacking_regressor_free(model: StackingRegressor) -> void {
     array_free_f32(model.base_preds)
 }
+
+# ============================================================================
+# RandomTreesEmbedding
+# Transforms data using the leaf indices of an ensemble of random trees.
+# ============================================================================
+
+export struct RandomTreesEmbedding {
+    trees: ptr<DecisionTreeRegressor>,
+    n_trees: i32,
+    max_depth: i32,
+    n_leaves_per_tree: ptr<i32>,
+    n_output_features: i32,
+    fitted: bool
+}
+
+function _count_leaves(nodes: ptr<TreeNode>, node_idx: i32) -> i32 {
+    let node: ptr<TreeNode> = nodes + node_idx
+    if node.is_leaf { return 1 }
+    let mut count: i32 = 0
+    count = count + _count_leaves(nodes, node.left)
+    count = count + _count_leaves(nodes, node.right)
+    return count
+}
+
+function _leaf_index(nodes: ptr<TreeNode>, node_idx: i32, x: ptr<f32>, counter: ptr<i32>) -> i32 {
+    let node: ptr<TreeNode> = nodes + node_idx
+    if node.is_leaf {
+        let idx: i32 = counter[0]
+        counter[0] = counter[0] + 1
+        return idx
+    }
+    if x[node.feature] <= node.threshold {
+        return _leaf_index(nodes, node.left, x, counter)
+    }
+    return _leaf_index(nodes, node.right, x, counter)
+}
+
+export function random_trees_embedding_fit(X: Matrix, n_trees: i32, max_depth: i32, seed: i32) -> RandomTreesEmbedding {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeRegressor>
+    let n_leaves_arr: ptr<i32> = malloc((n_trees as i64) * 4) as ptr<i32>
+
+    srand(seed)
+
+    let mut total_leaves: i32 = 0
+    for t in 0 to n_trees {
+        let X_boot: Matrix = matrix_new(n, p)
+        let y_boot: ptr<f32> = array_new_f32(n)
+        for i in 0 to n {
+            let idx: i32 = rand() % n
+            for j in 0 to p { matrix_set(X_boot, i, j, matrix_at(X, idx, j)) }
+            y_boot[i] = (idx as f32)
+        }
+        trees[t] = decision_tree_regressor_fit(X_boot, y_boot, max_depth, CRITERION_MSE)
+        let n_leaves: i32 = _count_leaves(trees[t].nodes, 0)
+        n_leaves_arr[t] = n_leaves
+        total_leaves = total_leaves + n_leaves
+        matrix_free(X_boot)
+        array_free_f32(y_boot)
+    }
+
+    let result: RandomTreesEmbedding = RandomTreesEmbedding {
+        trees: trees, n_trees: n_trees,
+        max_depth: max_depth,
+        n_leaves_per_tree: n_leaves_arr,
+        n_output_features: total_leaves,
+        fitted: true
+    }
+    return result
+}
+
+export function random_trees_embedding_transform(model: RandomTreesEmbedding, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let result: Matrix = matrix_new(n, model.n_output_features)
+
+    for i in 0 to n {
+        let x: ptr<f32> = array_new_f32(p)
+        for j in 0 to p { x[j] = matrix_at(X, i, j) }
+
+        let mut offset: i32 = 0
+        for t in 0 to model.n_trees {
+            let counter: ptr<i32> = malloc(4) as ptr<i32>
+            counter[0] = 0
+            let leaf_idx: i32 = _leaf_index(model.trees[t].nodes, 0, x, counter)
+            let col: i32 = offset + leaf_idx
+            if col < model.n_output_features {
+                matrix_set(result, i, col, 1.0)
+            }
+            offset = offset + model.n_leaves_per_tree[t]
+            free(counter as ptr<void>)
+        }
+        array_free_f32(x)
+    }
+    return result
+}
+
+export function random_trees_embedding_free(model: RandomTreesEmbedding) -> void {
+    for t in 0 to model.n_trees {
+        decision_tree_regressor_free(model.trees[t])
+    }
+    free(model.trees as ptr<void>)
+    free(model.n_leaves_per_tree as ptr<void>)
+}
