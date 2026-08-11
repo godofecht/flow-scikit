@@ -209,7 +209,7 @@ export struct NeighborResult {
 
 export function nearest_neighbors_kneighbors(model: NearestNeighbors, X: Matrix) -> ptr<NeighborResult> {
     let n: i32 = X.rows
-    let results: ptr<NeighborResult> = malloc((n as i64) * 16) as ptr<NeighborResult>
+    let results: ptr<NeighborResult> = malloc((n as i64) * 24) as ptr<NeighborResult>
 
     for i in 0 to n {
         let dists: ptr<f32> = array_new_f32(model.X_train.rows)
