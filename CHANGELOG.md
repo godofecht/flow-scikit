@@ -50,6 +50,37 @@
 - Closed 26 out-of-scope issues for components not implemented in flow-scikit.
 - Added `tests/test_sklearn_parity_fixes.flow` with 7 tests.
 
+### Runtime fixes
+
+- Fixed `NearestNeighbors` heap corruption: `nearest_neighbors_kneighbors`
+  allocated 16 bytes per `NeighborResult` instead of 24 (the struct is
+  `ptr + ptr + i32` = 24 bytes with padding on arm64).
+- Fixed `ExtraTreesClassifier` and `ExtraTreesRegressor` tree array
+  allocation: was 8 bytes per `DecisionTreeClassifier`/`DecisionTreeRegressor`
+  instead of 64. The structs are 40 and 24 bytes respectively.
+- Fixed `MultiOutputClassifier` and `MultiOutputRegressor` model array
+  allocation: was 8 bytes per `LogisticRegression`/`LinearRegression`
+  instead of 64/32. The structs are 48 and 32 bytes respectively.
+- Fixed `GaussianProcessRegressor` `_backward_sub`: the Flow transpiler
+  generates a positive step for `for i in N-1 to 0`, producing a loop that
+  never executes. Replaced with a `while` loop.
+- Fixed `ColumnTransformer`: `column_transformer_fit` now returns the struct
+  instead of mutating a by-value parameter. Flow passes structs by value, so
+  `ct.n_output_features` was never visible to the caller.
+- Rewrote `BayesianRidge` to use a closed-form solution (Gaussian elimination
+  on `beta * XtX + alpha * I`) instead of gradient descent. Fixed `b_vec`
+  indexing in the elimination (was using column index instead of row index).
+- Rewrote `IsotonicRegression` PAV algorithm with a stack-based approach.
+  The old `while changed` loop could oscillate. Used `while` instead of `for`
+  to avoid the vectorization pragma producing incorrect codegen.
+- Fixed `PipelineStep` allocation in `pipeline_new`: was 128 bytes per step
+  instead of 256. The struct is 248 bytes.
+- Fixed `ensemble_comparison` example: removed duplicate free of estimators
+  and classes already freed by `voting_classifier_free`.
+- Fixed `MultinomialNB` test data to use feature distributions that differ
+  across classes. Multinomial NB distinguishes by feature proportions, not
+  magnitudes.
+
 ## 0.2.0
 
 - Added IsotonicRegression (pool-adjacent-violators algorithm)
