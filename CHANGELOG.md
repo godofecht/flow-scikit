@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Improved algorithm implementations
+
+- Replaced `lda_fit` simplified EM with proper variational Bayes EM from
+  Blei, Ng, Jordan (2003). Uses digamma function approximation, variational
+  phi/gamma updates, and sufficient statistics accumulation. Helper
+  functions `_digamma_approx`, `_safe_exp`, `_lda_estep_doc`.
+- Replaced `minibatch_dictionary_learning_fit` nearest-atom update with
+  Orthogonal Matching Pursuit (OMP) sparse coding. Greedily selects atoms
+  by correlation, computes least-squares coefficients, updates dictionary
+  atoms weighted by code values. Helper `_omp_sparse_coding_update`.
+- Replaced `lasso_lars_fit` post-hoc soft-thresholding with coordinate
+  descent Lasso solver. Centers data, iterates soft-thresholded coordinate
+  updates until convergence. Produces correct L1-regularized solutions.
+  Helpers `_col_means`, `_col_norms_sq`, `_centered_col_dot`,
+  `_update_residual`, `_soft_threshold`.
+- Improved `kernel_svc_fit` SMO with second-order working set selection.
+  Scans all candidates to pick j maximizing |Ei - Ej| instead of
+  pseudo-random selection. Helper `_svm_compute_ej`.
+- Discovered Flow compiler limitation: functions with too many local
+  variables or too much complexity produce bus errors at runtime.
+  Worked around by extracting logic into small helper functions.
+
 ### Stub elimination and infrastructure modules
 
 - Replaced `StackingRegressor` stub with real implementation: trains
