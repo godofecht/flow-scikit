@@ -74,7 +74,7 @@ function _extract_columns(X: Matrix, columns: ptr<i32>, n_columns: i32) -> Matri
     return sub
 }
 
-export function column_transformer_fit(ct: ColumnTransformer, X: Matrix) -> void {
+export function column_transformer_fit(ct: ColumnTransformer, X: Matrix) -> ColumnTransformer {
     let mut n_output: i32 = 0
 
     for s in 0 to ct.n_specs {
@@ -107,6 +107,7 @@ export function column_transformer_fit(ct: ColumnTransformer, X: Matrix) -> void
 
     ct.n_output_features = n_output
     ct.fitted = true
+    return ct
 }
 
 export function column_transformer_transform(ct: ColumnTransformer, X: Matrix) -> Matrix {

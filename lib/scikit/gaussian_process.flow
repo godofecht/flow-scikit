@@ -105,7 +105,8 @@ function _forward_sub(L: ptr<f32>, b: ptr<f32>, n: i32) -> ptr<f32> {
 
 function _backward_sub(L: ptr<f32>, y: ptr<f32>, n: i32) -> ptr<f32> {
     let x: ptr<f32> = array_new_f32(n)
-    for i in n - 1 to 0 {
+    let mut i: i32 = n - 1
+    while i >= 0 {
         let mut sum: f32 = y[i]
         for j in i + 1 to n {
             sum = sum - L[j * n + i] * x[j]
@@ -115,6 +116,7 @@ function _backward_sub(L: ptr<f32>, y: ptr<f32>, n: i32) -> ptr<f32> {
         } else {
             x[i] = sum / L[i * n + i]
         }
+        i = i - 1
     }
     return x
 }
