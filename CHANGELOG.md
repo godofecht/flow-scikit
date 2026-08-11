@@ -155,6 +155,12 @@
   test, and example files with explicit decimal literals.
 - Fixed direct returns of struct literals containing function calls in
   `gaussian_process.flow`, `neighbors.flow`, and `pipeline.flow` (#409).
+- Added `KNeighborsTransformer`, `RadiusNeighborsTransformer` to neighbors.
+- Added `RepeatedStratifiedKFold`, `LeaveOneGroupOut`, `LeavePGroupOut` to
+  model_selection. Uses `GroupCVResult` struct with separate pointer arrays
+  to work around Flow bug #431 (arrays of structs with pointer fields
+  produce invalid pointers after function return).
+- Filed Flow issue #431.
 
 ## 0.2.0
 

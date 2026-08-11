@@ -26,6 +26,9 @@ Filed issues so far:
 - #413: FLOW compilation failed suppresses all error diagnostics
 - #414: Vectorization pragmas generate incorrect code in sensitive loops
 - #421: Inline exp() in nested while loop causes bus error
+- #431: Arrays of structs containing pointer fields produce invalid
+  pointers after function return. Workaround: use separate arrays of
+  pointers (ptr<ptr<T>>) instead of arrays of structs with pointer fields.
 
 ## Flow transpiler constraints (workarounds)
 
