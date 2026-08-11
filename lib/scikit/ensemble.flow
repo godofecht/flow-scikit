@@ -1193,7 +1193,7 @@ export function extra_trees_classifier_fit(
         }
     }
 
-    let trees: ptr<DecisionTreeClassifier> = malloc((n_trees as i64) * 8) as ptr<DecisionTreeClassifier>
+    let trees: ptr<DecisionTreeClassifier> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeClassifier>
     let n_features: i32 = X.cols
     let n_features_per_split: i32 = 1
     if n_features > 1 {
@@ -1293,7 +1293,7 @@ export function extra_trees_regressor_fit(
     X: Matrix, y: ptr<f32>,
     n_trees: i32, max_depth: i32, seed: i32
 ) -> ExtraTreesRegressor {
-    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 8) as ptr<DecisionTreeRegressor>
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeRegressor>
 
     srand(seed)
 

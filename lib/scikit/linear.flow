@@ -1132,44 +1132,96 @@ export struct BayesianRidge {
 export function bayesian_ridge_fit(X: Matrix, y: ptr<f32>, max_iter: i32, tol: f32) -> BayesianRidge {
     let n: i32 = X.rows
     let p: i32 = X.cols
-    let weights: ptr<f32> = array_new_f32(p)
-    let mut bias: f32 = 0.0
 
+    # Center y and X
     let y_mean: f32 = array_mean(y, n)
+    let x_mean: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        x_mean[j] = 0.0
+        for i in 0 to n {
+            x_mean[j] = x_mean[j] + matrix_at(X, i, j)
+        }
+        x_mean[j] = x_mean[j] / (n as f32)
+    }
+
+    let yc: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        yc[i] = y[i] - y_mean
+    }
+
     let mut alpha: f32 = 1.0
     let mut beta: f32 = 1.0
+    let weights: ptr<f32> = array_new_f32(p)
 
     for iter in 0 to max_iter {
-        let grad_w: ptr<f32> = array_new_f32(p)
-        let mut grad_b: f32 = 0.0
-
-        for i in 0 to n {
-            let mut pred: f32 = bias
-            for j in 0 to p {
-                pred = pred + weights[j] * matrix_at(X, i, j)
+        # Compute weights = (beta * XtX + alpha * I)^-1 * beta * Xty
+        # Build (p x p) matrix A = beta * XtX + alpha * I
+        let A: ptr<f32> = array_new_f32(p * p)
+        for j1 in 0 to p {
+            for j2 in 0 to p {
+                let mut sum: f32 = 0.0
+                for i in 0 to n {
+                    let xj1: f32 = matrix_at(X, i, j1) - x_mean[j1]
+                    let xj2: f32 = matrix_at(X, i, j2) - x_mean[j2]
+                    sum = sum + xj1 * xj2
+                }
+                A[j1 * p + j2] = beta * sum
             }
-            let error: f32 = y[i] - pred
-            for j in 0 to p {
-                grad_w[j] = grad_w[j] + error * matrix_at(X, i, j)
-            }
-            grad_b = grad_b + error
+            A[j1 * p + j1] = A[j1 * p + j1] + alpha
         }
 
-        let lr: f32 = beta / (n as f32 * beta + alpha)
+        # Build b = beta * Xty
+        let b_vec: ptr<f32> = array_new_f32(p)
         for j in 0 to p {
-            weights[j] = weights[j] + lr * (grad_w[j] - alpha * weights[j])
+            let mut sum: f32 = 0.0
+            for i in 0 to n {
+                let xj: f32 = matrix_at(X, i, j) - x_mean[j]
+                sum = sum + xj * yc[i]
+            }
+            b_vec[j] = beta * sum
         }
-        bias = bias + lr * grad_b
 
-        array_free_f32(grad_w)
+        # Solve A * w = b_vec via Gaussian elimination
+        let A_copy: ptr<f32> = array_new_f32(p * p)
+        for k in 0 to p * p {
+            A_copy[k] = A[k]
+        }
+        for col in 0 to p {
+            let pivot: f32 = A_copy[col * p + col]
+            let abs_pivot: f32 = fabs(pivot as f64) as f32
+            if abs_pivot < 0.000000000001 {
+                continue
+            }
+            for j in 0 to p {
+                A_copy[col * p + j] = A_copy[col * p + j] / pivot
+            }
+            b_vec[col] = b_vec[col] / pivot
+            for row in 0 to p {
+                if row == col { continue }
+                let factor: f32 = A_copy[row * p + col]
+                for j in 0 to p {
+                    A_copy[row * p + j] = A_copy[row * p + j] - factor * A_copy[col * p + j]
+                }
+                b_vec[row] = b_vec[row] - factor * b_vec[col]
+            }
+        }
 
+        for j in 0 to p {
+            weights[j] = b_vec[j]
+        }
+
+        array_free_f32(A)
+        array_free_f32(A_copy)
+
+        # Update alpha and beta
         let mut ss_res: f32 = 0.0
         for i in 0 to n {
-            let mut pred: f32 = bias
+            let mut pred: f32 = 0.0
             for j in 0 to p {
-                pred = pred + weights[j] * matrix_at(X, i, j)
+                let xj: f32 = matrix_at(X, i, j) - x_mean[j]
+                pred = pred + weights[j] * xj
             }
-            let d: f32 = y[i] - pred
+            let d: f32 = yc[i] - pred
             ss_res = ss_res + d * d
         }
 
@@ -1178,18 +1230,29 @@ export function bayesian_ridge_fit(X: Matrix, y: ptr<f32>, max_iter: i32, tol: f
             w_sq = w_sq + weights[j] * weights[j]
         }
 
-        let new_beta: f32 = (n as f32) / (ss_res + 1e-10)
         let new_alpha: f32 = (p as f32) / (w_sq + 1e-10)
+        let new_beta: f32 = (n as f32) / (ss_res + 1e-10)
 
-        if (fabs((alpha - new_alpha) as f64) as f32) < tol && (fabs((beta - new_beta) as f64) as f32) < tol {
-            alpha = new_alpha
-            beta = new_beta
-            break
-        }
-
+        let da: f32 = fabs((alpha - new_alpha) as f64) as f32
+        let db: f32 = fabs((beta - new_beta) as f64) as f32
         alpha = new_alpha
         beta = new_beta
+
+        array_free_f32(b_vec)
+
+        if da < tol && db < tol {
+            break
+        }
     }
+
+    # Compute bias
+    let mut bias: f32 = y_mean
+    for j in 0 to p {
+        bias = bias - weights[j] * x_mean[j]
+    }
+
+    array_free_f32(x_mean)
+    array_free_f32(yc)
 
     return BayesianRidge {
         weights: weights, bias: bias,
