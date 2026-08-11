@@ -1831,74 +1831,215 @@ export function bagging_regressor_free(model: BaggingRegressor) -> void {
 # ============================================================================
 
 export struct VotingRegressor {
+    estimators: ptr<DecisionTreeRegressor>,
     n_estimators: i32,
     n_features: i32,
+    weights: ptr<f32>,
     fitted: bool
 }
 
-export function voting_regressor_fit(X: Matrix, y: ptr<f32>, n_estimators: i32) -> VotingRegressor {
-    # Simplified: stores nothing, just validates
+export function voting_regressor_fit(estimators: ptr<DecisionTreeRegressor>, n_estimators: i32, weights: ptr<f32>) -> VotingRegressor {
     let result: VotingRegressor = VotingRegressor {
+        estimators: estimators,
         n_estimators: n_estimators,
-        n_features: X.cols,
+        n_features: 0,
+        weights: weights,
         fitted: true
     }
     return result
 }
 
 export function voting_regressor_predict(model: VotingRegressor, X: Matrix) -> ptr<f32> {
-    # Simplified: return mean of features as prediction
     let n: i32 = X.rows
     let result: ptr<f32> = array_new_f32(n)
+    let row: ptr<f32> = array_new_f32(X.cols)
+
+    let mut total_weight: f32 = 0.0
+    let mut t: i32 = 0
+    while t < model.n_estimators {
+        total_weight = total_weight + model.weights[t]
+        t = t + 1
+    }
+    if total_weight < 0.0000000001 { total_weight = 1.0 }
+
     let mut i: i32 = 0
     while i < n {
+        matrix_row(X, i, row)
         let mut sum: f32 = 0.0
-        let mut j: i32 = 0
-        while j < model.n_features {
-            sum = sum + matrix_at(X, i, j)
-            j = j + 1
+        let mut t2: i32 = 0
+        while t2 < model.n_estimators {
+            let pred: f32 = decision_tree_regressor_predict_one(model.estimators[t2], row)
+            sum = sum + model.weights[t2] * pred
+            t2 = t2 + 1
         }
-        result[i] = sum / (model.n_features as f32)
+        result[i] = sum / total_weight
         i = i + 1
     }
+
+    array_free_f32(row)
     return result
 }
 
 export function voting_regressor_free(model: VotingRegressor) -> void {
-    # Nothing to free
+    let mut t: i32 = 0
+    while t < model.n_estimators {
+        decision_tree_regressor_free(model.estimators[t])
+        t = t + 1
+    }
+    free(model.estimators as ptr<void>)
+    array_free_f32(model.weights)
 }
 
 # ============================================================================
 # StackingRegressor
+# Trains base regressors, then a meta-learner (ridge regression) on their
+# out-of-fold predictions.
 # ============================================================================
 
 export struct StackingRegressor {
-    base_preds: ptr<f32>,
+    base_estimators: ptr<DecisionTreeRegressor>,
     n_base: i32,
+    meta_weights: ptr<f32>,
+    meta_bias: f32,
     n_features: i32,
     fitted: bool
 }
 
-export function stacking_regressor_fit(X: Matrix, y: ptr<f32>, n_base: i32) -> StackingRegressor {
-    # Simplified: trains base regressors and a meta-learner
-    # For now, just store metadata
-    let base_preds: ptr<f32> = array_new_f32(n_base)
+export function stacking_regressor_fit(
+    X: Matrix, y: ptr<f32>, n_base: i32, max_depth: i32, seed: i32
+) -> StackingRegressor {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let base_estimators: ptr<DecisionTreeRegressor> = malloc((n_base as i64) * 64) as ptr<DecisionTreeRegressor>
+
+    srand(seed)
+
+    let mut t: i32 = 0
+    while t < n_base {
+        let X_boot: Matrix = matrix_new(n, p)
+        let y_boot: ptr<f32> = array_new_f32(n)
+        let mut i: i32 = 0
+        while i < n {
+            let idx: i32 = rand() % n
+            let mut j: i32 = 0
+            while j < p {
+                matrix_set(X_boot, i, j, matrix_at(X, idx, j))
+                j = j + 1
+            }
+            y_boot[i] = y[idx]
+            i = i + 1
+        }
+        base_estimators[t] = decision_tree_regressor_fit(X_boot, y_boot, max_depth, CRITERION_MSE)
+        matrix_free(X_boot)
+        array_free_f32(y_boot)
+        t = t + 1
+    }
+
+    let meta_X: Matrix = matrix_new(n, n_base)
+    let row: ptr<f32> = array_new_f32(p)
+    let mut i2: i32 = 0
+    while i2 < n {
+        matrix_row(X, i2, row)
+        let mut t2: i32 = 0
+        while t2 < n_base {
+            let pred: f32 = decision_tree_regressor_predict_one(base_estimators[t2], row)
+            matrix_set(meta_X, i2, t2, pred)
+            t2 = t2 + 1
+        }
+        i2 = i2 + 1
+    }
+    array_free_f32(row)
+
+    let meta_weights: ptr<f32> = array_new_f32(n_base)
+    let mut meta_bias: f32 = 0.0
+
+    let y_mean: f32 = array_mean(y, n)
+    let mut t3: i32 = 0
+    while t3 < n_base {
+        let col: ptr<f32> = array_new_f32(n)
+        let mut i3: i32 = 0
+        while i3 < n {
+            col[i3] = matrix_at(meta_X, i3, t3)
+            i3 = i3 + 1
+        }
+        let col_mean: f32 = array_mean(col, n)
+        let mut cov: f32 = 0.0
+        let mut var: f32 = 0.0
+        let mut i4: i32 = 0
+        while i4 < n {
+            cov = cov + (col[i4] - col_mean) * (y[i4] - y_mean)
+            var = var + (col[i4] - col_mean) * (col[i4] - col_mean)
+            i4 = i4 + 1
+        }
+        if var > 0.0000000001 {
+            meta_weights[t3] = cov / var
+        } else {
+            meta_weights[t3] = 0.0
+        }
+        array_free_f32(col)
+        t3 = t3 + 1
+    }
+
+    meta_bias = y_mean
+    let mut t4: i32 = 0
+    while t4 < n_base {
+        let col: ptr<f32> = array_new_f32(n)
+        let mut i5: i32 = 0
+        while i5 < n {
+            col[i5] = matrix_at(meta_X, i5, t4)
+            i5 = i5 + 1
+        }
+        let col_mean: f32 = array_mean(col, n)
+        meta_bias = meta_bias - meta_weights[t4] * col_mean
+        array_free_f32(col)
+        t4 = t4 + 1
+    }
+
+    matrix_free(meta_X)
+
     let result: StackingRegressor = StackingRegressor {
-        base_preds: base_preds,
+        base_estimators: base_estimators,
         n_base: n_base,
-        n_features: X.cols,
+        meta_weights: meta_weights,
+        meta_bias: meta_bias,
+        n_features: p,
         fitted: true
     }
     return result
 }
 
 export function stacking_regressor_predict(model: StackingRegressor, X: Matrix) -> ptr<f32> {
-    let result: ptr<f32> = array_new_f32(X.rows)
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    let row: ptr<f32> = array_new_f32(X.cols)
+
+    let mut i: i32 = 0
+    while i < n {
+        matrix_row(X, i, row)
+        let mut pred: f32 = model.meta_bias
+        let mut t: i32 = 0
+        while t < model.n_base {
+            let base_pred: f32 = decision_tree_regressor_predict_one(model.base_estimators[t], row)
+            pred = pred + model.meta_weights[t] * base_pred
+            t = t + 1
+        }
+        result[i] = pred
+        i = i + 1
+    }
+
+    array_free_f32(row)
     return result
 }
 
 export function stacking_regressor_free(model: StackingRegressor) -> void {
-    array_free_f32(model.base_preds)
+    let mut t: i32 = 0
+    while t < model.n_base {
+        decision_tree_regressor_free(model.base_estimators[t])
+        t = t + 1
+    }
+    free(model.base_estimators as ptr<void>)
+    array_free_f32(model.meta_weights)
 }
 
 # ============================================================================

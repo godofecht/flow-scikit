@@ -1,0 +1,464 @@
+# Utils module for flow-scikit.
+# Provides utility functions mirroring sklearn.utils:
+#   - check_array: validate matrix dimensions
+#   - check_X_y: validate X and y shapes
+#   - check_consistent_length: verify equal lengths
+#   - as_float_array: copy a matrix as f32
+#   - safe_indexing: row subset of a matrix
+#   - resample: bootstrap sampling
+#   - shuffle: shuffled indices
+#   - check_random_state: seed validation
+#   - gen_batches: batch index ranges
+#   - gen_even_slices: even slice ranges
+#   - tosequence: sort and return unique
+#   - check_scalar: validate a scalar parameter
+#   - assert_all_finite: check for NaN/inf
+#   - check_non_negative: check for negative values
+#   - check_symmetric: verify matrix symmetry
+#   - get_chunk_n_rows: chunk row count for memory
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function rand() -> i32
+    function srand(seed: u32) -> void
+}
+
+# ============================================================================
+# Array validation
+# ============================================================================
+
+export struct ArrayCheckResult {
+    valid: bool,
+    n_rows: i32,
+    n_cols: i32,
+    has_nan: bool,
+    has_inf: bool,
+    has_negative: bool
+}
+
+export function check_array(X: Matrix, ensure_non_negative: bool) -> ArrayCheckResult {
+    let result: ArrayCheckResult = ArrayCheckResult {
+        valid: true,
+        n_rows: X.rows,
+        n_cols: X.cols,
+        has_nan: false,
+        has_inf: false,
+        has_negative: false
+    }
+
+    if X.rows == 0 || X.cols == 0 {
+        result.valid = false
+        return result
+    }
+
+    let mut i: i32 = 0
+    while i < X.rows {
+        let mut j: i32 = 0
+        while j < X.cols {
+            let val: f32 = matrix_at(X, i, j)
+            if val != val { result.has_nan = true; result.valid = false }
+            if val > 10000000000.0 || val < -10000000000.0 {
+                result.has_inf = true
+                result.valid = false
+            }
+            if ensure_non_negative && val < 0.0 {
+                result.has_negative = true
+                result.valid = false
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return result
+}
+
+export function check_X_y(X: Matrix, y: ptr<f32>, n: i32, ensure_non_negative: bool) -> ArrayCheckResult {
+    let result: ArrayCheckResult = check_array(X, ensure_non_negative)
+    if n != X.rows {
+        result.valid = false
+    }
+    let mut i: i32 = 0
+    while i < n {
+        if y[i] != y[i] { result.has_nan = true; result.valid = false }
+        i = i + 1
+    }
+    return result
+}
+
+export function check_consistent_length(arrays_n: ptr<i32>, n_arrays: i32) -> bool {
+    if n_arrays <= 1 { return true }
+    let first: i32 = arrays_n[0]
+    let mut i: i32 = 1
+    while i < n_arrays {
+        if arrays_n[i] != first { return false }
+        i = i + 1
+    }
+    return true
+}
+
+# ============================================================================
+# Array manipulation
+# ============================================================================
+
+export function as_float_array(X: Matrix) -> Matrix {
+    return matrix_copy(X)
+}
+
+export function safe_indexing(X: Matrix, indices: ptr<i32>, n_indices: i32) -> Matrix {
+    let result: Matrix = matrix_new(n_indices, X.cols)
+    let mut i: i32 = 0
+    while i < n_indices {
+        let mut j: i32 = 0
+        while j < X.cols {
+            matrix_set(result, i, j, matrix_at(X, indices[i], j))
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return result
+}
+
+export function resample(X: Matrix, n_samples: i32, seed: i32) -> Matrix {
+    srand(seed)
+    let result: Matrix = matrix_new(n_samples, X.cols)
+    let mut i: i32 = 0
+    while i < n_samples {
+        let idx: i32 = rand() % X.rows
+        let mut j: i32 = 0
+        while j < X.cols {
+            matrix_set(result, i, j, matrix_at(X, idx, j))
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return result
+}
+
+export function shuffle(n: i32, seed: i32) -> ptr<i32> {
+    let result: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let mut i: i32 = 0
+    while i < n {
+        result[i] = i
+        i = i + 1
+    }
+    srand(seed)
+    i = n - 1
+    while i > 0 {
+        let j: i32 = rand() % (i + 1)
+        let tmp: i32 = result[i]
+        result[i] = result[j]
+        result[j] = tmp
+        i = i - 1
+    }
+    return result
+}
+
+export function check_random_state(seed: i32) -> i32 {
+    if seed < 0 {
+        srand(42)
+        return rand()
+    }
+    return seed
+}
+
+# ============================================================================
+# Batch generation
+# ============================================================================
+
+export function gen_batches_starts(n: i32, batch_size: i32) -> ptr<i32> {
+    let n_batches: i32 = (n + batch_size - 1) / batch_size
+    let result: ptr<i32> = malloc((n_batches as i64) * 4) as ptr<i32>
+    let mut i: i32 = 0
+    let mut start: i32 = 0
+    while i < n_batches {
+        result[i] = start
+        start = start + batch_size
+        if start > n { start = n }
+        i = i + 1
+    }
+    return result
+}
+
+export function gen_batches_ends(n: i32, batch_size: i32) -> ptr<i32> {
+    let n_batches: i32 = (n + batch_size - 1) / batch_size
+    let result: ptr<i32> = malloc((n_batches as i64) * 4) as ptr<i32>
+    let mut i: i32 = 0
+    let mut start: i32 = 0
+    while i < n_batches {
+        let end: i32 = start + batch_size
+        if end > n { end = n }
+        result[i] = end
+        start = end
+        i = i + 1
+    }
+    return result
+}
+
+export function gen_batches_count(n: i32, batch_size: i32) -> i32 {
+    return (n + batch_size - 1) / batch_size
+}
+
+export function gen_even_slices_starts(n: i32, n_packs: i32) -> ptr<i32> {
+    let result: ptr<i32> = malloc((n_packs as i64) * 4) as ptr<i32>
+    let pack_size: i32 = (n + n_packs - 1) / n_packs
+    let mut i: i32 = 0
+    let mut start: i32 = 0
+    while i < n_packs {
+        result[i] = start
+        start = start + pack_size
+        if start > n { start = n }
+        i = i + 1
+    }
+    return result
+}
+
+export function gen_even_slices_ends(n: i32, n_packs: i32) -> ptr<i32> {
+    let result: ptr<i32> = malloc((n_packs as i64) * 4) as ptr<i32>
+    let pack_size: i32 = (n + n_packs - 1) / n_packs
+    let mut i: i32 = 0
+    let mut start: i32 = 0
+    while i < n_packs {
+        let end: i32 = start + pack_size
+        if end > n { end = n }
+        result[i] = end
+        start = end
+        i = i + 1
+    }
+    return result
+}
+
+export function n_batches_to_n_slices(n_batches: i32) -> i32 {
+    return n_batches
+}
+
+# ============================================================================
+# Sequence utilities
+# ============================================================================
+
+export function tosequence(arr: ptr<f32>, n: i32) -> ptr<f32> {
+    let result: ptr<f32> = array_copy_f32(arr, n)
+    # Insertion sort
+    let mut i: i32 = 1
+    while i < n {
+        let key: f32 = result[i]
+        let mut j: i32 = i - 1
+        while j >= 0 && result[j] > key {
+            result[j + 1] = result[j]
+            j = j - 1
+        }
+        result[j + 1] = key
+        i = i + 1
+    }
+    return result
+}
+
+# ============================================================================
+# Scalar validation
+# ============================================================================
+
+export function check_scalar(val: f32, min_val: f32, max_val: f32) -> bool {
+    if val < min_val { return false }
+    if val > max_val { return false }
+    return true
+}
+
+export function assert_all_finite(X: Matrix) -> bool {
+    let mut i: i32 = 0
+    while i < X.rows {
+        let mut j: i32 = 0
+        while j < X.cols {
+            let val: f32 = matrix_at(X, i, j)
+            if val != val { return false }
+            if val > 10000000000.0 || val < -10000000000.0 { return false }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return true
+}
+
+export function check_non_negative(X: Matrix) -> bool {
+    let mut i: i32 = 0
+    while i < X.rows {
+        let mut j: i32 = 0
+        while j < X.cols {
+            if matrix_at(X, i, j) < 0.0 { return false }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return true
+}
+
+export function check_symmetric(X: Matrix, tol: f32) -> bool {
+    if X.rows != X.cols { return false }
+    let mut i: i32 = 0
+    while i < X.rows {
+        let mut j: i32 = i + 1
+        while j < X.cols {
+            let diff: f32 = matrix_at(X, i, j) - matrix_at(X, j, i)
+            if diff > tol || diff < -tol { return false }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return true
+}
+
+# ============================================================================
+# Memory estimation
+# ============================================================================
+
+export function get_chunk_n_rows(n_total: i32, row_size_bytes: i32, max_bytes: i64) -> i32 {
+    if row_size_bytes <= 0 { return n_total }
+    let chunk: i64 = max_bytes / (row_size_bytes as i64)
+    if chunk > (n_total as i64) { return n_total }
+    if chunk < 1 { return 1 }
+    return chunk as i32
+}
+
+# ============================================================================
+# Weight utilities
+# ============================================================================
+
+export function compute_sample_weight(class_weight: ptr<f32>, y: ptr<f32>, n: i32, n_classes: i32) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(n)
+    let mut i: i32 = 0
+    while i < n {
+        let cls: i32 = y[i] as i32
+        if cls >= 0 && cls < n_classes {
+            result[i] = class_weight[cls]
+        } else {
+            result[i] = 1.0
+        }
+        i = i + 1
+    }
+    return result
+}
+
+export function compute_class_weight(class_weight: ptr<f32>, classes: ptr<f32>, y: ptr<f32>, n_classes: i32, n: i32) -> ptr<f32> {
+    let result: ptr<f32> = array_new_f32(n_classes)
+    let mut i: i32 = 0
+    while i < n_classes {
+        let mut count: i32 = 0
+        let mut j: i32 = 0
+        while j < n {
+            if y[j] == classes[i] { count = count + 1 }
+            j = j + 1
+        }
+        if count > 0 {
+            result[i] = class_weight[i] * ((n as f32) / ((n_classes as f32) * (count as f32)))
+        } else {
+            result[i] = 1.0
+        }
+        i = i + 1
+    }
+    return result
+}
+
+# ============================================================================
+# Index utilities
+# ============================================================================
+
+export function safe_mask(n: i32, mask: ptr<i32>) -> ptr<i32> {
+    let mut count: i32 = 0
+    let mut i: i32 = 0
+    while i < n {
+        if mask[i] != 0 { count = count + 1 }
+        i = i + 1
+    }
+    let result: ptr<i32> = malloc((count as i64) * 4) as ptr<i32>
+    let mut idx: i32 = 0
+    i = 0
+    while i < n {
+        if mask[i] != 0 {
+            result[idx] = i
+            idx = idx + 1
+        }
+        i = i + 1
+    }
+    return result
+}
+
+export function indices_to_mask(indices: ptr<i32>, n_indices: i32, n: i32) -> ptr<i32> {
+    let result: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let mut i: i32 = 0
+    while i < n {
+        result[i] = 0
+        i = i + 1
+    }
+    i = 0
+    while i < n_indices {
+        if indices[i] >= 0 && indices[i] < n {
+            result[indices[i]] = 1
+        }
+        i = i + 1
+    }
+    return result
+}
+
+# ============================================================================
+# Array stats
+# ============================================================================
+
+export function array_min(X: Matrix) -> f32 {
+    let mut min_val: f32 = matrix_at(X, 0, 0)
+    let mut i: i32 = 0
+    while i < X.rows {
+        let mut j: i32 = 0
+        while j < X.cols {
+            if matrix_at(X, i, j) < min_val { min_val = matrix_at(X, i, j) }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return min_val
+}
+
+export function array_max(X: Matrix) -> f32 {
+    let mut max_val: f32 = matrix_at(X, 0, 0)
+    let mut i: i32 = 0
+    while i < X.rows {
+        let mut j: i32 = 0
+        while j < X.cols {
+            if matrix_at(X, i, j) > max_val { max_val = matrix_at(X, i, j) }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return max_val
+}
+
+export function array_nnz(X: Matrix, tol: f32) -> i32 {
+    let mut count: i32 = 0
+    let mut i: i32 = 0
+    while i < X.rows {
+        let mut j: i32 = 0
+        while j < X.cols {
+            let v: f32 = matrix_at(X, i, j)
+            if v > tol || v < -tol { count = count + 1 }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+# ============================================================================
+# Deprecation / metadata helpers
+# ============================================================================
+
+export function deprecated(msg: i32) -> void {
+    # Placeholder: in a real runtime this would print a deprecation warning.
+    # Flow does not support string parameters well, so we accept an int code.
+}
+
+export function get_metadata_routing() -> bool {
+    # Metadata routing is not supported in Flow. Always returns false.
+    return false
+}
+
+export function set_metadata_routing(enabled: bool) -> void {
+    # No-op: metadata routing is not supported in Flow.
+}

@@ -1,0 +1,97 @@
+# Exceptions module for flow-scikit.
+# Flow does not have exceptions or classes, so we model sklearn exceptions
+# as integer error codes and helper functions that return them.
+# Callers can check the returned code and handle accordingly.
+
+import "lib/scikit/matrix.flow"
+
+# ============================================================================
+# Error codes mirroring sklearn.exceptions
+# ============================================================================
+
+export const EXCEPTION_NONE: i32 = 0
+export const NOT_FITTED_ERROR: i32 = 1
+export const DATA_DIMENSION_WARNING: i32 = 2
+export const CONVERGENCE_WARNING: i32 = 3
+export const FIT_FAILED_WARNING: i32 = 4
+export const UNDEFINED_METRIC_WARNING: i32 = 5
+export const DATA_CONVERSION_WARNING: i32 = 6
+export const EFFICIENCY_WARNING: i32 = 7
+export const SKIP_FIT_WARNING: i32 = 8
+export const NOT_SUPPORTED_ERROR: i32 = 9
+export const CHECK_VERSION_ERROR: i32 = 10
+export const MISSING_CAPABILITY_ERROR: i32 = 11
+
+# ============================================================================
+# Error helpers
+# ============================================================================
+
+export function is_error(code: i32) -> bool {
+    if code == NOT_FITTED_ERROR { return true }
+    if code == NOT_SUPPORTED_ERROR { return true }
+    if code == CHECK_VERSION_ERROR { return true }
+    if code == MISSING_CAPABILITY_ERROR { return true }
+    return false
+}
+
+export function is_warning(code: i32) -> bool {
+    if code == DATA_DIMENSION_WARNING { return true }
+    if code == CONVERGENCE_WARNING { return true }
+    if code == FIT_FAILED_WARNING { return true }
+    if code == UNDEFINED_METRIC_WARNING { return true }
+    if code == DATA_CONVERSION_WARNING { return true }
+    if code == EFFICIENCY_WARNING { return true }
+    if code == SKIP_FIT_WARNING { return true }
+    return false
+}
+
+export function check_fitted(fitted: bool) -> i32 {
+    if fitted { return EXCEPTION_NONE }
+    return NOT_FITTED_ERROR
+}
+
+export function check_estimator_capability(supported: bool) -> i32 {
+    if supported { return EXCEPTION_NONE }
+    return MISSING_CAPABILITY_ERROR
+}
+
+# ============================================================================
+# Convergence / fit helpers
+# ============================================================================
+
+export function check_convergence(loss_prev: f32, loss_curr: f32, tol: f32) -> i32 {
+    let diff: f32 = loss_prev - loss_curr
+    if diff < 0.0 { diff = -diff }
+    if diff < tol { return EXCEPTION_NONE }
+    return CONVERGENCE_WARNING
+}
+
+export function check_n_iter(n_iter: i32, max_iter: i32) -> i32 {
+    if n_iter >= max_iter { return CONVERGENCE_WARNING }
+    return EXCEPTION_NONE
+}
+
+# ============================================================================
+# Data validation helpers
+# ============================================================================
+
+export function check_data_dimension(X: Matrix, expected_cols: i32) -> i32 {
+    if X.cols == expected_cols { return EXCEPTION_NONE }
+    return DATA_DIMENSION_WARNING
+}
+
+export function check_data_conversion(X: Matrix) -> i32 {
+    # In Flow all data is f32, so conversion from int/bool is implicit.
+    return DATA_CONVERSION_WARNING
+}
+
+# ============================================================================
+# Metric helpers
+# ============================================================================
+
+export function check_undefined_metric(value: f32) -> i32 {
+    if value != value { return UNDEFINED_METRIC_WARNING }
+    if value > 10000000000.0 { return UNDEFINED_METRIC_WARNING }
+    if value < -10000000000.0 { return UNDEFINED_METRIC_WARNING }
+    return EXCEPTION_NONE
+}
