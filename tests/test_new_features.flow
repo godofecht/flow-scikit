@@ -1377,6 +1377,125 @@ function test_extra_metrics() -> i32 {
     return 0
 }
 
+function test_neighbors_transformers() -> i32 {
+    println("Test: KNeighborsTransformer / RadiusNeighborsTransformer")
+    let n: i32 = 10
+    let X: Matrix = matrix_new(n, 2)
+    srand(42)
+    let mut i: i32 = 0
+    while i < n {
+        matrix_set(X, i, 0, ((rand() % 100) as f32) / 10.0)
+        matrix_set(X, i, 1, ((rand() % 100) as f32) / 10.0)
+        i = i + 1
+    }
+
+    let knn_t: KNeighborsTransformer = kneighbors_transformer_fit(X, 3, 0)
+    let graph: Matrix = kneighbors_transformer_transform(knn_t, X)
+    if graph.rows != n || graph.cols != n {
+        println("  FAIL: graph should be 10x10")
+        return 1
+    }
+    # Each row should have exactly 3 non-zero entries
+    let mut i2: i32 = 0
+    while i2 < n {
+        let mut nnz: i32 = 0
+        let mut j: i32 = 0
+        while j < n {
+            if matrix_at(graph, i2, j) > 0.0 { nnz = nnz + 1 }
+            j = j + 1
+        }
+        if nnz != 3 {
+            println("  FAIL: each row should have 3 nonzeros")
+            return 1
+        }
+        i2 = i2 + 1
+    }
+
+    let rnn_t: RadiusNeighborsTransformer = radius_neighbors_transformer_fit(X, 5.0, 0)
+    let rgraph: Matrix = radius_neighbors_transformer_transform(rnn_t, X)
+
+    let mut has_edge: bool = false
+    let mut i3: i32 = 0
+    while i3 < n {
+        let mut j3: i32 = 0
+        while j3 < n {
+            if matrix_at(rgraph, i3, j3) > 0.0 { has_edge = true }
+            j3 = j3 + 1
+        }
+        i3 = i3 + 1
+    }
+    if not has_edge {
+        println("  FAIL: radius graph should have at least one edge")
+        return 1
+    }
+
+    print("  OK: KNN graph 10x10 with 3 nnz/row, radius graph has edges")
+    println("")
+    matrix_free(graph)
+    matrix_free(rgraph)
+    kneighbors_transformer_free(knn_t)
+    radius_neighbors_transformer_free(rnn_t)
+    matrix_free(X)
+    return 0
+}
+
+function test_group_cv() -> i32 {
+    println("Test: RepeatedStratifiedKFold / LeaveOneGroupOut / LeavePGroupOut")
+    let n: i32 = 20
+    let y: ptr<f32> = array_new_f32(n)
+    let groups: ptr<f32> = array_new_f32(n)
+
+    let mut i: i32 = 0
+    while i < n {
+        if i < 10 { y[i] = 0.0 } else { y[i] = 1.0 }
+        groups[i] = (i / 5) as f32
+        i = i + 1
+    }
+
+    # RepeatedStratifiedKFold
+    let rskf: RepeatedStratifiedKFold = repeated_stratified_k_fold(y, n, 2, 3, 42)
+    let rs_result: GroupCVResult = repeated_stratified_k_fold_split(rskf, y, n)
+    if rs_result.n_splits != 6 {
+        println("  FAIL: should have 6 splits")
+        return 1
+    }
+    group_cv_result_free(rs_result)
+
+    # LeaveOneGroupOut
+    let lo_result: GroupCVResult = leave_one_group_out_split(groups, n)
+    if lo_result.n_splits != 4 {
+        println("  FAIL: should have 4 splits")
+        return 1
+    }
+    let mut all_ok: bool = true
+    i = 0
+    while i < lo_result.n_splits {
+        if lo_result.n_test_arr[i] + lo_result.n_train_arr[i] != n {
+            all_ok = false
+        }
+        i = i + 1
+    }
+    if not all_ok {
+        println("  FAIL: LOGO splits should cover all samples")
+        return 1
+    }
+    group_cv_result_free(lo_result)
+
+    # LeavePGroupOut
+    let lp_result: GroupCVResult = leave_p_group_out_split(groups, n, 2)
+    if lp_result.n_splits != 6 {
+        println("  FAIL: should have 6 splits for C(4,2)")
+        return 1
+    }
+    group_cv_result_free(lp_result)
+
+    print("  OK: RSKF 6 splits, LOGO 4 splits, LPGO 6 splits")
+    println("")
+    array_free_f32(y)
+    array_free_f32(groups)
+    return 0
+}
+
 function main() -> i32 {
     println("=== New Features Tests ===")
     println("")
@@ -1469,6 +1588,10 @@ function main() -> i32 {
     if test_minibatch_nmf() != 0 { failures = failures + 1 }
     println("")
     if test_extra_metrics() != 0 { failures = failures + 1 }
+    println("")
+    if test_neighbors_transformers() != 0 { failures = failures + 1 }
+    println("")
+    if test_group_cv() != 0 { failures = failures + 1 }
 
     println("")
     println("----------------------------------------")

@@ -719,3 +719,143 @@ export function kernel_density_sample(model: KernelDensity, n_samples: i32, seed
 export function kernel_density_free(model: KernelDensity) -> void {
     matrix_free(model.X_train)
 }
+
+# ============================================================================
+# KNeighborsTransformer
+# ============================================================================
+
+export struct KNeighborsTransformer {
+    X_train: Matrix,
+    n_neighbors: i32,
+    mode: i32,
+    fitted: bool
+}
+
+export function kneighbors_transformer_fit(X: Matrix, n_neighbors: i32, mode: i32) -> KNeighborsTransformer {
+    let X_copy: Matrix = matrix_copy(X)
+    let result: KNeighborsTransformer = KNeighborsTransformer {
+        X_train: X_copy,
+        n_neighbors: n_neighbors,
+        mode: mode,
+        fitted: true
+    }
+    return result
+}
+
+export function kneighbors_transformer_transform(model: KNeighborsTransformer, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let n_train: i32 = model.X_train.rows
+    let k: i32 = model.n_neighbors
+    if k > n_train { k = n_train }
+    let result: Matrix = matrix_new(n, n_train)
+    let mut i: i32 = 0
+    while i < n {
+        let mut j: i32 = 0
+        while j < n_train {
+            matrix_set(result, i, j, 0.0)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    i = 0
+    while i < n {
+        let dists: ptr<f32> = array_new_f32(n_train)
+        let mut j: i32 = 0
+        while j < n_train {
+            let mut d: f32 = 0.0
+            let mut f: i32 = 0
+            while f < model.X_train.cols {
+                let diff: f32 = matrix_at(X, i, f) - matrix_at(model.X_train, j, f)
+                d = d + diff * diff
+                f = f + 1
+            }
+            dists[j] = sqrt((d) as f64) as f32
+            j = j + 1
+        }
+        let mut kk: i32 = 0
+        while kk < k {
+            let mut best_j: i32 = -1
+            let mut best_d: f32 = 9999999999.0
+            let mut j2: i32 = 0
+            while j2 < n_train {
+                if dists[j2] < best_d && dists[j2] >= 0.0 {
+                    best_d = dists[j2]
+                    best_j = j2
+                }
+                j2 = j2 + 1
+            }
+            if best_j >= 0 {
+                if model.mode == 1 {
+                    matrix_set(result, i, best_j, best_d)
+                } else {
+                    matrix_set(result, i, best_j, 1.0)
+                }
+                dists[best_j] = -1.0
+            }
+            kk = kk + 1
+        }
+        array_free_f32(dists)
+        i = i + 1
+    }
+    return result
+}
+
+export function kneighbors_transformer_free(model: KNeighborsTransformer) -> void {
+    matrix_free(model.X_train)
+}
+
+# ============================================================================
+# RadiusNeighborsTransformer
+# ============================================================================
+
+export struct RadiusNeighborsTransformer {
+    X_train: Matrix,
+    radius: f32,
+    mode: i32,
+    fitted: bool
+}
+
+export function radius_neighbors_transformer_fit(X: Matrix, radius: f32, mode: i32) -> RadiusNeighborsTransformer {
+    let X_copy: Matrix = matrix_copy(X)
+    let result: RadiusNeighborsTransformer = RadiusNeighborsTransformer {
+        X_train: X_copy,
+        radius: radius,
+        mode: mode,
+        fitted: true
+    }
+    return result
+}
+
+export function radius_neighbors_transformer_transform(model: RadiusNeighborsTransformer, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let n_train: i32 = model.X_train.rows
+    let result: Matrix = matrix_new(n, n_train)
+    let mut i: i32 = 0
+    while i < n {
+        let mut j: i32 = 0
+        while j < n_train {
+            let mut d: f32 = 0.0
+            let mut f: i32 = 0
+            while f < model.X_train.cols {
+                let diff: f32 = matrix_at(X, i, f) - matrix_at(model.X_train, j, f)
+                d = d + diff * diff
+                f = f + 1
+            }
+            d = sqrt((d) as f64) as f32
+            if d <= model.radius {
+                if model.mode == 1 {
+                    matrix_set(result, i, j, d)
+                } else {
+                    matrix_set(result, i, j, 1.0)
+                }
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return result
+}
+
+export function radius_neighbors_transformer_free(model: RadiusNeighborsTransformer) -> void {
+    matrix_free(model.X_train)
+}

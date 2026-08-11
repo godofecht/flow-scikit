@@ -1229,6 +1229,13 @@ export function cross_val_score(X: Matrix, y: ptr<f32>, n_folds: i32, metric_typ
 # CVSplitInfo to avoid a struct redefinition conflict.
 # ============================================================================
 
+export struct CVSplit {
+    train_indices: ptr<i32>,
+    n_train: i32,
+    test_indices: ptr<i32>,
+    n_test: i32
+}
+
 export struct CVSplitInfo {
     n_splits: i32,
     is_stratified: bool
@@ -1712,6 +1719,373 @@ export function group_kfold_get_fold(splitter: GroupKFold, fold_idx: i32, groups
         y_test: y_test,
         n_train: n_train,
         n_test: n_test
+    }
+    return result
+}
+
+# ============================================================================
+
+# ============================================================================
+# GroupCVResult - uses separate arrays instead of ptr<CVSplit> to avoid
+# Flow compiler bug with arrays of structs containing pointers
+# ============================================================================
+
+export struct GroupCVResult {
+    train_ptrs: ptr<ptr<i32> >,
+    test_ptrs: ptr<ptr<i32> >,
+    n_train_arr: ptr<i32>,
+    n_test_arr: ptr<i32>,
+    n_splits: i32
+}
+
+export function group_cv_result_free(result: GroupCVResult) -> void {
+    let mut i: i32 = 0
+    while i < result.n_splits {
+        free(result.train_ptrs[i] as ptr<void>)
+        free(result.test_ptrs[i] as ptr<void>)
+        i = i + 1
+    }
+    free(result.train_ptrs as ptr<void>)
+    free(result.test_ptrs as ptr<void>)
+    free(result.n_train_arr as ptr<void>)
+    free(result.n_test_arr as ptr<void>)
+}
+
+# ============================================================================
+# RepeatedStratifiedKFold
+# ============================================================================
+
+export struct RepeatedStratifiedKFold {
+    n_splits: i32,
+    n_repeats: i32,
+    seed: i32,
+    fitted: bool
+}
+
+export function repeated_stratified_k_fold(y: ptr<f32>, n: i32, n_splits: i32, n_repeats: i32, seed: i32) -> RepeatedStratifiedKFold {
+    let result: RepeatedStratifiedKFold = RepeatedStratifiedKFold {
+        n_splits: n_splits,
+        n_repeats: n_repeats,
+        seed: seed,
+        fitted: true
+    }
+    return result
+}
+
+export function repeated_stratified_k_fold_split(cv: RepeatedStratifiedKFold, y: ptr<f32>, n: i32) -> GroupCVResult {
+    let total_splits: i32 = cv.n_splits * cv.n_repeats
+    let train_ptrs: ptr<ptr<i32> > = malloc((total_splits as i64) * 8) as ptr<ptr<i32> >
+    let test_ptrs: ptr<ptr<i32> > = malloc((total_splits as i64) * 8) as ptr<ptr<i32> >
+    let n_train_arr: ptr<i32> = malloc((total_splits as i64) * 4) as ptr<i32>
+    let n_test_arr: ptr<i32> = malloc((total_splits as i64) * 4) as ptr<i32>
+
+    srand(cv.seed)
+
+    let n_classes: i32 = 0
+    let mut i: i32 = 0
+    while i < n {
+        let c: i32 = y[i] as i32
+        if c + 1 > n_classes { n_classes = c + 1 }
+        i = i + 1
+    }
+
+    let mut idx: i32 = 0
+    let mut rep: i32 = 0
+    while rep < cv.n_repeats {
+        let perm: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+        i = 0
+        while i < n {
+            perm[i] = i
+            i = i + 1
+        }
+        i = n - 1
+        while i > 0 {
+            let j: i32 = rand() % (i + 1)
+            let tmp: i32 = perm[i]
+            perm[i] = perm[j]
+            perm[j] = tmp
+            i = i - 1
+        }
+
+        let test_size: i32 = n / cv.n_splits
+        let train_size: i32 = n - test_size
+
+        let mut s: i32 = 0
+        while s < cv.n_splits {
+            let test_start: i32 = s * test_size
+            let test_end: i32 = test_start + test_size
+            if s == cv.n_splits - 1 { test_end = n }
+
+            let n_test: i32 = test_end - test_start
+            let n_train: i32 = n - n_test
+
+            let train_idx: ptr<i32> = malloc((n_train as i64) * 4) as ptr<i32>
+            let test_idx: ptr<i32> = malloc((n_test as i64) * 4) as ptr<i32>
+
+            let mut ti: i32 = 0
+            let mut tei: i32 = 0
+            i = 0
+            while i < n {
+                if i >= test_start && i < test_end {
+                    test_idx[tei] = perm[i]
+                    tei = tei + 1
+                } else {
+                    train_idx[ti] = perm[i]
+                    ti = ti + 1
+                }
+                i = i + 1
+            }
+
+            train_ptrs[idx] = train_idx
+            test_ptrs[idx] = test_idx
+            n_train_arr[idx] = n_train
+            n_test_arr[idx] = n_test
+            idx = idx + 1
+            s = s + 1
+        }
+
+        free(perm as ptr<void>)
+        rep = rep + 1
+    }
+
+    let result: GroupCVResult = GroupCVResult {
+        train_ptrs: train_ptrs,
+        test_ptrs: test_ptrs,
+        n_train_arr: n_train_arr,
+        n_test_arr: n_test_arr,
+        n_splits: total_splits
+    }
+    return result
+}
+
+# ============================================================================
+# LeaveOneGroupOut
+# ============================================================================
+
+export struct LeaveOneGroupOut {
+    fitted: bool
+}
+
+export function leave_one_group_out() -> LeaveOneGroupOut {
+    let result: LeaveOneGroupOut = LeaveOneGroupOut { fitted: true }
+    return result
+}
+
+export function leave_one_group_out_split(groups: ptr<f32>, n: i32) -> GroupCVResult {
+    let unique_groups: ptr<f32> = malloc((n as i64) * 4) as ptr<f32>
+    let mut z: i32 = 0
+    while z < n {
+        unique_groups[z] = 0.0
+        z = z + 1
+    }
+
+    let n_groups: i32 = 0
+    let mut i: i32 = 0
+    while i < n {
+        let mut found: bool = false
+        let mut j: i32 = 0
+        while j < n_groups {
+            if unique_groups[j] == groups[i] {
+                found = true
+            }
+            j = j + 1
+        }
+        if not found {
+            unique_groups[n_groups] = groups[i]
+            n_groups = n_groups + 1
+        }
+        i = i + 1
+    }
+
+    let train_ptrs: ptr<ptr<i32> > = malloc((n_groups as i64) * 8) as ptr<ptr<i32> >
+    let test_ptrs: ptr<ptr<i32> > = malloc((n_groups as i64) * 8) as ptr<ptr<i32> >
+    let n_train_arr: ptr<i32> = malloc((n_groups as i64) * 4) as ptr<i32>
+    let n_test_arr: ptr<i32> = malloc((n_groups as i64) * 4) as ptr<i32>
+
+    let mut g: i32 = 0
+    while g < n_groups {
+        let group_val: f32 = unique_groups[g]
+        let n_test: i32 = 0
+        i = 0
+        while i < n {
+            if groups[i] == group_val {
+                n_test = n_test + 1
+            }
+            i = i + 1
+        }
+        let n_train: i32 = n - n_test
+        let train_idx: ptr<i32> = malloc((n_train as i64) * 4) as ptr<i32>
+        let test_idx: ptr<i32> = malloc((n_test as i64) * 4) as ptr<i32>
+        let mut ti: i32 = 0
+        let mut tei: i32 = 0
+        i = 0
+        while i < n {
+            if groups[i] == group_val {
+                test_idx[tei] = i
+                tei = tei + 1
+            } else {
+                train_idx[ti] = i
+                ti = ti + 1
+            }
+            i = i + 1
+        }
+        train_ptrs[g] = train_idx
+        test_ptrs[g] = test_idx
+        n_train_arr[g] = n_train
+        n_test_arr[g] = n_test
+        g = g + 1
+    }
+
+    let result: GroupCVResult = GroupCVResult {
+        train_ptrs: train_ptrs,
+        test_ptrs: test_ptrs,
+        n_train_arr: n_train_arr,
+        n_test_arr: n_test_arr,
+        n_splits: n_groups
+    }
+    return result
+}
+
+# ============================================================================
+# LeavePGroupOut
+# ============================================================================
+
+export struct LeavePGroupOut {
+    p: i32,
+    fitted: bool
+}
+
+export function leave_p_group_out(p: i32) -> LeavePGroupOut {
+    let result: LeavePGroupOut = LeavePGroupOut { p: p, fitted: true }
+    return result
+}
+
+export function leave_p_group_out_split(groups: ptr<f32>, n: i32, p: i32) -> GroupCVResult {
+    let unique_groups: ptr<f32> = malloc((n as i64) * 4) as ptr<f32>
+    let mut z: i32 = 0
+    while z < n {
+        unique_groups[z] = 0.0
+        z = z + 1
+    }
+
+    let n_groups: i32 = 0
+    let mut i: i32 = 0
+    while i < n {
+        let mut found: bool = false
+        let mut j: i32 = 0
+        while j < n_groups {
+            if unique_groups[j] == groups[i] {
+                found = true
+            }
+            j = j + 1
+        }
+        if not found {
+            unique_groups[n_groups] = groups[i]
+            n_groups = n_groups + 1
+        }
+        i = i + 1
+    }
+
+    # Count combinations C(n_groups, p)
+    let n_splits: i32 = 1
+    let mut k: i32 = 0
+    while k < p {
+        n_splits = n_splits * (n_groups - k) / (k + 1)
+        k = k + 1
+    }
+
+    let train_ptrs: ptr<ptr<i32> > = malloc((n_splits as i64) * 8) as ptr<ptr<i32> >
+    let test_ptrs: ptr<ptr<i32> > = malloc((n_splits as i64) * 8) as ptr<ptr<i32> >
+    let n_train_arr: ptr<i32> = malloc((n_splits as i64) * 4) as ptr<i32>
+    let n_test_arr: ptr<i32> = malloc((n_splits as i64) * 4) as ptr<i32>
+
+    let split_idx: i32 = 0
+
+    # Generate all p-sized subsets of groups
+    let combo: ptr<i32> = malloc((p as i64) * 4) as ptr<i32>
+    k = 0
+    while k < p {
+        combo[k] = k
+        k = k + 1
+    }
+
+    let mut done: bool = false
+    while not done {
+        # Build test set from combo groups
+        let n_test: i32 = 0
+        let mut i2: i32 = 0
+        while i2 < n {
+            let mut in_combo: bool = false
+            let mut j: i32 = 0
+            while j < p {
+                if unique_groups[combo[j]] == groups[i2] {
+                    in_combo = true
+                }
+                j = j + 1
+            }
+            if in_combo {
+                n_test = n_test + 1
+            }
+            i2 = i2 + 1
+        }
+        let n_train: i32 = n - n_test
+        let train_idx: ptr<i32> = malloc((n_train as i64) * 4) as ptr<i32>
+        let test_idx: ptr<i32> = malloc((n_test as i64) * 4) as ptr<i32>
+        let mut ti: i32 = 0
+        let mut tei: i32 = 0
+        i2 = 0
+        while i2 < n {
+            let mut in_combo: bool = false
+            let mut j: i32 = 0
+            while j < p {
+                if unique_groups[combo[j]] == groups[i2] {
+                    in_combo = true
+                }
+                j = j + 1
+            }
+            if in_combo {
+                test_idx[tei] = i2
+                tei = tei + 1
+            } else {
+                train_idx[ti] = i2
+                ti = ti + 1
+            }
+            i2 = i2 + 1
+        }
+        train_ptrs[split_idx] = train_idx
+        test_ptrs[split_idx] = test_idx
+        n_train_arr[split_idx] = n_train
+        n_test_arr[split_idx] = n_test
+        split_idx = split_idx + 1
+
+        # Next combination
+        let mut pos: i32 = p - 1
+        while pos >= 0 {
+            if combo[pos] < n_groups - p + pos {
+                combo[pos] = combo[pos] + 1
+                let mut pos2: i32 = pos + 1
+                while pos2 < p {
+                    combo[pos2] = combo[pos2 - 1] + 1
+                    pos2 = pos2 + 1
+                }
+                break
+            }
+            pos = pos - 1
+        }
+        if pos < 0 {
+            done = true
+        }
+    }
+
+    free(combo as ptr<void>)
+    free(unique_groups as ptr<void>)
+
+    let result: GroupCVResult = GroupCVResult {
+        train_ptrs: train_ptrs,
+        test_ptrs: test_ptrs,
+        n_train_arr: n_train_arr,
+        n_test_arr: n_test_arr,
+        n_splits: n_splits
     }
     return result
 }
