@@ -135,9 +135,6 @@ function main() -> i32 {
     println("")
     voting_classifier_free(voting)
     array_free_f32(vote_preds)
-    array_free_f32(classes)
-    for i in 0 to 3 { decision_tree_classifier_free(estimators[i]) }
-    free(estimators as ptr<void>)
     println("")
 
     # Summary table

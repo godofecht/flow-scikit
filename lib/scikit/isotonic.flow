@@ -40,52 +40,51 @@ export function isotonic_fit(X: ptr<f32>, y: ptr<f32>, n: i32, increasing: bool)
 
     let y_fit: ptr<f32> = array_copy_f32(sorted_y, n)
 
-    let mut changed: bool = true
-    while changed {
-        changed = false
-        let mut i: i32 = 0
-        while i < n - 1 {
+    # Stack-based PAV (Pool Adjacent Violators) algorithm
+    # Use block starts and sizes
+    let block_start: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let block_size: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let block_sum: ptr<f32> = malloc((n as i64) * 4) as ptr<f32>
+    let mut n_blocks: i32 = 0
+
+    let mut i: i32 = 0
+    while i < n {
+        block_start[n_blocks] = i
+        block_size[n_blocks] = 1
+        block_sum[n_blocks] = y_fit[i]
+        n_blocks = n_blocks + 1
+
+        while n_blocks > 1 {
+            let prev: i32 = n_blocks - 2
+            let curr: i32 = n_blocks - 1
+            let prev_avg: f32 = block_sum[prev] / (block_size[prev] as f32)
+            let curr_avg: f32 = block_sum[curr] / (block_size[curr] as f32)
+            let need_merge: bool = false
             if increasing {
-                if y_fit[i] > y_fit[i + 1] {
-                    let mut sum: f32 = y_fit[i] + y_fit[i + 1]
-                    let mut count: i32 = 2
-                    let mut k: i32 = i + 2
-                    while k < n && y_fit[k] < y_fit[k - 1] {
-                        sum = sum + y_fit[k]
-                        count = count + 1
-                        k = k + 1
-                    }
-                    let avg: f32 = sum / (count as f32)
-                    for j in i to i + count {
-                        y_fit[j] = avg
-                    }
-                    changed = true
-                    i = i + count
-                } else {
-                    i = i + 1
-                }
+                if prev_avg > curr_avg { need_merge = true }
             } else {
-                if y_fit[i] < y_fit[i + 1] {
-                    let mut sum: f32 = y_fit[i] + y_fit[i + 1]
-                    let mut count: i32 = 2
-                    let mut k: i32 = i + 2
-                    while k < n && y_fit[k] > y_fit[k - 1] {
-                        sum = sum + y_fit[k]
-                        count = count + 1
-                        k = k + 1
-                    }
-                    let avg: f32 = sum / (count as f32)
-                    for j in i to i + count {
-                        y_fit[j] = avg
-                    }
-                    changed = true
-                    i = i + count
-                } else {
-                    i = i + 1
-                }
+                if prev_avg < curr_avg { need_merge = true }
             }
+            if not need_merge { break }
+
+            block_sum[prev] = block_sum[prev] + block_sum[curr]
+            block_size[prev] = block_size[prev] + block_size[curr]
+            n_blocks = n_blocks - 1
+        }
+        i = i + 1
+    }
+
+    # Write back averaged values
+    for b in 0 to n_blocks {
+        let avg: f32 = block_sum[b] / (block_size[b] as f32)
+        for j in block_start[b] to block_start[b] + block_size[b] {
+            y_fit[j] = avg
         }
     }
+
+    free(block_start as ptr<void>)
+    free(block_size as ptr<void>)
+    free(block_sum as ptr<void>)
 
     let mut n_unique: i32 = 1
     for i in 1 to n {
