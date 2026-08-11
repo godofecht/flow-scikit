@@ -101,8 +101,21 @@
   visualization.
 - Added metrics: `zero_one_loss`, `zero_one_loss_count`, `hamming_loss`,
   `dcg_score`, `ndcg_score`, `coverage_error`, `label_ranking_loss`.
-- Added `tests/test_new_features.flow` with 16 tests covering all new
+- Added `tests/test_new_features.flow` with 24 tests covering all new
   estimators and metrics.
+
+### Additional estimators and utilities
+
+- Added `HistGradientBoostingRegressor` with squared error loss and
+  regression tree boosting.
+- Added `TargetEncoder` with smoothed mean encoding for categorical features.
+- Added `export_graphviz` and `export_graphviz_reg` for DOT-format tree
+  visualization.
+- Added metrics: `average_precision_score`, `top_k_accuracy_score`,
+  `mean_poisson_deviance`, `mean_gamma_deviance`, `d2_tweedie_score`,
+  `class_likelihood_ratios`, `class_balance_accuracy`.
+- Added model selection: `cross_val_score`, `repeated_k_fold`, `check_cv`,
+  `permutation_test_score`.
 
 ## 0.2.0
 

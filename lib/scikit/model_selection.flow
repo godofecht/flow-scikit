@@ -8,6 +8,7 @@ import "lib/scikit/metrics.flow"
 import "lib/scikit/progress.flow"
 import "lib/scikit/linear.flow"
 import "lib/scikit/validation.flow"
+import "lib/scikit/tree.flow"
 
 extern {
     function rand() -> i32
@@ -1044,4 +1045,318 @@ export function cross_val_predict(
     }
 
     return predictions
+}
+
+# ============================================================================
+# repeated_k_fold (Issue #28394)
+# Repeats KFold n_repeats times with different seeds.
+# Returns a struct with an array of per-fold scores.
+# ============================================================================
+
+export struct RepeatedKFoldResult {
+    scores: ptr<f32>,
+    n_scores: i32,
+    fitted: bool
+}
+
+export function repeated_k_fold(X: Matrix, y: ptr<f32>, n_splits: i32, n_repeats: i32, seed: i32) -> RepeatedKFoldResult {
+    let n: i32 = X.rows
+    let total: i32 = n_splits * n_repeats
+    let scores: ptr<f32> = array_new_f32(total)
+
+    let mut n_classes: i32 = 0
+    let classes: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_classes {
+            if classes[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_classes] = y[i]
+            n_classes = n_classes + 1
+        }
+    }
+    array_free_f32(classes)
+
+    let mut pos: i32 = 0
+    for r in 0 to n_repeats {
+        let current_seed: i32 = seed + r * 1000
+        let kf: KFold = kfold_init(n_splits, true, current_seed)
+
+        for fold in 0 to n_splits {
+            let fi: FoldIndices = kfold_get_fold(kf, n, fold)
+
+            let X_train: Matrix = matrix_new(fi.n_train, X.cols)
+            let y_train: ptr<f32> = array_new_f32(fi.n_train)
+            for i in 0 to fi.n_train {
+                let idx: i32 = fi.train_indices[i]
+                y_train[i] = y[idx]
+                for j in 0 to X.cols {
+                    matrix_set(X_train, i, j, matrix_at(X, idx, j))
+                }
+            }
+
+            let X_test: Matrix = matrix_new(fi.n_test, X.cols)
+            let y_test: ptr<f32> = array_new_f32(fi.n_test)
+            for i in 0 to fi.n_test {
+                let idx: i32 = fi.test_indices[i]
+                y_test[i] = y[idx]
+                for j in 0 to X.cols {
+                    matrix_set(X_test, i, j, matrix_at(X, idx, j))
+                }
+            }
+
+            let tree: DecisionTreeClassifier = decision_tree_classifier_fit(X_train, y_train, n_classes, 5, CRITERION_GINI)
+            let preds: ptr<f32> = decision_tree_classifier_predict(tree, X_test)
+            scores[pos] = accuracy_score(y_test, preds, fi.n_test)
+
+            array_free_f32(preds)
+            decision_tree_classifier_free(tree)
+            matrix_free(X_train)
+            matrix_free(X_test)
+            array_free_f32(y_train)
+            array_free_f32(y_test)
+            fold_indices_free(fi)
+
+            pos = pos + 1
+        }
+    }
+
+    let result: RepeatedKFoldResult = RepeatedKFoldResult {
+        scores: scores,
+        n_scores: total,
+        fitted: true
+    }
+    return result
+}
+
+export function repeated_kfold_result_free(result: RepeatedKFoldResult) -> void {
+    array_free_f32(result.scores)
+}
+
+# ============================================================================
+# cross_val_score
+# Performs k-fold cross-validation and returns an array of scores.
+# metric_type: 0=accuracy, 1=r2, 2=mse.
+# ============================================================================
+
+export function cross_val_score(X: Matrix, y: ptr<f32>, n_folds: i32, metric_type: i32) -> ptr<f32> {
+    let n: i32 = X.rows
+    let fold_size: i32 = n / n_folds
+    let scores: ptr<f32> = array_new_f32(n_folds)
+
+    let mut n_classes: i32 = 0
+    let classes: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_classes {
+            if classes[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_classes] = y[i]
+            n_classes = n_classes + 1
+        }
+    }
+    array_free_f32(classes)
+
+    for fold in 0 to n_folds {
+        let test_start: i32 = fold * fold_size
+        let test_end: i32 = test_start + fold_size
+        if fold == n_folds - 1 {
+            test_end = n
+        }
+        let n_test: i32 = test_end - test_start
+        let n_train: i32 = n - n_test
+
+        let X_train: Matrix = matrix_new(n_train, X.cols)
+        let y_train: ptr<f32> = array_new_f32(n_train)
+        let mut train_pos: i32 = 0
+        for i in 0 to n {
+            if i < test_start || i >= test_end {
+                y_train[train_pos] = y[i]
+                for j in 0 to X.cols {
+                    matrix_set(X_train, train_pos, j, matrix_at(X, i, j))
+                }
+                train_pos = train_pos + 1
+            }
+        }
+
+        let X_test: Matrix = matrix_new(n_test, X.cols)
+        let y_test: ptr<f32> = array_new_f32(n_test)
+        for i in 0 to n_test {
+            y_test[i] = y[test_start + i]
+            for j in 0 to X.cols {
+                matrix_set(X_test, i, j, matrix_at(X, test_start + i, j))
+            }
+        }
+
+        if metric_type == 0 {
+            let tree: DecisionTreeClassifier = decision_tree_classifier_fit(X_train, y_train, n_classes, 5, CRITERION_GINI)
+            let preds: ptr<f32> = decision_tree_classifier_predict(tree, X_test)
+            scores[fold] = accuracy_score(y_test, preds, n_test)
+            array_free_f32(preds)
+            decision_tree_classifier_free(tree)
+        } else {
+            let model: LinearRegression = linear_regression_fit(X_train, y_train, penalty_none())
+            let preds: ptr<f32> = linear_regression_predict(model, X_test)
+            if metric_type == 1 {
+                scores[fold] = r2_score(y_test, preds, n_test)
+            } else {
+                scores[fold] = mean_squared_error(y_test, preds, n_test)
+            }
+            array_free_f32(preds)
+            linear_regression_free(model)
+        }
+
+        matrix_free(X_train)
+        matrix_free(X_test)
+        array_free_f32(y_train)
+        array_free_f32(y_test)
+    }
+
+    return scores
+}
+
+# ============================================================================
+# check_cv
+# Returns info about the CV splitter.
+# If cv is 0, uses default 5-fold.
+# Note: CVResult is already used by cross_validate_score, so this returns
+# CVSplitInfo to avoid a struct redefinition conflict.
+# ============================================================================
+
+export struct CVSplitInfo {
+    n_splits: i32,
+    is_stratified: bool
+}
+
+export function check_cv(cv: i32, n_samples: i32) -> CVSplitInfo {
+    let n_splits: i32 = cv
+    if n_splits == 0 {
+        n_splits = 5
+    }
+    if n_splits < 2 {
+        n_splits = 2
+    }
+    if n_splits > n_samples {
+        n_splits = n_samples
+    }
+
+    let result: CVSplitInfo = CVSplitInfo {
+        n_splits: n_splits,
+        is_stratified: false
+    }
+    return result
+}
+
+# ============================================================================
+# permutation_test_score
+# Computes the actual score and permutation scores.
+# Returns a struct with the true score, mean permutation score, and p-value.
+# ============================================================================
+
+export struct PermutationTestResult {
+    true_score: f32,
+    perm_mean: f32,
+    p_value: f32
+}
+
+export function permutation_test_score(X: Matrix, y: ptr<f32>, n_permutations: i32, seed: i32) -> PermutationTestResult {
+    let n: i32 = X.rows
+    let n_test: i32 = n / 5
+    if n_test < 1 {
+        n_test = 1
+    }
+    let n_train: i32 = n - n_test
+
+    let mut n_classes: i32 = 0
+    let classes: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_classes {
+            if classes[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_classes] = y[i]
+            n_classes = n_classes + 1
+        }
+    }
+    array_free_f32(classes)
+
+    let X_train: Matrix = matrix_new(n_train, X.cols)
+    let y_train: ptr<f32> = array_new_f32(n_train)
+    let X_test: Matrix = matrix_new(n_test, X.cols)
+    let y_test: ptr<f32> = array_new_f32(n_test)
+
+    for i in 0 to n_train {
+        y_train[i] = y[i]
+        for j in 0 to X.cols {
+            matrix_set(X_train, i, j, matrix_at(X, i, j))
+        }
+    }
+    for i in 0 to n_test {
+        y_test[i] = y[n_train + i]
+        for j in 0 to X.cols {
+            matrix_set(X_test, i, j, matrix_at(X, n_train + i, j))
+        }
+    }
+
+    let true_tree: DecisionTreeClassifier = decision_tree_classifier_fit(X_train, y_train, n_classes, 5, CRITERION_GINI)
+    let true_preds: ptr<f32> = decision_tree_classifier_predict(true_tree, X_test)
+    let true_score: f32 = accuracy_score(y_test, true_preds, n_test)
+    array_free_f32(true_preds)
+    decision_tree_classifier_free(true_tree)
+
+    let perm_scores: ptr<f32> = array_new_f32(n_permutations)
+    let y_perm: ptr<f32> = array_new_f32(n_train)
+
+    srand(seed)
+    for p in 0 to n_permutations {
+        for i in 0 to n_train {
+            y_perm[i] = y_train[i]
+        }
+        for i in 0 to n_train {
+            let j: i32 = rand() % n_train
+            let tmp: f32 = y_perm[i]
+            y_perm[i] = y_perm[j]
+            y_perm[j] = tmp
+        }
+
+        let tree: DecisionTreeClassifier = decision_tree_classifier_fit(X_train, y_perm, n_classes, 5, CRITERION_GINI)
+        let preds: ptr<f32> = decision_tree_classifier_predict(tree, X_test)
+        perm_scores[p] = accuracy_score(y_test, preds, n_test)
+        array_free_f32(preds)
+        decision_tree_classifier_free(tree)
+    }
+
+    let mut perm_sum: f32 = 0.0
+    let mut count_ge: i32 = 0
+    for p in 0 to n_permutations {
+        perm_sum = perm_sum + perm_scores[p]
+        if perm_scores[p] >= true_score {
+            count_ge = count_ge + 1
+        }
+    }
+    let perm_mean: f32 = perm_sum / (n_permutations as f32)
+    let p_value: f32 = ((count_ge + 1) as f32) / ((n_permutations + 1) as f32)
+
+    array_free_f32(perm_scores)
+    array_free_f32(y_perm)
+    matrix_free(X_train)
+    matrix_free(X_test)
+    array_free_f32(y_train)
+    array_free_f32(y_test)
+
+    let result: PermutationTestResult = PermutationTestResult {
+        true_score: true_score,
+        perm_mean: perm_mean,
+        p_value: p_value
+    }
+    return result
 }

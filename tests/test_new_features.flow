@@ -477,6 +477,238 @@ function test_hist_gradient_boosting() -> i32 {
     return 0
 }
 
+function test_hist_gradient_boosting_regressor() -> i32 {
+    println("Test: HistGradientBoostingRegressor")
+    let n: i32 = 40
+    let X: Matrix = matrix_new(n, 3)
+    let y: ptr<f32> = array_new_f32(n)
+    srand(42)
+    let mut i: i32 = 0
+    while i < n {
+        let x0: f32 = ((rand() % 100) as f32) / 10.0
+        let x1: f32 = ((rand() % 100) as f32) / 10.0
+        let x2: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 0, x0)
+        matrix_set(X, i, 1, x1)
+        matrix_set(X, i, 2, x2)
+        y[i] = 2.0 * x0 + 3.0 * x1 - x2 + 1.0
+        i = i + 1
+    }
+
+    let model: HistGradientBoostingRegressor = hist_gradient_boosting_regressor_fit(
+        X, y, n, 30, 0.1, 3
+    )
+    let preds: ptr<f32> = hist_gradient_boosting_regressor_predict(model, X)
+    let r2: f32 = r2_score(y, preds, n)
+
+    if r2 < 0.8 {
+        println("  FAIL: HistGBR R2 should be > 0.8")
+        return 1
+    }
+    print("  OK: R2 = ")
+    printf("%.4f", r2)
+    println("")
+    hist_gradient_boosting_regressor_free(model)
+    array_free_f32(preds)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
+function test_target_encoder() -> i32 {
+    println("Test: TargetEncoder")
+    let n: i32 = 10
+    let X: Matrix = matrix_new(n, 2)
+    let y: ptr<f32> = array_new_f32(n)
+    # Category 0 in col 0 maps to y=1, category 1 maps to y=10
+    let mut i: i32 = 0
+    while i < 5 {
+        matrix_set(X, i, 0, 0.0)
+        matrix_set(X, i, 1, 1.0)
+        y[i] = 1.0
+        i = i + 1
+    }
+    while i < 10 {
+        matrix_set(X, i, 0, 1.0)
+        matrix_set(X, i, 1, 2.0)
+        y[i] = 10.0
+        i = i + 1
+    }
+
+    let model: TargetEncoder = target_encoder_fit(X, y, n, 1.0)
+    let transformed: Matrix = target_encoder_transform(model, X)
+
+    # Category 0 should encode to ~1, category 1 to ~10
+    let enc0: f32 = matrix_at(transformed, 0, 0)
+    let enc1: f32 = matrix_at(transformed, 5, 0)
+
+    if enc0 > 3.0 || enc1 < 7.0 {
+        println("  FAIL: TargetEncoder encodings wrong")
+        print("  enc0 = ")
+        printf("%.4f", enc0)
+        print("  enc1 = ")
+        printf("%.4f", enc1)
+        println("")
+        return 1
+    }
+    print("  OK: enc0 = ")
+    printf("%.4f", enc0)
+    print(", enc1 = ")
+    printf("%.4f", enc1)
+    println("")
+    target_encoder_free(model)
+    matrix_free(transformed)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
+function test_export_graphviz() -> i32 {
+    println("Test: export_graphviz")
+    let n: i32 = 20
+    let X: Matrix = matrix_new(n, 2)
+    let y: ptr<f32> = array_new_f32(n)
+    let mut i: i32 = 0
+    while i < 10 {
+        matrix_set(X, i, 0, 1.0 + (i as f32) * 0.1)
+        matrix_set(X, i, 1, 2.0 + (i as f32) * 0.1)
+        y[i] = 0.0
+        i = i + 1
+    }
+    while i < 20 {
+        matrix_set(X, i, 0, 5.0 + ((i - 10) as f32) * 0.1)
+        matrix_set(X, i, 1, 6.0 + ((i - 10) as f32) * 0.1)
+        y[i] = 1.0
+        i = i + 1
+    }
+
+    let model: DecisionTreeClassifier = decision_tree_classifier_fit(X, y, 2, 3, CRITERION_GINI)
+    println("  DOT output:")
+    export_graphviz(model)
+
+    decision_tree_classifier_free(model)
+    matrix_free(X)
+    array_free_f32(y)
+    println("  OK: graphviz exported")
+    return 0
+}
+
+function test_average_precision_score() -> i32 {
+    println("Test: average_precision_score")
+    let y_true: ptr<f32> = array_new_f32(5)
+    let y_score: ptr<f32> = array_new_f32(5)
+    y_true[0] = 0.0; y_true[1] = 1.0; y_true[2] = 0.0; y_true[3] = 1.0; y_true[4] = 1.0
+    y_score[0] = 0.1; y_score[1] = 0.9; y_score[2] = 0.2; y_score[3] = 0.8; y_score[4] = 0.7
+
+    let ap: f32 = average_precision_score(y_true, y_score, 5, 1.0)
+
+    if ap < 0.9 {
+        println("  FAIL: AP should be > 0.9 for good ranking")
+        return 1
+    }
+    print("  OK: AP = ")
+    printf("%.4f", ap)
+    println("")
+    array_free_f32(y_true)
+    array_free_f32(y_score)
+    return 0
+}
+
+function test_poisson_gamma_deviance() -> i32 {
+    println("Test: mean_poisson_deviance / mean_gamma_deviance")
+    let y_true: ptr<f32> = array_new_f32(4)
+    let y_pred: ptr<f32> = array_new_f32(4)
+    y_true[0] = 2.0; y_true[1] = 4.0; y_true[2] = 6.0; y_true[3] = 8.0
+    y_pred[0] = 2.1; y_pred[1] = 3.9; y_pred[2] = 6.1; y_pred[3] = 7.8
+
+    let pd: f32 = mean_poisson_deviance(y_true, y_pred, 4)
+    let gd: f32 = mean_gamma_deviance(y_true, y_pred, 4)
+
+    if pd < 0.0 || gd < 0.0 {
+        println("  FAIL: deviances should be non-negative")
+        return 1
+    }
+    print("  OK: poisson = ")
+    printf("%.4f", pd)
+    print(", gamma = ")
+    printf("%.4f", gd)
+    println("")
+    array_free_f32(y_true)
+    array_free_f32(y_pred)
+    return 0
+}
+
+function test_class_balance_accuracy() -> i32 {
+    println("Test: class_balance_accuracy")
+    let y_true: ptr<f32> = array_new_f32(6)
+    let y_pred: ptr<f32> = array_new_f32(6)
+    y_true[0] = 0.0; y_true[1] = 0.0; y_true[2] = 1.0; y_true[3] = 1.0; y_true[4] = 1.0; y_true[5] = 0.0
+    y_pred[0] = 0.0; y_pred[1] = 0.0; y_pred[2] = 1.0; y_pred[3] = 1.0; y_pred[4] = 0.0; y_pred[5] = 1.0
+
+    let classes: ptr<f32> = array_new_f32(2)
+    classes[0] = 0.0
+    classes[1] = 1.0
+
+    let cba: f32 = class_balance_accuracy(y_true, y_pred, 6, classes, 2)
+
+    if cba < 0.0 || cba > 1.0 {
+        println("  FAIL: CBA out of range")
+        return 1
+    }
+    print("  OK: CBA = ")
+    printf("%.4f", cba)
+    println("")
+    array_free_f32(y_true)
+    array_free_f32(y_pred)
+    array_free_f32(classes)
+    return 0
+}
+
+function test_cross_val_score() -> i32 {
+    println("Test: cross_val_score")
+    let ds: Dataset = make_classification(60, 4, 2, 4, 0, 2.0, 42)
+    let scores: ptr<f32> = cross_val_score(ds.X, ds.y, 5, 0)
+
+    let mut total: f32 = 0.0
+    for i in 0 to 5 {
+        total = total + scores[i]
+    }
+    let mean: f32 = total / 5.0
+
+    if mean < 0.5 {
+        println("  FAIL: mean CV accuracy should be > 0.5")
+        return 1
+    }
+    print("  OK: mean CV = ")
+    printf("%.4f", mean)
+    println("")
+    array_free_f32(scores)
+    dataset_free(ds)
+    return 0
+}
+
+function test_repeated_k_fold() -> i32 {
+    println("Test: repeated_k_fold")
+    let ds: Dataset = make_classification(60, 4, 2, 4, 0, 2.0, 42)
+    let result: RepeatedKFoldResult = repeated_k_fold(ds.X, ds.y, 3, 2, 42)
+
+    if result.n_scores < 1 {
+        println("  FAIL: should have scores")
+        return 1
+    }
+    let mut total: f32 = 0.0
+    for i in 0 to result.n_scores {
+        total = total + result.scores[i]
+    }
+    let mean: f32 = total / (result.n_scores as f32)
+    print("  OK: mean = ")
+    printf("%.4f", mean)
+    println("")
+    repeated_kfold_result_free(result)
+    dataset_free(ds)
+    return 0
+}
+
 function main() -> i32 {
     println("=== New Features Tests ===")
     println("")
@@ -513,6 +745,22 @@ function main() -> i32 {
     if test_svr_rbf() != 0 { failures = failures + 1 }
     println("")
     if test_hist_gradient_boosting() != 0 { failures = failures + 1 }
+    println("")
+    if test_hist_gradient_boosting_regressor() != 0 { failures = failures + 1 }
+    println("")
+    if test_target_encoder() != 0 { failures = failures + 1 }
+    println("")
+    if test_export_graphviz() != 0 { failures = failures + 1 }
+    println("")
+    if test_average_precision_score() != 0 { failures = failures + 1 }
+    println("")
+    if test_poisson_gamma_deviance() != 0 { failures = failures + 1 }
+    println("")
+    if test_class_balance_accuracy() != 0 { failures = failures + 1 }
+    println("")
+    if test_cross_val_score() != 0 { failures = failures + 1 }
+    println("")
+    if test_repeated_k_fold() != 0 { failures = failures + 1 }
 
     println("")
     println("----------------------------------------")

@@ -1665,3 +1665,294 @@ export function label_ranking_loss(y_true: ptr<f32>, y_score: ptr<f32>, n: i32, 
     }
     return total_loss / (n as f32)
 }
+
+# ============================================================================
+# Average Precision Score
+# ============================================================================
+
+export function average_precision_score(y_true: ptr<f32>, y_score: ptr<f32>, n: i32, pos_label: f32) -> f32 {
+    # Sort indices by score descending (selection sort)
+    let indices: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        indices[i] = i
+    }
+    for i in 0 to n {
+        let mut max_idx: i32 = i
+        for j in i + 1 to n {
+            if y_score[indices[j]] > y_score[indices[max_idx]] {
+                max_idx = j
+            }
+        }
+        let tmp: i32 = indices[i]
+        indices[i] = indices[max_idx]
+        indices[max_idx] = tmp
+    }
+
+    # Count total positives
+    let mut n_pos: i32 = 0
+    for i in 0 to n {
+        if y_true[i] == pos_label {
+            n_pos = n_pos + 1
+        }
+    }
+
+    if n_pos == 0 {
+        free(indices as ptr<void>)
+        let result: f32 = 0.0
+        return result
+    }
+
+    # AP = sum of (recall - prev_recall) * precision at each threshold
+    let mut ap: f32 = 0.0
+    let mut tp: i32 = 0
+    let mut fp: i32 = 0
+    let mut prev_recall: f32 = 0.0
+
+    for i in 0 to n {
+        if y_true[indices[i]] == pos_label {
+            tp = tp + 1
+        } else {
+            fp = fp + 1
+        }
+        let precision: f32 = (tp as f32) / ((tp + fp) as f32)
+        let recall: f32 = (tp as f32) / (n_pos as f32)
+        ap = ap + precision * (recall - prev_recall)
+        prev_recall = recall
+    }
+
+    free(indices as ptr<void>)
+
+    let result: f32 = ap
+    return result
+}
+
+# ============================================================================
+# Top-k Accuracy Score
+# ============================================================================
+
+export function top_k_accuracy_score(y_true: ptr<f32>, y_score: ptr<f32>, n: i32, n_classes: i32, k: i32) -> f32 {
+    let mut correct: i32 = 0
+    let scores: ptr<f32> = array_new_f32(n_classes)
+    let used: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+
+    for i in 0 to n {
+        let true_cls: i32 = y_true[i] as i32
+
+        for j in 0 to n_classes {
+            scores[j] = y_score[i * n_classes + j]
+            used[j] = 0
+        }
+
+        let mut found: bool = false
+        for rank in 0 to k {
+            let mut max_idx: i32 = -1
+            for j in 0 to n_classes {
+                if used[j] == 0 {
+                    if max_idx == -1 || scores[j] > scores[max_idx] {
+                        max_idx = j
+                    }
+                }
+            }
+            if max_idx == -1 {
+                break
+            }
+            used[max_idx] = 1
+            if max_idx == true_cls {
+                found = true
+            }
+        }
+
+        if found {
+            correct = correct + 1
+        }
+    }
+
+    free(used as ptr<void>)
+    array_free_f32(scores)
+
+    let result: f32 = (correct as f32) / (n as f32)
+    return result
+}
+
+# ============================================================================
+# Mean Poisson Deviance
+# ============================================================================
+
+export function mean_poisson_deviance(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
+    let mut sum: f32 = 0.0
+    for i in 0 to n {
+        if y_true[i] == 0.0 {
+            sum = sum + 2.0 * y_pred[i]
+        } else {
+            let ratio: f32 = y_true[i] / y_pred[i]
+            let log_ratio: f32 = log((ratio) as f64) as f32
+            sum = sum + 2.0 * (y_true[i] * log_ratio - (y_true[i] - y_pred[i]))
+        }
+    }
+    let result: f32 = sum / (n as f32)
+    return result
+}
+
+# ============================================================================
+# Mean Gamma Deviance
+# ============================================================================
+
+export function mean_gamma_deviance(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
+    let mut sum: f32 = 0.0
+    for i in 0 to n {
+        let ratio: f32 = y_true[i] / y_pred[i]
+        let log_ratio: f32 = log((ratio) as f64) as f32
+        sum = sum + 2.0 * (-log_ratio + (y_true[i] - y_pred[i]) / y_pred[i])
+    }
+    let result: f32 = sum / (n as f32)
+    return result
+}
+
+# ============================================================================
+# D2 Tweedie Score
+# ============================================================================
+
+export function tweedie_deviance_point(y: f32, x: f32, power: f32) -> f32 {
+    if power == 0.0 {
+        let d: f32 = y - x
+        let result: f32 = d * d
+        return result
+    }
+    if power == 1.0 {
+        if y == 0.0 {
+            let result: f32 = 2.0 * x
+            return result
+        }
+        let ratio: f32 = y / x
+        let log_ratio: f32 = log((ratio) as f64) as f32
+        let result: f32 = 2.0 * (y * log_ratio - (y - x))
+        return result
+    }
+    if power == 2.0 {
+        let ratio: f32 = y / x
+        let log_ratio: f32 = log((ratio) as f64) as f32
+        let result: f32 = 2.0 * (-log_ratio + (y - x) / x)
+        return result
+    }
+    # General Tweedie deviance for arbitrary power
+    let p: f32 = power
+    let term1: f32 = pow((y as f64), ((2.0 - p) as f64)) as f32 / ((1.0 - p) * (2.0 - p))
+    let term2: f32 = y * pow((x as f64), ((1.0 - p) as f64)) as f32 / (1.0 - p)
+    let term3: f32 = pow((x as f64), ((2.0 - p) as f64)) as f32 / (2.0 - p)
+    let result: f32 = 2.0 * (term1 - term2 + term3)
+    return result
+}
+
+export function d2_tweedie_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, power: f32) -> f32 {
+    # Compute model deviance
+    let mut deviance: f32 = 0.0
+    for i in 0 to n {
+        deviance = deviance + tweedie_deviance_point(y_true[i], y_pred[i], power)
+    }
+
+    # Compute null deviance (null model predicts mean(y_true))
+    let mean_y: f32 = array_mean(y_true, n)
+    let mut null_deviance: f32 = 0.0
+    for i in 0 to n {
+        null_deviance = null_deviance + tweedie_deviance_point(y_true[i], mean_y, power)
+    }
+
+    if null_deviance < 0.0000000001 {
+        let result: f32 = 0.0
+        return result
+    }
+    let result: f32 = 1.0 - deviance / null_deviance
+    return result
+}
+
+# ============================================================================
+# Class Likelihood Ratios
+# ============================================================================
+
+export struct ClassLikelihoodRatios {
+    positive_lr: f32,
+    negative_lr: f32
+}
+
+export function class_likelihood_ratios(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, pos_label: f32) -> ClassLikelihoodRatios {
+    let mut tp: i32 = 0
+    let mut tn: i32 = 0
+    let mut fp: i32 = 0
+    let mut fn_: i32 = 0
+
+    for i in 0 to n {
+        let actual_pos: bool = y_true[i] == pos_label
+        let pred_pos: bool = y_pred[i] == pos_label
+
+        if actual_pos && pred_pos {
+            tp = tp + 1
+        } elif not actual_pos && not pred_pos {
+            tn = tn + 1
+        } elif not actual_pos && pred_pos {
+            fp = fp + 1
+        } else {
+            fn_ = fn_ + 1
+        }
+    }
+
+    let sensitivity: f32 = 0.0
+    if tp + fn_ > 0 {
+        sensitivity = (tp as f32) / ((tp + fn_) as f32)
+    }
+    let specificity: f32 = 0.0
+    if tn + fp > 0 {
+        specificity = (tn as f32) / ((tn + fp) as f32)
+    }
+
+    let pos_lr: f32 = 0.0
+    if specificity < 1.0 - 0.0000000001 {
+        pos_lr = sensitivity / (1.0 - specificity)
+    }
+    let neg_lr: f32 = 0.0
+    if specificity > 0.0000000001 {
+        neg_lr = (1.0 - sensitivity) / specificity
+    }
+
+    let result: ClassLikelihoodRatios = ClassLikelihoodRatios {
+        positive_lr: pos_lr,
+        negative_lr: neg_lr
+    }
+    return result
+}
+
+# ============================================================================
+# Class Balance Accuracy
+# ============================================================================
+
+export function class_balance_accuracy(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32) -> f32 {
+    let mut sum_cba: f32 = 0.0
+    for c in 0 to n_classes {
+        let cls: f32 = classes[c]
+        let mut tp: i32 = 0
+        let mut predicted_as: i32 = 0
+        let mut actual: i32 = 0
+
+        for i in 0 to n {
+            if y_true[i] == cls {
+                actual = actual + 1
+            }
+            if y_pred[i] == cls {
+                predicted_as = predicted_as + 1
+            }
+            if y_true[i] == cls && y_pred[i] == cls {
+                tp = tp + 1
+            }
+        }
+
+        let denom: i32 = predicted_as
+        if actual > denom {
+            denom = actual
+        }
+        if denom > 0 {
+            sum_cba = sum_cba + (tp as f32) / (denom as f32)
+        }
+    }
+
+    let result: f32 = sum_cba / (n_classes as f32)
+    return result
+}

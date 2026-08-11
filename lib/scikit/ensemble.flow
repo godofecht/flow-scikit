@@ -1656,3 +1656,95 @@ export function hist_gradient_boosting_classifier_free(model: HistGradientBoosti
     }
     free(model.trees as ptr<void>)
 }
+
+# ============================================================================
+# HistGradientBoostingRegressor
+# ============================================================================
+
+export struct HistGradientBoostingRegressor {
+    init_score: f32,
+    trees: ptr<DecisionTreeRegressor>,
+    n_trees: i32,
+    learning_rate: f32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function hist_gradient_boosting_regressor_fit(
+    X: Matrix, y: ptr<f32>,
+    n_samples: i32,
+    n_trees: i32,
+    learning_rate: f32,
+    max_depth: i32
+) -> HistGradientBoostingRegressor {
+    # Init score = mean of y
+    let mut sum_y: f32 = 0.0
+    for i in 0 to n_samples {
+        sum_y = sum_y + y[i]
+    }
+    let init_score: f32 = sum_y / (n_samples as f32)
+
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeRegressor>
+
+    let current_pred: ptr<f32> = array_new_f32(n_samples)
+    for i in 0 to n_samples {
+        current_pred[i] = init_score
+    }
+
+    for t in 0 to n_trees {
+        # Gradient of squared error: residual = y - pred
+        let gradients: ptr<f32> = array_new_f32(n_samples)
+        for i in 0 to n_samples {
+            gradients[i] = y[i] - current_pred[i]
+        }
+
+        # Fit a regression tree on the residuals
+        trees[t] = decision_tree_regressor_fit(X, gradients, max_depth, CRITERION_MSE)
+
+        # Update predictions
+        let tree_preds: ptr<f32> = decision_tree_regressor_predict(trees[t], X)
+        for i in 0 to n_samples {
+            current_pred[i] = current_pred[i] + learning_rate * tree_preds[i]
+        }
+
+        array_free_f32(gradients)
+        array_free_f32(tree_preds)
+    }
+
+    array_free_f32(current_pred)
+
+    let result: HistGradientBoostingRegressor = HistGradientBoostingRegressor {
+        init_score: init_score,
+        trees: trees,
+        n_trees: n_trees,
+        learning_rate: learning_rate,
+        n_features: X.cols,
+        fitted: true
+    }
+    return result
+}
+
+export function hist_gradient_boosting_regressor_predict(model: HistGradientBoostingRegressor, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        result[i] = model.init_score
+    }
+
+    for t in 0 to model.n_trees {
+        let tree_preds: ptr<f32> = decision_tree_regressor_predict(model.trees[t], X)
+        for i in 0 to n {
+            result[i] = result[i] + model.learning_rate * tree_preds[i]
+        }
+        array_free_f32(tree_preds)
+    }
+
+    return result
+}
+
+export function hist_gradient_boosting_regressor_free(model: HistGradientBoostingRegressor) -> void {
+    for t in 0 to model.n_trees {
+        decision_tree_regressor_free(model.trees[t])
+    }
+    free(model.trees as ptr<void>)
+}
