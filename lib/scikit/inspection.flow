@@ -3,11 +3,13 @@
 # Measures the drop in a metric when a feature's values are shuffled.
 #
 # Note: Flow does not support function pointers, so the permutation
-# importance API accepts pre-computed baseline predictions and scores
-# rather than callable predict/metric functions.
+# importance API is split into type-specific variants for the most
+# common estimator types (DecisionTreeRegressor, DecisionTreeClassifier,
+# RandomForestRegressor, RandomForestClassifier).
 
 import "lib/scikit/matrix.flow"
 import "lib/scikit/tree.flow"
+import "lib/scikit/ensemble.flow"
 
 extern {
     function rand() -> i32
@@ -22,51 +24,268 @@ export struct PermutationImportanceResult {
     n_repeats: i32
 }
 
-# Compute permutation importance given baseline predictions and a
-# callable-free interface. The caller provides baseline_preds (model
-# predictions on unpermuted X) and baseline_score (metric value on
-# baseline_preds vs y). This function permutes each column, calls
-# the provided permuted_preds array (pre-computed externally), and
-# computes importance as baseline_score - perm_score.
-#
-# Since flow lacks function pointers, this is a simplified version
-# that returns uniform importances. A full implementation would
-# require the caller to re-run predictions per permutation externally.
+function _r2_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
+    let y_mean: f32 = array_mean(y_true, n)
+    let mut ss_res: f32 = 0.0
+    let mut ss_tot: f32 = 0.0
+    let mut i: i32 = 0
+    while i < n {
+        let diff: f32 = y_true[i] - y_pred[i]
+        ss_res = ss_res + diff * diff
+        let d2: f32 = y_true[i] - y_mean
+        ss_tot = ss_tot + d2 * d2
+        i = i + 1
+    }
+    if ss_tot < 0.0000000001 { return 0.0 }
+    return 1.0 - ss_res / ss_tot
+}
+
+function _accuracy_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
+    let mut correct: i32 = 0
+    let mut i: i32 = 0
+    while i < n {
+        if y_true[i] == y_pred[i] { correct = correct + 1 }
+        i = i + 1
+    }
+    return (correct as f32) / (n as f32)
+}
+
+function _permute_column(X: Matrix, col_idx: i32, perm: ptr<i32>) -> Matrix {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let result: Matrix = matrix_copy(X)
+    let mut i: i32 = 0
+    while i < n {
+        matrix_set(result, i, col_idx, matrix_at(X, perm[i], col_idx))
+        i = i + 1
+    }
+    return result
+}
+
+function _make_permutation(n: i32, seed: i32) -> ptr<i32> {
+    let perm: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let mut i: i32 = 0
+    while i < n {
+        perm[i] = i
+        i = i + 1
+    }
+    srand(seed)
+    i = n - 1
+    while i > 0 {
+        let j: i32 = rand() % (i + 1)
+        let tmp: i32 = perm[i]
+        perm[i] = perm[j]
+        perm[j] = tmp
+        i = i - 1
+    }
+    return perm
+}
+
+# Permutation importance for DecisionTreeRegressor (R2 score)
 export function permutation_importance_regression(
+    model: DecisionTreeRegressor,
     X: Matrix,
     y: ptr<f32>,
-    baseline_preds: ptr<f32>,
-    baseline_score: f32,
     n_repeats: i32,
     seed: i32
 ) -> PermutationImportanceResult {
     let n: i32 = X.rows
     let p: i32 = X.cols
 
+    let baseline_preds: ptr<f32> = decision_tree_regressor_predict(model, X)
+    let baseline_score: f32 = _r2_score(y, baseline_preds, n)
+    array_free_f32(baseline_preds)
+
     let importances_mean: ptr<f32> = array_new_f32(p)
     let importances_std: ptr<f32> = array_new_f32(p)
     let importances: ptr<f32> = array_new_f32(p * n_repeats)
 
-    srand(seed)
-
-    for j in 0 to p {
+    let mut j: i32 = 0
+    while j < p {
         let mut sum: f32 = 0.0
         let mut sum_sq: f32 = 0.0
-
-        for r in 0 to n_repeats {
-            # Without function pointers we approximate importance as 0.
-            # A real implementation would permute column j, re-predict,
-            # and compute the metric drop.
-            let imp: f32 = 0.0
+        let mut r: i32 = 0
+        while r < n_repeats {
+            let perm: ptr<i32> = _make_permutation(n, seed + j * n_repeats + r)
+            let X_perm: Matrix = _permute_column(X, j, perm)
+            let perm_preds: ptr<f32> = decision_tree_regressor_predict(model, X_perm)
+            let perm_score: f32 = _r2_score(y, perm_preds, n)
+            let imp: f32 = baseline_score - perm_score
             importances[j * n_repeats + r] = imp
             sum = sum + imp
             sum_sq = sum_sq + imp * imp
+            array_free_f32(perm_preds)
+            matrix_free(X_perm)
+            free(perm as ptr<void>)
+            r = r + 1
         }
-
         importances_mean[j] = sum / (n_repeats as f32)
         let variance: f32 = sum_sq / (n_repeats as f32) - importances_mean[j] * importances_mean[j]
         if variance < 0.0 { variance = 0.0 }
         importances_std[j] = sqrt(variance as f64) as f32
+        j = j + 1
+    }
+
+    return PermutationImportanceResult {
+        importances_mean: importances_mean,
+        importances_std: importances_std,
+        importances: importances,
+        n_features: p,
+        n_repeats: n_repeats
+    }
+}
+
+# Permutation importance for DecisionTreeClassifier (accuracy score)
+export function permutation_importance_classifier(
+    model: DecisionTreeClassifier,
+    X: Matrix,
+    y: ptr<f32>,
+    n_repeats: i32,
+    seed: i32
+) -> PermutationImportanceResult {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let baseline_preds: ptr<f32> = decision_tree_classifier_predict(model, X)
+    let baseline_score: f32 = _accuracy_score(y, baseline_preds, n)
+    array_free_f32(baseline_preds)
+
+    let importances_mean: ptr<f32> = array_new_f32(p)
+    let importances_std: ptr<f32> = array_new_f32(p)
+    let importances: ptr<f32> = array_new_f32(p * n_repeats)
+
+    let mut j: i32 = 0
+    while j < p {
+        let mut sum: f32 = 0.0
+        let mut sum_sq: f32 = 0.0
+        let mut r: i32 = 0
+        while r < n_repeats {
+            let perm: ptr<i32> = _make_permutation(n, seed + j * n_repeats + r)
+            let X_perm: Matrix = _permute_column(X, j, perm)
+            let perm_preds: ptr<f32> = decision_tree_classifier_predict(model, X_perm)
+            let perm_score: f32 = _accuracy_score(y, perm_preds, n)
+            let imp: f32 = baseline_score - perm_score
+            importances[j * n_repeats + r] = imp
+            sum = sum + imp
+            sum_sq = sum_sq + imp * imp
+            array_free_f32(perm_preds)
+            matrix_free(X_perm)
+            free(perm as ptr<void>)
+            r = r + 1
+        }
+        importances_mean[j] = sum / (n_repeats as f32)
+        let variance: f32 = sum_sq / (n_repeats as f32) - importances_mean[j] * importances_mean[j]
+        if variance < 0.0 { variance = 0.0 }
+        importances_std[j] = sqrt(variance as f64) as f32
+        j = j + 1
+    }
+
+    return PermutationImportanceResult {
+        importances_mean: importances_mean,
+        importances_std: importances_std,
+        importances: importances,
+        n_features: p,
+        n_repeats: n_repeats
+    }
+}
+
+# Permutation importance for RandomForestRegressor (R2 score)
+export function permutation_importance_rf_regression(
+    model: RandomForestRegressor,
+    X: Matrix,
+    y: ptr<f32>,
+    n_repeats: i32,
+    seed: i32
+) -> PermutationImportanceResult {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let baseline_preds: ptr<f32> = random_forest_regressor_predict(model, X)
+    let baseline_score: f32 = _r2_score(y, baseline_preds, n)
+    array_free_f32(baseline_preds)
+
+    let importances_mean: ptr<f32> = array_new_f32(p)
+    let importances_std: ptr<f32> = array_new_f32(p)
+    let importances: ptr<f32> = array_new_f32(p * n_repeats)
+
+    let mut j: i32 = 0
+    while j < p {
+        let mut sum: f32 = 0.0
+        let mut sum_sq: f32 = 0.0
+        let mut r: i32 = 0
+        while r < n_repeats {
+            let perm: ptr<i32> = _make_permutation(n, seed + j * n_repeats + r)
+            let X_perm: Matrix = _permute_column(X, j, perm)
+            let perm_preds: ptr<f32> = random_forest_regressor_predict(model, X_perm)
+            let perm_score: f32 = _r2_score(y, perm_preds, n)
+            let imp: f32 = baseline_score - perm_score
+            importances[j * n_repeats + r] = imp
+            sum = sum + imp
+            sum_sq = sum_sq + imp * imp
+            array_free_f32(perm_preds)
+            matrix_free(X_perm)
+            free(perm as ptr<void>)
+            r = r + 1
+        }
+        importances_mean[j] = sum / (n_repeats as f32)
+        let variance: f32 = sum_sq / (n_repeats as f32) - importances_mean[j] * importances_mean[j]
+        if variance < 0.0 { variance = 0.0 }
+        importances_std[j] = sqrt(variance as f64) as f32
+        j = j + 1
+    }
+
+    return PermutationImportanceResult {
+        importances_mean: importances_mean,
+        importances_std: importances_std,
+        importances: importances,
+        n_features: p,
+        n_repeats: n_repeats
+    }
+}
+
+# Permutation importance for RandomForestClassifier (accuracy score)
+export function permutation_importance_rf_classifier(
+    model: RandomForestClassifier,
+    X: Matrix,
+    y: ptr<f32>,
+    n_repeats: i32,
+    seed: i32
+) -> PermutationImportanceResult {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let baseline_preds: ptr<f32> = random_forest_classifier_predict(model, X)
+    let baseline_score: f32 = _accuracy_score(y, baseline_preds, n)
+    array_free_f32(baseline_preds)
+
+    let importances_mean: ptr<f32> = array_new_f32(p)
+    let importances_std: ptr<f32> = array_new_f32(p)
+    let importances: ptr<f32> = array_new_f32(p * n_repeats)
+
+    let mut j: i32 = 0
+    while j < p {
+        let mut sum: f32 = 0.0
+        let mut sum_sq: f32 = 0.0
+        let mut r: i32 = 0
+        while r < n_repeats {
+            let perm: ptr<i32> = _make_permutation(n, seed + j * n_repeats + r)
+            let X_perm: Matrix = _permute_column(X, j, perm)
+            let perm_preds: ptr<f32> = random_forest_classifier_predict(model, X_perm)
+            let perm_score: f32 = _accuracy_score(y, perm_preds, n)
+            let imp: f32 = baseline_score - perm_score
+            importances[j * n_repeats + r] = imp
+            sum = sum + imp
+            sum_sq = sum_sq + imp * imp
+            array_free_f32(perm_preds)
+            matrix_free(X_perm)
+            free(perm as ptr<void>)
+            r = r + 1
+        }
+        importances_mean[j] = sum / (n_repeats as f32)
+        let variance: f32 = sum_sq / (n_repeats as f32) - importances_mean[j] * importances_mean[j]
+        if variance < 0.0 { variance = 0.0 }
+        importances_std[j] = sqrt(variance as f64) as f32
+        j = j + 1
     }
 
     return PermutationImportanceResult {

@@ -650,7 +650,8 @@ export function kernel_density_fit(X: Matrix, bandwidth: f32, kernel: i32) -> Ke
     return result
 }
 
-# kernel: 0 = gaussian, 1 = tophat, 2 = epanechnikov
+# kernel: 0 = gaussian, 1 = tophat, 2 = epanechnikov, 3 = exponential,
+#         4 = linear, 5 = cosine
 function _kernel_density_gaussian(d2: f32, bandwidth: f32, n_features: i32) -> f32 {
     # K(u) = (2*pi)^(-d/2) * exp(-u^2 / 2)
     # With bandwidth h: density = K(u/h) / h^d
@@ -660,6 +661,97 @@ function _kernel_density_gaussian(d2: f32, bandwidth: f32, n_features: i32) -> f
     let e: f32 = exp((-d2 / (2.0 * h * h)) as f64) as f32
     let result: f32 = norm * e / pow((h) as f64, (d) as f64) as f32
     return result
+}
+
+function _kernel_density_tophat(d2: f32, bandwidth: f32, n_features: i32) -> f32 {
+    # K(u) = 1 if |u| <= 1, else 0
+    # Volume of unit ball in d dims: V_d = pi^(d/2) / Gamma(d/2 + 1)
+    # Use approximation: V_d ~ pi^(d/2) / (d/2)!
+    let h: f32 = bandwidth
+    let d: f32 = (n_features as f32)
+    let dist: f32 = sqrt(d2 as f64) as f32
+    if dist > h { return 0.0 }
+    # Volume of d-ball with radius h
+    let mut vol: f32 = pow(3.141592654 as f64, (d / 2.0) as f64) as f32
+    let mut gamma_denom: f32 = 1.0
+    let mut g: i32 = 0
+    while g < ((d / 2.0) as i32) {
+        gamma_denom = gamma_denom * ((d / 2.0) - (g as f32))
+        g = g + 1
+    }
+    if gamma_denom < 0.0000000001 { gamma_denom = 1.0 }
+    vol = vol / gamma_denom
+    vol = vol * pow((h) as f64, (d) as f64) as f32
+    if vol < 0.0000000001 { return 0.0 }
+    return 1.0 / vol
+}
+
+function _kernel_density_epanechnikov(d2: f32, bandwidth: f32, n_features: i32) -> f32 {
+    # K(u) = (3/4)(1-u^2) for |u| <= 1, in 1D
+    # In dD: K(u) = (d+2)/(2 * V_d) * (1 - |u|^2) for |u| <= 1
+    let h: f32 = bandwidth
+    let d: f32 = (n_features as f32)
+    let dist_sq: f32 = d2 / (h * h)
+    if dist_sq > 1.0 { return 0.0 }
+    let mut vol: f32 = pow(3.141592654 as f64, (d / 2.0) as f64) as f32
+    let mut gamma_denom: f32 = 1.0
+    let mut g: i32 = 0
+    while g < ((d / 2.0) as i32) {
+        gamma_denom = gamma_denom * ((d / 2.0) - (g as f32))
+        g = g + 1
+    }
+    if gamma_denom < 0.0000000001 { gamma_denom = 1.0 }
+    vol = vol / gamma_denom
+    let coeff: f32 = (d + 2.0) / (2.0 * vol)
+    let result: f32 = coeff * (1.0 - dist_sq) / pow((h) as f64, (d) as f64) as f32
+    return result
+}
+
+function _kernel_density_exponential(d2: f32, bandwidth: f32, n_features: i32) -> f32 {
+    # K(u) = exp(-|u|) in 1D
+    # In dD: K(u) = prod_d exp(-|u_i|) = exp(-sum|u_i|)
+    # Approximate with exp(-|u|) / (2^d * prod factorial)
+    let h: f32 = bandwidth
+    let d: f32 = (n_features as f32)
+    let dist: f32 = sqrt(d2 as f64) as f32
+    let e: f32 = exp((-dist / h) as f64) as f32
+    let norm: f32 = 1.0 / pow((2.0 * h) as f64, (d) as f64) as f32
+    return norm * e
+}
+
+function _kernel_density_linear(d2: f32, bandwidth: f32, n_features: i32) -> f32 {
+    # K(u) = 1 - |u| for |u| <= 1
+    let h: f32 = bandwidth
+    let d: f32 = (n_features as f32)
+    let dist: f32 = sqrt(d2 as f64) as f32
+    let u: f32 = dist / h
+    if u > 1.0 { return 0.0 }
+    let mut vol: f32 = pow(3.141592654 as f64, (d / 2.0) as f64) as f32
+    let mut gamma_denom: f32 = 1.0
+    let mut g: i32 = 0
+    while g < ((d / 2.0) as i32) {
+        gamma_denom = gamma_denom * ((d / 2.0) - (g as f32))
+        g = g + 1
+    }
+    if gamma_denom < 0.0000000001 { gamma_denom = 1.0 }
+    vol = vol / gamma_denom
+    vol = vol * pow((h) as f64, (d) as f64) as f32
+    if vol < 0.0000000001 { return 0.0 }
+    let coeff: f32 = (d + 2.0) / (2.0 * vol / (h as f32))
+    return coeff * (1.0 - u) / pow((h) as f64, (d) as f64) as f32
+}
+
+function _kernel_density_cosine(d2: f32, bandwidth: f32, n_features: i32) -> f32 {
+    # K(u) = (pi/4) * cos(pi/2 * |u|) for |u| <= 1
+    let h: f32 = bandwidth
+    let d: f32 = (n_features as f32)
+    let dist: f32 = sqrt(d2 as f64) as f32
+    let u: f32 = dist / h
+    if u > 1.0 { return 0.0 }
+    let c: f32 = cos((1.5707963 * u) as f64) as f32
+    let norm: f32 = pow((1.0 / h) as f64, (d) as f64) as f32
+    let coeff: f32 = 0.78539815 * (d + 2.0)
+    return coeff * c * norm
 }
 
 export function kernel_density_score_samples(model: KernelDensity, X: Matrix) -> ptr<f32> {
@@ -680,8 +772,17 @@ export function kernel_density_score_samples(model: KernelDensity, X: Matrix) ->
             }
             if model.kernel == 0 {
                 total = total + _kernel_density_gaussian(d2, model.bandwidth, model.n_features)
+            } elif model.kernel == 1 {
+                total = total + _kernel_density_tophat(d2, model.bandwidth, model.n_features)
+            } elif model.kernel == 2 {
+                total = total + _kernel_density_epanechnikov(d2, model.bandwidth, model.n_features)
+            } elif model.kernel == 3 {
+                total = total + _kernel_density_exponential(d2, model.bandwidth, model.n_features)
+            } elif model.kernel == 4 {
+                total = total + _kernel_density_linear(d2, model.bandwidth, model.n_features)
+            } elif model.kernel == 5 {
+                total = total + _kernel_density_cosine(d2, model.bandwidth, model.n_features)
             } else {
-                # Simplified: use gaussian for all kernels
                 total = total + _kernel_density_gaussian(d2, model.bandwidth, model.n_features)
             }
             j = j + 1

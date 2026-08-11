@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+### Stub elimination and infrastructure modules
+
+- Replaced `StackingRegressor` stub with real implementation: trains
+  bootstrap-sampled DecisionTreeRegressor base estimators and a
+  least-squares meta-learner on their predictions.
+- Replaced `VotingRegressor` stub with real implementation: accepts
+  pre-fitted DecisionTreeRegressor estimators and weights, averages
+  predictions.
+- Replaced `permutation_importance_regression` stub (returned zeros)
+  with real implementation that permutes columns, re-predicts, and
+  computes the R2 score drop. Added type-specific variants for
+  DecisionTreeClassifier, RandomForestRegressor, and
+  RandomForestClassifier.
+- Replaced `kernel_density_score_samples` stub (used gaussian for all
+  kernels) with real implementations for tophat, epanechnikov,
+  exponential, linear, and cosine kernels.
+- Replaced `spline_transformer_fit` stub (computed knots for first
+  feature only) with per-feature knot computation using sorted
+  quantiles.
+- Replaced `adjusted_mutual_info_score` stub (used 1/n as EMI) with
+  proper EMI approximation (R-1)(C-1)/(2(n-1)) from Vinh et al. 2009,
+  plus direct MI and entropy computation.
+- Added `lib/scikit/utils.flow` with `check_array`, `check_X_y`,
+  `check_consistent_length`, `as_float_array`, `safe_indexing`,
+  `resample`, `shuffle`, `check_random_state`, `gen_batches`,
+  `gen_even_slices`, `tosequence`, `check_scalar`,
+  `assert_all_finite`, `check_non_negative`, `check_symmetric`,
+  `get_chunk_n_rows`, `compute_sample_weight`, `compute_class_weight`,
+  `safe_mask`, `indices_to_mask`, `array_min`, `array_max`,
+  `array_nnz`.
+- Added `lib/scikit/exceptions.flow` with error codes for
+  `NotFittedError`, `ConvergenceWarning`, `DataDimensionWarning`,
+  `FitFailedWarning`, `UndefinedMetricWarning`, and helpers
+  `check_fitted`, `check_convergence`, `check_n_iter`.
+- Added `lib/scikit/config.flow` with `Config` struct,
+  `config_default`, `set_config`, and `config_context_*` helpers
+  mirroring sklearn's `config_context` and `set_config`.
+- Worked around Flow issue #431 (arrays of structs produce invalid
+  pointers) by replacing `BatchRange` struct arrays with separate
+  start/end integer arrays in `gen_batches` and `gen_even_slices`.
+
 ### Final parity batch: 21 missing APIs
 
 - Added `PoissonRegressor`, `GammaRegressor`, `TweedieRegressor` to

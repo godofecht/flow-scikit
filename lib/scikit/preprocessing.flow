@@ -1581,7 +1581,7 @@ export function multilabel_binarizer_free(model: MultiLabelBinarizer) -> void {
 export struct SplineTransformer {
     n_knots: i32,
     degree: i32,
-    knots: ptr<f32>,
+    knots: ptr<ptr<f32> >,
     n_features: i32,
     n_output_features: i32,
     fitted: bool
@@ -1591,14 +1591,42 @@ export function spline_transformer_fit(X: Matrix, n_knots: i32, degree: i32) -> 
     let n: i32 = X.rows
     let n_features: i32 = X.cols
 
-    # Compute knots as quantiles of the data (per feature, but simplified to first feature)
-    let knots: ptr<f32> = array_new_f32(n_knots)
-    let mut i: i32 = 0
-    while i < n_knots {
-        let t: f32 = (i as f32) / ((n_knots - 1) as f32)
-        let idx: i32 = (t * ((n - 1) as f32)) as i32
-        knots[i] = matrix_at(X, idx, 0)
-        i = i + 1
+    # Compute knots as quantiles of the data, per feature
+    let knots: ptr<ptr<f32> > = malloc((n_features as i64) * 8) as ptr<ptr<f32> >
+    let mut f: i32 = 0
+    while f < n_features {
+        knots[f] = array_new_f32(n_knots)
+        # Sort the column to compute quantile positions
+        let col: ptr<f32> = array_new_f32(n)
+        let mut i: i32 = 0
+        while i < n {
+            col[i] = matrix_at(X, i, f)
+            i = i + 1
+        }
+        # Insertion sort
+        let mut a: i32 = 1
+        while a < n {
+            let key: f32 = col[a]
+            let mut b: i32 = a - 1
+            while b >= 0 && col[b] > key {
+                col[b + 1] = col[b]
+                b = b - 1
+            }
+            col[b + 1] = key
+            a = a + 1
+        }
+        # Sample n_knots quantiles
+        let mut k: i32 = 0
+        while k < n_knots {
+            let t: f32 = (k as f32) / ((n_knots - 1) as f32)
+            let idx: i32 = (t * ((n - 1) as f32)) as i32
+            if idx >= n { idx = n - 1 }
+            if idx < 0 { idx = 0 }
+            knots[f][k] = col[idx]
+            k = k + 1
+        }
+        array_free_f32(col)
+        f = f + 1
     }
 
     # n_output_features = n_knots + degree - 1 per input feature
@@ -1664,7 +1692,7 @@ export function spline_transformer_transform(model: SplineTransformer, X: Matrix
         let mut out_idx: i32 = 0
         let mut f: i32 = 0
         while f < model.n_features {
-            let basis: ptr<f32> = _bspline_basis(matrix_at(X, i, f), model.knots, model.n_knots, model.degree)
+            let basis: ptr<f32> = _bspline_basis(matrix_at(X, i, f), model.knots[f], model.n_knots, model.degree)
             let mut b: i32 = 0
             while b < n_basis_per_feat {
                 matrix_set(result, i, out_idx, basis[b])
@@ -1680,7 +1708,12 @@ export function spline_transformer_transform(model: SplineTransformer, X: Matrix
 }
 
 export function spline_transformer_free(model: SplineTransformer) -> void {
-    array_free_f32(model.knots)
+    let mut f: i32 = 0
+    while f < model.n_features {
+        array_free_f32(model.knots[f])
+        f = f + 1
+    }
+    free(model.knots as ptr<void>)
 }
 
 # ============================================================================

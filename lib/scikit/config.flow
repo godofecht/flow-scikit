@@ -1,0 +1,127 @@
+# Config module for flow-scikit.
+# Mirrors sklearn.config_context and sklearn.set_config.
+# Since Flow has no global mutable state, configuration is passed
+# explicitly via a Config struct.
+
+import "lib/scikit/matrix.flow"
+
+# ============================================================================
+# Configuration struct
+# ============================================================================
+
+export struct Config {
+    assume_finite: bool,
+    print_changed_only: bool,
+    display: i32,
+    working_memory: i64,
+    transformer_output: i32,
+    enable_metadata_routing: bool,
+    skip_parameter_validation: bool
+}
+
+export const DISPLAY_TEXT: i32 = 0
+export const DISPLAY_DIAGRAM: i32 = 1
+
+export const TRANSFORMER_OUTPUT_DEFAULT: i32 = 0
+export const TRANSFORMER_OUTPUT_PANDAS: i32 = 1
+export const TRANSFORMER_OUTPUT_POLARS: i32 = 2
+
+# ============================================================================
+# Global config (module-level singleton pattern)
+# ============================================================================
+
+export function config_default() -> Config {
+    let result: Config = Config {
+        assume_finite: false,
+        print_changed_only: true,
+        display: DISPLAY_TEXT,
+        working_memory: 1024,
+        transformer_output: TRANSFORMER_OUTPUT_DEFAULT,
+        enable_metadata_routing: false,
+        skip_parameter_validation: false
+    }
+    return result
+}
+
+export function set_config(
+    assume_finite: bool,
+    print_changed_only: bool,
+    display: i32,
+    working_memory: i64,
+    transformer_output: i32,
+    enable_metadata_routing: bool,
+    skip_parameter_validation: bool
+) -> Config {
+    let result: Config = Config {
+        assume_finite: assume_finite,
+        print_changed_only: print_changed_only,
+        display: display,
+        working_memory: working_memory,
+        transformer_output: transformer_output,
+        enable_metadata_routing: enable_metadata_routing,
+        skip_parameter_validation: skip_parameter_validation
+    }
+    return result
+}
+
+# ============================================================================
+# Config context (returns a new config with one field changed)
+# ============================================================================
+
+export function config_context_assume_finite(config: Config, value: bool) -> Config {
+    config.assume_finite = value
+    return config
+}
+
+export function config_context_working_memory(config: Config, value: i64) -> Config {
+    config.working_memory = value
+    return config
+}
+
+export function config_context_display(config: Config, value: i32) -> Config {
+    config.display = value
+    return config
+}
+
+export function config_context_transformer_output(config: Config, value: i32) -> Config {
+    config.transformer_output = value
+    return config
+}
+
+export function config_context_metadata_routing(config: Config, value: bool) -> Config {
+    config.enable_metadata_routing = value
+    return config
+}
+
+export function config_context_skip_validation(config: Config, value: bool) -> Config {
+    config.skip_parameter_validation = value
+    return config
+}
+
+# ============================================================================
+# Config queries
+# ============================================================================
+
+export function get_config_assume_finite(config: Config) -> bool {
+    return config.assume_finite
+}
+
+export function get_config_working_memory(config: Config) -> i64 {
+    return config.working_memory
+}
+
+export function get_config_display(config: Config) -> i32 {
+    return config.display
+}
+
+export function get_config_transformer_output(config: Config) -> i32 {
+    return config.transformer_output
+}
+
+export function get_config_metadata_routing(config: Config) -> bool {
+    return config.enable_metadata_routing
+}
+
+export function get_config_skip_validation(config: Config) -> bool {
+    return config.skip_parameter_validation
+}
