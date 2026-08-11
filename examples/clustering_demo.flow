@@ -70,7 +70,7 @@ function main() -> i32 {
 
     # 1. KMeans
     println("--- KMeans ---")
-    let km: KMeans = kmeans_fit(X, 3, 100, 1e-4, 42)
+    let km: KMeans = kmeans_fit(X, 3, 100, 0.0001, 42)
     print("  Inertia = ")
     printf("%.4f", km.inertia)
     println("")
@@ -90,7 +90,7 @@ function main() -> i32 {
 
     # 2. MiniBatchKMeans
     println("--- MiniBatchKMeans ---")
-    let mbkm: MiniBatchKMeans = minibatch_kmeans_fit(X, 3, 10, 50, 1e-4, 42)
+    let mbkm: MiniBatchKMeans = minibatch_kmeans_fit(X, 3, 10, 50, 0.0001, 42)
     print("  Inertia = ")
     printf("%.4f", mbkm.inertia)
     println("")
@@ -127,7 +127,7 @@ function main() -> i32 {
 
     # 5. Silhouette score for KMeans
     println("--- Silhouette Score ---")
-    let km2: KMeans = kmeans_fit(X, 3, 100, 1e-4, 42)
+    let km2: KMeans = kmeans_fit(X, 3, 100, 0.0001, 42)
     let sil: f32 = silhouette_score(X, km2.labels, n)
     print("  KMeans(k=3) silhouette = ")
     printf("%.4f", sil)

@@ -245,7 +245,7 @@ export function transformed_target_regressor_fit(X: Matrix, y: ptr<f32>, transfo
             std = std + d * d
         }
         std = sqrt((std / (n as f32)) as f64) as f32
-        if std < 1e-10 { std = 1.0 }
+        if std < 0.0000000001 { std = 1.0 }
         for i in 0 to n {
             y_transformed[i] = (y[i] - mean) / std
         }

@@ -38,7 +38,7 @@ function test_minibatch_kmeans() -> i32 {
     println("Test: MiniBatchKMeans")
     let X: Matrix = make_blobs()
 
-    let mbkm: MiniBatchKMeans = minibatch_kmeans_fit(X, 3, 10, 50, 1e-4, 42)
+    let mbkm: MiniBatchKMeans = minibatch_kmeans_fit(X, 3, 10, 50, 0.0001, 42)
     let labels: ptr<i32> = minibatch_kmeans_predict(mbkm, X)
 
     let mut cluster_counts: array<i32, 3> = [0, 0, 0]
@@ -280,7 +280,7 @@ function test_nmf() -> i32 {
         }
     }
 
-    let model: NMF = nmf_fit(X, 2, 200, 1e-4, 42)
+    let model: NMF = nmf_fit(X, 2, 200, 0.0001, 42)
     let W: Matrix = nmf_transform(model, X)
 
     if W.cols != 2 {
@@ -373,7 +373,7 @@ function test_silhouette() -> i32 {
     println("Test: silhouette_score")
     let X: Matrix = make_blobs()
 
-    let km: KMeans = kmeans_fit(X, 3, 100, 1e-4, 42)
+    let km: KMeans = kmeans_fit(X, 3, 100, 0.0001, 42)
     let sil: f32 = silhouette_score(X, km.labels, X.rows)
 
     if sil < 0.3 {

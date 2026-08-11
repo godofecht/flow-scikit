@@ -117,7 +117,7 @@ export capability VerboseProgress {
     },
 
     function on_epoch_end(epoch: i32, total_epochs: i32, loss: f32) -> void {
-        if loss > 1e10 {
+        if loss > 10000000000.0 {
             println("[flow-scikit]   WARNING: loss is very large, consider reducing learning rate")
         }
     },

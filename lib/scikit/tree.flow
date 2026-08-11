@@ -217,7 +217,7 @@ function _build_classifier_tree(
 
     let mut best_feature: i32 = -1
     let mut best_threshold: f32 = 0.0
-    let mut best_impurity: f32 = 1e30
+    let mut best_impurity: f32 = 9999999999.0
 
     let y_subset: ptr<f32> = array_new_f32(n_indices)
     for i in 0 to n_indices {
@@ -280,7 +280,7 @@ function _build_classifier_tree(
         array_free_f32(values)
     }
 
-    if best_feature < 0 || best_impurity >= parent_impurity - 1e-10 {
+    if best_feature < 0 || best_impurity >= parent_impurity - 0.0000000001 {
         let y_sub: ptr<f32> = array_new_f32(n_indices)
         for i in 0 to n_indices {
             y_sub[i] = y[indices[i]]
@@ -462,7 +462,7 @@ function _build_regressor_tree(
 
     let mut best_feature: i32 = -1
     let mut best_threshold: f32 = 0.0
-    let mut best_impurity: f32 = 1e30
+    let mut best_impurity: f32 = 9999999999.0
 
     for f in 0 to X.cols {
         let values: ptr<f32> = array_new_f32(n_indices)
@@ -508,7 +508,7 @@ function _build_regressor_tree(
         array_free_f32(values)
     }
 
-    if best_feature < 0 || best_impurity >= parent_impurity - 1e-10 {
+    if best_feature < 0 || best_impurity >= parent_impurity - 0.0000000001 {
         let y_sub: ptr<f32> = array_new_f32(n_indices)
         for i in 0 to n_indices {
             y_sub[i] = y[indices[i]]

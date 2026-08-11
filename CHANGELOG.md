@@ -151,6 +151,10 @@
   Extracted inline `exp()` to helper function `_rbf_exp`.
 - Replaced all scientific notation literals in `cluster.flow` and `svm.flow`
   with decimal literals.
+- Replaced all remaining scientific notation literals across all library,
+  test, and example files with explicit decimal literals.
+- Fixed direct returns of struct literals containing function calls in
+  `gaussian_process.flow`, `neighbors.flow`, and `pipeline.flow` (#409).
 
 ## 0.2.0
 

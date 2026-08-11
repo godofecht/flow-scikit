@@ -74,7 +74,7 @@ export function select_k_best_fit(X: Matrix, y: ptr<f32>, k: i32, score_func: i3
                 }
             }
 
-            if ss_within < 1e-10 {
+            if ss_within < 0.0000000001 {
                 scores[j] = 0.0
             } else {
                 let df_between: f32 = (n_classes - 1) as f32
@@ -108,7 +108,7 @@ export function select_k_best_fit(X: Matrix, y: ptr<f32>, k: i32, score_func: i3
                 ss_yy = ss_yy + dy * dy
             }
 
-            if ss_xx < 1e-10 || ss_yy < 1e-10 {
+            if ss_xx < 0.0000000001 || ss_yy < 0.0000000001 {
                 scores[j] = 0.0
             } else {
                 let r: f32 = ss_xy / sqrt((ss_xx * ss_yy) as f64) as f32
@@ -117,8 +117,8 @@ export function select_k_best_fit(X: Matrix, y: ptr<f32>, k: i32, score_func: i3
                 if df < 1.0 {
                     df = 1.0
                 }
-                if r_sq > 1.0 - 1e-10 {
-                    r_sq = 1.0 - 1e-10
+                if r_sq > 1.0 - 0.0000000001 {
+                    r_sq = 1.0 - 0.0000000001
                 }
                 scores[j] = (r_sq / df) / ((1.0 - r_sq) / df)
             }
@@ -335,7 +335,7 @@ export function rfe_fit(
     let mut rank: i32 = n_features
 
     while n_remaining > n_features_to_select {
-        let mut min_importance: f32 = 1e30
+        let mut min_importance: f32 = 9999999999.0
         let mut min_idx: i32 = -1
 
         for j in 0 to n_features {
@@ -417,7 +417,7 @@ export function rfecv_fit(
 ) -> RFECV {
     let cv_scores: ptr<f32> = array_new_f32(n_features)
     let best_n: i32 = n_features
-    let mut best_score: f32 = -1e30
+    let mut best_score: f32 = -9999999999.0
 
     for n_select in 1 to n_features + 1 {
         let rfe: RFE = rfe_fit(X, y, n_select, null, n_samples, n_features)
@@ -432,7 +432,7 @@ export function rfecv_fit(
 
             let mut fold_score: f32 = 0.0
             for i in test_start to test_end {
-                let mut best_dist: f32 = 1e30
+                let mut best_dist: f32 = 9999999999.0
                 let mut best_label: f32 = y[i]
                 for j in 0 to n_samples {
                     if j >= test_start && j < test_end { continue }
@@ -517,7 +517,7 @@ export function sequential_feature_selector_fit(
     if direction == SFS_FORWARD {
         while n_selected < n_features_to_select {
             let mut best_j: i32 = -1
-            let mut best_score: f32 = -1e30
+            let mut best_score: f32 = -9999999999.0
 
             for j in 0 to n_features {
                 if selected[j] { continue }
@@ -537,7 +537,7 @@ export function sequential_feature_selector_fit(
 
                 let mut score: f32 = 0.0
                 for i in 0 to n_samples {
-                    let mut best_dist: f32 = 1e30
+                    let mut best_dist: f32 = 9999999999.0
                     let mut best_label: f32 = y[i]
                     for k in 0 to n_samples {
                         if k == i { continue }
@@ -573,7 +573,7 @@ export function sequential_feature_selector_fit(
         n_selected = n_features
         while n_selected > n_features_to_select {
             let mut worst_j: i32 = -1
-            let mut best_score: f32 = -1e30
+            let mut best_score: f32 = -9999999999.0
 
             for j in 0 to n_features {
                 if not selected[j] { continue }
@@ -593,7 +593,7 @@ export function sequential_feature_selector_fit(
 
                 let mut score: f32 = 0.0
                 for i in 0 to n_samples {
-                    let mut best_dist: f32 = 1e30
+                    let mut best_dist: f32 = 9999999999.0
                     let mut best_label: f32 = y[i]
                     for k in 0 to n_samples {
                         if k == i { continue }

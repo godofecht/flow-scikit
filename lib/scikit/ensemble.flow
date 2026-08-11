@@ -829,7 +829,7 @@ export function adaboost_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
         if err > 0.5 {
             alphas[t] = 0.0
         } else {
-            err = err + 1e-10
+            err = err + 0.0000000001
             alphas[t] = 0.5 * log(((1.0 - err) / err) as f64) as f32
         }
 
@@ -1005,7 +1005,7 @@ export function adaboost_regressor_fit(X: Matrix, y: ptr<f32>, n_trees: i32, max
             }
         }
 
-        if max_err < 1e-10 {
+        if max_err < 0.0000000001 {
             alphas[t] = 1.0
             free(sample_indices as ptr<void>)
             matrix_free(X_boot)
@@ -1025,10 +1025,10 @@ export function adaboost_regressor_fit(X: Matrix, y: ptr<f32>, n_trees: i32, max
         let mut beta: f32 = 0.0
         if err >= 0.99 {
             alphas[t] = 0.0
-            beta = 1e10
+            beta = 10000000000.0
         } else {
             beta = err / (1.0 - err)
-            if beta < 1e-10 { beta = 1e-10 }
+            if beta < 0.0000000001 { beta = 0.0000000001 }
             alphas[t] = log((1.0 / beta) as f64) as f32
         }
 
@@ -1522,7 +1522,7 @@ export function stacking_classifier_predict(model: StackingClassifier, base_pred
     let result: ptr<f32> = array_new_f32(n_samples)
     for i in 0 to n_samples {
         let mut best_c: i32 = 0
-        let mut best_val: f32 = -1e30
+        let mut best_val: f32 = -9999999999.0
         for c in 0 to model.n_classes {
             let mut z: f32 = model.meta_bias[c]
             for j in 0 to model.n_base {

@@ -38,7 +38,7 @@ function compute_std_col(m: Matrix, col: i32, mean: f32) -> f32 {
         sum_sq = sum_sq + d * d
     }
     let var: f32 = sum_sq / (m.rows as f32)
-    if var < 1e-10 {
+    if var < 0.0000000001 {
         return 1.0
     }
     return sqrt(var as f64) as f32
@@ -108,7 +108,7 @@ export function pls_fit(X: Matrix, Y: Matrix, n_components: i32, max_iter: i32, 
                 w_norm = w_norm + w_new[j] * w_new[j]
             }
             w_norm = sqrt(w_norm as f64) as f32
-            if w_norm < 1e-10 { w_norm = 1.0 }
+            if w_norm < 0.0000000001 { w_norm = 1.0 }
             for j in 0 to p {
                 w_new[j] = w_new[j] / w_norm
             }
@@ -175,7 +175,7 @@ export function pls_fit(X: Matrix, Y: Matrix, n_components: i32, max_iter: i32, 
         for i in 0 to n {
             t_norm = t_norm + t[i] * t[i]
         }
-        if t_norm < 1e-10 { t_norm = 1.0 }
+        if t_norm < 0.0000000001 { t_norm = 1.0 }
 
         for j in 0 to p {
             x_weights[c * p + j] = w[j]
@@ -429,7 +429,7 @@ export function cca_fit(X: Matrix, Y: Matrix, n_components: i32, max_iter: i32, 
             let mut a_norm: f32 = 0.0
             for j in 0 to p { a_norm = a_norm + a[j] * a[j] }
             a_norm = sqrt((a_norm as f64)) as f32
-            if a_norm < 1e-10 { a_norm = 1e-10 }
+            if a_norm < 0.0000000001 { a_norm = 0.0000000001 }
             for j in 0 to p { a[j] = a[j] / a_norm }
 
             let b: ptr<f32> = array_new_f32(q)
@@ -446,7 +446,7 @@ export function cca_fit(X: Matrix, Y: Matrix, n_components: i32, max_iter: i32, 
             let mut b_norm: f32 = 0.0
             for j in 0 to q { b_norm = b_norm + b[j] * b[j] }
             b_norm = sqrt((b_norm as f64)) as f32
-            if b_norm < 1e-10 { b_norm = 1e-10 }
+            if b_norm < 0.0000000001 { b_norm = 0.0000000001 }
             for j in 0 to q { b[j] = b[j] / b_norm }
 
             let mut corr: f32 = 0.0
@@ -481,7 +481,7 @@ export function cca_fit(X: Matrix, Y: Matrix, n_components: i32, max_iter: i32, 
         let mut x_norm: f32 = 0.0
         for j in 0 to p { x_norm = x_norm + x_weights[c][j] * x_weights[c][j] }
         x_norm = sqrt((x_norm as f64)) as f32
-        if x_norm < 1e-10 { x_norm = 1e-10 }
+        if x_norm < 0.0000000001 { x_norm = 0.0000000001 }
         for j in 0 to p { x_weights[c][j] = x_weights[c][j] / x_norm }
 
         for j in 0 to q {
@@ -496,7 +496,7 @@ export function cca_fit(X: Matrix, Y: Matrix, n_components: i32, max_iter: i32, 
         let mut y_norm: f32 = 0.0
         for j in 0 to q { y_norm = y_norm + y_weights[c][j] * y_weights[c][j] }
         y_norm = sqrt((y_norm as f64)) as f32
-        if y_norm < 1e-10 { y_norm = 1e-10 }
+        if y_norm < 0.0000000001 { y_norm = 0.0000000001 }
         for j in 0 to q { y_weights[c][j] = y_weights[c][j] / y_norm }
 
         for i in 0 to n {
@@ -603,7 +603,7 @@ export function pls_canonical_fit(X: Matrix, Y: Matrix, n_components: i32) -> PL
     let y_weights: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
 
     for c in 0 to n_components {
-        let mut max_val: f32 = -1e30
+        let mut max_val: f32 = -9999999999.0
         let mut max_j: i32 = 0
         for j in 0 to q {
             let mut s: f32 = 0.0
@@ -623,7 +623,7 @@ export function pls_canonical_fit(X: Matrix, Y: Matrix, n_components: i32) -> PL
         let mut w_norm: f32 = 0.0
         for j in 0 to p { w_norm = w_norm + w[j] * w[j] }
         w_norm = sqrt((w_norm as f64)) as f32
-        if w_norm < 1e-10 { w_norm = 1e-10 }
+        if w_norm < 0.0000000001 { w_norm = 0.0000000001 }
         for j in 0 to p { w[j] = w[j] / w_norm }
 
         let t: ptr<f32> = array_new_f32(n)
@@ -642,7 +642,7 @@ export function pls_canonical_fit(X: Matrix, Y: Matrix, n_components: i32) -> PL
         let mut c_norm: f32 = 0.0
         for j in 0 to q { c_norm = c_norm + c_vec[j] * c_vec[j] }
         c_norm = sqrt((c_norm as f64)) as f32
-        if c_norm < 1e-10 { c_norm = 1e-10 }
+        if c_norm < 0.0000000001 { c_norm = 0.0000000001 }
         for j in 0 to q { c_vec[j] = c_vec[j] / c_norm }
 
         x_weights[c] = w
@@ -656,7 +656,7 @@ export function pls_canonical_fit(X: Matrix, Y: Matrix, n_components: i32) -> PL
         }
         let t_norm: f32 = 0.0
         for i in 0 to n { t_norm = t_norm + t[i] * t[i] }
-        if t_norm > 1e-10 {
+        if t_norm > 0.0000000001 {
             for i in 0 to n {
                 for j in 0 to p {
                     matrix_set(Xc, i, j, matrix_at(Xc, i, j) - t[i] * p_load[j] / t_norm)
@@ -670,7 +670,7 @@ export function pls_canonical_fit(X: Matrix, Y: Matrix, n_components: i32) -> PL
             for i in 0 to n { s = s + matrix_at(Yc, i, j) * t[i] }
             q_load[j] = s
         }
-        if t_norm > 1e-10 {
+        if t_norm > 0.0000000001 {
             for i in 0 to n {
                 for j in 0 to q {
                     matrix_set(Yc, i, j, matrix_at(Yc, i, j) - t[i] * q_load[j] / t_norm)
@@ -796,7 +796,7 @@ export function pls_svd_fit(X: Matrix, Y: Matrix, n_components: i32) -> PLSSVD {
             let mut v_norm: f32 = 0.0
             for k in 0 to q { v_norm = v_norm + Cv[k] * Cv[k] }
             v_norm = sqrt((v_norm as f64)) as f32
-            if v_norm < 1e-10 { v_norm = 1e-10 }
+            if v_norm < 0.0000000001 { v_norm = 0.0000000001 }
             for k in 0 to q { Cv[k] = Cv[k] / v_norm }
 
             let CtCv: ptr<f32> = array_new_f32(p)
@@ -808,7 +808,7 @@ export function pls_svd_fit(X: Matrix, Y: Matrix, n_components: i32) -> PLSSVD {
             let mut u_norm: f32 = 0.0
             for j in 0 to p { u_norm = u_norm + CtCv[j] * CtCv[j] }
             u_norm = sqrt((u_norm as f64)) as f32
-            if u_norm < 1e-10 { u_norm = 1e-10 }
+            if u_norm < 0.0000000001 { u_norm = 0.0000000001 }
             for j in 0 to p { u[j] = CtCv[j] / u_norm }
 
             array_free_f32(Cv)
@@ -824,7 +824,7 @@ export function pls_svd_fit(X: Matrix, Y: Matrix, n_components: i32) -> PLSSVD {
         let mut v_norm: f32 = 0.0
         for k in 0 to q { v_norm = v_norm + v[k] * v[k] }
         v_norm = sqrt((v_norm as f64)) as f32
-        if v_norm < 1e-10 { v_norm = 1e-10 }
+        if v_norm < 0.0000000001 { v_norm = 0.0000000001 }
         for k in 0 to q { v[k] = v[k] / v_norm }
 
         x_weights[c] = u

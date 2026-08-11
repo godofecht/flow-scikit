@@ -80,7 +80,7 @@ function test_gaussian_nb() -> i32 {
     println("Test: GaussianNB")
     let data: Dataset = make_classification_data()
 
-    let nb: GaussianNB = gaussian_nb_fit(data.X, data.y, 2, 1e-9)
+    let nb: GaussianNB = gaussian_nb_fit(data.X, data.y, 2, 0.000000001)
     let preds: ptr<f32> = gaussian_nb_predict(nb, data.X)
 
     let acc: f32 = accuracy_score(data.y, preds, data.n_samples)
@@ -104,7 +104,7 @@ function test_kmeans() -> i32 {
     println("Test: KMeans")
     let data: Dataset = make_classification_data()
 
-    let km: KMeans = kmeans_fit(data.X, 2, 100, 1e-4, 42)
+    let km: KMeans = kmeans_fit(data.X, 2, 100, 0.0001, 42)
 
     let mut cluster0_label0: i32 = 0
     let mut cluster0_label1: i32 = 0

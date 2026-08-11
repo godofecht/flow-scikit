@@ -207,7 +207,7 @@ export function tfidf_vectorizer_transform(model: TfidfVectorizer, documents: pt
             norm = norm + tfidf * tfidf
         }
         norm = sqrt((norm as f64)) as f32
-        if norm > 1e-10 {
+        if norm > 0.0000000001 {
             for f in 0 to model.n_features {
                 matrix_set(counts, d, f, matrix_at(counts, d, f) / norm)
             }

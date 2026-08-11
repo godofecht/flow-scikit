@@ -40,14 +40,17 @@ export function knn_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, k: i3
         }
     }
 
-    return KNNClassifier {
-        X_train: matrix_copy(X),
-        y_train: array_copy_f32(y, X.rows),
+    let X_copy: Matrix = matrix_copy(X)
+    let y_copy: ptr<f32> = array_copy_f32(y, X.rows)
+    let result: KNNClassifier = KNNClassifier {
+        X_train: X_copy,
+        y_train: y_copy,
         classes: classes,
         n_classes: n_classes,
         k: k,
         fitted: true
     }
+    return result
 }
 
 export function knn_classifier_predict_proba(model: KNNClassifier, X: Matrix) -> Matrix {
@@ -60,7 +63,7 @@ export function knn_classifier_predict_proba(model: KNNClassifier, X: Matrix) ->
         }
 
         for j in 0 to model.k {
-            neighbors[j].distance = 1e30
+            neighbors[j].distance = 9999999999.0
             neighbors[j].label = 0.0
         }
 
@@ -133,12 +136,15 @@ export function knn_classifier_free(model: KNNClassifier) -> void {
 }
 
 export function knn_regressor_fit(X: Matrix, y: ptr<f32>, k: i32) -> KNNRegressor {
-    return KNNRegressor {
-        X_train: matrix_copy(X),
-        y_train: array_copy_f32(y, X.rows),
+    let X_copy: Matrix = matrix_copy(X)
+    let y_copy: ptr<f32> = array_copy_f32(y, X.rows)
+    let result: KNNRegressor = KNNRegressor {
+        X_train: X_copy,
+        y_train: y_copy,
         k: k,
         fitted: true
     }
+    return result
 }
 
 export function knn_regressor_predict(model: KNNRegressor, X: Matrix) -> ptr<f32> {
@@ -147,7 +153,7 @@ export function knn_regressor_predict(model: KNNRegressor, X: Matrix) -> ptr<f32
 
     for i in 0 to X.rows {
         for j in 0 to model.k {
-            neighbors[j].distance = 1e30
+            neighbors[j].distance = 9999999999.0
             neighbors[j].label = 0.0
         }
 
@@ -194,11 +200,13 @@ export struct NearestNeighbors {
 }
 
 export function nearest_neighbors_fit(X: Matrix, n_neighbors: i32) -> NearestNeighbors {
-    return NearestNeighbors {
-        X_train: matrix_copy(X),
+    let X_copy: Matrix = matrix_copy(X)
+    let result: NearestNeighbors = NearestNeighbors {
+        X_train: X_copy,
         n_neighbors: n_neighbors,
         fitted: true
     }
+    return result
 }
 
 export struct NeighborResult {
@@ -458,7 +466,7 @@ export function nearest_centroid_predict(model: NearestCentroid, X: Matrix) -> p
 
     for i in 0 to n {
         let mut best_c: i32 = 0
-        let mut best_dist: f32 = 1e30
+        let mut best_dist: f32 = 9999999999.0
         for c in 0 to model.n_classes {
             let mut s: f32 = 0.0
             for j in 0 to model.n_features {
@@ -540,7 +548,7 @@ export function local_outlier_factor_fit(X: Matrix, n_neighbors: i32) -> LocalOu
             if k_dist[j] > reach { reach = k_dist[j] }
             reach_sum = reach_sum + reach
         }
-        lrd[i] = (k as f32) / (reach_sum + 1e-10)
+        lrd[i] = (k as f32) / (reach_sum + 0.0000000001)
         array_free_f32(sorted)
     }
 
@@ -565,7 +573,7 @@ export function local_outlier_factor_fit(X: Matrix, n_neighbors: i32) -> LocalOu
         for j in 1 to k + 1 {
             sum_lrd = sum_lrd + lrd[indices[j]]
         }
-        lof[i] = sum_lrd / (k as f32) / (lrd[i] + 1e-10)
+        lof[i] = sum_lrd / (k as f32) / (lrd[i] + 0.0000000001)
         array_free_f32(sorted)
         free(indices as ptr<void>)
     }

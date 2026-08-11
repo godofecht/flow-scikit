@@ -40,7 +40,7 @@ export function gaussian_random_projection_fit(n_features: i32, n_components: i3
         for j in 0 to n_features {
             let r1: f32 = ((rand() % 10000) as f32) / 10000.0
             let r2: f32 = ((rand() % 10000) as f32) / 10000.0
-            if r1 < 1e-10 { r1 = 1e-10 }
+            if r1 < 0.0000000001 { r1 = 0.0000000001 }
             let z: f32 = sqrt((-2.0 * log((r1) as f64)) as f64) as f32 * cos((6.28318 * r2) as f64) as f32
             proj[c][j] = z * scale
         }

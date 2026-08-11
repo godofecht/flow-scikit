@@ -72,10 +72,10 @@ function _cholesky(K: ptr<f32>, n: i32, alpha: f32) -> ptr<f32> {
                 sum = sum - L[i * n + k] * L[j * n + k]
             }
             if i == j {
-                if sum < 1e-10 { sum = 1e-10 }
+                if sum < 0.0000000001 { sum = 0.0000000001 }
                 L[i * n + j] = sqrt((sum as f64)) as f32
             } else {
-                if L[j * n + j] < 1e-10 {
+                if L[j * n + j] < 0.0000000001 {
                     L[i * n + j] = 0.0
                 } else {
                     L[i * n + j] = sum / L[j * n + j]
@@ -94,7 +94,7 @@ function _forward_sub(L: ptr<f32>, b: ptr<f32>, n: i32) -> ptr<f32> {
         for j in 0 to i {
             sum = sum - L[i * n + j] * y[j]
         }
-        if L[i * n + i] < 1e-10 {
+        if L[i * n + i] < 0.0000000001 {
             y[i] = 0.0
         } else {
             y[i] = sum / L[i * n + i]
@@ -111,7 +111,7 @@ function _backward_sub(L: ptr<f32>, y: ptr<f32>, n: i32) -> ptr<f32> {
         for j in i + 1 to n {
             sum = sum - L[j * n + i] * x[j]
         }
-        if L[i * n + i] < 1e-10 {
+        if L[i * n + i] < 0.0000000001 {
             x[i] = 0.0
         } else {
             x[i] = sum / L[i * n + i]
@@ -150,9 +150,11 @@ export function gaussian_process_regressor_fit(
     array_free_f32(x_i)
     array_free_f32(x_j)
 
-    return GaussianProcessRegressor {
-        X_train: matrix_copy(X),
-        y_train: array_copy_f32(y, n),
+    let X_copy: Matrix = matrix_copy(X)
+    let y_copy: ptr<f32> = array_copy_f32(y, n)
+    let result: GaussianProcessRegressor = GaussianProcessRegressor {
+        X_train: X_copy,
+        y_train: y_copy,
         alpha: alpha,
         length_scale: length_scale,
         kernel_type: kernel_type,
@@ -161,6 +163,7 @@ export function gaussian_process_regressor_fit(
         L: L,
         fitted: true
     }
+    return result
 }
 
 export function gaussian_process_regressor_predict(model: GaussianProcessRegressor, X: Matrix) -> ptr<f32> {

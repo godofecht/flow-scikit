@@ -59,7 +59,7 @@ export function calibration_curve(
         let min_prob: f32 = array_min_val(y_prob, n)
         let max_prob: f32 = array_max_val(y_prob, n)
         let range: f32 = max_prob - min_prob
-        if range < 1e-10 {
+        if range < 0.0000000001 {
             range = 1.0
         }
         for i in 0 to n {

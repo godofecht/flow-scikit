@@ -45,7 +45,7 @@ function compute_joint_probabilities(dist: ptr<f32>, n: i32, perplexity: f32) ->
     let beta: f32 = 1.0
     let beta_min: f32 = 0.01
     let beta_max: f32 = 1000.0
-    let tol: f32 = 1e-4
+    let tol: f32 = 0.0001
     let max_iter: i32 = 50
 
     for i in 0 to n {
@@ -66,15 +66,15 @@ function compute_joint_probabilities(dist: ptr<f32>, n: i32, perplexity: f32) ->
                 }
             }
 
-            if sum_p < 1e-10 {
-                sum_p = 1e-10
+            if sum_p < 0.0000000001 {
+                sum_p = 0.0000000001
             }
 
             let mut entropy: f32 = 0.0
             for j in 0 to n {
                 if i != j {
                     let p: f32 = P[i * n + j] / sum_p
-                    if p > 1e-10 {
+                    if p > 0.0000000001 {
                         entropy = entropy - p * log(p as f64) as f32
                     }
                 }
@@ -158,8 +158,8 @@ export function tsne_fit(X: Matrix, n_components: i32, perplexity: f32, learning
             }
         }
 
-        if sum_Q < 1e-10 {
-            sum_Q = 1e-10
+        if sum_Q < 0.0000000001 {
+            sum_Q = 0.0000000001
         }
 
         for i in 0 to n {
@@ -229,13 +229,13 @@ export function tsne_fit(X: Matrix, n_components: i32, perplexity: f32, learning
                     }
                 }
             }
-            if sq < 1e-10 { sq = 1e-10 }
+            if sq < 0.0000000001 { sq = 0.0000000001 }
             for i in 0 to n {
                 for j in 0 to n {
                     if i != j {
                         let p: f32 = P[i * n + j]
                         let q: f32 = Q2[i * n + j] / sq
-                        if p > 1e-10 && q > 1e-10 {
+                        if p > 0.0000000001 && q > 0.0000000001 {
                             kl = kl + p * log((p / q) as f64) as f32
                         }
                     }
@@ -370,7 +370,7 @@ export function isomap_fit(X: Matrix, n_components: i32, n_neighbors: i32) -> Is
             let mut norm: f32 = 0.0
             for i in 0 to n { norm = norm + Bv[i] * Bv[i] }
             norm = sqrt((norm as f64)) as f32
-            if norm < 1e-10 { norm = 1e-10 }
+            if norm < 0.0000000001 { norm = 0.0000000001 }
             for i in 0 to n { v[i] = Bv[i] / norm }
             array_free_f32(Bv)
         }
@@ -459,7 +459,7 @@ export function lle_fit(X: Matrix, n_components: i32, n_neighbors: i32) -> LLE {
             W[i][indices[j]] = 1.0 / (k as f32)
             sum_w = sum_w + W[i][indices[j]]
         }
-        if sum_w > 1e-10 {
+        if sum_w > 0.0000000001 {
             for j in 0 to n { W[i][j] = W[i][j] / sum_w }
         }
 
@@ -497,7 +497,7 @@ export function lle_fit(X: Matrix, n_components: i32, n_neighbors: i32) -> LLE {
             let mut norm: f32 = 0.0
             for i in 0 to n { norm = norm + Mv[i] * Mv[i] }
             norm = sqrt((norm as f64)) as f32
-            if norm < 1e-10 { norm = 1e-10 }
+            if norm < 0.0000000001 { norm = 0.0000000001 }
             for i in 0 to n { v[i] = Mv[i] / norm }
             array_free_f32(Mv)
         }
@@ -566,7 +566,7 @@ export function spectral_embedding_fit(X: Matrix, n_components: i32, gamma: f32)
     let deg: ptr<f32> = array_new_f32(n)
     for i in 0 to n {
         for j in 0 to n { deg[i] = deg[i] + W[i][j] }
-        if deg[i] < 1e-10 { deg[i] = 1e-10 }
+        if deg[i] < 0.0000000001 { deg[i] = 0.0000000001 }
     }
 
     let L: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
@@ -594,7 +594,7 @@ export function spectral_embedding_fit(X: Matrix, n_components: i32, gamma: f32)
             let mut norm: f32 = 0.0
             for i in 0 to n { norm = norm + Lv[i] * Lv[i] }
             norm = sqrt((norm as f64)) as f32
-            if norm < 1e-10 { norm = 1e-10 }
+            if norm < 0.0000000001 { norm = 0.0000000001 }
             for i in 0 to n { v[i] = Lv[i] / norm }
             array_free_f32(Lv)
         }
@@ -683,7 +683,7 @@ export function mds_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f32, s
                     d_hat = d_hat + d * d
                 }
                 d_hat = sqrt((d_hat as f64)) as f32
-                if d_hat < 1e-10 { d_hat = 1e-10 }
+                if d_hat < 0.0000000001 { d_hat = 0.0000000001 }
 
                 let delta: f32 = D[i][j] - d_hat
                 stress = stress + delta * delta
