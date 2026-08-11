@@ -266,3 +266,92 @@ export function additive_chi2_sampler_transform(model: AdditiveChi2Sampler, X: M
 
 export function additive_chi2_sampler_free(model: AdditiveChi2Sampler) -> void {
 }
+
+# ============================================================================
+# SkewedChi2Sampler
+# Approximates feature map of the "skewed chi-squared" kernel via Monte Carlo.
+# ============================================================================
+
+export struct SkewedChi2Sampler {
+    random_weights: ptr<ptr<f32> >,
+    offset: ptr<f32>,
+    skewedness: f32,
+    n_components: i32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function skewed_chi2_sampler_fit(n_features: i32, skewedness: f32, n_components: i32, seed: i32) -> SkewedChi2Sampler {
+    srand(seed)
+
+    let weights: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+    let mut c: i32 = 0
+    while c < n_components {
+        weights[c] = array_new_f32(n_features)
+        let mut j: i32 = 0
+        while j < n_features {
+            let r1: f32 = ((rand() % 10000) as f32) / 10000.0
+            let r2: f32 = ((rand() % 10000) as f32) / 10000.0
+            let u1: f32 = r1
+            if u1 < 0.0000000001 { u1 = 0.0000000001 }
+            let z: f32 = sqrt((-2.0 * log(u1 as f64)) as f64) as f32 * cos((6.28318 * r2) as f64) as f32
+            weights[c][j] = z
+            j = j + 1
+        }
+        c = c + 1
+    }
+
+    let offset: ptr<f32> = array_new_f32(n_components)
+    c = 0
+    while c < n_components {
+        offset[c] = ((rand() % 10000) as f32) / 10000.0 * 6.28318
+        c = c + 1
+    }
+
+    let result: SkewedChi2Sampler = SkewedChi2Sampler {
+        random_weights: weights,
+        offset: offset,
+        skewedness: skewedness,
+        n_components: n_components,
+        n_features: n_features,
+        fitted: true
+    }
+    return result
+}
+
+export function skewed_chi2_sampler_transform(model: SkewedChi2Sampler, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let result: Matrix = matrix_new(n, model.n_components)
+    let scale: f32 = sqrt((2.0 / (model.n_components as f32)) as f64) as f32
+
+    let mut i: i32 = 0
+    while i < n {
+        let mut c: i32 = 0
+        while c < model.n_components {
+            let mut dot: f32 = 0.0
+            let mut j: i32 = 0
+            while j < model.n_features {
+                let x: f32 = matrix_at(X, i, j)
+                let val: f32 = log((x + model.skewedness) as f64) as f32
+                if x + model.skewedness > 0.0 {
+                    dot = dot + val * model.random_weights[c][j]
+                }
+                j = j + 1
+            }
+            matrix_set(result, i, c, scale * cos((dot + model.offset[c]) as f64) as f32)
+            c = c + 1
+        }
+        i = i + 1
+    }
+    return result
+}
+
+export function skewed_chi2_sampler_free(model: SkewedChi2Sampler) -> void {
+    let mut c: i32 = 0
+    while c < model.n_components {
+        array_free_f32(model.random_weights[c])
+        c = c + 1
+    }
+    free(model.random_weights as ptr<void>)
+    array_free_f32(model.offset)
+}

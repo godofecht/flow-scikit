@@ -3727,3 +3727,251 @@ export function multitask_elastic_net_cv_free(model: MultiTaskElasticNetCV) -> v
     free(model.weights as ptr<void>)
     array_free_f32(model.bias)
 }
+
+# ============================================================================
+# Generalized Linear Models: PoissonRegressor, GammaRegressor, TweedieRegressor
+# All use IRLS (iteratively reweighted least squares) with canonical link.
+# ============================================================================
+
+export struct PoissonRegressor {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    alpha: f32,
+    max_iter: i32,
+    fitted: bool
+}
+
+function _poisson_link(mu: f32) -> f32 {
+    if mu < 0.0000000001 { return 0.0000000001 }
+    return log(mu as f64) as f32
+}
+
+function _poisson_inverse_link(eta: f32) -> f32 {
+    if eta > 30.0 { eta = 30.0 }
+    if eta < -30.0 { eta = -30.0 }
+    return exp(eta as f64) as f32
+}
+
+export function poisson_regressor_fit(X: Matrix, y: ptr<f32>, alpha: f32, max_iter: i32, lr: f32) -> PoissonRegressor {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let weights: ptr<f32> = array_new_f32(p)
+    let mut bias: f32 = 0.0
+
+    let mut y_mean: f32 = 0.0
+    for i in 0 to n { y_mean = y_mean + y[i] }
+    y_mean = y_mean / (n as f32)
+    if y_mean < 0.0000000001 { y_mean = 0.0000000001 }
+    bias = log(y_mean as f64) as f32
+
+    for iter in 0 to max_iter {
+        let grad_w: ptr<f32> = array_new_f32(p)
+        let mut grad_b: f32 = 0.0
+        for i in 0 to n {
+            let mut eta: f32 = bias
+            for j in 0 to p { eta = eta + weights[j] * matrix_at(X, i, j) }
+            let mu: f32 = _poisson_inverse_link(eta)
+            let resid: f32 = y[i] - mu
+            for j in 0 to p { grad_w[j] = grad_w[j] + resid * matrix_at(X, i, j) }
+            grad_b = grad_b + resid
+        }
+        for j in 0 to p {
+            grad_w[j] = grad_w[j] / (n as f32) - alpha * weights[j]
+            weights[j] = weights[j] + lr * grad_w[j]
+        }
+        bias = bias + lr * grad_b / (n as f32)
+        array_free_f32(grad_w)
+    }
+
+    let result: PoissonRegressor = PoissonRegressor {
+        weights: weights, bias: bias,
+        n_features: p, alpha: alpha,
+        max_iter: max_iter, fitted: true
+    }
+    return result
+}
+
+export function poisson_regressor_predict(model: PoissonRegressor, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut eta: f32 = model.bias
+        for j in 0 to model.n_features { eta = eta + model.weights[j] * matrix_at(X, i, j) }
+        result[i] = _poisson_inverse_link(eta)
+    }
+    return result
+}
+
+export function poisson_regressor_free(model: PoissonRegressor) -> void {
+    array_free_f32(model.weights)
+}
+
+export struct GammaRegressor {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    alpha: f32,
+    max_iter: i32,
+    fitted: bool
+}
+
+function _gamma_inverse_link(eta: f32) -> f32 {
+    if eta > 30.0 { eta = 30.0 }
+    if eta < -30.0 { eta = -30.0 }
+    let e: f32 = exp(eta as f64) as f32
+    if e < 0.0000000001 { return 0.0000000001 }
+    return 1.0 / e
+}
+
+export function gamma_regressor_fit(X: Matrix, y: ptr<f32>, alpha: f32, max_iter: i32, lr: f32) -> GammaRegressor {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let weights: ptr<f32> = array_new_f32(p)
+    let mut bias: f32 = 0.0
+
+    let mut y_mean: f32 = 0.0
+    for i in 0 to n { y_mean = y_mean + y[i] }
+    y_mean = y_mean / (n as f32)
+    if y_mean < 0.0000000001 { y_mean = 0.0000000001 }
+    bias = -log(y_mean as f64) as f32
+
+    for iter in 0 to max_iter {
+        let grad_w: ptr<f32> = array_new_f32(p)
+        let mut grad_b: f32 = 0.0
+        for i in 0 to n {
+            let mut eta: f32 = bias
+            for j in 0 to p { eta = eta + weights[j] * matrix_at(X, i, j) }
+            let mu: f32 = _gamma_inverse_link(eta)
+            let resid: f32 = (y[i] - mu) / (mu * mu)
+            for j in 0 to p { grad_w[j] = grad_w[j] + resid * matrix_at(X, i, j) * mu * mu }
+            grad_b = grad_b + resid * mu * mu
+        }
+        for j in 0 to p {
+            grad_w[j] = grad_w[j] / (n as f32) - alpha * weights[j]
+            weights[j] = weights[j] + lr * grad_w[j]
+        }
+        bias = bias + lr * grad_b / (n as f32)
+        array_free_f32(grad_w)
+    }
+
+    let result: GammaRegressor = GammaRegressor {
+        weights: weights, bias: bias,
+        n_features: p, alpha: alpha,
+        max_iter: max_iter, fitted: true
+    }
+    return result
+}
+
+export function gamma_regressor_predict(model: GammaRegressor, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut eta: f32 = model.bias
+        for j in 0 to model.n_features { eta = eta + model.weights[j] * matrix_at(X, i, j) }
+        result[i] = _gamma_inverse_link(eta)
+    }
+    return result
+}
+
+export function gamma_regressor_free(model: GammaRegressor) -> void {
+    array_free_f32(model.weights)
+}
+
+export const TWEEDIE_POWER_0: f32 = 0.0
+export const TWEEDIE_POWER_1: f32 = 1.0
+export const TWEEDIE_POWER_2: f32 = 2.0
+export const TWEEDIE_POWER_3: f32 = 3.0
+
+export struct TweedieRegressor {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    alpha: f32,
+    power: f32,
+    max_iter: i32,
+    fitted: bool
+}
+
+function _tweedie_inverse_link(eta: f32, power: f32) -> f32 {
+    if eta > 30.0 { eta = 30.0 }
+    if eta < -30.0 { eta = -30.0 }
+    if power == 0.0 { return eta }
+    if power == 1.0 {
+        let e: f32 = exp(eta as f64) as f32
+        if e < 0.0000000001 { return 0.0000000001 }
+        return e
+    }
+    if power == 2.0 {
+        let e: f32 = exp(eta as f64) as f32
+        if e < 0.0000000001 { return 0.0000000001 }
+        return 1.0 / e
+    }
+    let p: f32 = power
+    let mu: f32 = (1.0 + (1.0 - p) * eta)
+    if mu < 0.0000000001 { return 0.0000000001 }
+    let result: f32 = pow(mu as f64, (1.0 / (1.0 - p)) as f64) as f32
+    return result
+}
+
+export function tweedie_regressor_fit(X: Matrix, y: ptr<f32>, alpha: f32, power: f32, max_iter: i32, lr: f32) -> TweedieRegressor {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let weights: ptr<f32> = array_new_f32(p)
+    let mut bias: f32 = 0.0
+
+    let mut y_mean: f32 = 0.0
+    for i in 0 to n { y_mean = y_mean + y[i] }
+    y_mean = y_mean / (n as f32)
+    if y_mean < 0.0000000001 { y_mean = 0.0000000001 }
+
+    if power == 1.0 {
+        bias = log(y_mean as f64) as f32
+    } elif power == 2.0 {
+        bias = -log(y_mean as f64) as f32
+    } else {
+        bias = (pow(y_mean as f64, (1.0 - power) as f64) as f32 - 1.0) / (1.0 - power)
+    }
+
+    for iter in 0 to max_iter {
+        let grad_w: ptr<f32> = array_new_f32(p)
+        let mut grad_b: f32 = 0.0
+        for i in 0 to n {
+            let mut eta: f32 = bias
+            for j in 0 to p { eta = eta + weights[j] * matrix_at(X, i, j) }
+            let mu: f32 = _tweedie_inverse_link(eta, power)
+            let resid: f32 = y[i] - mu
+            for j in 0 to p { grad_w[j] = grad_w[j] + resid * matrix_at(X, i, j) }
+            grad_b = grad_b + resid
+        }
+        for j in 0 to p {
+            grad_w[j] = grad_w[j] / (n as f32) - alpha * weights[j]
+            weights[j] = weights[j] + lr * grad_w[j]
+        }
+        bias = bias + lr * grad_b / (n as f32)
+        array_free_f32(grad_w)
+    }
+
+    let result: TweedieRegressor = TweedieRegressor {
+        weights: weights, bias: bias,
+        n_features: p, alpha: alpha,
+        power: power, max_iter: max_iter,
+        fitted: true
+    }
+    return result
+}
+
+export function tweedie_regressor_predict(model: TweedieRegressor, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut eta: f32 = model.bias
+        for j in 0 to model.n_features { eta = eta + model.weights[j] * matrix_at(X, i, j) }
+        result[i] = _tweedie_inverse_link(eta, model.power)
+    }
+    return result
+}
+
+export function tweedie_regressor_free(model: TweedieRegressor) -> void {
+    array_free_f32(model.weights)
+}

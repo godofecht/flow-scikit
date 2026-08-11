@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### Final parity batch: 21 missing APIs
+
+- Added `PoissonRegressor`, `GammaRegressor`, `TweedieRegressor` to
+  `linear.flow`. Generalized linear models with canonical link functions
+  (log, inverse, power) trained via gradient descent.
+- Added `RandomTreesEmbedding` to `ensemble.flow`. Transforms data into
+  sparse one-hot leaf indicator using an ensemble of random trees.
+- Added `LabelBinarizer` to `preprocessing.flow`. Binarizes labels in
+  one-vs-all fashion with configurable positive/negative labels and
+  inverse transform.
+- Added `chi2`, `f_classif`, `f_regression` to `feature_selection.flow`.
+  Statistical test scorers returning `Chi2Result` / `FResult` structs with
+  scores and p-values.
+- Added `GroupShuffleSplit` to `model_selection.flow`. Shuffle-Group(s)-Out
+  cross-validation iterator that holds out entire groups at random.
+- Added `silhouette_samples` to `metrics.flow`. Per-sample silhouette
+  coefficients.
+- Added `rand_score` to `metrics.flow`. Unadjusted Rand Index.
+- Added `estimate_bandwidth` to `cluster.flow`. Bandwidth estimator for
+  MeanShift using pairwise distance quantiles.
+- Added `kmeans_plusplus_init` to `cluster.flow`. K-Means++ cluster center
+  initialization.
+- Added `FeatureUnion` to `compose.flow`. Concatenates outputs of multiple
+  transformers (StandardScaler, MinMaxScaler, passthrough, polynomial).
+- Added `SkewedChi2Sampler` to `kernel_approximation.flow`. Monte Carlo
+  approximation of the skewed chi-squared kernel feature map.
+- Added `johnson_lindenstrauss_min_dim` to `random_projection.flow`.
+  Computes the minimal embedding dimension for the Johnson-Lindenstrauss
+  lemma.
+- Added `MissingIndicator` to `impute.flow`. Binary indicator matrix for
+  missing values.
+- Added `load_digits`, `load_wine`, `load_breast_cancer`, `load_diabetes`
+  to `datasets.flow`. Synthetic versions of the standard sklearn toy
+  datasets with matching dimensions and class counts.
+
 ### Tooling
 
 - Added `tools/run_all.py` to run every test and example with a single

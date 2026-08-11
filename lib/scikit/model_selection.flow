@@ -2089,3 +2089,125 @@ export function leave_p_group_out_split(groups: ptr<f32>, n: i32, p: i32) -> Gro
     }
     return result
 }
+
+# ============================================================================
+# GroupShuffleSplit
+# Shuffle-Group(s)-Out cross-validation iterator.
+# ============================================================================
+
+export struct GroupShuffleSplit {
+    n_splits: i32,
+    test_size: f32,
+    seed: i32
+}
+
+export function group_shuffle_split_init(n_splits: i32, test_size: f32, seed: i32) -> GroupShuffleSplit {
+    let result: GroupShuffleSplit = GroupShuffleSplit {
+        n_splits: n_splits, test_size: test_size, seed: seed
+    }
+    return result
+}
+
+export function group_shuffle_split_get_split(
+    gss: GroupShuffleSplit, groups: ptr<i32>, n: i32, n_groups: i32, split: i32
+) -> TrainTestSplit {
+    let unique_groups: ptr<i32> = malloc((n_groups as i64) * 4) as ptr<i32>
+    let mut n_found: i32 = 0
+    let mut i: i32 = 0
+    while i < n {
+        let mut found: bool = false
+        let mut k: i32 = 0
+        while k < n_found {
+            if unique_groups[k] == groups[i] { found = true }
+            k = k + 1
+        }
+        if not found {
+            unique_groups[n_found] = groups[i]
+            n_found = n_found + 1
+        }
+        i = i + 1
+    }
+
+    let n_test_groups: i32 = ((n_found as f32) * gss.test_size) as i32
+    if n_test_groups < 1 { n_test_groups = 1 }
+    let n_train_groups: i32 = n_found - n_test_groups
+
+    srand(gss.seed + split)
+
+    let perm: ptr<i32> = malloc((n_found as i64) * 4) as ptr<i32>
+    i = 0
+    while i < n_found {
+        perm[i] = i
+        i = i + 1
+    }
+    i = n_found - 1
+    while i > 0 {
+        let j: i32 = rand() % (i + 1)
+        let tmp: i32 = perm[i]
+        perm[i] = perm[j]
+        perm[j] = tmp
+        i = i - 1
+    }
+
+    let is_test_group: ptr<i32> = malloc((n_found as i64) * 4) as ptr<i32>
+    i = 0
+    while i < n_found {
+        is_test_group[i] = 0
+        i = i + 1
+    }
+    i = 0
+    while i < n_test_groups {
+        is_test_group[perm[i]] = 1
+        i = i + 1
+    }
+
+    let mut n_test: i32 = 0
+    i = 0
+    while i < n {
+        let mut g_idx: i32 = 0
+        let mut found: bool = false
+        while g_idx < n_found && not found {
+            if unique_groups[g_idx] == groups[i] { found = true }
+            else { g_idx = g_idx + 1 }
+        }
+        if is_test_group[g_idx] == 1 { n_test = n_test + 1 }
+        i = i + 1
+    }
+
+    let n_train: i32 = n - n_test
+
+    let X_train: Matrix = matrix_new(n_train, 0)
+    let X_test: Matrix = matrix_new(n_test, 0)
+    let y_train: ptr<f32> = array_new_f32(n_train)
+    let y_test: ptr<f32> = array_new_f32(n_test)
+
+    let mut train_pos: i32 = 0
+    let mut test_pos: i32 = 0
+    i = 0
+    while i < n {
+        let mut g_idx: i32 = 0
+        let mut found: bool = false
+        while g_idx < n_found && not found {
+            if unique_groups[g_idx] == groups[i] { found = true }
+            else { g_idx = g_idx + 1 }
+        }
+        if is_test_group[g_idx] == 1 {
+            y_test[test_pos] = 0.0
+            test_pos = test_pos + 1
+        } else {
+            y_train[train_pos] = 0.0
+            train_pos = train_pos + 1
+        }
+        i = i + 1
+    }
+
+    free(unique_groups as ptr<void>)
+    free(perm as ptr<void>)
+    free(is_test_group as ptr<void>)
+
+    let result: TrainTestSplit = TrainTestSplit {
+        X_train: X_train, y_train: y_train, n_train: n_train,
+        X_test: X_test, y_test: y_test, n_test: n_test
+    }
+    return result
+}

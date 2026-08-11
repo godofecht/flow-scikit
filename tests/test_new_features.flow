@@ -1496,6 +1496,520 @@ function test_group_cv() -> i32 {
     return 0
 }
 
+function test_glm_regressors() -> i32 {
+    println("Test: PoissonRegressor / GammaRegressor / TweedieRegressor")
+    let data: Dataset = make_regression(50, 3, 3, 0.5, 5.0, 42)
+    let y_pos: ptr<f32> = array_new_f32(50)
+    let mut i: i32 = 0
+    while i < 50 {
+        let v: f32 = data.y[i]
+        if v < 0.1 { v = 0.1 }
+        y_pos[i] = v
+        i = i + 1
+    }
+
+    let pois: PoissonRegressor = poisson_regressor_fit(data.X, y_pos, 0.01, 200, 0.01)
+    let pois_pred: ptr<f32> = poisson_regressor_predict(pois, data.X)
+    let mut pois_ok: bool = true
+    i = 0
+    while i < 50 {
+        if pois_pred[i] < 0.0 { pois_ok = false }
+        i = i + 1
+    }
+    if not pois_ok {
+        println("  FAIL: PoissonRegressor produced negative predictions")
+        poisson_regressor_free(pois)
+        array_free_f32(pois_pred)
+        array_free_f32(y_pos)
+        dataset_free(data)
+        return 1
+    }
+    poisson_regressor_free(pois)
+    array_free_f32(pois_pred)
+
+    let gamma: GammaRegressor = gamma_regressor_fit(data.X, y_pos, 0.01, 200, 0.01)
+    let gamma_pred: ptr<f32> = gamma_regressor_predict(gamma, data.X)
+    let mut gamma_ok: bool = true
+    i = 0
+    while i < 50 {
+        if gamma_pred[i] < 0.0 { gamma_ok = false }
+        i = i + 1
+    }
+    if not gamma_ok {
+        println("  FAIL: GammaRegressor produced negative predictions")
+        gamma_regressor_free(gamma)
+        array_free_f32(gamma_pred)
+        array_free_f32(y_pos)
+        dataset_free(data)
+        return 1
+    }
+    gamma_regressor_free(gamma)
+    array_free_f32(gamma_pred)
+
+    let tweedie: TweedieRegressor = tweedie_regressor_fit(data.X, y_pos, 0.01, 1.0, 200, 0.01)
+    let tweedie_pred: ptr<f32> = tweedie_regressor_predict(tweedie, data.X)
+    let mut tweedie_ok: bool = true
+    i = 0
+    while i < 50 {
+        if tweedie_pred[i] < 0.0 { tweedie_ok = false }
+        i = i + 1
+    }
+    if not tweedie_ok {
+        println("  FAIL: TweedieRegressor produced negative predictions")
+        tweedie_regressor_free(tweedie)
+        array_free_f32(tweedie_pred)
+        array_free_f32(y_pos)
+        dataset_free(data)
+        return 1
+    }
+    tweedie_regressor_free(tweedie)
+    array_free_f32(tweedie_pred)
+
+    println("  OK: all GLM regressors produce non-negative predictions")
+    array_free_f32(y_pos)
+    dataset_free(data)
+    return 0
+}
+
+function test_random_trees_embedding() -> i32 {
+    println("Test: RandomTreesEmbedding")
+    let data: Dataset = make_classification(40, 4, 2, 2, 0, 1.0, 42)
+    let rte: RandomTreesEmbedding = random_trees_embedding_fit(data.X, 5, 3, 42)
+    let embedded: Matrix = random_trees_embedding_transform(rte, data.X)
+
+    if embedded.cols < 1 {
+        println("  FAIL: embedding has no columns")
+        random_trees_embedding_free(rte)
+        matrix_free(embedded)
+        dataset_free(data)
+        return 1
+    }
+
+    let mut nnz: i32 = 0
+    let mut i: i32 = 0
+    while i < embedded.rows {
+        let mut j: i32 = 0
+        while j < embedded.cols {
+            if matrix_at(embedded, i, j) > 0.5 { nnz = nnz + 1 }
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    if nnz != embedded.rows * 5 {
+        println("  FAIL: each sample should activate exactly one leaf per tree")
+        random_trees_embedding_free(rte)
+        matrix_free(embedded)
+        dataset_free(data)
+        return 1
+    }
+
+    print("  OK: embedding ")
+    print(embedded.cols)
+    print(" cols, ")
+    print(nnz)
+    println(" nonzeros")
+    random_trees_embedding_free(rte)
+    matrix_free(embedded)
+    dataset_free(data)
+    return 0
+}
+
+function test_label_binarizer() -> i32 {
+    println("Test: LabelBinarizer")
+    let y: ptr<f32> = array_new_f32(6)
+    y[0] = 0.0; y[1] = 1.0; y[2] = 2.0; y[3] = 0.0; y[4] = 1.0; y[5] = 2.0
+
+    let lb: LabelBinarizer = label_binarizer_fit(y, 6, 0.0, 1.0)
+    let Y: Matrix = label_binarizer_transform(lb, y, 6)
+
+    if lb.n_classes != 3 {
+        println("  FAIL: expected 3 classes")
+        label_binarizer_free(lb)
+        matrix_free(Y)
+        array_free_f32(y)
+        return 1
+    }
+
+    if matrix_at(Y, 0, 0) != 1.0 || matrix_at(Y, 0, 1) != 0.0 || matrix_at(Y, 0, 2) != 0.0 {
+        println("  FAIL: row 0 should be [1, 0, 0]")
+        label_binarizer_free(lb)
+        matrix_free(Y)
+        array_free_f32(y)
+        return 1
+    }
+
+    if matrix_at(Y, 1, 0) != 0.0 || matrix_at(Y, 1, 1) != 1.0 || matrix_at(Y, 1, 2) != 0.0 {
+        println("  FAIL: row 1 should be [0, 1, 0]")
+        label_binarizer_free(lb)
+        matrix_free(Y)
+        array_free_f32(y)
+        return 1
+    }
+
+    let inv: ptr<f32> = label_binarizer_inverse_transform(lb, Y, 6)
+    let mut inv_ok: bool = true
+    let mut i: i32 = 0
+    while i < 6 {
+        if inv[i] != y[i] { inv_ok = false }
+        i = i + 1
+    }
+    if not inv_ok {
+        println("  FAIL: inverse transform does not match original")
+        label_binarizer_free(lb)
+        matrix_free(Y)
+        array_free_f32(inv)
+        array_free_f32(y)
+        return 1
+    }
+
+    println("  OK: 3 classes, transform and inverse correct")
+    label_binarizer_free(lb)
+    matrix_free(Y)
+    array_free_f32(inv)
+    array_free_f32(y)
+    return 0
+}
+
+function test_chi2_f_classif_f_regression() -> i32 {
+    println("Test: chi2 / f_classif / f_regression")
+    let data: Dataset = make_classification(50, 5, 2, 3, 0, 2.0, 42)
+
+    let chi2_res: Chi2Result = chi2(data.X, data.y)
+    let mut chi2_ok: bool = true
+    let mut i: i32 = 0
+    while i < 5 {
+        if chi2_res.scores[i] < 0.0 { chi2_ok = false }
+        i = i + 1
+    }
+    if not chi2_ok {
+        println("  FAIL: chi2 scores should be non-negative")
+        chi2_result_free(chi2_res)
+        dataset_free(data)
+        return 1
+    }
+    chi2_result_free(chi2_res)
+
+    let fclassif_res: FResult = f_classif(data.X, data.y)
+    let mut fclassif_ok: bool = true
+    i = 0
+    while i < 5 {
+        if fclassif_res.scores[i] < 0.0 { fclassif_ok = false }
+        i = i + 1
+    }
+    if not fclassif_ok {
+        println("  FAIL: f_classif scores should be non-negative")
+        f_result_free(fclassif_res)
+        dataset_free(data)
+        return 1
+    }
+    f_result_free(fclassif_res)
+
+    let reg_data: Dataset = make_regression(50, 5, 3, 0.5, 1.0, 42)
+    let freg_res: FResult = f_regression(reg_data.X, reg_data.y)
+    let mut freg_ok: bool = true
+    i = 0
+    while i < 5 {
+        if freg_res.scores[i] < 0.0 { freg_ok = false }
+        i = i + 1
+    }
+    if not freg_ok {
+        println("  FAIL: f_regression scores should be non-negative")
+        f_result_free(freg_res)
+        dataset_free(data)
+        dataset_free(reg_data)
+        return 1
+    }
+    f_result_free(freg_res)
+
+    println("  OK: all scoring functions return non-negative scores")
+    dataset_free(data)
+    dataset_free(reg_data)
+    return 0
+}
+
+function test_group_shuffle_split() -> i32 {
+    println("Test: GroupShuffleSplit")
+    let n: i32 = 20
+    let groups: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let mut i: i32 = 0
+    while i < n {
+        groups[i] = i / 5
+        i = i + 1
+    }
+
+    let gss: GroupShuffleSplit = group_shuffle_split_init(3, 0.5, 42)
+    let split0: TrainTestSplit = group_shuffle_split_get_split(gss, groups, n, 4, 0)
+
+    if split0.n_train + split0.n_test != n {
+        println("  FAIL: train + test should equal n")
+        free(groups as ptr<void>)
+        train_test_split_free(split0)
+        return 1
+    }
+
+    if split0.n_test == 0 || split0.n_train == 0 {
+        println("  FAIL: split should have both train and test")
+        free(groups as ptr<void>)
+        train_test_split_free(split0)
+        return 1
+    }
+
+    print("  OK: split 0 has ")
+    print(split0.n_train)
+    print(" train, ")
+    print(split0.n_test)
+    println(" test")
+    free(groups as ptr<void>)
+    train_test_split_free(split0)
+    return 0
+}
+
+function test_silhouette_samples_rand_score() -> i32 {
+    println("Test: silhouette_samples / rand_score")
+    let data: Dataset = make_blobs(30, 2, 3, 0.5, -5.0, 5.0, 42)
+    let km: KMeans = kmeans_fit(data.X, 3, 50, 0.001, 42)
+    let preds: ptr<f32> = kmeans_predict(km, data.X)
+
+    let labels: ptr<i32> = malloc((30 as i64) * 4) as ptr<i32>
+    let mut i: i32 = 0
+    while i < 30 {
+        labels[i] = preds[i] as i32
+        i = i + 1
+    }
+
+    let sil_samples: ptr<f32> = silhouette_samples(data.X, labels, 30)
+    let mut sil_ok: bool = true
+    i = 0
+    while i < 30 {
+        if sil_samples[i] < -1.01 || sil_samples[i] > 1.01 { sil_ok = false }
+        i = i + 1
+    }
+    if not sil_ok {
+        println("  FAIL: silhouette samples should be in [-1, 1]")
+        array_free_f32(sil_samples)
+        free(labels as ptr<void>)
+        array_free_f32(preds)
+        kmeans_free(km)
+        dataset_free(data)
+        return 1
+    }
+    array_free_f32(sil_samples)
+
+    let rs: f32 = rand_score(data.y, preds, 30)
+    if rs < 0.0 || rs > 1.01 {
+        println("  FAIL: rand_score should be in [0, 1]")
+        free(labels as ptr<void>)
+        array_free_f32(preds)
+        kmeans_free(km)
+        dataset_free(data)
+        return 1
+    }
+
+    print("  OK: rand_score = ")
+    print(rs)
+    println("")
+    free(labels as ptr<void>)
+    array_free_f32(preds)
+    kmeans_free(km)
+    dataset_free(data)
+    return 0
+}
+
+function test_estimate_bandwidth_kmeans_pp() -> i32 {
+    println("Test: estimate_bandwidth / kmeans_plusplus_init")
+    let data: Dataset = make_blobs(50, 2, 3, 0.5, -5.0, 5.0, 42)
+
+    let bw: f32 = estimate_bandwidth(data.X, 0.3, 20, 42)
+    if bw <= 0.0 {
+        println("  FAIL: bandwidth should be positive")
+        dataset_free(data)
+        return 1
+    }
+
+    let centers: Matrix = kmeans_plusplus_init(data.X, 3, 42)
+    if centers.rows != 3 {
+        println("  FAIL: kmeans++ should return 3 centers")
+        matrix_free(centers)
+        dataset_free(data)
+        return 1
+    }
+
+    let mut is_distinct: bool = false
+    if matrix_at(centers, 0, 0) != matrix_at(centers, 1, 0) { is_distinct = true }
+    if matrix_at(centers, 1, 0) != matrix_at(centers, 2, 0) { is_distinct = true }
+    if not is_distinct {
+        println("  FAIL: kmeans++ centers should be distinct")
+        matrix_free(centers)
+        dataset_free(data)
+        return 1
+    }
+
+    print("  OK: bandwidth = ")
+    print(bw)
+    print(", kmeans++ 3 distinct centers")
+    println("")
+    matrix_free(centers)
+    dataset_free(data)
+    return 0
+}
+
+function test_feature_union() -> i32 {
+    println("Test: FeatureUnion")
+    let data: Dataset = make_regression(20, 3, 3, 0.1, 1.0, 42)
+
+    let fu: FeatureUnion = feature_union_init(2)
+    feature_union_set_transformer(fu, 0, FU_TRANSFORMER_STANDARD_SCALER, 0)
+    feature_union_set_transformer(fu, 1, FU_TRANSFORMER_PASSTHROUGH, 0)
+    let fu_fitted: FeatureUnion = feature_union_fit(fu, data.X)
+    let result: Matrix = feature_union_transform(fu_fitted, data.X)
+
+    if result.cols != 6 {
+        println("  FAIL: expected 6 output features (3+3)")
+        feature_union_free(fu_fitted)
+        matrix_free(result)
+        dataset_free(data)
+        return 1
+    }
+
+    print("  OK: FeatureUnion produces ")
+    print(result.cols)
+    println(" features")
+    feature_union_free(fu_fitted)
+    matrix_free(result)
+    dataset_free(data)
+    return 0
+}
+
+function test_skewed_chi2_sampler() -> i32 {
+    println("Test: SkewedChi2Sampler")
+    let sampler: SkewedChi2Sampler = skewed_chi2_sampler_fit(4, 1.0, 10, 42)
+    let X: Matrix = matrix_new(5, 4)
+    let mut i: i32 = 0
+    while i < 5 {
+        let mut j: i32 = 0
+        while j < 4 {
+            matrix_set(X, i, j, 1.0 + ((i + j) as f32) * 0.1)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    let result: Matrix = skewed_chi2_sampler_transform(sampler, X)
+
+    if result.rows != 5 || result.cols != 10 {
+        println("  FAIL: expected 5x10 output")
+        skewed_chi2_sampler_free(sampler)
+        matrix_free(result)
+        matrix_free(X)
+        return 1
+    }
+
+    println("  OK: SkewedChi2Sampler 5x10 output")
+    skewed_chi2_sampler_free(sampler)
+    matrix_free(result)
+    matrix_free(X)
+    return 0
+}
+
+function test_johnson_lindenstrauss() -> i32 {
+    println("Test: johnson_lindenstrauss_min_dim")
+    let dim: i32 = johnson_lindenstrauss_min_dim(100, 0.1)
+    if dim <= 0 {
+        println("  FAIL: JL min dim should be positive")
+        return 1
+    }
+
+    let dim2: i32 = johnson_lindenstrauss_min_dim(1000, 0.05)
+    if dim2 <= dim {
+        println("  FAIL: smaller eps should require more dimensions")
+        return 1
+    }
+
+    print("  OK: JL(100, 0.1) = ")
+    print(dim)
+    print(", JL(1000, 0.05) = ")
+    print(dim2)
+    println("")
+    return 0
+}
+
+function test_missing_indicator() -> i32 {
+    println("Test: MissingIndicator")
+    let X: Matrix = matrix_new(4, 3)
+    matrix_set(X, 0, 0, 1.0); matrix_set(X, 0, 1, 2.0); matrix_set(X, 0, 2, -999999.0)
+    matrix_set(X, 1, 0, -999999.0); matrix_set(X, 1, 1, 5.0); matrix_set(X, 1, 2, 6.0)
+    matrix_set(X, 2, 0, 7.0); matrix_set(X, 2, 1, -999999.0); matrix_set(X, 2, 2, 9.0)
+    matrix_set(X, 3, 0, 10.0); matrix_set(X, 3, 1, 11.0); matrix_set(X, 3, 2, 12.0)
+
+    let mi: MissingIndicator = missing_indicator_fit(X, -999999.0, MISSING_FEATURES_ALL)
+    let indicator: Matrix = missing_indicator_transform(mi, X)
+
+    let mut count: i32 = 0
+    let mut i: i32 = 0
+    while i < 4 {
+        let mut j: i32 = 0
+        while j < 3 {
+            if matrix_at(indicator, i, j) > 0.5 { count = count + 1 }
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    if count != 3 {
+        println("  FAIL: expected 3 missing values, got")
+        print(count)
+        missing_indicator_free(mi)
+        matrix_free(indicator)
+        matrix_free(X)
+        return 1
+    }
+
+    println("  OK: 3 missing values detected")
+    missing_indicator_free(mi)
+    matrix_free(indicator)
+    matrix_free(X)
+    return 0
+}
+
+function test_dataset_loaders() -> i32 {
+    println("Test: load_digits / load_wine / load_breast_cancer / load_diabetes")
+
+    let digits: Dataset = load_digits()
+    if digits.n_samples != 180 || digits.n_features != 64 || digits.n_classes != 10 {
+        println("  FAIL: load_digits dimensions wrong")
+        dataset_free(digits)
+        return 1
+    }
+    dataset_free(digits)
+
+    let wine: Dataset = load_wine()
+    if wine.n_samples != 178 || wine.n_features != 13 || wine.n_classes != 3 {
+        println("  FAIL: load_wine dimensions wrong")
+        dataset_free(wine)
+        return 1
+    }
+    dataset_free(wine)
+
+    let cancer: Dataset = load_breast_cancer()
+    if cancer.n_samples != 569 || cancer.n_features != 30 || cancer.n_classes != 2 {
+        println("  FAIL: load_breast_cancer dimensions wrong")
+        dataset_free(cancer)
+        return 1
+    }
+    dataset_free(cancer)
+
+    let diabetes: Dataset = load_diabetes()
+    if diabetes.n_samples != 442 || diabetes.n_features != 10 || diabetes.is_classification {
+        println("  FAIL: load_diabetes dimensions wrong")
+        dataset_free(diabetes)
+        return 1
+    }
+    dataset_free(diabetes)
+
+    println("  OK: all dataset loaders return correct dimensions")
+    return 0
+}
+
 function main() -> i32 {
     println("=== New Features Tests ===")
     println("")
@@ -1592,6 +2106,30 @@ function main() -> i32 {
     if test_neighbors_transformers() != 0 { failures = failures + 1 }
     println("")
     if test_group_cv() != 0 { failures = failures + 1 }
+    println("")
+    if test_glm_regressors() != 0 { failures = failures + 1 }
+    println("")
+    if test_random_trees_embedding() != 0 { failures = failures + 1 }
+    println("")
+    if test_label_binarizer() != 0 { failures = failures + 1 }
+    println("")
+    if test_chi2_f_classif_f_regression() != 0 { failures = failures + 1 }
+    println("")
+    if test_group_shuffle_split() != 0 { failures = failures + 1 }
+    println("")
+    if test_silhouette_samples_rand_score() != 0 { failures = failures + 1 }
+    println("")
+    if test_estimate_bandwidth_kmeans_pp() != 0 { failures = failures + 1 }
+    println("")
+    if test_feature_union() != 0 { failures = failures + 1 }
+    println("")
+    if test_skewed_chi2_sampler() != 0 { failures = failures + 1 }
+    println("")
+    if test_johnson_lindenstrauss() != 0 { failures = failures + 1 }
+    println("")
+    if test_missing_indicator() != 0 { failures = failures + 1 }
+    println("")
+    if test_dataset_loaders() != 0 { failures = failures + 1 }
 
     println("")
     println("----------------------------------------")
