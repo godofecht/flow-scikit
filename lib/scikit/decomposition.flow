@@ -1924,3 +1924,185 @@ export function lda_transform(model: LatentDirichletAllocation, X: Matrix) -> Ma
 export function lda_free(model: LatentDirichletAllocation) -> void {
     matrix_free(model.components)
 }
+
+# ============================================================================
+# MiniBatchNMF
+# ============================================================================
+
+export struct MiniBatchNMF {
+    W: ptr<f32>,
+    H: ptr<f32>,
+    n_components: i32,
+    n_samples: i32,
+    n_features: i32,
+    reconstruction_err: f32,
+    n_iter: i32,
+    fitted: bool
+}
+
+export function minibatch_nmf_fit(X: Matrix, n_components: i32, max_iter: i32, batch_size: i32, tol: f32, seed: i32) -> MiniBatchNMF {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+    srand(seed)
+
+    # Initialize W and H with random non-negative values
+    let W: ptr<f32> = array_new_f32(n * n_components)
+    let H: ptr<f32> = array_new_f32(n_components * n_features)
+
+    let mut i: i32 = 0
+    while i < n * n_components {
+        W[i] = ((rand() % 100) as f32) / 100.0 + 0.01
+        i = i + 1
+    }
+    i = 0
+    while i < n_components * n_features {
+        H[i] = ((rand() % 100) as f32) / 100.0 + 0.01
+        i = i + 1
+    }
+
+    # Mini-batch updates
+    let mut iter: i32 = 0
+    let mut prev_err: f32 = 999999.0
+    while iter < max_iter {
+        # Random batch
+        let X_batch: Matrix = matrix_new(batch_size, n_features)
+        let batch_idx: ptr<i32> = malloc((batch_size as i64) * 4) as ptr<i32>
+        let mut b: i32 = 0
+        while b < batch_size {
+            let idx: i32 = rand() % n
+            batch_idx[b] = idx
+            let mut j: i32 = 0
+            while j < n_features {
+                matrix_set(X_batch, b, j, matrix_at(X, idx, j))
+                j = j + 1
+            }
+            b = b + 1
+        }
+
+        # Update W for batch samples and H globally
+        # W update: W[i,k] *= (X @ H^T)[i,k] / (W @ H @ H^T)[i,k]
+        b = 0
+        while b < batch_size {
+            let idx: i32 = batch_idx[b]
+            let mut k: i32 = 0
+            while k < n_components {
+                # Numerator: sum_j X[idx,j] * H[k,j]
+                let mut num: f32 = 0.0
+                let mut j: i32 = 0
+                while j < n_features {
+                    num = num + matrix_at(X_batch, b, j) * H[k * n_features + j]
+                    j = j + 1
+                }
+                # Denominator: sum_j W[idx,k'] * H[k',j] * H[k,j]
+                let mut den: f32 = 0.0
+                let mut k2: i32 = 0
+                while k2 < n_components {
+                    let mut s: f32 = 0.0
+                    let mut j2: i32 = 0
+                    while j2 < n_features {
+                        s = s + H[k2 * n_features + j2] * H[k * n_features + j2]
+                        j2 = j2 + 1
+                    }
+                    den = den + W[idx * n_components + k2] * s
+                    k2 = k2 + 1
+                }
+                if den < 0.0000000001 { den = 0.0000000001 }
+                W[idx * n_components + k] = W[idx * n_components + k] * num / den
+                k = k + 1
+            }
+            b = b + 1
+        }
+
+        # H update: H[k,j] *= (W^T @ X)[k,j] / (W^T @ W @ H)[k,j]
+        let mut k3: i32 = 0
+        while k3 < n_components {
+            let mut j3: i32 = 0
+            while j3 < n_features {
+                let mut num2: f32 = 0.0
+                let mut b2: i32 = 0
+                while b2 < batch_size {
+                    num2 = num2 + W[batch_idx[b2] * n_components + k3] * matrix_at(X_batch, b2, j3)
+                    b2 = b2 + 1
+                }
+                let mut den2: f32 = 0.0
+                let mut k4: i32 = 0
+                while k4 < n_components {
+                    let mut ws: f32 = 0.0
+                    let mut b3: i32 = 0
+                    while b3 < batch_size {
+                        ws = ws + W[batch_idx[b3] * n_components + k4] * W[batch_idx[b3] * n_components + k3]
+                        b3 = b3 + 1
+                    }
+                    den2 = den2 + ws * H[k4 * n_features + j3]
+                    k4 = k4 + 1
+                }
+                if den2 < 0.0000000001 { den2 = 0.0000000001 }
+                H[k3 * n_features + j3] = H[k3 * n_features + j3] * num2 / den2
+                j3 = j3 + 1
+            }
+            k3 = k3 + 1
+        }
+
+        matrix_free(X_batch)
+        free(batch_idx as ptr<void>)
+        iter = iter + 1
+    }
+
+    # Compute reconstruction error
+    let mut recon_err: f32 = 0.0
+    let mut i2: i32 = 0
+    while i2 < n {
+        let mut j4: i32 = 0
+        while j4 < n_features {
+            let mut pred: f32 = 0.0
+            let mut k5: i32 = 0
+            while k5 < n_components {
+                pred = pred + W[i2 * n_components + k5] * H[k5 * n_features + j4]
+                k5 = k5 + 1
+            }
+            let diff: f32 = matrix_at(X, i2, j4) - pred
+            recon_err = recon_err + diff * diff
+            j4 = j4 + 1
+        }
+        i2 = i2 + 1
+    }
+    recon_err = sqrt((recon_err) as f64) as f32
+
+    let result: MiniBatchNMF = MiniBatchNMF {
+        W: W,
+        H: H,
+        n_components: n_components,
+        n_samples: n,
+        n_features: n_features,
+        reconstruction_err: recon_err,
+        n_iter: max_iter,
+        fitted: true
+    }
+    return result
+}
+
+export function minibatch_nmf_transform(model: MiniBatchNMF, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let result: Matrix = matrix_new(n, model.n_components)
+    let mut i: i32 = 0
+    while i < n {
+        let mut k: i32 = 0
+        while k < model.n_components {
+            let mut dot: f32 = 0.0
+            let mut j: i32 = 0
+            while j < model.n_features {
+                dot = dot + matrix_at(X, i, j) * model.H[k * model.n_features + j]
+                j = j + 1
+            }
+            matrix_set(result, i, k, dot)
+            k = k + 1
+        }
+        i = i + 1
+    }
+    return result
+}
+
+export function minibatch_nmf_free(model: MiniBatchNMF) -> void {
+    array_free_f32(model.W)
+    array_free_f32(model.H)
+}

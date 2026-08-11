@@ -2956,3 +2956,774 @@ export function passive_aggressive_regressor_predict(model: PassiveAggressiveReg
 export function passive_aggressive_regressor_free(model: PassiveAggressiveRegressor) -> void {
     array_free_f32(model.coef)
 }
+
+# ============================================================================
+# LogisticRegressionCV
+# ============================================================================
+
+export struct LogisticRegressionCV {
+    C: f32,
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    n_classes: i32,
+    fitted: bool
+}
+
+export function logistic_regression_cv_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_Cs: i32) -> LogisticRegressionCV {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    # Generate C grid (inverse regularization strength)
+    let Cs: ptr<f32> = array_new_f32(n_Cs)
+    let mut i: i32 = 0
+    while i < n_Cs {
+        let t: f32 = (i as f32) / ((n_Cs - 1) as f32)
+        Cs[i] = 0.001 * pow(10.0 as f64, (t * 6.0) as f64) as f32
+        i = i + 1
+    }
+
+    let mut best_C: f32 = Cs[0]
+    let mut best_acc: f32 = -1.0
+    let fold_size: i32 = n / 5
+
+    let mut c_idx: i32 = 0
+    while c_idx < n_Cs {
+        let C: f32 = Cs[c_idx]
+        let alpha: f32 = 1.0 / C
+        let pen: Penalty = Penalty { kind: 2, alpha: alpha, l1_ratio: 0.0 }
+        let mut total_acc: f32 = 0.0
+        let mut fold: i32 = 0
+        while fold < 5 {
+            let test_start: i32 = fold * fold_size
+            let test_end: i32 = test_start + fold_size
+            if fold == 4 { test_end = n }
+            let n_train: i32 = n - (test_end - test_start)
+
+            let X_train: Matrix = matrix_new(n_train, n_features)
+            let y_train: ptr<f32> = array_new_f32(n_train)
+            let mut idx: i32 = 0
+            let mut j: i32 = 0
+            while j < n {
+                if j < test_start || j >= test_end {
+                    let mut k: i32 = 0
+                    while k < n_features {
+                        matrix_set(X_train, idx, k, matrix_at(X, j, k))
+                        k = k + 1
+                    }
+                    y_train[idx] = y[j]
+                    idx = idx + 1
+                }
+                j = j + 1
+            }
+
+            let model: LogisticRegression = logistic_regression_fit(X_train, y_train, n_classes, 500, 0.1, pen)
+            let preds: ptr<f32> = logistic_predict(model, X)
+
+            let mut correct: i32 = 0
+            let mut t2: i32 = test_start
+            while t2 < test_end {
+                if preds[t2] == y[t2] {
+                    correct = correct + 1
+                }
+                t2 = t2 + 1
+            }
+            total_acc = total_acc + (correct as f32) / ((test_end - test_start) as f32)
+
+            array_free_f32(preds)
+            logistic_regression_free(model)
+            matrix_free(X_train)
+            array_free_f32(y_train)
+            fold = fold + 1
+        }
+
+        let avg_acc: f32 = total_acc / 5.0
+        if avg_acc > best_acc {
+            best_acc = avg_acc
+            best_C = C
+        }
+        c_idx = c_idx + 1
+    }
+
+    # Refit with best C
+    let best_alpha: f32 = 1.0 / best_C
+    let best_pen: Penalty = Penalty { kind: 2, alpha: best_alpha, l1_ratio: 0.0 }
+    let best_model: LogisticRegression = logistic_regression_fit(X, y, n_classes, 500, 0.1, best_pen)
+    let weights_copy: ptr<f32> = array_copy_f32(best_model.weights, n_features * n_classes)
+    let bias_copy: f32 = best_model.bias
+    logistic_regression_free(best_model)
+    array_free_f32(Cs)
+
+    let result: LogisticRegressionCV = LogisticRegressionCV {
+        C: best_C,
+        weights: weights_copy,
+        bias: bias_copy,
+        n_features: n_features,
+        n_classes: n_classes,
+        fitted: true
+    }
+    return result
+}
+
+export function logistic_regression_cv_predict(model: LogisticRegressionCV, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    let mut i: i32 = 0
+    while i < n {
+        if model.n_classes == 2 {
+            # Binary: weights for class 1 are at offset 0
+            let mut z: f32 = model.bias
+            let mut j: i32 = 0
+            while j < model.n_features {
+                z = z + model.weights[j] * matrix_at(X, i, j)
+                j = j + 1
+            }
+            let sig: f32 = 1.0 / (1.0 + exp((-z) as f64) as f32)
+            if sig > 0.5 {
+                result[i] = 1.0
+            } else {
+                result[i] = 0.0
+            }
+        } else {
+            let mut best_score: f32 = -999999.0
+            let mut best_cls: i32 = 0
+            let mut c: i32 = 0
+            while c < model.n_classes {
+                let mut z: f32 = model.bias
+                let mut j: i32 = 0
+                while j < model.n_features {
+                    z = z + model.weights[c * model.n_features + j] * matrix_at(X, i, j)
+                    j = j + 1
+                }
+                if z > best_score {
+                    best_score = z
+                    best_cls = c
+                }
+                c = c + 1
+            }
+            result[i] = (best_cls as f32)
+        }
+        i = i + 1
+    }
+    return result
+}
+
+export function logistic_regression_cv_free(model: LogisticRegressionCV) -> void {
+    array_free_f32(model.weights)
+}
+
+# ============================================================================
+# LarsCV
+# ============================================================================
+
+export struct LarsCV {
+    n_active: i32,
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    active_features: ptr<i32>,
+    fitted: bool
+}
+
+export function lars_cv_fit(X: Matrix, y: ptr<f32>, max_features: i32) -> LarsCV {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    # Try different n_active values and pick best via CV
+    let mut best_n_active: i32 = 1
+    let mut best_mse: f32 = 999999.0
+    let fold_size: i32 = n / 5
+
+    let mut n_active: i32 = 1
+    while n_active <= max_features {
+        let mut total_mse: f32 = 0.0
+        let mut fold: i32 = 0
+        while fold < 5 {
+            let test_start: i32 = fold * fold_size
+            let test_end: i32 = test_start + fold_size
+            if fold == 4 { test_end = n }
+            let n_train: i32 = n - (test_end - test_start)
+
+            let X_train: Matrix = matrix_new(n_train, n_features)
+            let y_train: ptr<f32> = array_new_f32(n_train)
+            let mut idx: i32 = 0
+            let mut j: i32 = 0
+            while j < n {
+                if j < test_start || j >= test_end {
+                    let mut k: i32 = 0
+                    while k < n_features {
+                        matrix_set(X_train, idx, k, matrix_at(X, j, k))
+                        k = k + 1
+                    }
+                    y_train[idx] = y[j]
+                    idx = idx + 1
+                }
+                j = j + 1
+            }
+
+            let model: Lars = lars_fit(X_train, y_train, n_active)
+            let preds: ptr<f32> = lars_predict(model, X)
+
+            let mut fold_mse: f32 = 0.0
+            let mut t2: i32 = test_start
+            while t2 < test_end {
+                let diff: f32 = y[t2] - preds[t2]
+                fold_mse = fold_mse + diff * diff
+                t2 = t2 + 1
+            }
+            total_mse = total_mse + fold_mse / ((test_end - test_start) as f32)
+
+            array_free_f32(preds)
+            lars_free(model)
+            matrix_free(X_train)
+            array_free_f32(y_train)
+            fold = fold + 1
+        }
+
+        let avg_mse: f32 = total_mse / 5.0
+        if avg_mse < best_mse {
+            best_mse = avg_mse
+            best_n_active = n_active
+        }
+        n_active = n_active + 1
+    }
+
+    # Refit with best n_active
+    let best_model: Lars = lars_fit(X, y, best_n_active)
+    let weights_copy: ptr<f32> = array_copy_f32(best_model.weights, n_features)
+    let active_copy: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    let mut i: i32 = 0
+    while i < n_features {
+        active_copy[i] = best_model.active_features[i]
+        i = i + 1
+    }
+    let bias_copy: f32 = best_model.bias
+    lars_free(best_model)
+
+    let result: LarsCV = LarsCV {
+        n_active: best_n_active,
+        weights: weights_copy,
+        bias: bias_copy,
+        n_features: n_features,
+        active_features: active_copy,
+        fitted: true
+    }
+    return result
+}
+
+export function lars_cv_predict(model: LarsCV, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    let mut i: i32 = 0
+    while i < n {
+        let mut pred: f32 = model.bias
+        let mut j: i32 = 0
+        while j < model.n_features {
+            pred = pred + model.weights[j] * matrix_at(X, i, j)
+            j = j + 1
+        }
+        result[i] = pred
+        i = i + 1
+    }
+    return result
+}
+
+export function lars_cv_free(model: LarsCV) -> void {
+    array_free_f32(model.weights)
+    free(model.active_features as ptr<void>)
+}
+
+# ============================================================================
+# LassoLars
+# ============================================================================
+
+export struct LassoLars {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    n_active: i32,
+    alpha: f32,
+    fitted: bool
+}
+
+export function lasso_lars_fit(X: Matrix, y: ptr<f32>, alpha: f32, max_iter: i32) -> LassoLars {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    # LassoLars: LARS with L1 penalty (alpha modification)
+    # Simplified: use LARS then apply soft-thresholding
+    let n_active: i32 = n_features
+    if max_iter < n_features {
+        n_active = max_iter
+    }
+
+    let lars_model: Lars = lars_fit(X, y, n_active)
+    let weights: ptr<f32> = array_new_f32(n_features)
+
+    # Soft-threshold the LARS coefficients
+    let mut i: i32 = 0
+    while i < n_features {
+        let w: f32 = lars_model.weights[i]
+        if w > alpha {
+            weights[i] = w - alpha
+        } else {
+            if w < -alpha {
+                weights[i] = w + alpha
+            } else {
+                weights[i] = 0.0
+            }
+        }
+        i = i + 1
+    }
+
+    let bias_copy: f32 = lars_model.bias
+    lars_free(lars_model)
+
+    let result: LassoLars = LassoLars {
+        weights: weights,
+        bias: bias_copy,
+        n_features: n_features,
+        n_active: n_active,
+        alpha: alpha,
+        fitted: true
+    }
+    return result
+}
+
+export function lasso_lars_predict(model: LassoLars, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    let mut i: i32 = 0
+    while i < n {
+        let mut pred: f32 = model.bias
+        let mut j: i32 = 0
+        while j < model.n_features {
+            pred = pred + model.weights[j] * matrix_at(X, i, j)
+            j = j + 1
+        }
+        result[i] = pred
+        i = i + 1
+    }
+    return result
+}
+
+export function lasso_lars_free(model: LassoLars) -> void {
+    array_free_f32(model.weights)
+}
+
+# ============================================================================
+# LassoLarsCV
+# ============================================================================
+
+export struct LassoLarsCV {
+    alpha: f32,
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function lasso_lars_cv_fit(X: Matrix, y: ptr<f32>, n_alphas: i32) -> LassoLarsCV {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    let alphas: ptr<f32> = array_new_f32(n_alphas)
+    let mut i: i32 = 0
+    while i < n_alphas {
+        let t: f32 = (i as f32) / ((n_alphas - 1) as f32)
+        alphas[i] = 0.001 * pow(10.0 as f64, (t * 3.0) as f64) as f32
+        i = i + 1
+    }
+
+    let mut best_alpha: f32 = alphas[0]
+    let mut best_mse: f32 = 999999.0
+    let fold_size: i32 = n / 5
+
+    let mut a_idx: i32 = 0
+    while a_idx < n_alphas {
+        let alpha: f32 = alphas[a_idx]
+        let mut total_mse: f32 = 0.0
+        let mut fold: i32 = 0
+        while fold < 5 {
+            let test_start: i32 = fold * fold_size
+            let test_end: i32 = test_start + fold_size
+            if fold == 4 { test_end = n }
+            let n_train: i32 = n - (test_end - test_start)
+
+            let X_train: Matrix = matrix_new(n_train, n_features)
+            let y_train: ptr<f32> = array_new_f32(n_train)
+            let mut idx: i32 = 0
+            let mut j: i32 = 0
+            while j < n {
+                if j < test_start || j >= test_end {
+                    let mut k: i32 = 0
+                    while k < n_features {
+                        matrix_set(X_train, idx, k, matrix_at(X, j, k))
+                        k = k + 1
+                    }
+                    y_train[idx] = y[j]
+                    idx = idx + 1
+                }
+                j = j + 1
+            }
+
+            let model: LassoLars = lasso_lars_fit(X_train, y_train, alpha, n_features)
+            let preds: ptr<f32> = lasso_lars_predict(model, X)
+
+            let mut fold_mse: f32 = 0.0
+            let mut t2: i32 = test_start
+            while t2 < test_end {
+                let diff: f32 = y[t2] - preds[t2]
+                fold_mse = fold_mse + diff * diff
+                t2 = t2 + 1
+            }
+            total_mse = total_mse + fold_mse / ((test_end - test_start) as f32)
+
+            array_free_f32(preds)
+            lasso_lars_free(model)
+            matrix_free(X_train)
+            array_free_f32(y_train)
+            fold = fold + 1
+        }
+
+        let avg_mse: f32 = total_mse / 5.0
+        if avg_mse < best_mse {
+            best_mse = avg_mse
+            best_alpha = alpha
+        }
+        a_idx = a_idx + 1
+    }
+
+    let best_model: LassoLars = lasso_lars_fit(X, y, best_alpha, n_features)
+    let weights_copy: ptr<f32> = array_copy_f32(best_model.weights, n_features)
+    let bias_copy: f32 = best_model.bias
+    lasso_lars_free(best_model)
+    array_free_f32(alphas)
+
+    let result: LassoLarsCV = LassoLarsCV {
+        alpha: best_alpha,
+        weights: weights_copy,
+        bias: bias_copy,
+        n_features: n_features,
+        fitted: true
+    }
+    return result
+}
+
+export function lasso_lars_cv_predict(model: LassoLarsCV, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    let mut i: i32 = 0
+    while i < n {
+        let mut pred: f32 = model.bias
+        let mut j: i32 = 0
+        while j < model.n_features {
+            pred = pred + model.weights[j] * matrix_at(X, i, j)
+            j = j + 1
+        }
+        result[i] = pred
+        i = i + 1
+    }
+    return result
+}
+
+export function lasso_lars_cv_free(model: LassoLarsCV) -> void {
+    array_free_f32(model.weights)
+}
+
+# ============================================================================
+# MultiTaskLassoCV
+# ============================================================================
+
+export struct MultiTaskLassoCV {
+    alpha: f32,
+    weights: ptr<ptr<f32> >,
+    bias: ptr<f32>,
+    n_features: i32,
+    n_tasks: i32,
+    fitted: bool
+}
+
+export function multitask_lasso_cv_fit(X: Matrix, Y: Matrix, n_alphas: i32) -> MultiTaskLassoCV {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+    let n_tasks: i32 = Y.cols
+
+    let alphas: ptr<f32> = array_new_f32(n_alphas)
+    let mut i: i32 = 0
+    while i < n_alphas {
+        let t: f32 = (i as f32) / ((n_alphas - 1) as f32)
+        alphas[i] = 0.001 * pow(10.0 as f64, (t * 4.0) as f64) as f32
+        i = i + 1
+    }
+
+    let mut best_alpha: f32 = alphas[0]
+    let mut best_mse: f32 = 999999.0
+    let fold_size: i32 = n / 5
+
+    let mut a_idx: i32 = 0
+    while a_idx < n_alphas {
+        let alpha: f32 = alphas[a_idx]
+        let mut total_mse: f32 = 0.0
+        let mut fold: i32 = 0
+        while fold < 5 {
+            let test_start: i32 = fold * fold_size
+            let test_end: i32 = test_start + fold_size
+            if fold == 4 { test_end = n }
+            let n_train: i32 = n - (test_end - test_start)
+
+            let X_train: Matrix = matrix_new(n_train, n_features)
+            let Y_train: Matrix = matrix_new(n_train, n_tasks)
+            let mut idx: i32 = 0
+            let mut j: i32 = 0
+            while j < n {
+                if j < test_start || j >= test_end {
+                    let mut k: i32 = 0
+                    while k < n_features {
+                        matrix_set(X_train, idx, k, matrix_at(X, j, k))
+                        k = k + 1
+                    }
+                    let mut k2: i32 = 0
+                    while k2 < n_tasks {
+                        matrix_set(Y_train, idx, k2, matrix_at(Y, j, k2))
+                        k2 = k2 + 1
+                    }
+                    idx = idx + 1
+                }
+                j = j + 1
+            }
+
+            let model: MultiTaskLasso = multitask_lasso_fit(X_train, Y_train, alpha, 500, 0.01)
+            let preds: Matrix = multitask_lasso_predict(model, X)
+
+            let mut fold_mse: f32 = 0.0
+            let mut t2: i32 = test_start
+            while t2 < test_end {
+                let mut k3: i32 = 0
+                while k3 < n_tasks {
+                    let diff: f32 = matrix_at(Y, t2, k3) - matrix_at(preds, t2, k3)
+                    fold_mse = fold_mse + diff * diff
+                    k3 = k3 + 1
+                }
+                t2 = t2 + 1
+            }
+            total_mse = total_mse + fold_mse / ((test_end - test_start) as f32 * (n_tasks as f32))
+
+            matrix_free(preds)
+            multitask_lasso_free(model)
+            matrix_free(X_train)
+            matrix_free(Y_train)
+            fold = fold + 1
+        }
+
+        let avg_mse: f32 = total_mse / 5.0
+        if avg_mse < best_mse {
+            best_mse = avg_mse
+            best_alpha = alpha
+        }
+        a_idx = a_idx + 1
+    }
+
+    let best_model: MultiTaskLasso = multitask_lasso_fit(X, Y, best_alpha, 500, 0.01)
+    let weights_copy: ptr<ptr<f32> > = malloc((n_tasks as i64) * 8) as ptr<ptr<f32> >
+    let bias_copy: ptr<f32> = array_new_f32(n_tasks)
+    let mut t: i32 = 0
+    while t < n_tasks {
+        weights_copy[t] = array_copy_f32(best_model.weights[t], n_features)
+        bias_copy[t] = best_model.bias[t]
+        t = t + 1
+    }
+    multitask_lasso_free(best_model)
+    array_free_f32(alphas)
+
+    let result: MultiTaskLassoCV = MultiTaskLassoCV {
+        alpha: best_alpha,
+        weights: weights_copy,
+        bias: bias_copy,
+        n_features: n_features,
+        n_tasks: n_tasks,
+        fitted: true
+    }
+    return result
+}
+
+export function multitask_lasso_cv_predict(model: MultiTaskLassoCV, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let result: Matrix = matrix_new(n, model.n_tasks)
+    let mut i: i32 = 0
+    while i < n {
+        let mut t: i32 = 0
+        while t < model.n_tasks {
+            let mut pred: f32 = model.bias[t]
+            let mut j: i32 = 0
+            while j < model.n_features {
+                pred = pred + model.weights[t][j] * matrix_at(X, i, j)
+                j = j + 1
+            }
+            matrix_set(result, i, t, pred)
+            t = t + 1
+        }
+        i = i + 1
+    }
+    return result
+}
+
+export function multitask_lasso_cv_free(model: MultiTaskLassoCV) -> void {
+    let mut i: i32 = 0
+    while i < model.n_tasks {
+        array_free_f32(model.weights[i])
+        i = i + 1
+    }
+    free(model.weights as ptr<void>)
+    array_free_f32(model.bias)
+}
+
+# ============================================================================
+# MultiTaskElasticNetCV
+# ============================================================================
+
+export struct MultiTaskElasticNetCV {
+    alpha: f32,
+    l1_ratio: f32,
+    weights: ptr<ptr<f32> >,
+    bias: ptr<f32>,
+    n_features: i32,
+    n_tasks: i32,
+    fitted: bool
+}
+
+export function multitask_elastic_net_cv_fit(X: Matrix, Y: Matrix, n_alphas: i32) -> MultiTaskElasticNetCV {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+    let n_tasks: i32 = Y.cols
+    let l1_ratio: f32 = 0.5
+
+    let alphas: ptr<f32> = array_new_f32(n_alphas)
+    let mut i: i32 = 0
+    while i < n_alphas {
+        let t: f32 = (i as f32) / ((n_alphas - 1) as f32)
+        alphas[i] = 0.001 * pow(10.0 as f64, (t * 4.0) as f64) as f32
+        i = i + 1
+    }
+
+    let mut best_alpha: f32 = alphas[0]
+    let mut best_mse: f32 = 999999.0
+    let fold_size: i32 = n / 5
+
+    let mut a_idx: i32 = 0
+    while a_idx < n_alphas {
+        let alpha: f32 = alphas[a_idx]
+        let mut total_mse: f32 = 0.0
+        let mut fold: i32 = 0
+        while fold < 5 {
+            let test_start: i32 = fold * fold_size
+            let test_end: i32 = test_start + fold_size
+            if fold == 4 { test_end = n }
+            let n_train: i32 = n - (test_end - test_start)
+
+            let X_train: Matrix = matrix_new(n_train, n_features)
+            let Y_train: Matrix = matrix_new(n_train, n_tasks)
+            let mut idx: i32 = 0
+            let mut j: i32 = 0
+            while j < n {
+                if j < test_start || j >= test_end {
+                    let mut k: i32 = 0
+                    while k < n_features {
+                        matrix_set(X_train, idx, k, matrix_at(X, j, k))
+                        k = k + 1
+                    }
+                    let mut k2: i32 = 0
+                    while k2 < n_tasks {
+                        matrix_set(Y_train, idx, k2, matrix_at(Y, j, k2))
+                        k2 = k2 + 1
+                    }
+                    idx = idx + 1
+                }
+                j = j + 1
+            }
+
+            let model: MultiTaskElasticNet = multitask_elastic_net_fit(X_train, Y_train, alpha, l1_ratio, 500, 0.01)
+            let preds: Matrix = multitask_elastic_net_predict(model, X)
+
+            let mut fold_mse: f32 = 0.0
+            let mut t2: i32 = test_start
+            while t2 < test_end {
+                let mut k3: i32 = 0
+                while k3 < n_tasks {
+                    let diff: f32 = matrix_at(Y, t2, k3) - matrix_at(preds, t2, k3)
+                    fold_mse = fold_mse + diff * diff
+                    k3 = k3 + 1
+                }
+                t2 = t2 + 1
+            }
+            total_mse = total_mse + fold_mse / ((test_end - test_start) as f32 * (n_tasks as f32))
+
+            matrix_free(preds)
+            multitask_elastic_net_free(model)
+            matrix_free(X_train)
+            matrix_free(Y_train)
+            fold = fold + 1
+        }
+
+        let avg_mse: f32 = total_mse / 5.0
+        if avg_mse < best_mse {
+            best_mse = avg_mse
+            best_alpha = alpha
+        }
+        a_idx = a_idx + 1
+    }
+
+    let best_model: MultiTaskElasticNet = multitask_elastic_net_fit(X, Y, best_alpha, l1_ratio, 500, 0.01)
+    let weights_copy: ptr<ptr<f32> > = malloc((n_tasks as i64) * 8) as ptr<ptr<f32> >
+    let bias_copy: ptr<f32> = array_new_f32(n_tasks)
+    let mut t: i32 = 0
+    while t < n_tasks {
+        weights_copy[t] = array_copy_f32(best_model.weights[t], n_features)
+        bias_copy[t] = best_model.bias[t]
+        t = t + 1
+    }
+    multitask_elastic_net_free(best_model)
+    array_free_f32(alphas)
+
+    let result: MultiTaskElasticNetCV = MultiTaskElasticNetCV {
+        alpha: best_alpha,
+        l1_ratio: l1_ratio,
+        weights: weights_copy,
+        bias: bias_copy,
+        n_features: n_features,
+        n_tasks: n_tasks,
+        fitted: true
+    }
+    return result
+}
+
+export function multitask_elastic_net_cv_predict(model: MultiTaskElasticNetCV, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let result: Matrix = matrix_new(n, model.n_tasks)
+    let mut i: i32 = 0
+    while i < n {
+        let mut t: i32 = 0
+        while t < model.n_tasks {
+            let mut pred: f32 = model.bias[t]
+            let mut j: i32 = 0
+            while j < model.n_features {
+                pred = pred + model.weights[t][j] * matrix_at(X, i, j)
+                j = j + 1
+            }
+            matrix_set(result, i, t, pred)
+            t = t + 1
+        }
+        i = i + 1
+    }
+    return result
+}
+
+export function multitask_elastic_net_cv_free(model: MultiTaskElasticNetCV) -> void {
+    let mut i: i32 = 0
+    while i < model.n_tasks {
+        array_free_f32(model.weights[i])
+        i = i + 1
+    }
+    free(model.weights as ptr<void>)
+    array_free_f32(model.bias)
+}

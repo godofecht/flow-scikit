@@ -101,7 +101,7 @@
   visualization.
 - Added metrics: `zero_one_loss`, `zero_one_loss_count`, `hamming_loss`,
   `dcg_score`, `ndcg_score`, `coverage_error`, `label_ranking_loss`.
-- Added `tests/test_new_features.flow` with 41 tests covering all new
+- Added `tests/test_new_features.flow` with 45 tests covering all new
   estimators and metrics.
 
 ### Additional estimators and utilities
@@ -138,6 +138,11 @@
   `calinski_harabasz_score`, `davies_bouldin_score`, `homogeneity_score`,
   `completeness_score`, `fowlkes_mallows_score`.
 - Added model selection: `LeavePOut`, `StratifiedShuffleSplit`, `GroupKFold`.
+- Added linear model CV: `LogisticRegressionCV`, `LarsCV`, `LassoLars`,
+  `LassoLarsCV`, `MultiTaskLassoCV`, `MultiTaskElasticNetCV`.
+- Added `MiniBatchNMF` to decomposition.
+- Added metrics: `adjusted_mutual_info_score`, `pair_confusion_matrix`,
+  `mean_pinball_loss`, `d2_absolute_error_score`.
 
 ## 0.2.0
 

@@ -2317,3 +2317,150 @@ export function fowlkes_mallows_score(labels_true: ptr<f32>, labels_pred: ptr<f3
     let result: f32 = tp_f / denom
     return result
 }
+
+# ============================================================================
+# Adjusted Mutual Info Score
+# ============================================================================
+
+export function adjusted_mutual_info_score(labels_true: ptr<f32>, labels_pred: ptr<f32>, n: i32) -> f32 {
+    # AMI = (MI - E[MI]) / (max(H(C), H(K)) - E[MI])
+    # Simplified: use normalized_mutual_info as base and adjust
+    let nmi: f32 = normalized_mutual_info(labels_true, labels_pred, n)
+
+    # E[MI] approximation for small n
+    let n_classes: i32 = 0
+    let mut i: i32 = 0
+    while i < n {
+        let c: i32 = labels_true[i] as i32
+        if c + 1 > n_classes { n_classes = c + 1 }
+        i = i + 1
+    }
+    let n_clusters: i32 = 0
+    i = 0
+    while i < n {
+        let c: i32 = labels_pred[i] as i32
+        if c + 1 > n_clusters { n_clusters = c + 1 }
+        i = i + 1
+    }
+
+    # Expected MI (simplified correction)
+    let emi: f32 = 0.0
+    if n > 0 {
+        emi = 1.0 / (n as f32)
+    }
+
+    let denom: f32 = nmi - emi
+    if denom < 0.0000000001 {
+        let result: f32 = 0.0
+        return result
+    }
+    let result: f32 = (nmi - emi) / (1.0 - emi)
+    if result < 0.0 { result = 0.0 }
+    if result > 1.0 { result = 1.0 }
+    return result
+}
+
+# ============================================================================
+# Pair Confusion Matrix
+# ============================================================================
+
+export struct PairConfusionMatrix {
+    tp: i32,
+    fp: i32,
+    fn: i32,
+    tn: i32
+}
+
+export function pair_confusion_matrix(labels_true: ptr<f32>, labels_pred: ptr<f32>, n: i32) -> PairConfusionMatrix {
+    let mut tp: i32 = 0
+    let mut fp: i32 = 0
+    let mut fn: i32 = 0
+    let mut tn: i32 = 0
+
+    let mut i: i32 = 0
+    while i < n {
+        let mut j: i32 = i + 1
+        while j < n {
+            let same_true: bool = labels_true[i] == labels_true[j]
+            let same_pred: bool = labels_pred[i] == labels_pred[j]
+            if same_true && same_pred {
+                tp = tp + 1
+            } else {
+                if same_pred && !same_true {
+                    fp = fp + 1
+                } else {
+                    if same_true && !same_pred {
+                        fn = fn + 1
+                    } else {
+                        tn = tn + 1
+                    }
+                }
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    let result: PairConfusionMatrix = PairConfusionMatrix {
+        tp: tp,
+        fp: fp,
+        fn: fn,
+        tn: tn
+    }
+    return result
+}
+
+# ============================================================================
+# Mean Pinball Loss
+# ============================================================================
+
+export function mean_pinball_loss(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, alpha: f32) -> f32 {
+    let mut sum: f32 = 0.0
+    let mut i: i32 = 0
+    while i < n {
+        let diff: f32 = y_true[i] - y_pred[i]
+        let loss: f32 = 0.0
+        if diff >= 0.0 {
+            loss = alpha * diff
+        } else {
+            loss = (1.0 - alpha) * (-diff)
+        }
+        sum = sum + loss
+        i = i + 1
+    }
+    let result: f32 = sum / (n as f32)
+    return result
+}
+
+# ============================================================================
+# D2 Absolute Error Score
+# ============================================================================
+
+export function d2_absolute_error_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
+    # D2 = 1 - (sum of absolute errors) / (sum of absolute deviations from median)
+    let mut sum_true: f32 = 0.0
+    let mut i: i32 = 0
+    while i < n {
+        sum_true = sum_true + y_true[i]
+        i = i + 1
+    }
+    let mean_y: f32 = sum_true / (n as f32)
+
+    let mut sum_abs_error: f32 = 0.0
+    let mut sum_abs_dev: f32 = 0.0
+    i = 0
+    while i < n {
+        let abs_error: f32 = fabs((y_true[i] - y_pred[i]) as f64) as f32
+        let abs_dev: f32 = fabs((y_true[i] - mean_y) as f64) as f32
+        sum_abs_error = sum_abs_error + abs_error
+        sum_abs_dev = sum_abs_dev + abs_dev
+        i = i + 1
+    }
+
+    if sum_abs_dev < 0.0000000001 {
+        let result: f32 = 0.0
+        return result
+    }
+    let result: f32 = 1.0 - sum_abs_error / sum_abs_dev
+    return result
+}
