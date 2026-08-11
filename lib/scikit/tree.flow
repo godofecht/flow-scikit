@@ -964,3 +964,62 @@ function _export_tree_text_recursive(
         _export_tree_text_recursive(nodes, node.right, depth + 1, max_depth, is_classifier, false)
     }
 }
+
+# ============================================================================
+# Tree visualization: export_graphviz (DOT format)
+# ============================================================================
+
+export function export_graphviz(model: DecisionTreeClassifier) -> void {
+    println("digraph Tree {")
+    _export_graphviz_recursive(model.nodes, 0, 0, true)
+    println("}")
+}
+
+export function export_graphviz_reg(model: DecisionTreeRegressor) -> void {
+    println("digraph Tree {")
+    _export_graphviz_recursive(model.nodes, 0, 0, false)
+    println("}")
+}
+
+function _export_graphviz_recursive(
+    nodes: ptr<TreeNode>, node_idx: i32, depth: i32, is_classifier: bool
+) -> void {
+    let node: TreeNode = nodes[node_idx]
+    print("  ")
+    print(node_idx)
+    print(" [label=")
+    if node.is_leaf {
+        if is_classifier {
+            print("class=")
+            printf("%.0f", node.value)
+        } else {
+            print("value=")
+            printf("%.4f", node.value)
+        }
+        print(" nsamples=")
+        print(node.n_samples)
+    } else {
+        print("feature")
+        print(node.feature)
+        print(" <=")
+        printf("%.4f", node.threshold)
+        print(" nsamples=")
+        print(node.n_samples)
+    }
+    println("]")
+
+    if not node.is_leaf {
+        print("  ")
+        print(node_idx)
+        print(" -> ")
+        print(node.left)
+        println(" [label=true]")
+        print("  ")
+        print(node_idx)
+        print(" -> ")
+        print(node.right)
+        println(" [label=false]")
+        _export_graphviz_recursive(nodes, node.left, depth + 1, is_classifier)
+        _export_graphviz_recursive(nodes, node.right, depth + 1, is_classifier)
+    }
+}

@@ -1406,3 +1406,115 @@ export function quantile_transformer_free(model: QuantileTransformer) -> void {
     free(model.references as ptr<void>)
     free(model.quantiles as ptr<void>)
 }
+
+# ============================================================================
+# TargetEncoder
+# ============================================================================
+
+export struct TargetEncoder {
+    categories: ptr<ptr<f32> >,
+    encodings: ptr<ptr<f32> >,
+    n_categories: ptr<i32>,
+    n_features: i32,
+    smoothing: f32,
+    global_mean: f32,
+    fitted: bool
+}
+
+export function target_encoder_fit(X: Matrix, y: ptr<f32>, n_samples: i32, smoothing: f32) -> TargetEncoder {
+    let n_features: i32 = X.cols
+
+    # Global mean of y
+    let mut total_sum: f32 = 0.0
+    for i in 0 to n_samples {
+        total_sum = total_sum + y[i]
+    }
+    let global_mean: f32 = total_sum / (n_samples as f32)
+
+    let categories: ptr<ptr<f32> > = malloc((n_features as i64) * 8) as ptr<ptr<f32> >
+    let encodings: ptr<ptr<f32> > = malloc((n_features as i64) * 8) as ptr<ptr<f32> >
+    let n_categories: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+
+    for j in 0 to n_features {
+        # Find unique values in column j
+        let unique_vals: ptr<f32> = array_new_f32(n_samples)
+        let mut n_unique: i32 = 0
+        for i in 0 to n_samples {
+            let val: f32 = matrix_at(X, i, j)
+            let mut found: bool = false
+            for k in 0 to n_unique {
+                if unique_vals[k] == val {
+                    found = true
+                }
+            }
+            if not found {
+                unique_vals[n_unique] = val
+                n_unique = n_unique + 1
+            }
+        }
+
+        categories[j] = array_new_f32(n_unique)
+        encodings[j] = array_new_f32(n_unique)
+        n_categories[j] = n_unique
+
+        for k in 0 to n_unique {
+            categories[j][k] = unique_vals[k]
+            # Compute smoothed mean of y for this category
+            let mut sum_y: f32 = 0.0
+            let mut count: i32 = 0
+            for i in 0 to n_samples {
+                if matrix_at(X, i, j) == unique_vals[k] {
+                    sum_y = sum_y + y[i]
+                    count = count + 1
+                }
+            }
+            # Smoothed encoding: (count * mean + smoothing * global_mean) / (count + smoothing)
+            let cat_mean: f32 = sum_y / (count as f32)
+            let smooth_count: f32 = (count as f32) + smoothing
+            encodings[j][k] = ((count as f32) * cat_mean + smoothing * global_mean) / smooth_count
+        }
+
+        array_free_f32(unique_vals)
+    }
+
+    let result: TargetEncoder = TargetEncoder {
+        categories: categories,
+        encodings: encodings,
+        n_categories: n_categories,
+        n_features: n_features,
+        smoothing: smoothing,
+        global_mean: global_mean,
+        fitted: true
+    }
+    return result
+}
+
+export function target_encoder_transform(model: TargetEncoder, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let result: Matrix = matrix_new(n, model.n_features)
+
+    for i in 0 to n {
+        for j in 0 to model.n_features {
+            let val: f32 = matrix_at(X, i, j)
+            let mut encoded: f32 = model.global_mean
+            for k in 0 to model.n_categories[j] {
+                if model.categories[j][k] == val {
+                    encoded = model.encodings[j][k]
+                }
+            }
+            matrix_set(result, i, j, encoded)
+        }
+    }
+
+    return result
+}
+
+export function target_encoder_free(model: TargetEncoder) -> void {
+    for j in 0 to model.n_features {
+        array_free_f32(model.categories[j])
+        array_free_f32(model.encodings[j])
+    }
+    free(model.categories as ptr<void>)
+    free(model.encodings as ptr<void>)
+    free(model.n_categories as ptr<void>)
+}
