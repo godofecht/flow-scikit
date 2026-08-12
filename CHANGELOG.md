@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Bug fixes and depth improvements
+
+- Fixed CCA dead code: removed `s = s + matrix_at(Xc, i, j) * 0.0`
+  line in cross_decomposition.flow that multiplied by zero.
+- Fixed factor_analysis_fit: all n_components are now properly
+  initialized and stored. Previously only component 0 was stored.
+  Covariance is restored at the start of each EM iteration and
+  deflated per-component within each iteration.
+- Fixed empirical_covariance_get_precision: replaced the incorrect
+  diagonal-only approximation with full Gaussian elimination with
+  partial pivoting on the augmented [cov | I] matrix.
+- Implemented mutual information scoring in select_k_best_fit for
+  SCORE_MUTUAL_INFO. Discretizes each feature into 10 bins and
+  computes MI between binned features and class labels.
+- Implemented missing_indicator_fit to scan data and track which
+  features have missing values. The transform now respects the
+  features parameter (ALL, MISSING, NON_MISSING). Uses ptr<i32>
+  for the has_missing array because Flow silently drops ptr<bool>
+  fields from generated C structs.
+
 ### Histogram-based Gradient Boosting
 
 - Replaced the simplified HistGradientBoosting implementation (which

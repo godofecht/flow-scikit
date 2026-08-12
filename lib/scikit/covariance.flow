@@ -69,24 +69,78 @@ export function empirical_covariance_get_precision(model: EmpiricalCovariance) -
         inv[i] = array_new_f32(p)
     }
 
-    let det: f32 = 1.0
+    # Build augmented matrix [cov | I] and do Gaussian elimination
+    let aug: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
     for i in 0 to p {
-        det = det * model.covariance[i][i]
+        aug[i] = array_new_f32(2 * p)
+        for j in 0 to p {
+            aug[i][j] = model.covariance[i][j]
+        }
+        aug[i][p + i] = 1.0
     }
 
-    if (fabs((det) as f64) as f32) < 0.0000000001 {
-        for i in 0 to p {
-            inv[i][i] = 1.0 / (model.covariance[i][i] + 0.000001)
+    # Forward elimination with partial pivoting
+    for col in 0 to p {
+        # Find pivot
+        let mut pivot: i32 = col
+        let mut max_val: f32 = fabs((aug[col][col]) as f64) as f32
+        for row in (col + 1) to p {
+            let val: f32 = fabs((aug[row][col]) as f64) as f32
+            if val > max_val {
+                max_val = val
+                pivot = row
+            }
         }
-    } else {
-        for i in 0 to p {
-            inv[i][i] = 1.0 / model.covariance[i][i]
-            for j in 0 to i {
-                inv[i][j] = -model.covariance[i][j] / (model.covariance[i][i] * model.covariance[j][j])
-                inv[j][i] = inv[i][j]
+
+        # Swap rows
+        if pivot != col {
+            for j in 0 to (2 * p) {
+                let tmp: f32 = aug[col][j]
+                aug[col][j] = aug[pivot][j]
+                aug[pivot][j] = tmp
+            }
+        }
+
+        # Skip if column is zero
+        if max_val < 0.0000000001 { continue }
+
+        # Eliminate below
+        for row in (col + 1) to p {
+            let factor: f32 = aug[row][col] / aug[col][col]
+            for j in col to (2 * p) {
+                aug[row][j] = aug[row][j] - factor * aug[col][j]
             }
         }
     }
+
+    # Back substitution
+    for col in 0 to p {
+        let c: i32 = p - 1 - col
+        # Normalize pivot row
+        let pivot_val: f32 = aug[c][c]
+        if fabs((pivot_val) as f64) as f32 > 0.0000000001 {
+            for j in 0 to (2 * p) {
+                aug[c][j] = aug[c][j] / pivot_val
+            }
+        }
+        # Eliminate above
+        for row in 0 to c {
+            let factor: f32 = aug[row][c]
+            for j in 0 to (2 * p) {
+                aug[row][j] = aug[row][j] - factor * aug[c][j]
+            }
+        }
+    }
+
+    # Extract inverse from right half of augmented matrix
+    for i in 0 to p {
+        for j in 0 to p {
+            inv[i][j] = aug[i][p + j]
+        }
+    }
+
+    for i in 0 to p { array_free_f32(aug[i]) }
+    free(aug as ptr<void>)
 
     return inv
 }

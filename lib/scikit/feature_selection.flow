@@ -87,6 +87,93 @@ export function select_k_best_fit(X: Matrix, y: ptr<f32>, k: i32, score_func: i3
         }
 
         array_free_f32(classes)
+    } elif score_func == SCORE_MUTUAL_INFO {
+        # Mutual information for classification.
+        # Discretize each feature into bins, then compute MI between
+        # the binned feature and class labels.
+        let classes: ptr<f32> = array_new_f32(X.rows)
+        let mut n_classes: i32 = 0
+        for i in 0 to X.rows {
+            let mut found: bool = false
+            for c in 0 to n_classes {
+                if classes[c] == y[i] { found = true }
+            }
+            if not found {
+                classes[n_classes] = y[i]
+                n_classes = n_classes + 1
+            }
+        }
+
+        let n_bins: i32 = 10
+        let n: i32 = X.rows
+
+        for j in 0 to n_features {
+            # Find min and max for this feature
+            let mut fmin: f32 = matrix_at(X, 0, j)
+            let mut fmax: f32 = matrix_at(X, 0, j)
+            for i in 1 to n {
+                let val: f32 = matrix_at(X, i, j)
+                if val < fmin { fmin = val }
+                if val > fmax { fmax = val }
+            }
+            let range: f32 = fmax - fmin
+            let bin_width: f32 = range / (n_bins as f32)
+            if bin_width < 0.0000000001 {
+                scores[j] = 0.0
+                continue
+            }
+
+            # Count joint and marginal frequencies
+            # joint[bin][class] count
+            let n_cells: i32 = n_bins * n_classes
+            let joint: ptr<i32> = malloc((n_cells as i64) * 4) as ptr<i32>
+            for cell in 0 to n_cells { joint[cell] = 0 }
+            let bin_counts: ptr<i32> = malloc((n_bins as i64) * 4) as ptr<i32>
+            for b in 0 to n_bins { bin_counts[b] = 0 }
+            let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+            for c in 0 to n_classes { class_counts[c] = 0 }
+
+            for i in 0 to n {
+                let val: f32 = matrix_at(X, i, j)
+                let mut bin: i32 = ((val - fmin) / bin_width) as i32
+                if bin < 0 { bin = 0 }
+                if bin >= n_bins { bin = n_bins - 1 }
+
+                # Find class index
+                let mut cls: i32 = 0
+                for c in 0 to n_classes {
+                    if classes[c] == y[i] { cls = c }
+                }
+
+                joint[bin * n_classes + cls] = joint[bin * n_classes + cls] + 1
+                bin_counts[bin] = bin_counts[bin] + 1
+                class_counts[cls] = class_counts[cls] + 1
+            }
+
+            # Compute MI = sum p(x,y) * log(p(x,y) / (p(x) * p(y)))
+            let mut mi: f32 = 0.0
+            let n_f: f32 = (n as f32)
+            for b in 0 to n_bins {
+                if bin_counts[b] == 0 { continue }
+                for c in 0 to n_classes {
+                    let jcount: i32 = joint[b * n_classes + c]
+                    if jcount == 0 { continue }
+                    let p_xy: f32 = (jcount as f32) / n_f
+                    let p_x: f32 = (bin_counts[b] as f32) / n_f
+                    let p_y: f32 = (class_counts[c] as f32) / n_f
+                    mi = mi + p_xy * (log((p_xy / (p_x * p_y)) as f64) as f32)
+                }
+            }
+
+            if mi < 0.0 { mi = 0.0 }
+            scores[j] = mi
+
+            free(joint as ptr<void>)
+            free(bin_counts as ptr<void>)
+            free(class_counts as ptr<void>)
+        }
+
+        array_free_f32(classes)
     } elif score_func == SCORE_F_REGRESSION {
         let y_mean: f32 = array_mean(y, X.rows)
 
