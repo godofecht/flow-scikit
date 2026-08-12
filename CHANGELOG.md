@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Real bundled datasets
+
+- Replaced synthetic `load_iris` with the actual iris dataset (150
+  samples, 4 features, 3 classes). Real flower measurements from
+  sklearn.datasets.load_iris().
+- Replaced synthetic `load_wine` with the actual wine dataset (178
+  samples, 13 features, 3 classes). Real wine chemical analysis data.
+- Replaced synthetic `load_breast_cancer` with the actual breast cancer
+  dataset (569 samples, 30 features, 2 classes). Real diagnostic data
+  from sklearn.datasets.load_breast_cancer().
+- Replaced synthetic `load_diabetes` with the actual diabetes dataset
+  (442 samples, 10 features, regression). Real diabetes progression
+  data from sklearn.datasets.load_diabetes().
+- `load_digits` remains synthetic (180 samples instead of 1797) due to
+  the large size of the real 8x8 digit dataset.
+- Created `lib/scikit/datasets_real.flow` (3400 lines) containing the
+  real data. `datasets.flow` imports it and delegates.
+
 ### Improved algorithm implementations
 
 - Replaced `lda_fit` simplified EM with proper variational Bayes EM from
