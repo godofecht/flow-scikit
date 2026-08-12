@@ -1,0 +1,163 @@
+import "lib/scikit/scikit.flow"
+
+function main() -> i32 {
+    println("Test: metrics audit against known values")
+    let mut failures: i32 = 0
+
+    # Test 1: accuracy_score
+    # y_true = [0, 1, 1, 0, 1], y_pred = [0, 1, 0, 0, 1]
+    # correct = 4, n = 5, accuracy = 0.8
+    let y_true_1: ptr<f32> = array_new_f32(5)
+    y_true_1[0] = 0.0; y_true_1[1] = 1.0; y_true_1[2] = 1.0; y_true_1[3] = 0.0; y_true_1[4] = 1.0
+    let y_pred_1: ptr<f32> = array_new_f32(5)
+    y_pred_1[0] = 0.0; y_pred_1[1] = 1.0; y_pred_1[2] = 0.0; y_pred_1[3] = 0.0; y_pred_1[4] = 1.0
+    let acc: f32 = accuracy_score(y_true_1, y_pred_1, 5)
+    if acc < 0.79 || acc > 0.81 {
+        print("  FAIL: accuracy_score = ")
+        printf("%.4f", acc)
+        println(" expected 0.8")
+        failures = failures + 1
+    } else {
+        println("  OK: accuracy_score = 0.8")
+    }
+
+    # Test 2: precision_score (binary, pos_label=1)
+    # tp=2, fp=0, precision = 1.0
+    let prec: f32 = precision_score(y_true_1, y_pred_1, 5, 1.0)
+    if prec < 0.99 || prec > 1.01 {
+        print("  FAIL: precision_score = ")
+        printf("%.4f", prec)
+        println(" expected 1.0")
+        failures = failures + 1
+    } else {
+        println("  OK: precision_score = 1.0")
+    }
+
+    # Test 3: recall_score (binary, pos_label=1)
+    # tp=2, fn=1, recall = 2/3
+    let rec: f32 = recall_score(y_true_1, y_pred_1, 5, 1.0)
+    if rec < 0.65 || rec > 0.68 {
+        print("  FAIL: recall_score = ")
+        printf("%.4f", rec)
+        println(" expected 0.6667")
+        failures = failures + 1
+    } else {
+        println("  OK: recall_score = 0.6667")
+    }
+
+    # Test 4: f1_score (binary, pos_label=1)
+    # prec=1.0, rec=0.6667, f1 = 2*1*0.6667/(1+0.6667) = 0.8
+    let f1: f32 = f1_score(y_true_1, y_pred_1, 5, 1.0)
+    if f1 < 0.79 || f1 > 0.81 {
+        print("  FAIL: f1_score = ")
+        printf("%.4f", f1)
+        println(" expected 0.8")
+        failures = failures + 1
+    } else {
+        println("  OK: f1_score = 0.8")
+    }
+
+    # Test 5: mean_squared_error
+    # y_true = [3, -0.5, 2, 7], y_pred = [2.5, 0, 2, 8]
+    # errors = [0.5, -0.5, 0, -1], squared = [0.25, 0.25, 0, 1], mse = 1.5/4 = 0.375
+    let y_true_2: ptr<f32> = array_new_f32(4)
+    y_true_2[0] = 3.0; y_true_2[1] = -0.5; y_true_2[2] = 2.0; y_true_2[3] = 7.0
+    let y_pred_2: ptr<f32> = array_new_f32(4)
+    y_pred_2[0] = 2.5; y_pred_2[1] = 0.0; y_pred_2[2] = 2.0; y_pred_2[3] = 8.0
+    let mse: f32 = mean_squared_error(y_true_2, y_pred_2, 4)
+    if mse < 0.37 || mse > 0.38 {
+        print("  FAIL: mse = ")
+        printf("%.4f", mse)
+        println(" expected 0.375")
+        failures = failures + 1
+    } else {
+        println("  OK: mean_squared_error = 0.375")
+    }
+
+    # Test 6: r2_score
+    # sklearn: r2_score([3,-0.5,2,7], [2.5,0,2,8]) = 0.948608
+    # ss_res = 0.25+0.25+0+1 = 1.5
+    # mean = 2.875, ss_tot = (3-2.875)^2+(-0.5-2.875)^2+(2-2.875)^2+(7-2.875)^2
+    #       = 0.015625+11.390625+0.765625+17.015625 = 29.1875
+    # r2 = 1 - 1.5/29.1875 = 0.9486
+    let r2: f32 = r2_score(y_true_2, y_pred_2, 4)
+    if r2 < 0.94 || r2 > 0.96 {
+        print("  FAIL: r2_score = ")
+        printf("%.4f", r2)
+        println(" expected ~0.9486")
+        failures = failures + 1
+    } else {
+        println("  OK: r2_score = 0.9486")
+    }
+
+    # Test 7: mean_absolute_error
+    # |0.5| + |0.5| + |0| + |1| = 2, mae = 0.5
+    let mae: f32 = mean_absolute_error(y_true_2, y_pred_2, 4)
+    if mae < 0.49 || mae > 0.51 {
+        print("  FAIL: mae = ")
+        printf("%.4f", mae)
+        println(" expected 0.5")
+        failures = failures + 1
+    } else {
+        println("  OK: mean_absolute_error = 0.5")
+    }
+
+    # Test 8: macro f1 with 3 classes
+    # y_true = [0,1,2,0,1,2], y_pred = [0,2,1,0,0,1]
+    # Class 0: tp=2, fp=1, fn=0 -> prec=0.667, rec=1.0, f1=0.8
+    # Class 1: tp=0, fp=2, fn=2 -> prec=0, rec=0, f1=0
+    # Class 2: tp=0, fp=1, fn=2 -> prec=0, rec=0, f1=0
+    # macro_f1 = (0.8+0+0)/3 = 0.2667
+    let y_true_3: ptr<f32> = array_new_f32(6)
+    y_true_3[0] = 0.0; y_true_3[1] = 1.0; y_true_3[2] = 2.0
+    y_true_3[3] = 0.0; y_true_3[4] = 1.0; y_true_3[5] = 2.0
+    let y_pred_3: ptr<f32> = array_new_f32(6)
+    y_pred_3[0] = 0.0; y_pred_3[1] = 2.0; y_pred_3[2] = 1.0
+    y_pred_3[3] = 0.0; y_pred_3[4] = 0.0; y_pred_3[5] = 1.0
+    let classes_3: ptr<f32> = array_new_f32(3)
+    classes_3[0] = 0.0; classes_3[1] = 1.0; classes_3[2] = 2.0
+    let macro_f1: f32 = f1_score_macro(y_true_3, y_pred_3, 6, classes_3, 3)
+    if macro_f1 < 0.25 || macro_f1 > 0.28 {
+        print("  FAIL: macro_f1 = ")
+        printf("%.4f", macro_f1)
+        println(" expected ~0.2667")
+        failures = failures + 1
+    } else {
+        println("  OK: f1_score_macro = 0.2667")
+    }
+
+    # Test 9: r2_score edge case (constant y_true)
+    let y_const: ptr<f32> = array_new_f32(3)
+    y_const[0] = 5.0; y_const[1] = 5.0; y_const[2] = 5.0
+    let y_pred_const: ptr<f32> = array_new_f32(3)
+    y_pred_const[0] = 5.0; y_pred_const[1] = 5.0; y_pred_const[2] = 5.0
+    let r2_const: f32 = r2_score(y_const, y_pred_const, 3)
+    if r2_const < 0.99 || r2_const > 1.01 {
+        print("  FAIL: r2_score (constant) = ")
+        printf("%.4f", r2_const)
+        println(" expected 1.0")
+        failures = failures + 1
+    } else {
+        println("  OK: r2_score (constant, perfect) = 1.0")
+    }
+
+    array_free_f32(y_true_1)
+    array_free_f32(y_pred_1)
+    array_free_f32(y_true_2)
+    array_free_f32(y_pred_2)
+    array_free_f32(y_true_3)
+    array_free_f32(y_pred_3)
+    array_free_f32(classes_3)
+    array_free_f32(y_const)
+    array_free_f32(y_pred_const)
+
+    if failures > 0 {
+        print("  FAILED: ")
+        printf("%d", failures)
+        println(" metric tests")
+        return 1
+    }
+
+    println("  OK: all metric audit tests passed")
+    return 0
+}

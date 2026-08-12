@@ -7,6 +7,7 @@
 import "lib/scikit/matrix.flow"
 import "lib/scikit/validation.flow"
 import "lib/scikit/progress.flow"
+import "lib/scikit/sparse.flow"
 
 # ============================================================================
 # Term specification for linear models (Issue #28394)
@@ -283,6 +284,79 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
             }
             Progress.on_epoch_start(epoch, epochs, total_loss / (X.rows as f32))
         }
+
+        array_free_f32(grad_w)
+    }
+
+    return LogisticRegression {
+        weights: weights,
+        bias: bias,
+        n_features: n,
+        classes: classes,
+        n_classes: n_classes,
+        penalty: penalty,
+        fitted: true
+    }
+}
+
+# Sparse-input version of logistic_regression_fit.
+# Takes a SparseMatrix (CSR) and only iterates over non-zero entries.
+export function logistic_regression_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_classes: i32, epochs: i32, lr: f32, penalty: Penalty) -> LogisticRegression {
+    let n: i32 = S.n_cols
+    let n_samples: i32 = S.n_rows
+    let weights: ptr<f32> = array_new_f32(n)
+    let bias: f32 = 0.0
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to n_samples {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] { found = true }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    for epoch in 0 to epochs {
+        let grad_w: ptr<f32> = array_new_f32(n)
+        let mut grad_b: f32 = 0.0
+
+        for i in 0 to n_samples {
+            # z = bias + sum over non-zero entries of w[j] * x_ij
+            let mut z: f32 = bias
+            let start: i32 = S.indptr[i]
+            let end: i32 = S.indptr[i + 1]
+            let mut k: i32 = start
+            while k < end {
+                z = z + weights[S.indices[k]] * S.data[k]
+                k = k + 1
+            }
+            let p: f32 = sigmoid(z)
+            let label: f32 = 0.0
+            if y[i] == classes[1] { label = 1.0 }
+            let err: f32 = p - label
+
+            # Accumulate gradient only over non-zero entries
+            k = start
+            while k < end {
+                grad_w[S.indices[k]] = grad_w[S.indices[k]] + err * S.data[k]
+                k = k + 1
+            }
+            grad_b = grad_b + err
+        }
+
+        let inv_n: f32 = 1.0 / (n_samples as f32)
+        for j in 0 to n {
+            grad_w[j] = grad_w[j] * inv_n
+            if penalty.kind == PENALTY_L2 || penalty.kind == PENALTY_ELASTICNET {
+                grad_w[j] = grad_w[j] + penalty.alpha * weights[j] * (1.0 - penalty.l1_ratio)
+            }
+            weights[j] = weights[j] - lr * grad_w[j]
+        }
+        bias = bias - lr * grad_b * inv_n
 
         array_free_f32(grad_w)
     }

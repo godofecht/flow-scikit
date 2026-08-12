@@ -1,0 +1,51 @@
+import "lib/scikit/scikit.flow"
+
+function main() -> i32 {
+    println("Test: multi-class LinearSVC (OVR)")
+
+    # Use iris dataset (3 classes)
+    let ds: Dataset = load_iris()
+    let split: TrainTestSplit = train_test_split(ds.X, ds.y, 0.3, 42)
+
+    # Train multi-class LinearSVC
+    let model: LinearSVCMulti = linear_svc_multi_fit(
+        split.X_train, split.y_train, 3, 1.0, 500
+    )
+
+    # Predict
+    let preds: ptr<f32> = linear_svc_multi_predict(model, split.X_test)
+    let acc: f32 = accuracy_score(split.y_test, preds, split.n_test)
+
+    print("  Multi-class LinearSVC accuracy = ")
+    printf("%.4f", acc)
+    println("")
+
+    if acc < 0.8 {
+        println("  FAIL: multi-class accuracy should be > 0.8")
+        linear_svc_multi_free(model)
+        array_free_f32(preds)
+        train_test_split_free(split)
+        dataset_free(ds)
+        return 1
+    }
+
+    # Test decision function shape
+    let scores: ptr<f32> = linear_svc_multi_decision_function(model, split.X_test)
+    # Should be n_test * n_classes
+    print("  Decision function sample 0: ")
+    let mut c: i32 = 0
+    while c < 3 {
+        printf("%.4f", scores[c])
+        print(" ")
+        c = c + 1
+    }
+    println("")
+
+    println("  OK: multi-class LinearSVC works")
+    linear_svc_multi_free(model)
+    array_free_f32(preds)
+    array_free_f32(scores)
+    train_test_split_free(split)
+    dataset_free(ds)
+    return 0
+}

@@ -1,0 +1,136 @@
+import "lib/scikit/scikit.flow"
+
+function main() -> i32 {
+    println("Test: sparse-aware LinearSVC and LogisticRegression")
+
+    # Create a sparse dataset with mostly zeros
+    let n: i32 = 50
+    let p: i32 = 20
+    let X: Matrix = matrix_new(n, p)
+    let y: ptr<f32> = array_new_f32(n)
+    srand(42)
+
+    let mut i: i32 = 0
+    while i < n {
+        # Only set 3 out of 20 features per sample (sparse)
+        let f0: i32 = rand() % p
+        let f1: i32 = rand() % p
+        let f2: i32 = rand() % p
+        matrix_set(X, i, f0, 1.0)
+        matrix_set(X, i, f1, 2.0)
+        matrix_set(X, i, f2, -1.0)
+        # Label based on first feature
+        if f0 < p / 2 {
+            y[i] = 1.0
+        } else {
+            y[i] = 0.0
+        }
+        i = i + 1
+    }
+
+    # Convert to sparse
+    let S: SparseMatrix = sparse_from_dense(X)
+    let density: f32 = sparse_density(S)
+    print("  Density = ")
+    printf("%.4f", density)
+    println("")
+
+    # Test sparse LinearSVC
+    let model_svc: LinearSVC = linear_svc_fit_sparse(S, y, 2, 1.0, 200)
+    let scores_svc: ptr<f32> = linear_svc_predict(model_svc, X)
+    let preds_svc: ptr<f32> = linear_svc_decide(model_svc, scores_svc, n)
+    let acc_svc: f32 = accuracy_score(y, preds_svc, n)
+    print("  LinearSVC (sparse) accuracy = ")
+    printf("%.4f", acc_svc)
+    println("")
+
+    if acc_svc < 0.7 {
+        println("  FAIL: sparse LinearSVC accuracy too low")
+        linear_svc_free(model_svc)
+        array_free_f32(scores_svc)
+        array_free_f32(preds_svc)
+        sparse_free(S)
+        matrix_free(X)
+        array_free_f32(y)
+        return 1
+    }
+
+    # Test sparse LogisticRegression
+    let penalty: Penalty = Penalty { kind: PENALTY_L2, alpha: 0.001, l1_ratio: 0.0 }
+    let model_lr: LogisticRegression = logistic_regression_fit_sparse(S, y, 2, 500, 0.5, penalty)
+    let probs_lr: ptr<f32> = logistic_predict(model_lr, X)
+    let preds_lr: ptr<f32> = logistic_decide(model_lr, probs_lr, n, 0.5)
+    let acc_lr: f32 = accuracy_score(y, preds_lr, n)
+    print("  LogisticRegression (sparse) accuracy = ")
+    printf("%.4f", acc_lr)
+    println("")
+
+    if acc_lr < 0.7 {
+        println("  FAIL: sparse LogisticRegression accuracy too low")
+        linear_svc_free(model_svc)
+        array_free_f32(scores_svc)
+        array_free_f32(preds_svc)
+        logistic_regression_free(model_lr)
+        array_free_f32(probs_lr)
+        array_free_f32(preds_lr)
+        sparse_free(S)
+        matrix_free(X)
+        array_free_f32(y)
+        return 1
+    }
+
+    # Verify sparse and dense give similar results
+    let model_svc_dense: LinearSVC = linear_svc_fit(X, y, 2, 1.0, 200, 0.01)
+    let scores_dense: ptr<f32> = linear_svc_predict(model_svc_dense, X)
+    let preds_dense: ptr<f32> = linear_svc_decide(model_svc_dense, scores_dense, n)
+    let acc_dense: f32 = accuracy_score(y, preds_dense, n)
+    print("  LinearSVC (dense) accuracy = ")
+    printf("%.4f", acc_dense)
+    println("")
+
+    # Check weights are similar
+    let mut max_diff: f32 = 0.0
+    let mut j: i32 = 0
+    while j < p {
+        let diff: f32 = model_svc.weights[j] - model_svc_dense.weights[j]
+        let abs_diff: f32 = diff
+        if diff < 0.0 { abs_diff = -diff }
+        if abs_diff > max_diff { max_diff = abs_diff }
+        j = j + 1
+    }
+    print("  Max weight diff (sparse vs dense) = ")
+    printf("%.6f", max_diff)
+    println("")
+
+    if max_diff > 0.5 {
+        println("  FAIL: sparse and dense weights differ too much")
+        linear_svc_free(model_svc)
+        array_free_f32(scores_svc)
+        array_free_f32(preds_svc)
+        logistic_regression_free(model_lr)
+        array_free_f32(probs_lr)
+        array_free_f32(preds_lr)
+        linear_svc_free(model_svc_dense)
+        array_free_f32(scores_dense)
+        array_free_f32(preds_dense)
+        sparse_free(S)
+        matrix_free(X)
+        array_free_f32(y)
+        return 1
+    }
+
+    println("  OK: sparse-aware estimators match dense behavior")
+    linear_svc_free(model_svc)
+    array_free_f32(scores_svc)
+    array_free_f32(preds_svc)
+    logistic_regression_free(model_lr)
+    array_free_f32(probs_lr)
+    array_free_f32(preds_lr)
+    linear_svc_free(model_svc_dense)
+    array_free_f32(scores_dense)
+    array_free_f32(preds_dense)
+    sparse_free(S)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}

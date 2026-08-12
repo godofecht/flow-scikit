@@ -1,7 +1,11 @@
 # Model persistence: save and load fitted models to/from files.
 # Uses binary format with simple header (dimensions + flat data).
+# Estimator-level save/load serializes all fitted parameters into a
+# single binary file with a known layout.
 
 import "lib/scikit/matrix.flow"
+import "lib/scikit/svm.flow"
+import "lib/scikit/linear.flow"
 
 extern {
     function malloc(size: i64) -> ptr<void>
@@ -136,4 +140,128 @@ export function load_int(path: string) -> i32 {
     free(val_ptr as ptr<void>)
     fclose(fp)
     return val
+}
+
+# Helper: write f32 array to open file
+function _write_f32_array(fp: ptr<void>, arr: ptr<f32>, n: i32) -> void {
+    fwrite(arr as ptr<void>, 4, (n as i64), fp)
+}
+
+# Helper: read f32 array from open file
+function _read_f32_array(fp: ptr<void>, n: i32) -> ptr<f32> {
+    let arr: ptr<f32> = array_new_f32(n)
+    fread(arr as ptr<void>, 4, (n as i64), fp)
+    return arr
+}
+
+# Helper: write i32 to open file
+function _write_i32(fp: ptr<void>, val: i32) -> void {
+    let buf: ptr<i32> = malloc(4) as ptr<i32>
+    buf[0] = val
+    fwrite(buf as ptr<void>, 4, 1, fp)
+    free(buf as ptr<void>)
+}
+
+# Helper: read i32 from open file
+function _read_i32(fp: ptr<void>) -> i32 {
+    let buf: ptr<i32> = malloc(4) as ptr<i32>
+    fread(buf as ptr<void>, 4, 1, fp)
+    let val: i32 = buf[0]
+    free(buf as ptr<void>)
+    return val
+}
+
+# Helper: write f32 scalar to open file
+function _write_f32(fp: ptr<void>, val: f32) -> void {
+    let buf: ptr<f32> = malloc(4) as ptr<f32>
+    buf[0] = val
+    fwrite(buf as ptr<void>, 4, 1, fp)
+    free(buf as ptr<void>)
+}
+
+# Helper: read f32 scalar from open file
+function _read_f32(fp: ptr<void>) -> f32 {
+    let buf: ptr<f32> = malloc(4) as ptr<f32>
+    fread(buf as ptr<void>, 4, 1, fp)
+    let val: f32 = buf[0]
+    free(buf as ptr<void>)
+    return val
+}
+
+# ============================================================================
+# LinearSVC estimator save/load (single binary file)
+# Layout: [n_features: i32][n_classes: i32][bias: f32]
+#         [weights: n_features * f32][classes: n_classes * f32]
+# ============================================================================
+
+export function save_linear_svc(model: LinearSVC, path: string) -> i32 {
+    let fp: ptr<void> = fopen(path, "wb")
+    if fp == 0 as ptr<void> { return -1 }
+    _write_i32(fp, model.n_features)
+    _write_i32(fp, model.n_classes)
+    _write_f32(fp, model.bias)
+    _write_f32_array(fp, model.weights, model.n_features)
+    _write_f32_array(fp, model.classes, model.n_classes)
+    fclose(fp)
+    return 0
+}
+
+export function load_linear_svc(path: string) -> LinearSVC {
+    let fp: ptr<void> = fopen(path, "rb")
+    let n_features: i32 = _read_i32(fp)
+    let n_classes: i32 = _read_i32(fp)
+    let bias: f32 = _read_f32(fp)
+    let weights: ptr<f32> = _read_f32_array(fp, n_features)
+    let classes: ptr<f32> = _read_f32_array(fp, n_classes)
+    fclose(fp)
+
+    return LinearSVC {
+        weights: weights,
+        bias: bias,
+        n_features: n_features,
+        classes: classes,
+        n_classes: n_classes,
+        C: 1.0,
+        fitted: true
+    }
+}
+
+# ============================================================================
+# LogisticRegression estimator save/load (single binary file)
+# Layout: [n_features: i32][n_classes: i32][bias: f32]
+#         [weights: n_features * f32][classes: n_classes * f32]
+# ============================================================================
+
+export function save_logistic_regression(model: LogisticRegression, path: string) -> i32 {
+    let fp: ptr<void> = fopen(path, "wb")
+    if fp == 0 as ptr<void> { return -1 }
+    _write_i32(fp, model.n_features)
+    _write_i32(fp, model.n_classes)
+    _write_f32(fp, model.bias)
+    _write_f32_array(fp, model.weights, model.n_features)
+    _write_f32_array(fp, model.classes, model.n_classes)
+    fclose(fp)
+    return 0
+}
+
+export function load_logistic_regression(path: string) -> LogisticRegression {
+    let fp: ptr<void> = fopen(path, "rb")
+    let n_features: i32 = _read_i32(fp)
+    let n_classes: i32 = _read_i32(fp)
+    let bias: f32 = _read_f32(fp)
+    let weights: ptr<f32> = _read_f32_array(fp, n_features)
+    let classes: ptr<f32> = _read_f32_array(fp, n_classes)
+    fclose(fp)
+
+    let penalty: Penalty = Penalty { kind: PENALTY_L2, alpha: 0.001, l1_ratio: 0.0 }
+
+    return LogisticRegression {
+        weights: weights,
+        bias: bias,
+        n_features: n_features,
+        classes: classes,
+        n_classes: n_classes,
+        penalty: penalty,
+        fitted: true
+    }
 }

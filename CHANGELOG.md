@@ -2,6 +2,79 @@
 
 ## Unreleased
 
+### Histogram-based Gradient Boosting
+
+- Replaced the simplified HistGradientBoosting implementation (which
+  used DecisionTreeRegressor instances) with a proper histogram-based
+  tree builder. Features are quantile-binned into at most 256 bins.
+  Gradient and hessian histograms are accumulated per feature and node.
+  Splits are found by scanning cumulative bin sums with regularized
+  gain. Trees are built recursively with a shared node counter to
+  avoid struct-by-value issues in Flow.
+- Both classifier (logistic loss) and regressor (squared error)
+  variants use the new histogram trees.
+- Added structs: HistNode, HistTree, BinnedData, HistPair,
+  SplitResult, SplitSamplesResult.
+- Added helpers: _compute_bin_thresholds, _bin_value, _bin_features,
+  _build_hist, _find_best_hist_split, _split_samples,
+  _compute_leaf_value, _build_hist_tree, _hist_tree_build_recursive.
+
+### f64 internal precision
+
+- LinearSVC dual coordinate descent now uses f64 for weight
+  accumulation, alpha updates, and bias computation. Reduces float
+  error on datasets with many features.
+- KernelSVC SMO error computation (E_i, E_j) now accumulates in f64.
+- LDA digamma approximation now computes in f64.
+
+### Sparse-aware estimators
+
+- Added linear_svc_fit_sparse: trains LinearSVC from a CSR
+  SparseMatrix. Only iterates over non-zero entries when computing
+  Q_ii, w_dot_x, and weight updates.
+- Added logistic_regression_fit_sparse: trains LogisticRegression
+  from a CSR SparseMatrix. Gradient accumulation only touches
+  non-zero entries.
+- Sparse and dense produce identical weights on the same data.
+
+### Multi-class LinearSVC (OVR)
+
+- Added LinearSVCMulti struct and functions:
+  linear_svc_multi_fit, linear_svc_multi_predict,
+  linear_svc_multi_decision_function, linear_svc_multi_free.
+- Trains one binary LinearSVC per class. Prediction uses argmax of
+  decision function scores across all binary classifiers.
+- Achieves 97.8% accuracy on iris (3 classes).
+
+### Estimator-level save/load
+
+- Added save_linear_svc / load_linear_svc: serializes a fitted
+  LinearSVC to a single binary file (n_features, n_classes, bias,
+  weights, classes).
+- Added save_logistic_regression / load_logistic_regression:
+  serializes a fitted LogisticRegression to a single binary file.
+- Loaded models produce identical predictions to originals.
+
+### Metrics audit and additions
+
+- Added precision_score, recall_score, f1_score (binary, with
+  pos_label parameter).
+- Added precision_score_macro, recall_score_macro, f1_score_macro
+  (macro-averaged across all classes).
+- Fixed r2_score edge case: returns 1.0 when y_true is constant and
+  predictions match, matching sklearn behavior.
+- Audited accuracy_score, mean_squared_error, mean_absolute_error,
+  r2_score, precision_score, recall_score, f1_score against known
+  sklearn values. All match.
+
+### Tests added
+
+- tests/test_sparse_estimators.flow: sparse-aware LinearSVC and
+  LogisticRegression, weight parity with dense.
+- tests/test_multiclass_svm.flow: multi-class OVR LinearSVC on iris.
+- tests/test_estimator_persistence.flow: estimator save/load round-trip.
+- tests/test_metrics_audit.flow: metric formulas against known values.
+
 ### Real load_digits dataset
 
 - Replaced synthetic load_digits (180 samples) with the actual digits
