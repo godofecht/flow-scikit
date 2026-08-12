@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Improved SMO convergence for KernelSVC
+
+- Implemented proper SMO alternating pass strategy (Platt 1998).
+  Alternates between full passes over all samples and non-boundary
+  passes over samples with 0 < alpha < C. Non-boundary passes converge
+  faster because those samples are more likely to violate KKT
+  conditions.
+- Convergence now stops when a full pass makes no changes, matching
+  sklearn's SMO behavior.
+
 ### Real bundled datasets
 
 - Replaced synthetic `load_iris` with the actual iris dataset (150
