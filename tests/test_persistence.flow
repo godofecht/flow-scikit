@@ -1,0 +1,104 @@
+import "lib/scikit/scikit.flow"
+
+function main() -> i32 {
+    println("Test: persistence save/load")
+
+    # Create a test matrix
+    let M: Matrix = matrix_new(3, 4)
+    let mut i: i32 = 0
+    while i < 3 {
+        let mut j: i32 = 0
+        while j < 4 {
+            matrix_set(M, i, j, (i * 4 + j) as f32)
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    # Save it
+    let rc: i32 = save_matrix(M, "/tmp/test_matrix.bin")
+    if rc != 0 {
+        println("  FAIL: save_matrix failed")
+        matrix_free(M)
+        return 1
+    }
+
+    # Load it
+    let M2: Matrix = load_matrix("/tmp/test_matrix.bin")
+    if M2.rows != 3 || M2.cols != 4 {
+        println("  FAIL: loaded matrix has wrong dimensions")
+        matrix_free(M)
+        matrix_free(M2)
+        return 1
+    }
+
+    # Check values
+    i = 0
+    while i < 3 {
+        let mut j: i32 = 0
+        while j < 4 {
+            let v1: f32 = matrix_at(M, i, j)
+            let v2: f32 = matrix_at(M2, i, j)
+            if v1 != v2 {
+                println("  FAIL: value mismatch")
+                matrix_free(M)
+                matrix_free(M2)
+                return 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    # Test array save/load
+    let arr: ptr<f32> = array_new_f32(5)
+    arr[0] = 1.5
+    arr[1] = 2.5
+    arr[2] = 3.5
+    arr[3] = 4.5
+    arr[4] = 5.5
+    save_array(arr, 5, "/tmp/test_array.bin")
+    array_free_f32(arr)
+
+    let arr2: ptr<f32> = load_array("/tmp/test_array.bin")
+    i = 0
+    while i < 5 {
+        let expected: f32 = (i as f32) + 1.5
+        if arr2[i] != expected {
+            println("  FAIL: array value mismatch")
+            array_free_f32(arr2)
+            matrix_free(M)
+            matrix_free(M2)
+            return 1
+        }
+        i = i + 1
+    }
+
+    # Test scalar save/load
+    save_scalar(3.14159, "/tmp/test_scalar.bin")
+    let s: f32 = load_scalar("/tmp/test_scalar.bin")
+    if s < 3.14 || s > 3.15 {
+        println("  FAIL: scalar mismatch")
+        array_free_f32(arr2)
+        matrix_free(M)
+        matrix_free(M2)
+        return 1
+    }
+
+    # Test int save/load
+    save_int(42, "/tmp/test_int.bin")
+    let n: i32 = load_int("/tmp/test_int.bin")
+    if n != 42 {
+        println("  FAIL: int mismatch")
+        array_free_f32(arr2)
+        matrix_free(M)
+        matrix_free(M2)
+        return 1
+    }
+
+    println("  OK: all persistence tests passed")
+    array_free_f32(arr2)
+    matrix_free(M)
+    matrix_free(M2)
+    return 0
+}

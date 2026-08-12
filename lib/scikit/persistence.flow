@@ -1,0 +1,139 @@
+# Model persistence: save and load fitted models to/from files.
+# Uses binary format with simple header (dimensions + flat data).
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function fopen(path: string, mode: string) -> ptr<void>
+    function fclose(fp: ptr<void>) -> i32
+    function fwrite(ptr: ptr<void>, size: i64, count: i64, fp: ptr<void>) -> i64
+    function fread(ptr: ptr<void>, size: i64, count: i64, fp: ptr<void>) -> i64
+    function fprintf(fp: ptr<void>, fmt: string, ...) -> i32
+}
+
+# Save a matrix to a binary file.
+# Format: [rows: i32][cols: i32][data: rows*cols f32 values]
+export function save_matrix(M: Matrix, path: string) -> i32 {
+    let fp: ptr<void> = fopen(path, "wb")
+    if fp == 0 as ptr<void> { return -1 }
+
+    # Write dimensions
+    let dims: ptr<i32> = malloc(8) as ptr<i32>
+    dims[0] = M.rows
+    dims[1] = M.cols
+    let written: i64 = fwrite(dims as ptr<void>, 4, 2, fp)
+    free(dims as ptr<void>)
+
+    # Write data
+    let count: i64 = (M.rows as i64) * (M.cols as i64)
+    let w2: i64 = fwrite(M.data as ptr<void>, 4, count, fp)
+
+    fclose(fp)
+    return 0
+}
+
+# Load a matrix from a binary file.
+export function load_matrix(path: string) -> Matrix {
+    let fp: ptr<void> = fopen(path, "rb")
+    let rows: i32 = 0
+    let cols: i32 = 0
+
+    if fp != 0 as ptr<void> {
+        let dims: ptr<i32> = malloc(8) as ptr<i32>
+        let read: i64 = fread(dims as ptr<void>, 4, 2, fp)
+        rows = dims[0]
+        cols = dims[1]
+        free(dims as ptr<void>)
+
+        let M: Matrix = matrix_new(rows, cols)
+        let count: i64 = (rows as i64) * (cols as i64)
+        let r2: i64 = fread(M.data as ptr<void>, 4, count, fp)
+        fclose(fp)
+        return M
+    }
+
+    # Return empty matrix on failure
+    return matrix_new(0, 0)
+}
+
+# Save a float array to a binary file.
+# Format: [n: i32][data: n f32 values]
+export function save_array(arr: ptr<f32>, n: i32, path: string) -> i32 {
+    let fp: ptr<void> = fopen(path, "wb")
+    if fp == 0 as ptr<void> { return -1 }
+
+    let n_ptr: ptr<i32> = malloc(4) as ptr<i32>
+    n_ptr[0] = n
+    fwrite(n_ptr as ptr<void>, 4, 1, fp)
+    free(n_ptr as ptr<void>)
+
+    fwrite(arr as ptr<void>, 4, n as i64, fp)
+    fclose(fp)
+    return 0
+}
+
+# Load a float array from a binary file.
+export function load_array(path: string) -> ptr<f32> {
+    let fp: ptr<void> = fopen(path, "rb")
+    if fp == 0 as ptr<void> { return array_new_f32(0) }
+
+    let n_ptr: ptr<i32> = malloc(4) as ptr<i32>
+    fread(n_ptr as ptr<void>, 4, 1, fp)
+    let n: i32 = n_ptr[0]
+    free(n_ptr as ptr<void>)
+
+    let arr: ptr<f32> = array_new_f32(n)
+    fread(arr as ptr<void>, 4, n as i64, fp)
+    fclose(fp)
+    return arr
+}
+
+# Save a scalar (single f32) to a binary file.
+export function save_scalar(val: f32, path: string) -> i32 {
+    let fp: ptr<void> = fopen(path, "wb")
+    if fp == 0 as ptr<void> { return -1 }
+    let val_ptr: ptr<f32> = malloc(4) as ptr<f32>
+    val_ptr[0] = val
+    fwrite(val_ptr as ptr<void>, 4, 1, fp)
+    free(val_ptr as ptr<void>)
+    fclose(fp)
+    return 0
+}
+
+# Load a scalar (single f32) from a binary file.
+export function load_scalar(path: string) -> f32 {
+    let fp: ptr<void> = fopen(path, "rb")
+    if fp == 0 as ptr<void> { return 0.0 }
+    let val_ptr: ptr<f32> = malloc(4) as ptr<f32>
+    fread(val_ptr as ptr<void>, 4, 1, fp)
+    let val: f32 = val_ptr[0]
+    free(val_ptr as ptr<void>)
+    fclose(fp)
+    return val
+}
+
+# Save an integer (single i32) to a binary file.
+export function save_int(val: i32, path: string) -> i32 {
+    let fp: ptr<void> = fopen(path, "wb")
+    if fp == 0 as ptr<void> { return -1 }
+    let val_ptr: ptr<i32> = malloc(4) as ptr<i32>
+    val_ptr[0] = val
+    fwrite(val_ptr as ptr<void>, 4, 1, fp)
+    free(val_ptr as ptr<void>)
+    fclose(fp)
+    return 0
+}
+
+# Load an integer (single i32) from a binary file.
+export function load_int(path: string) -> i32 {
+    let fp: ptr<void> = fopen(path, "rb")
+    if fp == 0 as ptr<void> { return 0 }
+    let val_ptr: ptr<i32> = malloc(4) as ptr<i32>
+    fread(val_ptr as ptr<void>, 4, 1, fp)
+    let val: i32 = val_ptr[0]
+    free(val_ptr as ptr<void>)
+    fclose(fp)
+    return val
+}

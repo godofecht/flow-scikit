@@ -1,0 +1,175 @@
+# Sparse matrix support in CSR (Compressed Sparse Row) format.
+# Mirrors scipy.sparse.csr_matrix for interoperability with sklearn.
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function memset(p: ptr<void>, val: i32, n: i64) -> ptr<void>
+}
+
+# CSR sparse matrix:
+#   data: non-zero values
+#   indices: column indices for each non-zero value
+#   indptr: row pointers (length n_rows + 1)
+#   indptr[i] to indptr[i+1] gives the range of data/indices for row i
+export struct SparseMatrix {
+    data: ptr<f32>,
+    indices: ptr<i32>,
+    indptr: ptr<i32>,
+    n_rows: i32,
+    n_cols: i32,
+    nnz: i32
+}
+
+# Create a new sparse matrix with given capacity
+export function sparse_new(n_rows: i32, n_cols: i32, capacity: i32) -> SparseMatrix {
+    let data: ptr<f32> = array_new_f32(capacity)
+    let indices: ptr<i32> = malloc((capacity as i64) * 4) as ptr<i32>
+    let indptr: ptr<i32> = malloc(((n_rows + 1) as i64) * 4) as ptr<i32>
+    let mut i: i32 = 0
+    while i < n_rows + 1 {
+        indptr[i] = 0
+        i = i + 1
+    }
+    return SparseMatrix {
+        data: data,
+        indices: indices,
+        indptr: indptr,
+        n_rows: n_rows,
+        n_cols: n_cols,
+        nnz: 0
+    }
+}
+
+export function sparse_free(S: SparseMatrix) -> void {
+    array_free_f32(S.data)
+    free(S.indices as ptr<void>)
+    free(S.indptr as ptr<void>)
+}
+
+# Convert a dense Matrix to CSR sparse format
+export function sparse_from_dense(M: Matrix) -> SparseMatrix {
+    let n_rows: i32 = M.rows
+    let n_cols: i32 = M.cols
+
+    # Count non-zeros
+    let mut nnz: i32 = 0
+    let mut i: i32 = 0
+    while i < n_rows {
+        let mut j: i32 = 0
+        while j < n_cols {
+            if matrix_at(M, i, j) != 0.0 { nnz = nnz + 1 }
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    let S: SparseMatrix = sparse_new(n_rows, n_cols, nnz)
+    S.nnz = nnz
+
+    # Fill CSR arrays
+    let mut pos: i32 = 0
+    i = 0
+    while i < n_rows {
+        S.indptr[i] = pos
+        let mut j: i32 = 0
+        while j < n_cols {
+            let val: f32 = matrix_at(M, i, j)
+            if val != 0.0 {
+                S.data[pos] = val
+                S.indices[pos] = j
+                pos = pos + 1
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    S.indptr[n_rows] = pos
+
+    return S
+}
+
+# Convert a CSR sparse matrix to dense format
+export function sparse_to_dense(S: SparseMatrix) -> Matrix {
+    let M: Matrix = matrix_new(S.n_rows, S.n_cols)
+    let mut i: i32 = 0
+    while i < S.n_rows {
+        let start: i32 = S.indptr[i]
+        let end: i32 = S.indptr[i + 1]
+        let mut k: i32 = start
+        while k < end {
+            matrix_set(M, i, S.indices[k], S.data[k])
+            k = k + 1
+        }
+        i = i + 1
+    }
+    return M
+}
+
+# Get element at (row, col)
+export function sparse_at(S: SparseMatrix, row: i32, col: i32) -> f32 {
+    let start: i32 = S.indptr[row]
+    let end: i32 = S.indptr[row + 1]
+    let mut k: i32 = start
+    while k < end {
+        if S.indices[k] == col { return S.data[k] }
+        k = k + 1
+    }
+    return 0.0
+}
+
+# Compute dot product of sparse row with dense vector
+export function sparse_dot_row(S: SparseMatrix, row: i32, v_arr: ptr<f32>) -> f32 {
+    let start: i32 = S.indptr[row]
+    let end: i32 = S.indptr[row + 1]
+    let mut sum: f32 = 0.0
+    let mut k: i32 = start
+    while k < end {
+        sum = sum + S.data[k] *  v_arr[S.indices[k]]
+        k = k + 1
+    }
+    return sum
+}
+
+# Compute sparse matrix times dense matrix -> dense matrix
+export function sparse_dot_dense(S: SparseMatrix, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(S.n_rows, X.cols)
+    let mut i: i32 = 0
+    while i < S.n_rows {
+        let start: i32 = S.indptr[i]
+        let end: i32 = S.indptr[i + 1]
+        let mut j: i32 = 0
+        while j < X.cols {
+            let mut sum: f32 = 0.0
+            let mut k: i32 = start
+            while k < end {
+                sum = sum + S.data[k] * matrix_at(X, S.indices[k], j)
+                k = k + 1
+            }
+            matrix_set(result, i, j, sum)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return result
+}
+
+# Compute density (fraction of non-zero elements)
+export function sparse_density(S: SparseMatrix) -> f32 {
+    let total: i32 = S.n_rows * S.n_cols
+    if total == 0 { return 0.0 }
+    return (S.nnz as f32) / (total as f32)
+}
+
+# Count non-zeros per row
+export function sparse_nnz_per_row(S: SparseMatrix) -> ptr<i32> {
+    let counts: ptr<i32> = malloc((S.n_rows as i64) * 4) as ptr<i32>
+    let mut i: i32 = 0
+    while i < S.n_rows {
+        counts[i] = S.indptr[i + 1] - S.indptr[i]
+        i = i + 1
+    }
+    return counts
+}

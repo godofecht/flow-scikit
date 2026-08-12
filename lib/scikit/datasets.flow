@@ -297,51 +297,5 @@ export function make_swiss_roll(n_samples: i32, noise: f32, seed: i32) -> Datase
     }
 }
 
-# ============================================================================
-# load_digits (simplified, 8x8=64 features, 10 classes, 1797 samples)
-# ============================================================================
-
-export function load_digits() -> Dataset {
-    let n: i32 = 180
-    let p: i32 = 64
-    let X: Matrix = matrix_new(n, p)
-    let y: ptr<f32> = array_new_f32(n)
-
-    srand(42)
-    let per_class: i32 = n / 10
-
-    let mut c: i32 = 0
-    while c < 10 {
-        let mut i: i32 = 0
-        while i < per_class {
-            let idx: i32 = c * per_class + i
-            y[idx] = c as f32
-            let mut j: i32 = 0
-            while j < p {
-                let row: i32 = j / 8
-                let col: i32 = j % 8
-                let center_row: f32 = 3.5 + (c as f32) * 0.3
-                let center_col: f32 = 3.5
-                let dist: f32 = sqrt(((row as f32 - center_row) * (row as f32 - center_row) + (col as f32 - center_col) * (col as f32 - center_col)) as f64) as f32
-                let val: f32 = 16.0 - dist * 2.0
-                if val < 0.0 { val = 0.0 }
-                val = val + (((rand() % 100) as f32) / 100.0 - 0.5) * 4.0
-                if val < 0.0 { val = 0.0 }
-                if val > 16.0 { val = 16.0 }
-                matrix_set(X, idx, j, val)
-                j = j + 1
-            }
-            i = i + 1
-        }
-        c = c + 1
-    }
-
-    return Dataset {
-        X: X, y: y,
-        n_samples: n, n_features: p,
-        n_classes: 10, is_classification: true
-    }
-}
-
-# Real load_wine, load_breast_cancer, load_diabetes are in
+# Real load_wine, load_breast_cancer, load_diabetes, load_digits are in
 # datasets_real.flow, imported at the top of this file.
