@@ -417,9 +417,7 @@ export function cca_fit(X: Matrix, Y: Matrix, n_components: i32, max_iter: i32, 
         for iter in 0 to max_iter {
             let a: ptr<f32> = array_new_f32(p)
             for j in 0 to p {
-                let mut s: f32 = 0.0
                 for i in 0 to n {
-                    s = s + matrix_at(Xc, i, j) * 0.0
                     for k in 0 to q {
                         a[j] = a[j] + matrix_at(Xc, i, j) * matrix_at(Yc, i, k) * u[k]
                     }

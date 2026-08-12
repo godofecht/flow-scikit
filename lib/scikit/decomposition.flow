@@ -1221,9 +1221,25 @@ export function factor_analysis_fit(X: Matrix, n_components: i32, max_iter: i32,
         noise_variance[j] = cov[j][j] / 2.0
     }
 
+    # Save a copy of cov for restoration each EM iteration
+    let cov_orig: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to p {
+        cov_orig[i] = array_new_f32(p)
+        for j in 0 to p {
+            cov_orig[i][j] = cov[i][j]
+        }
+    }
+
     let mut n_iter: i32 = 0
     for iter in 0 to max_iter {
         n_iter = iter + 1
+
+        # Restore original covariance at start of each iteration
+        for i in 0 to p {
+            for j in 0 to p {
+                cov[i][j] = cov_orig[i][j]
+            }
+        }
 
         let inv_psi: ptr<f32> = array_new_f32(p)
         for j in 0 to p {
@@ -1232,42 +1248,45 @@ export function factor_analysis_fit(X: Matrix, n_components: i32, max_iter: i32,
         }
 
         for c in 0 to n_components {
-            if c == 0 || true {
-                let w: ptr<f32> = array_new_f32(p)
-                for j in 0 to p {
-                    w[j] = cov[j][j] * inv_psi[j] * 0.5
-                }
-
-                let beta: ptr<f32> = array_new_f32(p)
-                for j in 0 to p {
-                    let mut s: f32 = 0.0
-                    for k in 0 to p {
-                        s = s + cov[j][k] * inv_psi[k] * w[k]
-                    }
-                    beta[j] = s
-                }
-
-                let mut beta_sq: f32 = 0.0
-                for j in 0 to p { beta_sq = beta_sq + beta[j] * beta[j] * inv_psi[j] }
-                if beta_sq < 0.0000000001 { beta_sq = 0.0000000001 }
-
-                for j in 0 to p {
-                    w[j] = beta[j] / sqrt((1.0 + beta_sq) as f64) as f32
-                }
-
-                if c < n_components {
-                    if c == 0 {
-                        for j in 0 to p {
-                            if components[c] == null {
-                                components[c] = array_new_f32(p)
-                            }
-                            components[c][j] = w[j]
-                        }
-                    }
-                }
-                array_free_f32(w)
-                array_free_f32(beta)
+            let w: ptr<f32> = array_new_f32(p)
+            for j in 0 to p {
+                w[j] = cov[j][j] * inv_psi[j] * 0.5
             }
+
+            let beta: ptr<f32> = array_new_f32(p)
+            for j in 0 to p {
+                let mut s: f32 = 0.0
+                for k in 0 to p {
+                    s = s + cov[j][k] * inv_psi[k] * w[k]
+                }
+                beta[j] = s
+            }
+
+            let mut beta_sq: f32 = 0.0
+            for j in 0 to p { beta_sq = beta_sq + beta[j] * beta[j] * inv_psi[j] }
+            if beta_sq < 0.0000000001 { beta_sq = 0.0000000001 }
+
+            for j in 0 to p {
+                w[j] = beta[j] / sqrt((1.0 + beta_sq) as f64) as f32
+            }
+
+            # Store component c
+            if components[c] == null {
+                components[c] = array_new_f32(p)
+            }
+            for j in 0 to p {
+                components[c][j] = w[j]
+            }
+
+            # Deflate covariance for next component in this iteration
+            for j in 0 to p {
+                for k in 0 to p {
+                    cov[j][k] = cov[j][k] - w[j] * w[k]
+                }
+            }
+
+            array_free_f32(w)
+            array_free_f32(beta)
         }
 
         let mut max_change: f32 = 0.0
@@ -1288,6 +1307,8 @@ export function factor_analysis_fit(X: Matrix, n_components: i32, max_iter: i32,
 
     for i in 0 to p { array_free_f32(cov[i]) }
     free(cov as ptr<void>)
+    for i in 0 to p { array_free_f32(cov_orig[i]) }
+    free(cov_orig as ptr<void>)
     matrix_free(Xc)
 
     return FactorAnalysis {
