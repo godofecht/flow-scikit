@@ -3263,113 +3263,409 @@ function _col_means(X: Matrix, n_features: i32) -> ptr<f32> {
     return result
 }
 
-# Helper: compute column norms squared of centered X
-function _col_norms_sq(X: Matrix, col_means: ptr<f32>, n_features: i32) -> ptr<f32> {
-    let result: ptr<f32> = array_new_f32(n_features)
-    let mut j: i32 = 0
-    while j < n_features {
-        let mut s: f32 = 0.0
-        let mut i: i32 = 0
-        while i < X.rows {
-            let v: f32 = matrix_at(X, i, j) - col_means[j]
-            s = s + v * v
-            i = i + 1
-        }
-        result[j] = s
-        j = j + 1
+# Helper: solve small linear system Ax = b using Gaussian elimination
+# A is n x n stored as flat array, b is n, returns solution array of size n
+# Uses f64 internally for numerical stability
+function _solve_linear_system(A: ptr<f32>, b: ptr<f32>, n: i32) -> ptr<f32> {
+    # Copy A and b to f64 for higher precision
+    let M: ptr<f64> = array_new_f64(n * n)
+    let rhs: ptr<f64> = array_new_f64(n)
+    let mut i: i32 = 0
+    while i < n * n {
+        M[i] = A[i] as f64
+        i = i + 1
     }
-    return result
+    i = 0
+    while i < n {
+        rhs[i] = b[i] as f64
+        i = i + 1
+    }
+
+    # Forward elimination with partial pivoting
+    let mut col: i32 = 0
+    while col < n {
+        # Find pivot
+        let mut max_row: i32 = col
+        let mut max_val: f64 = M[col * n + col]
+        let abs_max: f64 = max_val
+        if max_val < 0.0 { max_val = -max_val }
+        let mut row: i32 = col + 1
+        while row < n {
+            let val: f64 = M[row * n + col]
+            let abs_val: f64 = val
+            if val < 0.0 { abs_val = -val }
+            if abs_val > abs_max {
+                max_row = row
+                max_val = val
+            }
+            row = row + 1
+        }
+
+        # Swap rows
+        if max_row != col {
+            let mut k: i32 = 0
+            while k < n {
+                let tmp: f64 = M[col * n + k]
+                M[col * n + k] = M[max_row * n + k]
+                M[max_row * n + k] = tmp
+                k = k + 1
+            }
+            let tmp2: f64 = rhs[col]
+            rhs[col] = rhs[max_row]
+            rhs[max_row] = tmp2
+        }
+
+        # Eliminate
+        let pivot: f64 = M[col * n + col]
+        if pivot > -0.000000000001 and pivot < 0.000000000001 {
+            # Singular, return zeros
+            let result: ptr<f32> = array_new_f32(n)
+            array_free_f64(M)
+            array_free_f64(rhs)
+            return result
+        }
+        row = col + 1
+        while row < n {
+            let factor: f64 = M[row * n + col] / pivot
+            let mut k2: i32 = col
+            while k2 < n {
+                M[row * n + k2] = M[row * n + k2] - factor * M[col * n + k2]
+                k2 = k2 + 1
+            }
+            rhs[row] = rhs[row] - factor * rhs[col]
+            row = row + 1
+        }
+        col = col + 1
+    }
+
+    # Back substitution
+    let x: ptr<f32> = array_new_f32(n)
+    let mut r: i32 = n - 1
+    while r >= 0 {
+        let mut sum: f64 = rhs[r]
+        let mut c2: i32 = r + 1
+        while c2 < n {
+            sum = sum - M[r * n + c2] * (x[c2] as f64)
+            c2 = c2 + 1
+        }
+        x[r] = (sum / M[r * n + r]) as f32
+        r = r - 1
+    }
+
+    array_free_f64(M)
+    array_free_f64(rhs)
+    return x
 }
 
-# Helper: compute dot product of centered column k with residual
-function _centered_col_dot(X: Matrix, col_means: ptr<f32>, residual: ptr<f32>, k: i32) -> f32 {
+# Helper: compute Gram matrix of active centered columns
+# Returns n_active x n_active flat array
+function _gram_active(X: Matrix, cmeans: ptr<f32>, active: ptr<i32>, n_active: i32) -> ptr<f32> {
+    let G: ptr<f32> = array_new_f32(n_active * n_active)
+    let mut a: i32 = 0
+    while a < n_active {
+        let mut b: i32 = 0
+        while b < n_active {
+            let mut s: f32 = 0.0
+            let mut i: i32 = 0
+            while i < X.rows {
+                let va: f32 = matrix_at(X, i, active[a]) - cmeans[active[a]]
+                let vb: f32 = matrix_at(X, i, active[b]) - cmeans[active[b]]
+                s = s + va * vb
+                i = i + 1
+            }
+            G[a * n_active + b] = s
+            b = b + 1
+        }
+        a = a + 1
+    }
+    return G
+}
+
+# Helper: compute centered column dot with vector
+function _centered_dot(X: Matrix, cmeans: ptr<f32>, k: i32, v_arr: ptr<f32>) -> f32 {
     let mut s: f32 = 0.0
     let mut i: i32 = 0
     while i < X.rows {
-        s = s + (matrix_at(X, i, k) - col_means[k]) * residual[i]
+        s = s + (matrix_at(X, i, k) - cmeans[k]) * v_arr[i]
         i = i + 1
     }
     return s
-}
-
-# Helper: add/subtract w * centered_col_k to/from residual
-function _update_residual(X: Matrix, col_means: ptr<f32>, residual: ptr<f32>, k: i32, w: f32, sign: f32) -> void {
-    let mut i: i32 = 0
-    while i < X.rows {
-        residual[i] = residual[i] + sign * w * (matrix_at(X, i, k) - col_means[k])
-        i = i + 1
-    }
-}
-
-# Helper: soft threshold
-function _soft_threshold(rho: f32, threshold: f32) -> f32 {
-    if rho > threshold { return rho - threshold }
-    if rho < -threshold { return rho + threshold }
-    return 0.0
 }
 
 export function lasso_lars_fit(X: Matrix, y: ptr<f32>, alpha: f32, max_iter: i32) -> LassoLars {
     let n: i32 = X.rows
     let n_features: i32 = X.cols
 
-    # LassoLars: coordinate descent with soft-thresholding.
-    # Produces the same L1-regularized solution as the LARS-Lasso path.
+    # LARS-Lasso algorithm (Efron et al. 2004)
+    # Computes the L1-regularized solution via the LARS path
+    # with the Lasso modification (removing variables that cross zero).
 
     let y_mean: f32 = array_mean(y, n)
     let cmeans: ptr<f32> = _col_means(X, n_features)
-    let norms_sq: ptr<f32> = _col_norms_sq(X, cmeans, n_features)
 
-    let weights: ptr<f32> = array_new_f32(n_features)
-    let residual: ptr<f32> = array_new_f32(n)
+    # Center y
+    let yc: ptr<f32> = array_new_f32(n)
     let mut i: i32 = 0
-    while i < n_features {
-        weights[i] = 0.0
+    while i < n {
+        yc[i] = y[i] - y_mean
         i = i + 1
     }
+
+    # Weights (coefficients in centered space)
+    let beta: ptr<f32> = array_new_f32(n_features)
+    i = 0
+    while i < n_features {
+        beta[i] = 0.0
+        i = i + 1
+    }
+
+    # Active set
+    let active: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    let signs: ptr<f32> = array_new_f32(n_features)
+    let mut n_active: i32 = 0
+
+    # Residual = yc (since beta = 0)
+    let residual: ptr<f32> = array_new_f32(n)
     i = 0
     while i < n {
-        residual[i] = y[i] - y_mean
+        residual[i] = yc[i]
         i = i + 1
     }
 
-    let threshold: f32 = alpha * (n as f32)
-    let mut n_active: i32 = 0
     let mut iter: i32 = 0
-
     while iter < max_iter {
-        let mut n_changed: i32 = 0
-        let mut k: i32 = 0
-        while k < n_features {
-            if norms_sq[k] < 0.0000000001 { k = k + 1; continue }
-            let w_old: f32 = weights[k]
-            _update_residual(X, cmeans, residual, k, w_old, 1.0)
-            let rho: f32 = _centered_col_dot(X, cmeans, residual, k)
-            let w_new: f32 = _soft_threshold(rho, threshold) / norms_sq[k]
-            if w_new != w_old { n_changed = n_changed + 1 }
-            if w_old == 0.0 and w_new != 0.0 { n_active = n_active + 1 }
-            if w_old != 0.0 and w_new == 0.0 { n_active = n_active - 1 }
-            weights[k] = w_new
-            _update_residual(X, cmeans, residual, k, w_new, -1.0)
-            k = k + 1
+        # Compute correlations c_j = X_j^T * residual
+        let corr: ptr<f32> = array_new_f32(n_features)
+        let mut j: i32 = 0
+        while j < n_features {
+            corr[j] = _centered_dot(X, cmeans, j, residual)
+            j = j + 1
         }
-        if n_changed == 0 { break }
+
+        # Find max absolute correlation
+        let mut C: f32 = 0.0
+        j = 0
+        while j < n_features {
+            let ac: f32 = corr[j]
+            if ac < 0.0 { ac = -ac }
+            if ac > C { C = ac }
+            j = j + 1
+        }
+
+        # Stop if max correlation is below threshold (alpha * n)
+        let threshold: f32 = alpha * (n as f32)
+        if C < threshold { array_free_f32(corr); break }
+
+        # Check KKT: add variables that are at max correlation
+        let mut add_idx: i32 = -1
+        let mut max_corr_inactive: f32 = 0.0
+        j = 0
+        while j < n_features {
+            # Check if j is active
+            let mut is_active: bool = false
+            let mut a: i32 = 0
+            while a < n_active {
+                if active[a] == j { is_active = true }
+                a = a + 1
+            }
+            if not is_active {
+                let ac2: f32 = corr[j]
+                if ac2 < 0.0 { ac2 = -ac2 }
+                if ac2 > C - 0.001 {
+                    # This variable is at max correlation, add it
+                    if ac2 > max_corr_inactive {
+                        max_corr_inactive = ac2
+                        add_idx = j
+                    }
+                }
+            }
+            j = j + 1
+        }
+
+        if add_idx >= 0 {
+            active[n_active] = add_idx
+            if corr[add_idx] >= 0.0 {
+                signs[n_active] = 1.0
+            } else {
+                signs[n_active] = -1.0
+            }
+            n_active = n_active + 1
+        }
+
+        if n_active == 0 { array_free_f32(corr); break }
+
+        # Compute equiangular direction
+        # G = X_A^T X_A (n_active x n_active)
+        let G: ptr<f32> = _gram_active(X, cmeans, active, n_active)
+
+        # s = signs of active variables
+        let s_vec: ptr<f32> = array_new_f32(n_active)
+        let mut a2: i32 = 0
+        while a2 < n_active {
+            s_vec[a2] = signs[a2]
+            a2 = a2 + 1
+        }
+
+        # Solve G * w = s to get w = G^{-1} * s
+        let w: ptr<f32> = _solve_linear_system(G, s_vec, n_active)
+
+        # A_A = 1 / sqrt(1^T * w) = 1 / sqrt(sum(w))
+        let mut sum_w: f32 = 0.0
+        a2 = 0
+        while a2 < n_active {
+            sum_w = sum_w + w[a2]
+            a2 = a2 + 1
+        }
+
+        if sum_w < 0.0000000001 {
+            array_free_f32(corr)
+            array_free_f32(G)
+            array_free_f32(s_vec)
+            array_free_f32(w)
+            break
+        }
+
+        let AA: f32 = 1.0 / sqrt((sum_w) as f64) as f32
+
+        # Equiangular direction weights: gamma_dir = AA * w
+        let gamma_dir: ptr<f32> = array_new_f32(n_active)
+        a2 = 0
+        while a2 < n_active {
+            gamma_dir[a2] = AA * w[a2]
+            a2 = a2 + 1
+        }
+
+        # Compute a_j = X_j^T * u_A for all j (where u_A = X_A * gamma_dir)
+        # a_j = sum over active of gamma_dir[a] * (X_j^T X_{active[a]})
+        let a_vec: ptr<f32> = array_new_f32(n_features)
+        j = 0
+        while j < n_features {
+            let mut s: f32 = 0.0
+            let mut a3: i32 = 0
+            while a3 < n_active {
+                let mut dot: f32 = 0.0
+                let mut i2: i32 = 0
+                while i2 < n {
+                    dot = dot + (matrix_at(X, i2, j) - cmeans[j]) * (matrix_at(X, i2, active[a3]) - cmeans[active[a3]])
+                    i2 = i2 + 1
+                }
+                s = s + gamma_dir[a3] * dot
+                a3 = a3 + 1
+            }
+            a_vec[j] = s
+            j = j + 1
+        }
+
+        # Compute step size gamma
+        # For inactive variables: gamma_j = min of (C - c_j)/(AA - a_j) and (C + c_j)/(AA + a_j)
+        # Take the minimum positive gamma_j
+        let mut gamma: f32 = 999999.0
+        j = 0
+        while j < n_features {
+            let mut is_active2: bool = false
+            let mut a4: i32 = 0
+            while a4 < n_active {
+                if active[a4] == j { is_active2 = true }
+                a4 = a4 + 1
+            }
+            if not is_active2 {
+                let t1: f32 = (C - corr[j]) / (AA - a_vec[j])
+                let t2: f32 = (C + corr[j]) / (AA + a_vec[j])
+                if t1 > 0.0000000001 and t1 < gamma { gamma = t1 }
+                if t2 > 0.0000000001 and t2 < gamma { gamma = t2 }
+            }
+            j = j + 1
+        }
+
+        # Lasso modification: check if any active coefficient crosses zero
+        let mut gamma_tilde: f32 = 999999.0
+        let mut drop_idx: i32 = -1
+        let mut a5: i32 = 0
+        while a5 < n_active {
+            if gamma_dir[a5] != 0.0 {
+                let t: f32 = -beta[active[a5]] / gamma_dir[a5]
+                if t > 0.0000000001 and t < gamma_tilde {
+                    gamma_tilde = t
+                    drop_idx = a5
+                }
+            }
+            a5 = a5 + 1
+        }
+
+        # Use the smaller step
+        let mut step: f32 = gamma
+        if gamma_tilde < gamma {
+            step = gamma_tilde
+        }
+        if step > 999998.0 { step = C / AA }
+
+        # Don't step past the point where C drops below threshold
+        let max_step: f32 = (C - threshold) / AA
+        if step > max_step { step = max_step }
+        if step < 0.0 { step = 0.0 }
+
+        # Update beta and residual
+        let mut a6: i32 = 0
+        while a6 < n_active {
+            let idx: i32 = active[a6]
+            beta[idx] = beta[idx] + step * gamma_dir[a6]
+            a6 = a6 + 1
+        }
+
+        # Update residual: r -= step * X_A * gamma_dir
+        let mut i3: i32 = 0
+        while i3 < n {
+            let mut delta: f32 = 0.0
+            let mut a7: i32 = 0
+            while a7 < n_active {
+                delta = delta + step * gamma_dir[a7] * (matrix_at(X, i3, active[a7]) - cmeans[active[a7]])
+                a7 = a7 + 1
+            }
+            residual[i3] = residual[i3] - delta
+            i3 = i3 + 1
+        }
+
+        # Lasso modification: drop variable if coefficient crossed zero
+        if drop_idx >= 0 and gamma_tilde < gamma {
+            let drop_var: i32 = active[drop_idx]
+            beta[drop_var] = 0.0
+            # Remove from active set
+            let mut a8: i32 = drop_idx
+            while a8 < n_active - 1 {
+                active[a8] = active[a8 + 1]
+                signs[a8] = signs[a8 + 1]
+                a8 = a8 + 1
+            }
+            n_active = n_active - 1
+        }
+
+        array_free_f32(corr)
+        array_free_f32(G)
+        array_free_f32(s_vec)
+        array_free_f32(w)
+        array_free_f32(gamma_dir)
+        array_free_f32(a_vec)
+
+        if step < 0.0000000001 { break }
         iter = iter + 1
     }
 
     # Compute bias
     let bias: f32 = y_mean
-    let mut j: i32 = 0
-    while j < n_features {
-        bias = bias - weights[j] * cmeans[j]
-        j = j + 1
+    let mut j2: i32 = 0
+    while j2 < n_features {
+        bias = bias - beta[j2] * cmeans[j2]
+        j2 = j2 + 1
     }
 
     array_free_f32(cmeans)
-    array_free_f32(norms_sq)
+    array_free_f32(yc)
     array_free_f32(residual)
+    free(active as ptr<void>)
+    array_free_f32(signs)
 
     let result: LassoLars = LassoLars {
-        weights: weights,
+        weights: beta,
         bias: bias,
         n_features: n_features,
         n_active: n_active,

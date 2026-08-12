@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+### Real load_digits dataset
+
+- Replaced synthetic load_digits (180 samples) with the actual digits
+  dataset (1797 samples, 64 features, 10 classes). Real 8x8 pixel
+  handwritten digit data from sklearn.datasets.load_digits().
+
+### LARS-Lasso path algorithm
+
+- Replaced coordinate descent in lasso_lars_fit with the actual
+  LARS-Lasso algorithm from Efron et al. (2004). Computes the
+  equiangular direction via Gaussian elimination on the active set
+  Gram matrix. Includes the Lasso modification: removes variables
+  from the active set when their coefficients cross zero.
+- Linear solver uses f64 internally for numerical stability.
+- Added helpers: _solve_linear_system, _gram_active, _centered_dot.
+
+### LinearSVC dual coordinate descent
+
+- Replaced SGD with dual coordinate descent for L2-regularized
+  L1-loss SVM (Hsieh et al. 2008, used by liblinear). Solves the
+  dual problem with projected gradient updates. Computes bias from
+  free support vectors.
+
+### Model persistence
+
+- Added lib/scikit/persistence.flow with binary save/load for
+  matrices, arrays, scalars, and integers. Uses C file I/O
+  (fopen, fwrite, fread). Functions: save_matrix, load_matrix,
+  save_array, load_array, save_scalar, load_scalar, save_int,
+  load_int.
+- Added tests/test_persistence.flow.
+
+### f64 precision support
+
+- Added f64 array functions to matrix.flow: array_new_f64,
+  array_free_f64, array_copy_f64.
+- LARS linear solver uses f64 internally for numerical stability.
+  More algorithms can be converted to f64 internal precision as
+  needed.
+
+### Sparse matrix support
+
+- Added lib/scikit/sparse.flow with CSR (Compressed Sparse Row)
+  format. Mirrors scipy.sparse.csr_matrix.
+- Functions: sparse_new, sparse_free, sparse_from_dense,
+  sparse_to_dense, sparse_at, sparse_dot_row, sparse_dot_dense,
+  sparse_density, sparse_nnz_per_row.
+- Added tests/test_sparse.flow.
+
 ### Improved SMO convergence for KernelSVC
 
 - Implemented proper SMO alternating pass strategy (Platt 1998).

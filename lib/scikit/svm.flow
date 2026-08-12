@@ -20,13 +20,14 @@ export struct LinearSVC {
 }
 
 export function linear_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, epochs: i32, lr: f32) -> LinearSVC {
-    let n: i32 = X.cols
-    let weights: ptr<f32> = array_new_f32(n)
+    let n_features: i32 = X.cols
+    let n_samples: i32 = X.rows
+    let weights: ptr<f32> = array_new_f32(n_features)
     let bias: f32 = 0.0
 
     let classes: ptr<f32> = array_new_f32(n_classes)
     let mut n_found: i32 = 0
-    for i in 0 to X.rows {
+    for i in 0 to n_samples {
         let mut found: bool = false
         for k in 0 to n_found {
             if classes[k] == y[i] {
@@ -39,37 +40,111 @@ export function linear_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, e
         }
     }
 
-    for epoch in 0 to epochs {
-        for i in 0 to X.rows {
-            let mut z: f32 = bias
-            for j in 0 to n {
-                z = z + weights[j] * matrix_at(X, i, j)
-            }
+    # Dual coordinate descent for L2-regularized L1-loss SVM
+    # (Hsieh et al. 2008, used by liblinear)
+    # Dual: min 0.5 * alpha^T Q alpha - sum(alpha_i)
+    #       s.t. 0 <= alpha_i <= C
+    # where Q_ij = y_i y_j x_i^T x_j
+    # Primal weights: w = sum(alpha_i * y_i * x_i)
 
-            let label: f32 = -1.0
-            if y[i] == classes[1] {
-                label = 1.0
-            }
-
-            let margin: f32 = label * z
-            if margin < 1.0 {
-                for j in 0 to n {
-                    let grad: f32 = lr * (C * -label * matrix_at(X, i, j) + weights[j] / (X.rows as f32))
-                    weights[j] = weights[j] - grad
-                }
-                bias = bias + lr * C * label
-            } else {
-                for j in 0 to n {
-                    weights[j] = weights[j] - lr * weights[j] / (X.rows as f32)
-                }
-            }
+    # Binary encoding: class[1] = +1, others = -1
+    let y_dual: ptr<f32> = array_new_f32(n_samples)
+    for i in 0 to n_samples {
+        if y[i] == classes[1] {
+            y_dual[i] = 1.0
+        } else {
+            y_dual[i] = -1.0
         }
     }
+
+    # Initialize alpha to 0 (w = 0)
+    let alpha: ptr<f32> = array_new_f32(n_samples)
+    for i in 0 to n_samples {
+        alpha[i] = 0.0
+    }
+
+    # Initialize weights to 0
+    for j in 0 to n_features {
+        weights[j] = 0.0
+    }
+
+    let eps: f32 = 0.001
+    let mut epoch: i32 = 0
+    while epoch < epochs {
+        let mut max_pg: f32 = 0.0
+        for i in 0 to n_samples {
+            # Compute Q_ii = x_i^T x_i
+            let mut Q_ii: f32 = 0.0
+            for j in 0 to n_features {
+                let xv: f32 = matrix_at(X, i, j)
+                Q_ii = Q_ii + xv * xv
+            }
+
+            if Q_ii < 0.0000000001 { continue }
+
+            # Compute G = y_i * w^T x_i - 1
+            let mut w_dot_x: f32 = 0.0
+            for j in 0 to n_features {
+                w_dot_x = w_dot_x + weights[j] * matrix_at(X, i, j)
+            }
+            let G: f32 = y_dual[i] * w_dot_x - 1.0
+
+            # Projected gradient
+            let mut PG: f32 = G
+            if alpha[i] <= 0.0 {
+                if G > 0.0 { PG = 0.0 }
+            }
+            if alpha[i] >= C {
+                if G < 0.0 { PG = 0.0 }
+            }
+
+            let abs_pg: f32 = PG
+            if PG < 0.0 { abs_pg = -PG }
+            if abs_pg > max_pg { max_pg = abs_pg }
+
+            if abs_pg > eps {
+                # Update alpha
+                let alpha_new: f32 = alpha[i] - G / Q_ii
+                if alpha_new < 0.0 { alpha_new = 0.0 }
+                if alpha_new > C { alpha_new = C }
+
+                # Update w: w += (alpha_new - alpha_i) * y_i * x_i
+                let delta: f32 = (alpha_new - alpha[i]) * y_dual[i]
+                for j in 0 to n_features {
+                    weights[j] = weights[j] + delta * matrix_at(X, i, j)
+                }
+
+                alpha[i] = alpha_new
+            }
+        }
+        if max_pg < eps { break }
+        epoch = epoch + 1
+    }
+
+    # Compute bias: average over support vectors (0 < alpha < C)
+    let mut bias_sum: f32 = 0.0
+    let mut n_sv: i32 = 0
+    for i in 0 to n_samples {
+        if alpha[i] > 0.0 and alpha[i] < C {
+            let mut w_dot_x: f32 = 0.0
+            for j in 0 to n_features {
+                w_dot_x = w_dot_x + weights[j] * matrix_at(X, i, j)
+            }
+            bias_sum = bias_sum + (y_dual[i] - w_dot_x)
+            n_sv = n_sv + 1
+        }
+    }
+    if n_sv > 0 {
+        bias = bias_sum / (n_sv as f32)
+    }
+
+    array_free_f32(y_dual)
+    array_free_f32(alpha)
 
     return LinearSVC {
         weights: weights,
         bias: bias,
-        n_features: n,
+        n_features: n_features,
         classes: classes,
         n_classes: n_classes,
         C: C,

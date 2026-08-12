@@ -138,6 +138,22 @@ export function array_free_f32(p: ptr<f32>) -> void {
     free(p as ptr<void>)
 }
 
+# f64 array support for higher-precision internal computations
+export function array_new_f64(n: i32) -> ptr<f64> {
+    let p: ptr<void> = calloc((n as i64) * 8, 1)
+    return p as ptr<f64>
+}
+
+export function array_free_f64(p: ptr<f64>) -> void {
+    free(p as ptr<void>)
+}
+
+export function array_copy_f64(src: ptr<f64>, n: i32) -> ptr<f64> {
+    let dst: ptr<f64> = array_new_f64(n)
+    memcpy(dst as ptr<void>, src as ptr<void>, (n as i64) * 8)
+    return dst
+}
+
 export function array_copy_f32(src: ptr<f32>, n: i32) -> ptr<f32> {
     let dst: ptr<f32> = array_new_f32(n)
     memcpy(dst as ptr<void>, src as ptr<void>, (n as i64) * 4)
