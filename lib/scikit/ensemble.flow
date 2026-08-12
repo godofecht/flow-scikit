@@ -1548,12 +1548,451 @@ export function stacking_classifier_free(model: StackingClassifier) -> void {
 }
 
 # ============================================================================
-# HistGradientBoosting (simplified histogram-based GBM)
+# HistGradientBoosting with proper histogram binning and histogram-based splits.
+# Bins features into at most 256 bins, builds gradient/hessian histograms,
+# and finds splits by scanning histogram bins instead of all samples.
 # ============================================================================
+
+# Histogram tree node: stores split feature, threshold, or leaf value
+export struct HistNode {
+    feature: i32,
+    threshold: f32,
+    left: i32,
+    right: i32,
+    value: f32,
+    is_leaf: bool
+}
+
+# Histogram tree: array of nodes
+export struct HistTree {
+    nodes: ptr<HistNode>,
+    n_nodes: i32,
+    max_nodes: i32
+}
+
+# Binned data: each value is an integer bin index (0 to n_bins-1)
+# Stored as a Matrix where data is interpreted as i32
+export struct BinnedData {
+    data: ptr<i32>,
+    n_samples: i32,
+    n_features: i32,
+    # Per-feature bin boundaries: thresholds[f][b] is the upper bound of bin b
+    thresholds: ptr<ptr<f32> >,
+    n_bins: ptr<i32>,
+    max_bins: i32
+}
+
+# Helper: compute quantile-based bin boundaries for one feature
+function _compute_bin_thresholds(values: ptr<f32>, n: i32, max_bins: i32) -> ptr<f32> {
+    # Sort values (simple insertion sort for small n)
+    let sorted: ptr<f32> = array_new_f32(n)
+    let mut i: i32 = 0
+    while i < n {
+        sorted[i] = values[i]
+        i = i + 1
+    }
+    let mut i2: i32 = 1
+    while i2 < n {
+        let key: f32 = sorted[i2]
+        let mut j: i32 = i2 - 1
+        while j >= 0 && sorted[j] > key {
+            sorted[j + 1] = sorted[j]
+            j = j - 1
+        }
+        sorted[j + 1] = key
+        i2 = i2 + 1
+    }
+
+    # Create bin boundaries at quantile positions
+    let n_thresholds: i32 = max_bins - 1
+    if n_thresholds > n - 1 { n_thresholds = n - 1 }
+    if n_thresholds < 1 { n_thresholds = 1 }
+
+    let thresholds: ptr<f32> = array_new_f32(max_bins)
+    let mut k: i32 = 0
+    while k < n_thresholds {
+        # Quantile position
+        let pos: f32 = (k + 1) as f32 / (n_thresholds + 1) as f32
+        let idx: i32 = (pos * (n as f32)) as i32
+        if idx >= n { idx = n - 1 }
+        if idx < 0 { idx = 0 }
+        thresholds[k] = sorted[idx]
+        k = k + 1
+    }
+    # Fill remaining with last value
+    while k < max_bins {
+        thresholds[k] = sorted[n - 1]
+        k = k + 1
+    }
+
+    array_free_f32(sorted)
+    return thresholds
+}
+
+# Helper: assign a value to a bin using the thresholds
+function _bin_value(val: f32, thresholds: ptr<f32>, n_thresholds: i32) -> i32 {
+    let mut b: i32 = 0
+    while b < n_thresholds {
+        if val <= thresholds[b] { return b }
+        b = b + 1
+    }
+    return n_thresholds
+}
+
+# Bin all features of X
+function _bin_features(X: Matrix, max_bins: i32) -> BinnedData {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let binned: ptr<i32> = malloc((n as i64) * (p as i64) * 4) as ptr<i32>
+    let thresholds: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    let n_bins: ptr<i32> = malloc((p as i64) * 4) as ptr<i32>
+
+    let mut f: i32 = 0
+    while f < p {
+        # Extract column
+        let col_vals: ptr<f32> = array_new_f32(n)
+        let mut i: i32 = 0
+        while i < n {
+            col_vals[i] = matrix_at(X, i, f)
+            i = i + 1
+        }
+
+        thresholds[f] = _compute_bin_thresholds(col_vals, n, max_bins)
+        n_bins[f] = max_bins
+
+        # Bin each value
+        i = 0
+        while i < n {
+            binned[i * p + f] = _bin_value(matrix_at(X, i, f), thresholds[f], max_bins - 1)
+            i = i + 1
+        }
+
+        array_free_f32(col_vals)
+        f = f + 1
+    }
+
+    return BinnedData {
+        data: binned,
+        n_samples: n,
+        n_features: p,
+        thresholds: thresholds,
+        n_bins: n_bins,
+        max_bins: max_bins
+    }
+}
+
+# Free binned data
+function _binned_free(bd: BinnedData) -> void {
+    let mut f: i32 = 0
+    while f < bd.n_features {
+        array_free_f32(bd.thresholds[f])
+        f = f + 1
+    }
+    free(bd.thresholds as ptr<void>)
+    free(bd.n_bins as ptr<void>)
+    free(bd.data as ptr<void>)
+}
+
+# Helper: create a new hist tree
+function _hist_tree_new(max_nodes: i32) -> HistTree {
+    let nodes: ptr<HistNode> = malloc((max_nodes as i64) * 24) as ptr<HistNode>
+    return HistTree { nodes: nodes, n_nodes: 0, max_nodes: max_nodes }
+}
+
+# Helper: add a leaf node
+function _hist_tree_add_leaf(tree: HistTree, value: f32) -> i32 {
+    let idx: i32 = tree.n_nodes
+    tree.nodes[idx].feature = -1
+    tree.nodes[idx].threshold = 0.0
+    tree.nodes[idx].left = -1
+    tree.nodes[idx].right = -1
+    tree.nodes[idx].value = value
+    tree.nodes[idx].is_leaf = true
+    tree.n_nodes = tree.n_nodes + 1
+    return idx
+}
+
+# Helper: add a leaf node using shared node counter
+function _hist_tree_add_leaf_ptr(tree: HistTree, value: f32, node_count: ptr<i32>) -> i32 {
+    let idx: i32 = node_count[0]
+    tree.nodes[idx].feature = -1
+    tree.nodes[idx].threshold = 0.0
+    tree.nodes[idx].left = -1
+    tree.nodes[idx].right = -1
+    tree.nodes[idx].value = value
+    tree.nodes[idx].is_leaf = true
+    node_count[0] = node_count[0] + 1
+    return idx
+}
+
+# Helper: add a split node
+function _hist_tree_add_split(tree: HistTree, feature: i32, threshold: f32, left: i32, right: i32) -> i32 {
+    let idx: i32 = tree.n_nodes
+    tree.nodes[idx].feature = feature
+    tree.nodes[idx].threshold = threshold
+    tree.nodes[idx].left = left
+    tree.nodes[idx].right = right
+    tree.nodes[idx].value = 0.0
+    tree.nodes[idx].is_leaf = false
+    tree.n_nodes = tree.n_nodes + 1
+    return idx
+}
+
+# Helper: build histogram for one feature at one node
+# Returns arrays of gradient sum and hessian sum per bin
+struct HistPair {
+    hist_g: ptr<f32>,
+    hist_h: ptr<f32>
+}
+
+function _build_hist(
+    bd: BinnedData, gradients: ptr<f32>, hessians: ptr<f32>,
+    sample_idx: ptr<i32>, n_samples: i32, feature: i32,
+    n_bins: i32
+) -> HistPair {
+    let hist_g: ptr<f32> = array_new_f32(n_bins)
+    let hist_h: ptr<f32> = array_new_f32(n_bins)
+    let mut i: i32 = 0
+    while i < n_samples {
+        let sidx: i32 = sample_idx[i]
+        let bin_val: i32 = bd.data[sidx * bd.n_features + feature]
+        hist_g[bin_val] = hist_g[bin_val] + gradients[sidx]
+        hist_h[bin_val] = hist_h[bin_val] + hessians[sidx]
+        i = i + 1
+    }
+    return HistPair { hist_g: hist_g, hist_h: hist_h }
+}
+
+# Helper: find best split across all features using histograms
+# Returns: best_feature, best_bin, best_gain (-1 if no split found)
+struct SplitResult {
+    feature: i32,
+    bin: i32,
+    gain: f32
+}
+
+function _find_best_hist_split(
+    bd: BinnedData, gradients: ptr<f32>, hessians: ptr<f32>,
+    sample_idx: ptr<i32>, n_samples: i32, n_bins: i32,
+    lam: f32
+) -> SplitResult {
+    let mut best_feature: i32 = -1
+    let mut best_bin: i32 = -1
+    let mut best_gain: f32 = 0.0
+
+    # Total G and H
+    let mut total_g: f32 = 0.0
+    let mut total_h: f32 = 0.0
+    let mut i: i32 = 0
+    while i < n_samples {
+        let sidx: i32 = sample_idx[i]
+        total_g = total_g + gradients[sidx]
+        total_h = total_h + hessians[sidx]
+        i = i + 1
+    }
+
+    let parent_score: f32 = (total_g * total_g) / (total_h + lam)
+
+    let mut f: i32 = 0
+    while f < bd.n_features {
+        let result: HistPair = _build_hist(bd, gradients, hessians, sample_idx, n_samples, f, n_bins)
+        let hist_g: ptr<f32> = result.hist_g
+        let hist_h: ptr<f32> = result.hist_h
+
+        # Scan bins to find best split
+        let mut cum_g: f32 = 0.0
+        let mut cum_h: f32 = 0.0
+        let mut b: i32 = 0
+        while b < n_bins - 1 {
+            cum_g = cum_g + hist_g[b]
+            cum_h = cum_h + hist_h[b]
+            let right_g: f32 = total_g - cum_g
+            let right_h: f32 = total_h - cum_h
+
+            if cum_h > 0.0000000001 and right_h > 0.0000000001 {
+                let left_score: f32 = (cum_g * cum_g) / (cum_h + lam)
+                let right_score: f32 = (right_g * right_g) / (right_h + lam)
+                let gain: f32 = left_score + right_score - parent_score
+                if gain > best_gain {
+                    best_gain = gain
+                    best_feature = f
+                    best_bin = b
+                }
+            }
+            b = b + 1
+        }
+
+        array_free_f32(hist_g)
+        array_free_f32(hist_h)
+        f = f + 1
+    }
+
+    return SplitResult { feature: best_feature, bin: best_bin, gain: best_gain }
+}
+
+# Helper: split samples into left and right based on feature and bin
+struct SplitSamplesResult {
+    n_left: i32,
+    n_right: i32
+}
+
+function _split_samples(
+    bd: BinnedData, sample_idx: ptr<i32>, n_samples: i32,
+    feature: i32, bin_threshold: i32,
+    left_idx: ptr<i32>, right_idx: ptr<i32>
+) -> SplitSamplesResult {
+    let mut n_left: i32 = 0
+    let mut n_right: i32 = 0
+    let mut i: i32 = 0
+    while i < n_samples {
+        let sidx: i32 = sample_idx[i]
+        let bin_val: i32 = bd.data[sidx * bd.n_features + feature]
+        if bin_val <= bin_threshold {
+            left_idx[n_left] = sidx
+            n_left = n_left + 1
+        } else {
+            right_idx[n_right] = sidx
+            n_right = n_right + 1
+        }
+        i = i + 1
+    }
+    return SplitSamplesResult { n_left: n_left, n_right: n_right }
+}
+
+# Helper: compute leaf value (negative gradient / hessian sum)
+function _compute_leaf_value(gradients: ptr<f32>, hessians: ptr<f32>, sample_idx: ptr<i32>, n_samples: i32, lam: f32) -> f32 {
+    let mut g_sum: f32 = 0.0
+    let mut h_sum: f32 = 0.0
+    let mut i: i32 = 0
+    while i < n_samples {
+        g_sum = g_sum + gradients[sample_idx[i]]
+        h_sum = h_sum + hessians[sample_idx[i]]
+        i = i + 1
+    }
+    return -g_sum / (h_sum + lam)
+}
+
+# Build a histogram tree recursively
+function _build_hist_tree(
+    bd: BinnedData, gradients: ptr<f32>, hessians: ptr<f32>,
+    sample_idx: ptr<i32>, n_samples: i32, depth: i32, max_depth: i32,
+    n_bins: i32, lam: f32, min_samples_leaf: i32
+) -> HistTree {
+    let max_nodes: i32 = 1
+    let mut d: i32 = 0
+    while d < max_depth {
+        max_nodes = max_nodes * 2 + 1
+        d = d + 1
+    }
+    let tree: HistTree = _hist_tree_new(max_nodes + 1)
+    let node_count: ptr<i32> = malloc(4) as ptr<i32>
+    node_count[0] = 0
+    _hist_tree_build_recursive(bd, gradients, hessians, sample_idx, n_samples, depth, max_depth, n_bins, lam, min_samples_leaf, tree, node_count)
+    tree.n_nodes = node_count[0]
+    free(node_count as ptr<void>)
+    return tree
+}
+
+# Recursive tree builder. Uses node_count pointer for shared state.
+function _hist_tree_build_recursive(
+    bd: BinnedData, gradients: ptr<f32>, hessians: ptr<f32>,
+    sample_idx: ptr<i32>, n_samples: i32, depth: i32, max_depth: i32,
+    n_bins: i32, lam: f32, min_samples_leaf: i32, tree: HistTree,
+    node_count: ptr<i32>
+) -> i32 {
+    # Check stopping conditions
+    if depth >= max_depth || n_samples < min_samples_leaf * 2 {
+        let val: f32 = _compute_leaf_value(gradients, hessians, sample_idx, n_samples, lam)
+        return _hist_tree_add_leaf_ptr(tree, val, node_count)
+    }
+
+    # Find best split
+    let result: SplitResult = _find_best_hist_split(bd, gradients, hessians, sample_idx, n_samples, n_bins, lam)
+    let best_feature: i32 = result.feature
+    let best_bin: i32 = result.bin
+    let best_gain: f32 = result.gain
+
+    if best_feature < 0 || best_gain < 0.0 {
+        let val: f32 = _compute_leaf_value(gradients, hessians, sample_idx, n_samples, lam)
+        return _hist_tree_add_leaf_ptr(tree, val, node_count)
+    }
+
+    # Split samples
+    let left_idx: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+    let right_idx: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+    let split_result: SplitSamplesResult = _split_samples(bd, sample_idx, n_samples, best_feature, best_bin, left_idx, right_idx)
+    let n_left: i32 = split_result.n_left
+    let n_right: i32 = split_result.n_right
+
+    if n_left < min_samples_leaf || n_right < min_samples_leaf {
+        let val: f32 = _compute_leaf_value(gradients, hessians, sample_idx, n_samples, lam)
+        free(left_idx as ptr<void>)
+        free(right_idx as ptr<void>)
+        return _hist_tree_add_leaf_ptr(tree, val, node_count)
+    }
+
+    # Get threshold value from bin boundaries
+    let threshold: f32 = bd.thresholds[best_feature][best_bin]
+
+    # Reserve this node (split node)
+    let node_idx: i32 = node_count[0]
+    node_count[0] = node_count[0] + 1
+
+    # Build left and right subtrees
+    let left_idx_node: i32 = _hist_tree_build_recursive(bd, gradients, hessians, left_idx, n_left, depth + 1, max_depth, n_bins, lam, min_samples_leaf, tree, node_count)
+    let right_idx_node: i32 = _hist_tree_build_recursive(bd, gradients, hessians, right_idx, n_right, depth + 1, max_depth, n_bins, lam, min_samples_leaf, tree, node_count)
+
+    # Fill in the split node
+    tree.nodes[node_idx].feature = best_feature
+    tree.nodes[node_idx].threshold = threshold
+    tree.nodes[node_idx].left = left_idx_node
+    tree.nodes[node_idx].right = right_idx_node
+    tree.nodes[node_idx].value = 0.0
+    tree.nodes[node_idx].is_leaf = false
+
+    free(left_idx as ptr<void>)
+    free(right_idx as ptr<void>)
+    return node_idx
+}
+
+# Predict for a single sample using a hist tree
+function _hist_tree_predict_one(tree: HistTree, X: Matrix, i: i32) -> f32 {
+    let mut node_idx: i32 = 0
+    let mut depth: i32 = 0
+    while depth < 100 {
+        let node: HistNode = tree.nodes[node_idx]
+        if node.is_leaf { return node.value }
+        let val: f32 = matrix_at(X, i, node.feature)
+        if val <= node.threshold {
+            node_idx = node.left
+        } else {
+            node_idx = node.right
+        }
+        depth = depth + 1
+    }
+    return 0.0
+}
+
+# Predict for all samples
+function _hist_tree_predict(tree: HistTree, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let preds: ptr<f32> = array_new_f32(n)
+    let mut i: i32 = 0
+    while i < n {
+        preds[i] = _hist_tree_predict_one(tree, X, i)
+        i = i + 1
+    }
+    return preds
+}
+
+# Free a hist tree
+function _hist_tree_free(tree: HistTree) -> void {
+    free(tree.nodes as ptr<void>)
+}
 
 export struct HistGradientBoostingClassifier {
     init_score: f32,
-    trees: ptr<DecisionTreeRegressor>,
+    trees: ptr<HistTree>,
     n_trees: i32,
     n_classes: i32,
     learning_rate: f32,
@@ -1575,41 +2014,55 @@ export function hist_gradient_boosting_classifier_fit(
     }
     let init_score: f32 = log(((pos as f32) / ((n_samples - pos) as f32 + 0.0000000001)) as f64) as f32
 
-    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeRegressor>
+    # Bin features
+    let bd: BinnedData = _bin_features(X, 256)
+
+    let trees: ptr<HistTree> = malloc((n_trees as i64) * 24) as ptr<HistTree>
 
     let current_pred: ptr<f32> = array_new_f32(n_samples)
     for i in 0 to n_samples {
         current_pred[i] = init_score
     }
 
+    let lam: f32 = 0.0
+    let min_samples_leaf: i32 = 1
+    if min_samples_leaf < 1 { min_samples_leaf = 1 }
+
+    # Sample indices (all samples initially)
+    let sample_idx: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+    for i in 0 to n_samples {
+        sample_idx[i] = i
+    }
+
     for t in 0 to n_trees {
+        # Compute gradients and hessians for logistic loss
         let gradients: ptr<f32> = array_new_f32(n_samples)
+        let hessians: ptr<f32> = array_new_f32(n_samples)
         for i in 0 to n_samples {
             let p: f32 = 1.0 / (1.0 + exp((-current_pred[i]) as f64) as f32)
             let target: f32 = 0.0
             if y[i] == 1.0 { target = 1.0 }
-            gradients[i] = target - p
+            gradients[i] = p - target
+            hessians[i] = p * (1.0 - p)
         }
 
-        # Fit a regression tree on the gradients (negative gradient as target)
-        let neg_grad: ptr<f32> = array_new_f32(n_samples)
-        for i in 0 to n_samples {
-            neg_grad[i] = gradients[i]
-        }
-        trees[t] = decision_tree_regressor_fit(X, neg_grad, max_depth, CRITERION_MSE)
+        # Build histogram tree
+        trees[t] = _build_hist_tree(bd, gradients, hessians, sample_idx, n_samples, 0, max_depth, 256, lam, min_samples_leaf)
 
         # Update predictions
-        let tree_preds: ptr<f32> = decision_tree_regressor_predict(trees[t], X)
+        let tree_preds: ptr<f32> = _hist_tree_predict(trees[t], X)
         for i in 0 to n_samples {
             current_pred[i] = current_pred[i] + learning_rate * tree_preds[i]
         }
 
         array_free_f32(gradients)
-        array_free_f32(neg_grad)
+        array_free_f32(hessians)
         array_free_f32(tree_preds)
     }
 
     array_free_f32(current_pred)
+    free(sample_idx as ptr<void>)
+    _binned_free(bd)
 
     return HistGradientBoostingClassifier {
         init_score: init_score,
@@ -1631,7 +2084,7 @@ export function hist_gradient_boosting_classifier_predict(model: HistGradientBoo
     }
 
     for t in 0 to model.n_trees {
-        let tree_preds: ptr<f32> = decision_tree_regressor_predict(model.trees[t], X)
+        let tree_preds: ptr<f32> = _hist_tree_predict(model.trees[t], X)
         for i in 0 to n {
             current_pred[i] = current_pred[i] + model.learning_rate * tree_preds[i]
         }
@@ -1652,7 +2105,7 @@ export function hist_gradient_boosting_classifier_predict(model: HistGradientBoo
 
 export function hist_gradient_boosting_classifier_free(model: HistGradientBoostingClassifier) -> void {
     for t in 0 to model.n_trees {
-        decision_tree_regressor_free(model.trees[t])
+        _hist_tree_free(model.trees[t])
     }
     free(model.trees as ptr<void>)
 }
@@ -1663,7 +2116,7 @@ export function hist_gradient_boosting_classifier_free(model: HistGradientBoosti
 
 export struct HistGradientBoostingRegressor {
     init_score: f32,
-    trees: ptr<DecisionTreeRegressor>,
+    trees: ptr<HistTree>,
     n_trees: i32,
     learning_rate: f32,
     n_features: i32,
@@ -1684,34 +2137,51 @@ export function hist_gradient_boosting_regressor_fit(
     }
     let init_score: f32 = sum_y / (n_samples as f32)
 
-    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeRegressor>
+    # Bin features
+    let bd: BinnedData = _bin_features(X, 256)
+
+    let trees: ptr<HistTree> = malloc((n_trees as i64) * 24) as ptr<HistTree>
 
     let current_pred: ptr<f32> = array_new_f32(n_samples)
     for i in 0 to n_samples {
         current_pred[i] = init_score
     }
 
+    let lam: f32 = 0.0
+    let min_samples_leaf: i32 = 1
+    if min_samples_leaf < 1 { min_samples_leaf = 1 }
+
+    let sample_idx: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+    for i in 0 to n_samples {
+        sample_idx[i] = i
+    }
+
     for t in 0 to n_trees {
-        # Gradient of squared error: residual = y - pred
+        # Gradients and hessians for squared error: g = pred - y, h = 1
         let gradients: ptr<f32> = array_new_f32(n_samples)
+        let hessians: ptr<f32> = array_new_f32(n_samples)
         for i in 0 to n_samples {
-            gradients[i] = y[i] - current_pred[i]
+            gradients[i] = current_pred[i] - y[i]
+            hessians[i] = 1.0
         }
 
-        # Fit a regression tree on the residuals
-        trees[t] = decision_tree_regressor_fit(X, gradients, max_depth, CRITERION_MSE)
+        # Build histogram tree
+        trees[t] = _build_hist_tree(bd, gradients, hessians, sample_idx, n_samples, 0, max_depth, 256, lam, min_samples_leaf)
 
         # Update predictions
-        let tree_preds: ptr<f32> = decision_tree_regressor_predict(trees[t], X)
+        let tree_preds: ptr<f32> = _hist_tree_predict(trees[t], X)
         for i in 0 to n_samples {
             current_pred[i] = current_pred[i] + learning_rate * tree_preds[i]
         }
 
         array_free_f32(gradients)
+        array_free_f32(hessians)
         array_free_f32(tree_preds)
     }
 
     array_free_f32(current_pred)
+    free(sample_idx as ptr<void>)
+    _binned_free(bd)
 
     let result: HistGradientBoostingRegressor = HistGradientBoostingRegressor {
         init_score: init_score,
@@ -1732,7 +2202,7 @@ export function hist_gradient_boosting_regressor_predict(model: HistGradientBoos
     }
 
     for t in 0 to model.n_trees {
-        let tree_preds: ptr<f32> = decision_tree_regressor_predict(model.trees[t], X)
+        let tree_preds: ptr<f32> = _hist_tree_predict(model.trees[t], X)
         for i in 0 to n {
             result[i] = result[i] + model.learning_rate * tree_preds[i]
         }
@@ -1744,7 +2214,7 @@ export function hist_gradient_boosting_regressor_predict(model: HistGradientBoos
 
 export function hist_gradient_boosting_regressor_free(model: HistGradientBoostingRegressor) -> void {
     for t in 0 to model.n_trees {
-        decision_tree_regressor_free(model.trees[t])
+        _hist_tree_free(model.trees[t])
     }
     free(model.trees as ptr<void>)
 }

@@ -3,6 +3,7 @@
 # Uses simplified SMO-like updates for the dual formulation.
 
 import "lib/scikit/matrix.flow"
+import "lib/scikit/sparse.flow"
 
 # ============================================================================
 # LinearSVC (linear SVM classifier via SGD on hinge loss)
@@ -42,10 +43,7 @@ export function linear_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, e
 
     # Dual coordinate descent for L2-regularized L1-loss SVM
     # (Hsieh et al. 2008, used by liblinear)
-    # Dual: min 0.5 * alpha^T Q alpha - sum(alpha_i)
-    #       s.t. 0 <= alpha_i <= C
-    # where Q_ij = y_i y_j x_i^T x_j
-    # Primal weights: w = sum(alpha_i * y_i * x_i)
+    # Uses f64 internally for weight accumulation to reduce float error.
 
     # Binary encoding: class[1] = +1, others = -1
     let y_dual: ptr<f32> = array_new_f32(n_samples)
@@ -57,61 +55,55 @@ export function linear_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, e
         }
     }
 
-    # Initialize alpha to 0 (w = 0)
-    let alpha: ptr<f32> = array_new_f32(n_samples)
-    for i in 0 to n_samples {
-        alpha[i] = 0.0
-    }
+    # f64 internal weight vector
+    let w64: ptr<f64> = array_new_f64(n_features)
+    let alpha: ptr<f64> = array_new_f64(n_samples)
+    let C64: f64 = C as f64
 
-    # Initialize weights to 0
-    for j in 0 to n_features {
-        weights[j] = 0.0
-    }
-
-    let eps: f32 = 0.001
+    let eps: f64 = 0.001
     let mut epoch: i32 = 0
     while epoch < epochs {
-        let mut max_pg: f32 = 0.0
+        let mut max_pg: f64 = 0.0
         for i in 0 to n_samples {
             # Compute Q_ii = x_i^T x_i
-            let mut Q_ii: f32 = 0.0
+            let mut Q_ii: f64 = 0.0
             for j in 0 to n_features {
-                let xv: f32 = matrix_at(X, i, j)
+                let xv: f64 = (matrix_at(X, i, j)) as f64
                 Q_ii = Q_ii + xv * xv
             }
 
             if Q_ii < 0.0000000001 { continue }
 
             # Compute G = y_i * w^T x_i - 1
-            let mut w_dot_x: f32 = 0.0
+            let mut w_dot_x: f64 = 0.0
             for j in 0 to n_features {
-                w_dot_x = w_dot_x + weights[j] * matrix_at(X, i, j)
+                w_dot_x = w_dot_x + w64[j] * (matrix_at(X, i, j)) as f64
             }
-            let G: f32 = y_dual[i] * w_dot_x - 1.0
+            let G: f64 = (y_dual[i]) as f64 * w_dot_x - 1.0
 
             # Projected gradient
-            let mut PG: f32 = G
+            let mut PG: f64 = G
             if alpha[i] <= 0.0 {
                 if G > 0.0 { PG = 0.0 }
             }
-            if alpha[i] >= C {
+            if alpha[i] >= C64 {
                 if G < 0.0 { PG = 0.0 }
             }
 
-            let abs_pg: f32 = PG
+            let abs_pg: f64 = PG
             if PG < 0.0 { abs_pg = -PG }
             if abs_pg > max_pg { max_pg = abs_pg }
 
             if abs_pg > eps {
                 # Update alpha
-                let alpha_new: f32 = alpha[i] - G / Q_ii
+                let alpha_new: f64 = alpha[i] - G / Q_ii
                 if alpha_new < 0.0 { alpha_new = 0.0 }
-                if alpha_new > C { alpha_new = C }
+                if alpha_new > C64 { alpha_new = C64 }
 
                 # Update w: w += (alpha_new - alpha_i) * y_i * x_i
-                let delta: f32 = (alpha_new - alpha[i]) * y_dual[i]
+                let delta: f64 = (alpha_new - alpha[i]) * (y_dual[i]) as f64
                 for j in 0 to n_features {
-                    weights[j] = weights[j] + delta * matrix_at(X, i, j)
+                    w64[j] = w64[j] + delta * (matrix_at(X, i, j)) as f64
                 }
 
                 alpha[i] = alpha_new
@@ -122,24 +114,164 @@ export function linear_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, e
     }
 
     # Compute bias: average over support vectors (0 < alpha < C)
-    let mut bias_sum: f32 = 0.0
+    let mut bias_sum: f64 = 0.0
     let mut n_sv: i32 = 0
     for i in 0 to n_samples {
-        if alpha[i] > 0.0 and alpha[i] < C {
-            let mut w_dot_x: f32 = 0.0
+        if alpha[i] > 0.0 and alpha[i] < C64 {
+            let mut w_dot_x: f64 = 0.0
             for j in 0 to n_features {
-                w_dot_x = w_dot_x + weights[j] * matrix_at(X, i, j)
+                w_dot_x = w_dot_x + w64[j] * (matrix_at(X, i, j)) as f64
             }
-            bias_sum = bias_sum + (y_dual[i] - w_dot_x)
+            bias_sum = bias_sum + ((y_dual[i]) as f64 - w_dot_x)
             n_sv = n_sv + 1
         }
     }
     if n_sv > 0 {
-        bias = bias_sum / (n_sv as f32)
+        bias = (bias_sum / (n_sv as f64)) as f32
+    }
+
+    # Copy f64 weights to f32 output
+    for j in 0 to n_features {
+        weights[j] = w64[j] as f32
     }
 
     array_free_f32(y_dual)
-    array_free_f32(alpha)
+    array_free_f64(w64)
+    array_free_f64(alpha)
+
+    return LinearSVC {
+        weights: weights,
+        bias: bias,
+        n_features: n_features,
+        classes: classes,
+        n_classes: n_classes,
+        C: C,
+        fitted: true
+    }
+}
+
+# Sparse-input version of linear_svc_fit.
+# Takes a SparseMatrix (CSR) instead of a dense Matrix.
+# Uses the same dual coordinate descent algorithm but only iterates
+# over non-zero entries when computing w_dot_x and updating weights.
+export function linear_svc_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_classes: i32, C: f32, epochs: i32) -> LinearSVC {
+    let n_features: i32 = S.n_cols
+    let n_samples: i32 = S.n_rows
+    let weights: ptr<f32> = array_new_f32(n_features)
+    let bias: f32 = 0.0
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to n_samples {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] { found = true }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let y_dual: ptr<f32> = array_new_f32(n_samples)
+    for i in 0 to n_samples {
+        if y[i] == classes[1] {
+            y_dual[i] = 1.0
+        } else {
+            y_dual[i] = -1.0
+        }
+    }
+
+    let w64: ptr<f64> = array_new_f64(n_features)
+    let alpha: ptr<f64> = array_new_f64(n_samples)
+    let C64: f64 = C as f64
+
+    let eps: f64 = 0.001
+    let mut epoch: i32 = 0
+    while epoch < epochs {
+        let mut max_pg: f64 = 0.0
+        for i in 0 to n_samples {
+            # Q_ii = x_i^T x_i (only non-zero entries contribute)
+            let mut Q_ii: f64 = 0.0
+            let start: i32 = S.indptr[i]
+            let end: i32 = S.indptr[i + 1]
+            let mut k: i32 = start
+            while k < end {
+                let val: f64 = (S.data[k]) as f64
+                Q_ii = Q_ii + val * val
+                k = k + 1
+            }
+
+            if Q_ii < 0.0000000001 { continue }
+
+            # w_dot_x = sum over non-zero entries of w[j] * x_ij
+            let mut w_dot_x: f64 = 0.0
+            k = start
+            while k < end {
+                w_dot_x = w_dot_x + w64[S.indices[k]] * (S.data[k]) as f64
+                k = k + 1
+            }
+            let G: f64 = (y_dual[i]) as f64 * w_dot_x - 1.0
+
+            let mut PG: f64 = G
+            if alpha[i] <= 0.0 {
+                if G > 0.0 { PG = 0.0 }
+            }
+            if alpha[i] >= C64 {
+                if G < 0.0 { PG = 0.0 }
+            }
+
+            let abs_pg: f64 = PG
+            if PG < 0.0 { abs_pg = -PG }
+            if abs_pg > max_pg { max_pg = abs_pg }
+
+            if abs_pg > eps {
+                let alpha_new: f64 = alpha[i] - G / Q_ii
+                if alpha_new < 0.0 { alpha_new = 0.0 }
+                if alpha_new > C64 { alpha_new = C64 }
+
+                let delta: f64 = (alpha_new - alpha[i]) * (y_dual[i]) as f64
+                k = start
+                while k < end {
+                    w64[S.indices[k]] = w64[S.indices[k]] + delta * (S.data[k]) as f64
+                    k = k + 1
+                }
+
+                alpha[i] = alpha_new
+            }
+        }
+        if max_pg < eps { break }
+        epoch = epoch + 1
+    }
+
+    # Compute bias from free support vectors
+    let mut bias_sum: f64 = 0.0
+    let mut n_sv: i32 = 0
+    for i in 0 to n_samples {
+        if alpha[i] > 0.0 and alpha[i] < C64 {
+            let mut w_dot_x: f64 = 0.0
+            let start2: i32 = S.indptr[i]
+            let end2: i32 = S.indptr[i + 1]
+            let mut k2: i32 = start2
+            while k2 < end2 {
+                w_dot_x = w_dot_x + w64[S.indices[k2]] * (S.data[k2]) as f64
+                k2 = k2 + 1
+            }
+            bias_sum = bias_sum + ((y_dual[i]) as f64 - w_dot_x)
+            n_sv = n_sv + 1
+        }
+    }
+    if n_sv > 0 {
+        bias = (bias_sum / (n_sv as f64)) as f32
+    }
+
+    for j in 0 to n_features {
+        weights[j] = w64[j] as f32
+    }
+
+    array_free_f32(y_dual)
+    array_free_f64(w64)
+    array_free_f64(alpha)
 
     return LinearSVC {
         weights: weights,
@@ -182,6 +314,123 @@ export function linear_svc_decide(model: LinearSVC, scores: ptr<f32>, n_samples:
 
 export function linear_svc_free(model: LinearSVC) -> void {
     array_free_f32(model.weights)
+    array_free_f32(model.classes)
+}
+
+# ============================================================================
+# Multi-class LinearSVC via One-vs-Rest
+# Trains n_classes binary classifiers. Each classifier distinguishes one
+# class from all others. Prediction uses argmax of decision functions.
+# ============================================================================
+
+export struct LinearSVCMulti {
+    models: ptr<LinearSVC>,
+    classes: ptr<f32>,
+    n_classes: i32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function linear_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, epochs: i32) -> LinearSVCMulti {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    # Extract unique classes
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] { found = true }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let models: ptr<LinearSVC> = malloc((n_classes as i64) * 64) as ptr<LinearSVC>
+
+    # Train one binary classifier per class
+    let mut c: i32 = 0
+    while c < n_classes {
+        # Create binary labels: +1 for class c, -1 for others
+        let y_binary: ptr<f32> = array_new_f32(n)
+        for i in 0 to n {
+            if y[i] == classes[c] {
+                y_binary[i] = 1.0
+            } else {
+                y_binary[i] = 0.0
+            }
+        }
+
+        # Train binary LinearSVC with this class as positive
+        # We need to ensure classes[1] = 1.0 for the binary model
+        # The fit function uses classes[1] as positive class
+        # So we set y_binary to 1.0 for positive, 0.0 for negative
+        # The fit function will find classes[0]=0.0, classes[1]=1.0
+        models[c] = linear_svc_fit(X, y_binary, 2, C, epochs, 0.01)
+        array_free_f32(y_binary)
+        c = c + 1
+    }
+
+    return LinearSVCMulti {
+        models: models,
+        classes: classes,
+        n_classes: n_classes,
+        n_features: n_features,
+        fitted: true
+    }
+}
+
+export function linear_svc_multi_decision_function(model: LinearSVCMulti, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let scores: ptr<f32> = array_new_f32(n * model.n_classes)
+
+    let mut c: i32 = 0
+    while c < model.n_classes {
+        let binary_scores: ptr<f32> = linear_svc_decision_function(model.models[c], X)
+        for i in 0 to n {
+            scores[i * model.n_classes + c] = binary_scores[i]
+        }
+        array_free_f32(binary_scores)
+        c = c + 1
+    }
+
+    return scores
+}
+
+export function linear_svc_multi_predict(model: LinearSVCMulti, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let scores: ptr<f32> = linear_svc_multi_decision_function(model, X)
+    let preds: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best_score: f32 = scores[i * model.n_classes]
+        let mut c: i32 = 1
+        while c < model.n_classes {
+            let s: f32 = scores[i * model.n_classes + c]
+            if s > best_score {
+                best_score = s
+                best_c = c
+            }
+            c = c + 1
+        }
+        preds[i] = model.classes[best_c]
+    }
+
+    array_free_f32(scores)
+    return preds
+}
+
+export function linear_svc_multi_free(model: LinearSVCMulti) -> void {
+    let mut c: i32 = 0
+    while c < model.n_classes {
+        linear_svc_free(model.models[c])
+        c = c + 1
+    }
+    free(model.models as ptr<void>)
     array_free_f32(model.classes)
 }
 
@@ -276,14 +525,14 @@ export struct KernelSVC {
 
 # Helper: compute SVM decision function output for sample j
 function _svm_compute_ej(kernel: Matrix, alphas: ptr<f32>, y_dual: ptr<f32>, n: i32, b: f32, j: i32) -> f32 {
-    let mut ej: f32 = 0.0
+    let mut ej: f64 = 0.0
     let mut k: i32 = 0
     while k < n {
-        ej = ej + alphas[k] * y_dual[k] * matrix_at(kernel, j, k)
+        ej = ej + (alphas[k] * y_dual[k] * matrix_at(kernel, j, k)) as f64
         k = k + 1
     }
-    ej = ej + b - y_dual[j]
-    return ej
+    ej = ej + (b) as f64 - (y_dual[j]) as f64
+    return ej as f32
 }
 
 export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, gamma: f32, max_iter: i32) -> KernelSVC {
@@ -337,15 +586,16 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
             # Full pass over all samples
             i = 0
             while i < n {
-            let mut ei: f32 = 0.0
+            let mut ei: f64 = 0.0
             let mut j: i32 = 0
             while j < n {
-                ei = ei + alphas[j] * y_dual[j] * matrix_at(kernel, i, j)
+                ei = ei + (alphas[j] * y_dual[j] * matrix_at(kernel, i, j)) as f64
                 j = j + 1
             }
-            ei = ei + b - y_dual[i]
+            ei = ei + (b) as f64 - (y_dual[i]) as f64
+            let ei_f: f32 = ei as f32
 
-            let yi_ei: f32 = y_dual[i] * ei
+            let yi_ei: f32 = y_dual[i] * ei_f
             if (yi_ei < -tol && alphas[i] < C) || (yi_ei > tol && alphas[i] > 0.0) {
                 # Second-order working set selection: pick j maximizing |Ei - Ej|
                 let mut best_j: i32 = (iter * 7 + i * 13 + 3) % n
@@ -355,7 +605,7 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
                 while j_scan < n {
                     if j_scan == i { j_scan = j_scan + 1; continue }
                     let ej_test: f32 = _svm_compute_ej(kernel, alphas, y_dual, n, b, j_scan)
-                    let diff: f32 = ei - ej_test
+                    let diff: f32 = ei_f - ej_test
                     let abs_diff: f32 = diff
                     if diff < 0.0 { abs_diff = -diff }
                     if abs_diff > best_gain {
@@ -404,7 +654,7 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
                     continue
                 }
 
-                let mut alpha_j_new: f32 = alpha_j_old - y_dual[j2] * (ei - ej) / eta
+                let mut alpha_j_new: f32 = alpha_j_old - y_dual[j2] * (ei_f - ej) / eta
                 if alpha_j_new < L {
                     alpha_j_new = L
                 }
@@ -417,7 +667,7 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
                 alphas[i] = alpha_i_new
                 alphas[j2] = alpha_j_new
 
-                let b1: f32 = b - ei - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, i) - y_dual[j2] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, i, j2)
+                let b1: f32 = b - ei_f - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, i) - y_dual[j2] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, i, j2)
                 let b2: f32 = b - ej - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, j2) - y_dual[j2] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, j2, j2)
 
                 if alpha_i_new > 0.0 && alpha_i_new < C {
@@ -437,15 +687,16 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
             i = 0
             while i < n {
                 if alphas[i] > 0.0 && alphas[i] < C {
-                    let mut ei: f32 = 0.0
+                    let mut ei: f64 = 0.0
                     let mut j: i32 = 0
                     while j < n {
-                        ei = ei + alphas[j] * y_dual[j] * matrix_at(kernel, i, j)
+                        ei = ei + (alphas[j] * y_dual[j] * matrix_at(kernel, i, j)) as f64
                         j = j + 1
                     }
-                    ei = ei + b - y_dual[i]
+                    ei = ei + (b) as f64 - (y_dual[i]) as f64
+                    let ei_f: f32 = ei as f32
 
-                    let yi_ei: f32 = y_dual[i] * ei
+                    let yi_ei: f32 = y_dual[i] * ei_f
                     if (yi_ei < -tol && alphas[i] < C) || (yi_ei > tol && alphas[i] > 0.0) {
                         # Second-order working set selection
                         let mut best_j: i32 = (iter * 7 + i * 13 + 3) % n
@@ -455,7 +706,7 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
                         while j_scan < n {
                             if j_scan == i { j_scan = j_scan + 1; continue }
                             let ej_test: f32 = _svm_compute_ej(kernel, alphas, y_dual, n, b, j_scan)
-                            let diff: f32 = ei - ej_test
+                            let diff: f32 = ei_f - ej_test
                             let abs_diff: f32 = diff
                             if diff < 0.0 { abs_diff = -diff }
                             if abs_diff > best_gain {
@@ -490,7 +741,7 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
                         let eta: f32 = 2.0 * matrix_at(kernel, i, j2) - matrix_at(kernel, i, i) - matrix_at(kernel, j2, j2)
                         if eta >= -0.0000000001 { i = i + 1; continue }
 
-                        let mut alpha_j_new: f32 = alpha_j_old - y_dual[j2] * (ei - ej) / eta
+                        let mut alpha_j_new: f32 = alpha_j_old - y_dual[j2] * (ei_f - ej) / eta
                         if alpha_j_new < L { alpha_j_new = L }
                         if alpha_j_new > H { alpha_j_new = H }
 
@@ -499,7 +750,7 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
                         alphas[i] = alpha_i_new
                         alphas[j2] = alpha_j_new
 
-                        let b1: f32 = b - ei - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, i) - y_dual[j2] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, i, j2)
+                        let b1: f32 = b - ei_f - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, i) - y_dual[j2] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, i, j2)
                         let b2: f32 = b - ej - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, j2) - y_dual[j2] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, j2, j2)
 
                         if alpha_i_new > 0.0 && alpha_i_new < C {

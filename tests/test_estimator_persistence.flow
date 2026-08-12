@@ -1,0 +1,119 @@
+import "lib/scikit/scikit.flow"
+
+function main() -> i32 {
+    println("Test: estimator-level save/load")
+
+    let ds: Dataset = load_iris()
+    let split: TrainTestSplit = train_test_split(ds.X, ds.y, 0.3, 42)
+
+    # Train LinearSVC
+    let model: LinearSVC = linear_svc_fit(split.X_train, split.y_train, 2, 1.0, 200, 0.01)
+    let preds1: ptr<f32> = linear_svc_predict(model, split.X_test)
+    let scores1: ptr<f32> = linear_svc_decide(model, preds1, split.n_test)
+    let acc1: f32 = accuracy_score(split.y_test, scores1, split.n_test)
+    print("  Original LinearSVC accuracy = ")
+    printf("%.4f", acc1)
+    println("")
+
+    # Save and reload
+    save_linear_svc(model, "/tmp/test_svc_model.bin")
+    let loaded: LinearSVC = load_linear_svc("/tmp/test_svc_model.bin")
+
+    let preds2: ptr<f32> = linear_svc_predict(loaded, split.X_test)
+    let scores2: ptr<f32> = linear_svc_decide(loaded, preds2, split.n_test)
+    let acc2: f32 = accuracy_score(split.y_test, scores2, split.n_test)
+    print("  Loaded LinearSVC accuracy = ")
+    printf("%.4f", acc2)
+    println("")
+
+    # Check weights match
+    let mut max_diff: f32 = 0.0
+    for j in 0 to model.n_features {
+        let diff: f32 = model.weights[j] - loaded.weights[j]
+        let abs_diff: f32 = diff
+        if diff < 0.0 { abs_diff = -diff }
+        if abs_diff > max_diff { max_diff = abs_diff }
+    }
+    print("  Max weight diff = ")
+    printf("%.8f", max_diff)
+    println("")
+
+    if max_diff > 0.0001 {
+        println("  FAIL: loaded weights differ from original")
+        linear_svc_free(model)
+        linear_svc_free(loaded)
+        array_free_f32(preds1)
+        array_free_f32(scores1)
+        array_free_f32(preds2)
+        array_free_f32(scores2)
+        train_test_split_free(split)
+        dataset_free(ds)
+        return 1
+    }
+
+    # Test LogisticRegression save/load
+    let penalty: Penalty = Penalty { kind: PENALTY_L2, alpha: 0.001, l1_ratio: 0.0 }
+    let lr_model: LogisticRegression = logistic_regression_fit(split.X_train, split.y_train, 2, 500, 0.5, penalty)
+    let lr_probs1: ptr<f32> = logistic_predict(lr_model, split.X_test)
+    let lr_preds1: ptr<f32> = logistic_decide(lr_model, lr_probs1, split.n_test, 0.5)
+    let lr_acc1: f32 = accuracy_score(split.y_test, lr_preds1, split.n_test)
+    print("  Original LogReg accuracy = ")
+    printf("%.4f", lr_acc1)
+    println("")
+
+    save_logistic_regression(lr_model, "/tmp/test_lr_model.bin")
+    let lr_loaded: LogisticRegression = load_logistic_regression("/tmp/test_lr_model.bin")
+    let lr_probs2: ptr<f32> = logistic_predict(lr_loaded, split.X_test)
+    let lr_preds2: ptr<f32> = logistic_decide(lr_loaded, lr_probs2, split.n_test, 0.5)
+    let lr_acc2: f32 = accuracy_score(split.y_test, lr_preds2, split.n_test)
+    print("  Loaded LogReg accuracy = ")
+    printf("%.4f", lr_acc2)
+    println("")
+
+    let mut lr_max_diff: f32 = 0.0
+    for j in 0 to lr_model.n_features {
+        let diff: f32 = lr_model.weights[j] - lr_loaded.weights[j]
+        let abs_diff: f32 = diff
+        if diff < 0.0 { abs_diff = -diff }
+        if abs_diff > lr_max_diff { lr_max_diff = abs_diff }
+    }
+    print("  Max LR weight diff = ")
+    printf("%.8f", lr_max_diff)
+    println("")
+
+    if lr_max_diff > 0.0001 {
+        println("  FAIL: loaded LR weights differ from original")
+        linear_svc_free(model)
+        linear_svc_free(loaded)
+        array_free_f32(preds1)
+        array_free_f32(scores1)
+        array_free_f32(preds2)
+        array_free_f32(scores2)
+        logistic_regression_free(lr_model)
+        logistic_regression_free(lr_loaded)
+        array_free_f32(lr_probs1)
+        array_free_f32(lr_preds1)
+        array_free_f32(lr_probs2)
+        array_free_f32(lr_preds2)
+        train_test_split_free(split)
+        dataset_free(ds)
+        return 1
+    }
+
+    println("  OK: estimator save/load works")
+    linear_svc_free(model)
+    linear_svc_free(loaded)
+    array_free_f32(preds1)
+    array_free_f32(scores1)
+    array_free_f32(preds2)
+    array_free_f32(scores2)
+    logistic_regression_free(lr_model)
+    logistic_regression_free(lr_loaded)
+    array_free_f32(lr_probs1)
+    array_free_f32(lr_preds1)
+    array_free_f32(lr_probs2)
+    array_free_f32(lr_preds2)
+    train_test_split_free(split)
+    dataset_free(ds)
+    return 0
+}

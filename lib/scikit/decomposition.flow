@@ -1815,13 +1815,13 @@ export struct LatentDirichletAllocation {
 
 # Helper: digamma approximation
 function _digamma_approx(x: f32) -> f32 {
-    let mut val: f32 = x
-    let mut result: f32 = 0.0
+    let mut val: f64 = (x) as f64
+    let mut result: f64 = 0.0
     while val < 6.0 { result = result - 1.0 / val; val = val + 1.0 }
-    result = result + log((val) as f64) as f32
+    result = result + log(val)
     result = result - 1.0 / (2.0 * val)
     result = result - 1.0 / (12.0 * val * val)
-    return result
+    return result as f32
 }
 
 # Helper: safe exp

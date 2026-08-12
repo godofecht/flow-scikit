@@ -79,6 +79,72 @@ export function precision_recall_fscore(y_true: ptr<f32>, y_pred: ptr<f32>, n: i
     return results
 }
 
+# Binary precision_score for a given positive label.
+# Matches sklearn precision_score(average='binary').
+export function precision_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, pos_label: f32) -> f32 {
+    let mut tp: i32 = 0
+    let mut fp: i32 = 0
+    for i in 0 to n {
+        let true_pos: bool = y_true[i] == pos_label
+        let pred_pos: bool = y_pred[i] == pos_label
+        if true_pos && pred_pos { tp = tp + 1 }
+        if not true_pos && pred_pos { fp = fp + 1 }
+    }
+    if tp + fp == 0 { return 0.0 }
+    return (tp as f32) / ((tp + fp) as f32)
+}
+
+# Binary recall_score for a given positive label.
+# Matches sklearn recall_score(average='binary').
+export function recall_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, pos_label: f32) -> f32 {
+    let mut tp: i32 = 0
+    let mut fn: i32 = 0
+    for i in 0 to n {
+        let true_pos: bool = y_true[i] == pos_label
+        let pred_pos: bool = y_pred[i] == pos_label
+        if true_pos && pred_pos { tp = tp + 1 }
+        if true_pos && not pred_pos { fn = fn + 1 }
+    }
+    if tp + fn == 0 { return 0.0 }
+    return (tp as f32) / ((tp + fn) as f32)
+}
+
+# Binary f1_score for a given positive label.
+# Matches sklearn f1_score(average='binary').
+export function f1_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, pos_label: f32) -> f32 {
+    let prec: f32 = precision_score(y_true, y_pred, n, pos_label)
+    let rec: f32 = recall_score(y_true, y_pred, n, pos_label)
+    if prec + rec == 0.0 { return 0.0 }
+    return 2.0 * prec * rec / (prec + rec)
+}
+
+# Macro-averaged precision across all classes.
+export function precision_score_macro(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32) -> f32 {
+    let mut sum: f32 = 0.0
+    for c in 0 to n_classes {
+        sum = sum + precision_score(y_true, y_pred, n, classes[c])
+    }
+    return sum / (n_classes as f32)
+}
+
+# Macro-averaged recall across all classes.
+export function recall_score_macro(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32) -> f32 {
+    let mut sum: f32 = 0.0
+    for c in 0 to n_classes {
+        sum = sum + recall_score(y_true, y_pred, n, classes[c])
+    }
+    return sum / (n_classes as f32)
+}
+
+# Macro-averaged f1 across all classes.
+export function f1_score_macro(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32) -> f32 {
+    let mut sum: f32 = 0.0
+    for c in 0 to n_classes {
+        sum = sum + f1_score(y_true, y_pred, n, classes[c])
+    }
+    return sum / (n_classes as f32)
+}
+
 export struct ClassificationReport {
     class_metrics: ptr<PrecisionRecall>,
     classes: ptr<f32>,
@@ -309,6 +375,7 @@ export function r2_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
         ss_tot = ss_tot + d_tot * d_tot
     }
     if ss_tot < 0.0000000001 {
+        if ss_res < 0.0000000001 { return 1.0 }
         return 0.0
     }
     return 1.0 - ss_res / ss_tot
