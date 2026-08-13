@@ -4,6 +4,27 @@
 
 ### Bug fixes and depth improvements
 
+- Added multi-class KernelSVC (KernelSVCMulti) via one-vs-rest. Trains
+  one binary kernel SVM per class with y_dual set directly (+1/-1),
+  avoiding the class-ordering dependency in kernel_svc_fit. Prediction
+  uses argmax over decision function scores. Iris accuracy: 1.0.
+- Fixed Nystroem eigendecomposition: replaced the incorrect diagonal-only
+  eigenvalue approximation with power iteration and deflation. The
+  transform now projects through eigenvectors and normalizes by
+  sqrt(eigenvalue), matching the standard Nystroem approximation.
+- Fixed CalibratedClassifierCV isotonic calibration: the non-Platt
+  fallback was a no-op (a=1, b=0). Now runs PAVA on (pred, y) sorted
+  by prediction value, then fits a sigmoid to the isotonic curve.
+- Fixed AdditiveChi2Sampler transform: the formula was mathematically
+  wrong (x * cos(t) / sqrt(x)). Now uses the correct deterministic
+  Fourier feature map: cos(t_k * log(x)) / sqrt(x).
+- Fixed _rbf_kernel name collision between gaussian_process.flow and
+  svm.flow. The Flow compiler only emits one definition when two
+  non-exported functions share a name across modules (Flow issue #465).
+  Renamed the GP versions to _gp_rbf_kernel, _gp_linear_kernel, _gp_kernel.
+- Bumped all struct array allocations from 64 to 128 bytes per element.
+  KernelSVC is ~80 bytes and was overflowing at 64. Updated AGENTS.md
+  guidance accordingly.
 - Fixed CCA dead code: removed `s = s + matrix_at(Xc, i, j) * 0.0`
   line in cross_decomposition.flow that multiplied by zero.
 - Fixed factor_analysis_fit: all n_components are now properly

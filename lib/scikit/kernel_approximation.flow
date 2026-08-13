@@ -10,6 +10,9 @@ extern {
     function sqrt(x: f64) -> f64
     function exp(x: f64) -> f64
     function fabs(x: f64) -> f64
+    function cos(x: f64) -> f64
+    function sin(x: f64) -> f64
+    function log(x: f64) -> f64
     function rand() -> i32
     function srand(seed: u32) -> void
     function printf(fmt: string, ...) -> i32
@@ -96,6 +99,8 @@ export struct Nystroem {
     n_features: i32,
     gamma: f32,
     kernel: i32,
+    eigenvectors: Matrix,
+    eigvals: ptr<f32>,
     normalization: ptr<f32>,
     fitted: bool
 }
@@ -155,19 +160,84 @@ export function nystroem_fit(X: Matrix, n_components: i32, gamma: f32, kernel: i
         }
     }
 
+    # Eigendecomposition of K via power iteration with deflation.
+    # K is symmetric (n_comp x n_comp). We extract the top n_comp
+    # eigenvalue/eigenvector pairs. This replaces the previous incorrect
+    # approach of using diagonal entries as eigenvalues.
     let eigvals: ptr<f32> = array_new_f32(n_comp)
-    for i in 0 to n_comp {
-        eigvals[i] = K.data[i * n_comp + i]
-        if eigvals[i] < 0.0000000001 { eigvals[i] = 0.0000000001 }
+    let eigenvectors: Matrix = matrix_new(n_comp, n_comp)
+
+    let K_work: Matrix = matrix_copy(K)
+
+    for c in 0 to n_comp {
+        let v: ptr<f32> = array_new_f32(n_comp)
+        for i in 0 to n_comp {
+            v[i] = 1.0 / sqrt((n_comp as f64) as f32)
+        }
+
+        let mut iter: i32 = 0
+        while iter < 200 {
+            let new_v: ptr<f32> = array_new_f32(n_comp)
+            for i in 0 to n_comp {
+                let mut s: f32 = 0.0
+                for j in 0 to n_comp {
+                    s = s + matrix_at(K_work, i, j) * v[j]
+                }
+                new_v[i] = s
+            }
+
+            let norm: f32 = 0.0
+            for i in 0 to n_comp {
+                norm = norm + new_v[i] * new_v[i]
+            }
+            norm = sqrt((norm) as f64) as f32
+            if norm < 0.0000000001 { norm = 1.0 }
+            for i in 0 to n_comp {
+                v[i] = new_v[i] / norm
+            }
+            array_free_f32(new_v)
+            iter = iter + 1
+        }
+
+        # Rayleigh quotient for eigenvalue
+        let tmp: ptr<f32> = array_new_f32(n_comp)
+        for i in 0 to n_comp {
+            let mut s: f32 = 0.0
+            for j in 0 to n_comp {
+                s = s + matrix_at(K_work, i, j) * v[j]
+            }
+            tmp[i] = s
+        }
+        let mut eigval: f32 = 0.0
+        for i in 0 to n_comp {
+            eigval = eigval + v[i] * tmp[i]
+        }
+        array_free_f32(tmp)
+
+        if eigval < 0.0000000001 { eigval = 0.0000000001 }
+        eigvals[c] = eigval
+        for i in 0 to n_comp {
+            matrix_set(eigenvectors, i, c, v[i])
+        }
+
+        # Deflate: K_work = K_work - eigval * v v^T
+        for i in 0 to n_comp {
+            for j in 0 to n_comp {
+                let val: f32 = matrix_at(K_work, i, j) - eigval * v[i] * v[j]
+                matrix_set(K_work, i, j, val)
+            }
+        }
+
+        array_free_f32(v)
     }
+
+    matrix_free(K_work)
+    matrix_free(K)
 
     let normalization: ptr<f32> = array_new_f32(n_comp)
     for i in 0 to n_comp {
         normalization[i] = 1.0 / sqrt((eigvals[i]) as f64) as f32
     }
-
-    matrix_free(K)
-    array_free_f32(eigvals)
 
     return Nystroem {
         components: components,
@@ -176,6 +246,8 @@ export function nystroem_fit(X: Matrix, n_components: i32, gamma: f32, kernel: i
         n_features: p,
         gamma: gamma,
         kernel: kernel,
+        eigenvectors: eigenvectors,
+        eigvals: eigvals,
         normalization: normalization,
         fitted: true
     }
@@ -185,21 +257,35 @@ export function nystroem_transform(model: Nystroem, X: Matrix) -> Matrix {
     let n: i32 = X.rows
     let result: Matrix = matrix_new(n, model.n_components)
 
+    # For each sample, compute kernel against all components,
+    # then project through eigenvectors and normalize by sqrt(eigval).
     for i in 0 to n {
         let xi: ptr<f32> = array_new_f32(model.n_features)
         for j in 0 to model.n_features {
             xi[j] = matrix_at(X, i, j)
         }
 
-        for c in 0 to model.n_components {
+        # k_vec[j] = kernel(X_i, comp_j)
+        let k_vec: ptr<f32> = array_new_f32(model.n_components)
+        for j in 0 to model.n_components {
             let xc: ptr<f32> = array_new_f32(model.n_features)
-            for j in 0 to model.n_features {
-                xc[j] = matrix_at(model.components, c, j)
+            for k in 0 to model.n_features {
+                xc[k] = matrix_at(model.components, j, k)
             }
-            let k_val: f32 = _kernel_func(xi, xc, model.n_features, model.kernel, model.gamma)
-            matrix_set(result, i, c, k_val * model.normalization[c])
+            k_vec[j] = _kernel_func(xi, xc, model.n_features, model.kernel, model.gamma)
             array_free_f32(xc)
         }
+
+        # result[i, c] = sum_j k_vec[j] * U[j, c] / sqrt(eigval_c)
+        for c in 0 to model.n_components {
+            let mut s: f32 = 0.0
+            for j in 0 to model.n_components {
+                s = s + k_vec[j] * matrix_at(model.eigenvectors, j, c)
+            }
+            matrix_set(result, i, c, s * model.normalization[c])
+        }
+
+        array_free_f32(k_vec)
         array_free_f32(xi)
     }
 
@@ -208,7 +294,9 @@ export function nystroem_transform(model: Nystroem, X: Matrix) -> Matrix {
 
 export function nystroem_free(model: Nystroem) -> void {
     matrix_free(model.components)
+    matrix_free(model.eigenvectors)
     free(model.component_indices as ptr<void>)
+    array_free_f32(model.eigvals)
     array_free_f32(model.normalization)
 }
 
@@ -235,32 +323,37 @@ export function additive_chi2_sampler_fit(n_samples: i32, n_features: i32, sampl
 export function additive_chi2_sampler_transform(model: AdditiveChi2Sampler, X: Matrix) -> Matrix {
     let n: i32 = X.rows
     let p: i32 = X.cols
-    let n_out: i32 = p * (model.sample_steps + 1) / 2
+    let n_out: i32 = p * model.sample_steps
     let result: Matrix = matrix_new(n, n_out)
 
-    let intervals: ptr<f32> = array_new_f32(model.sample_steps + 1)
-    for i in 0 to model.sample_steps + 1 {
-        intervals[i] = 0.0
-    }
+    # Deterministic Fourier feature map for the additive chi-squared kernel.
+    # For each non-negative feature x and sample step k:
+    #   t_k = (4k + 2) * pi / (4 * sample_steps)
+    #   output = cos(t_k * log(x)) / sqrt(x)
+    # This approximates the kernel K(x,y) = -sum (x-y)^2 / (x+y).
+    let pi_val: f32 = 3.14159265358979
 
     for i in 0 to n {
         let mut col: i32 = 0
         for j in 0 to p {
             let x: f32 = matrix_at(X, i, j)
-            if x < 0.0 {
-                matrix_set(result, i, col, 0.0)
-                col = col + 1
+            if x <= 0.0 {
+                for k in 0 to model.sample_steps {
+                    matrix_set(result, i, col, 0.0)
+                    col = col + 1
+                }
                 continue
             }
+            let log_x: f32 = log((x) as f64) as f32
+            let inv_sqrt_x: f32 = 1.0 / sqrt((x) as f64) as f32
             for k in 0 to model.sample_steps {
-                let t: f32 = (4.0 * (k as f32) + 2.0) * 3.14159 / (4.0 * (model.sample_steps as f32))
-                matrix_set(result, i, col, x * cos((t) as f64) as f32 / sqrt((x + 0.0000000001) as f64) as f32)
+                let t: f32 = (4.0 * (k as f32) + 2.0) * pi_val / (4.0 * (model.sample_steps as f32))
+                matrix_set(result, i, col, cos((t * log_x) as f64) as f32 * inv_sqrt_x)
                 col = col + 1
             }
         }
     }
 
-    array_free_f32(intervals)
     return result
 }
 

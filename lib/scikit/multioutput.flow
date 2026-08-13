@@ -23,7 +23,7 @@ export function multi_output_classifier_fit(
     n_outputs: i32, n_classes: i32,
     epochs: i32, lr: f32
 ) -> MultiOutputClassifier {
-    let models: ptr<LogisticRegression> = malloc((n_outputs as i64) * 64) as ptr<LogisticRegression>
+    let models: ptr<LogisticRegression> = malloc((n_outputs as i64) * 128) as ptr<LogisticRegression>
 
     for o in 0 to n_outputs {
         let y_col: ptr<f32> = array_new_f32(X.rows)
@@ -127,7 +127,7 @@ export struct ClassifierChain {
 }
 
 export function classifier_chain_fit(X: Matrix, Y: ptr<ptr<f32> >, n_samples: i32, n_features: i32, n_outputs: i32, lr: f32, n_iter: i32) -> ClassifierChain {
-    let models: ptr<LogisticRegression> = malloc((n_outputs as i64) * 64) as ptr<LogisticRegression>
+    let models: ptr<LogisticRegression> = malloc((n_outputs as i64) * 128) as ptr<LogisticRegression>
     let order: ptr<i32> = malloc((n_outputs as i64) * 4) as ptr<i32>
     for o in 0 to n_outputs { order[o] = o }
 
@@ -223,7 +223,7 @@ export struct RegressorChain {
 }
 
 export function regressor_chain_fit(X: Matrix, Y: ptr<ptr<f32> >, n_samples: i32, n_features: i32, n_outputs: i32) -> RegressorChain {
-    let models: ptr<LinearRegression> = malloc((n_outputs as i64) * 64) as ptr<LinearRegression>
+    let models: ptr<LinearRegression> = malloc((n_outputs as i64) * 128) as ptr<LinearRegression>
     let order: ptr<i32> = malloc((n_outputs as i64) * 4) as ptr<i32>
     for o in 0 to n_outputs { order[o] = o }
 

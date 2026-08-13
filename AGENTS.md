@@ -29,6 +29,8 @@ Filed issues so far:
 - #431: Arrays of structs containing pointer fields produce invalid
   pointers after function return. Workaround: use separate arrays of
   pointers (ptr<ptr<T>>) instead of arrays of structs with pointer fields.
+- #465: Non-exported functions with same name in different modules collide
+  in generated C. Only one definition is emitted. Workaround: rename one.
 
 ## Flow transpiler constraints (workarounds)
 
@@ -43,7 +45,7 @@ Filed issues so far:
 - Use `sqrt((x) as f64) as f32` for square root.
 - Use `log((x) as f64) as f32` for natural log.
 - Flow structs are passed by value. Mutating functions must return the struct.
-- Use generous allocation sizes (64+ bytes per struct) on arm64.
+- Use generous allocation sizes (128+ bytes per struct) on arm64.
 
 ## Build and test
 

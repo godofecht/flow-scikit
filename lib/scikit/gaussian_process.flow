@@ -30,7 +30,7 @@ export struct GaussianProcessRegressor {
     fitted: bool
 }
 
-function _rbf_kernel(x1: ptr<f32>, x2: ptr<f32>, n: i32, length_scale: f32) -> f32 {
+function _gp_rbf_kernel(x1: ptr<f32>, x2: ptr<f32>, n: i32, length_scale: f32) -> f32 {
     let mut dist_sq: f32 = 0.0
     for i in 0 to n {
         let d: f32 = x1[i] - x2[i]
@@ -40,7 +40,7 @@ function _rbf_kernel(x1: ptr<f32>, x2: ptr<f32>, n: i32, length_scale: f32) -> f
     return exp((0.0 - gamma * dist_sq) as f64) as f32
 }
 
-function _linear_kernel(x1: ptr<f32>, x2: ptr<f32>, n: i32) -> f32 {
+function _gp_linear_kernel(x1: ptr<f32>, x2: ptr<f32>, n: i32) -> f32 {
     let mut dot: f32 = 0.0
     for i in 0 to n {
         dot = dot + x1[i] * x2[i]
@@ -48,11 +48,11 @@ function _linear_kernel(x1: ptr<f32>, x2: ptr<f32>, n: i32) -> f32 {
     return dot
 }
 
-function _kernel(x1: ptr<f32>, x2: ptr<f32>, n: i32, kernel_type: i32, length_scale: f32) -> f32 {
+function _gp_kernel(x1: ptr<f32>, x2: ptr<f32>, n: i32, kernel_type: i32, length_scale: f32) -> f32 {
     if kernel_type == GP_KERNEL_LINEAR {
-        return _linear_kernel(x1, x2, n)
+        return _gp_linear_kernel(x1, x2, n)
     }
-    return _rbf_kernel(x1, x2, n, length_scale)
+    return _gp_rbf_kernel(x1, x2, n, length_scale)
 }
 
 function _cholesky(K: ptr<f32>, n: i32, alpha: f32) -> ptr<f32> {
@@ -140,7 +140,7 @@ export function gaussian_process_regressor_fit(
             for k in 0 to n_features {
                 x_j[k] = matrix_at(X, j, k)
             }
-            K[i * n + j] = _kernel(x_i, x_j, n_features, kernel_type, length_scale)
+            K[i * n + j] = _gp_kernel(x_i, x_j, n_features, kernel_type, length_scale)
         }
     }
 
@@ -189,7 +189,7 @@ export function gaussian_process_regressor_predict(model: GaussianProcessRegress
             for k in 0 to n_features {
                 x_train_i[k] = matrix_at(model.X_train, j, k)
             }
-            k_star[j] = _kernel(x_test, x_train_i, n_features, model.kernel_type, model.length_scale)
+            k_star[j] = _gp_kernel(x_test, x_train_i, n_features, model.kernel_type, model.length_scale)
         }
 
         let mut pred: f32 = 0.0
@@ -232,7 +232,7 @@ export function gaussian_process_regressor_predict_with_std(model: GaussianProce
             for k in 0 to n_features {
                 x_train_i[k] = matrix_at(model.X_train, j, k)
             }
-            k_star[j] = _kernel(x_test, x_train_i, n_features, model.kernel_type, model.length_scale)
+            k_star[j] = _gp_kernel(x_test, x_train_i, n_features, model.kernel_type, model.length_scale)
         }
 
         let mut pred: f32 = 0.0
@@ -245,7 +245,7 @@ export function gaussian_process_regressor_predict_with_std(model: GaussianProce
 
         let mut k_xx: f32 = 1.0
         if model.kernel_type == GP_KERNEL_LINEAR {
-            k_xx = _linear_kernel(x_test, x_test, n_features)
+            k_xx = _gp_linear_kernel(x_test, x_test, n_features)
         }
 
         let mut variance: f32 = k_xx
