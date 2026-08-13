@@ -300,7 +300,7 @@ function _calib_sigmoid(z: f32) -> f32 {
 
 export function calibrated_classifier_cv_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_folds: i32, method: i32) -> CalibratedClassifierCV {
     let n: i32 = X.rows
-    let models: ptr<DecisionTreeClassifier> = malloc((n_folds as i64) * 64) as ptr<DecisionTreeClassifier>
+    let models: ptr<DecisionTreeClassifier> = malloc((n_folds as i64) * 128) as ptr<DecisionTreeClassifier>
     let calib_a: ptr<f32> = array_new_f32(n_folds)
     let calib_b: ptr<f32> = array_new_f32(n_folds)
 
@@ -376,8 +376,99 @@ export function calibrated_classifier_cv_fit(X: Matrix, y: ptr<f32>, n_classes: 
             calib_a[fold] = a
             calib_b[fold] = b
         } else {
-            calib_a[fold] = 1.0
-            calib_b[fold] = 0.0
+            # Isotonic calibration: fit PAVA on (pred, y), then fit
+            # a sigmoid to approximate the isotonic curve so the
+            # existing predict path (sigmoid(a*pred + b)) still works.
+            let sorted_idx: ptr<i32> = malloc((n_test as i64) * 4) as ptr<i32>
+            for k in 0 to n_test {
+                sorted_idx[k] = k
+            }
+            # Insertion sort by prediction value
+            for k in 1 to n_test {
+                let key: i32 = sorted_idx[k]
+                let key_val: f32 = preds[key]
+                let mut j: i32 = k - 1
+                while j >= 0 && preds[sorted_idx[j]] > key_val {
+                    sorted_idx[j + 1] = sorted_idx[j]
+                    j = j - 1
+                }
+                sorted_idx[j + 1] = key
+            }
+
+            let sorted_y: ptr<f32> = array_new_f32(n_test)
+            for k in 0 to n_test {
+                sorted_y[k] = y_test[sorted_idx[k]]
+            }
+
+            # PAVA (increasing)
+            let block_sum: ptr<f32> = malloc((n_test as i64) * 4) as ptr<f32>
+            let block_size: ptr<i32> = malloc((n_test as i64) * 4) as ptr<i32>
+            let block_start: ptr<i32> = malloc((n_test as i64) * 4) as ptr<i32>
+            let mut n_blocks: i32 = 0
+
+            let mut k: i32 = 0
+            while k < n_test {
+                block_start[n_blocks] = k
+                block_size[n_blocks] = 1
+                block_sum[n_blocks] = sorted_y[k]
+                n_blocks = n_blocks + 1
+
+                while n_blocks > 1 {
+                    let prev: i32 = n_blocks - 2
+                    let curr: i32 = n_blocks - 1
+                    let prev_avg: f32 = block_sum[prev] / (block_size[prev] as f32)
+                    let curr_avg: f32 = block_sum[curr] / (block_size[curr] as f32)
+                    if prev_avg > curr_avg {
+                        block_sum[prev] = block_sum[prev] + block_sum[curr]
+                        block_size[prev] = block_size[prev] + block_size[curr]
+                        n_blocks = n_blocks - 1
+                    } else {
+                        break
+                    }
+                }
+                k = k + 1
+            }
+
+            let iso_y: ptr<f32> = array_new_f32(n_test)
+            for blk in 0 to n_blocks {
+                let avg: f32 = block_sum[blk] / (block_size[blk] as f32)
+                for j in block_start[blk] to block_start[blk] + block_size[blk] {
+                    iso_y[j] = avg
+                }
+            }
+
+            free(block_sum as ptr<void>)
+            free(block_size as ptr<void>)
+            free(block_start as ptr<void>)
+
+            # Fit sigmoid a*pred + b to match iso_y using gradient descent
+            let mut a: f32 = 0.0
+            let mut b: f32 = 0.0
+            let lr2: f32 = 0.01
+            let mut iter2: i32 = 0
+            while iter2 < 200 {
+                let mut ga: f32 = 0.0
+                let mut gb: f32 = 0.0
+                let mut kk: i32 = 0
+                while kk < n_test {
+                    let z: f32 = a * preds[sorted_idx[kk]] + b
+                    let p: f32 = _calib_sigmoid(z)
+                    let target: f32 = iso_y[kk]
+                    ga = ga + (p - target) * preds[sorted_idx[kk]]
+                    gb = gb + (p - target)
+                    kk = kk + 1
+                }
+                a = a - lr2 * ga / (n_test as f32)
+                b = b - lr2 * gb / (n_test as f32)
+                iter2 = iter2 + 1
+            }
+
+            calib_a[fold] = a
+            calib_b[fold] = b
+
+            array_free_f32(sorted_y)
+            array_free_f32(iso_y)
+            free(sorted_idx as ptr<void>)
         }
 
         array_free_f32(preds)

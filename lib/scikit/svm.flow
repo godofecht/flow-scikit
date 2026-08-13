@@ -349,7 +349,7 @@ export function linear_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: 
         }
     }
 
-    let models: ptr<LinearSVC> = malloc((n_classes as i64) * 64) as ptr<LinearSVC>
+    let models: ptr<LinearSVC> = malloc((n_classes as i64) * 128) as ptr<LinearSVC>
 
     # Train one binary classifier per class
     let mut c: i32 = 0
@@ -569,6 +569,16 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
         i = i + 1
     }
 
+    let result: KernelSVC = _kernel_svc_smo(X, y_dual, classes, n_classes, C, gamma, max_iter)
+    return result
+}
+
+# Core SMO training loop. Takes y_dual directly (-1/+1) so callers
+# can control class encoding without relying on class detection order.
+function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_classes: i32, C: f32, gamma: f32, max_iter: i32) -> KernelSVC {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
     let kernel: Matrix = _rbf_kernel(X, X, gamma)
 
     let alphas: ptr<f32> = array_new_f32(n)
@@ -578,6 +588,7 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
     let mut iter: i32 = 0
     let mut examine_all: bool = true
     let mut num_changed: i32 = 1
+    let mut i: i32 = 0
 
     while (num_changed > 0 || examine_all) && iter < max_iter {
         num_changed = 0
@@ -858,6 +869,122 @@ export function kernel_svc_free(model: KernelSVC) -> void {
     matrix_free(model.X_train)
     array_free_f32(model.y_train_dual)
     array_free_f32(model.alphas)
+    array_free_f32(model.classes)
+}
+
+# ============================================================================
+# Multi-class KernelSVC via One-vs-Rest
+# Trains one binary kernel SVM per class. Prediction uses argmax of
+# decision function scores across all binary classifiers.
+# ============================================================================
+
+export struct KernelSVCMulti {
+    models: ptr<KernelSVC>,
+    classes: ptr<f32>,
+    n_classes: i32,
+    n_features: i32,
+    gamma: f32,
+    C: f32,
+    fitted: bool
+}
+
+export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gamma: f32, C: f32, max_iter: i32) -> KernelSVCMulti {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] { found = true }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let models: ptr<KernelSVC> = malloc((n_classes as i64) * 128) as ptr<KernelSVC>
+
+    let mut c: i32 = 0
+    while c < n_classes {
+        # Build y_dual directly: +1 for current class, -1 otherwise.
+        # This avoids the class-ordering dependency in kernel_svc_fit.
+        let y_dual: ptr<f32> = array_new_f32(n)
+        for i in 0 to n {
+            if y[i] == classes[c] {
+                y_dual[i] = 1.0
+            } else {
+                y_dual[i] = -1.0
+            }
+        }
+        let binary_classes: ptr<f32> = array_new_f32(2)
+        binary_classes[0] = -1.0
+        binary_classes[1] = 1.0
+        models[c] = _kernel_svc_smo(X, y_dual, binary_classes, 2, C, gamma, max_iter)
+        c = c + 1
+    }
+
+    return KernelSVCMulti {
+        models: models,
+        classes: classes,
+        n_classes: n_classes,
+        n_features: n_features,
+        gamma: gamma,
+        C: C,
+        fitted: true
+    }
+}
+
+export function kernel_svc_multi_decision_function(model: KernelSVCMulti, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let scores: ptr<f32> = array_new_f32(n * model.n_classes)
+
+    let mut c: i32 = 0
+    while c < model.n_classes {
+        let binary_scores: ptr<f32> = kernel_svc_predict(model.models[c], X)
+        for i in 0 to n {
+            scores[i * model.n_classes + c] = binary_scores[i]
+        }
+        array_free_f32(binary_scores)
+        c = c + 1
+    }
+
+    return scores
+}
+
+export function kernel_svc_multi_predict(model: KernelSVCMulti, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let scores: ptr<f32> = kernel_svc_multi_decision_function(model, X)
+    let preds: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best_score: f32 = scores[i * model.n_classes]
+        let mut c: i32 = 1
+        while c < model.n_classes {
+            let s: f32 = scores[i * model.n_classes + c]
+            if s > best_score {
+                best_score = s
+                best_c = c
+            }
+            c = c + 1
+        }
+        preds[i] = model.classes[best_c]
+    }
+
+    array_free_f32(scores)
+    return preds
+}
+
+export function kernel_svc_multi_free(model: KernelSVCMulti) -> void {
+    let mut c: i32 = 0
+    while c < model.n_classes {
+        kernel_svc_free(model.models[c])
+        c = c + 1
+    }
+    free(model.models as ptr<void>)
     array_free_f32(model.classes)
 }
 

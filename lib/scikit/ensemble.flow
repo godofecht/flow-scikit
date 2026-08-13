@@ -39,7 +39,7 @@ export function random_forest_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: 
         }
     }
 
-    let trees: ptr<DecisionTreeClassifier> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeClassifier>
+    let trees: ptr<DecisionTreeClassifier> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeClassifier>
     srand(seed)
 
     for t in 0 to n_trees {
@@ -201,7 +201,7 @@ export struct RandomForestRegressor {
 }
 
 export function random_forest_regressor_fit(X: Matrix, y: ptr<f32>, n_trees: i32, max_depth: i32, seed: i32) -> RandomForestRegressor {
-    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeRegressor>
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeRegressor>
     srand(seed)
 
     for t in 0 to n_trees {
@@ -310,7 +310,7 @@ export function bagging_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n
         }
     }
 
-    let trees: ptr<DecisionTreeClassifier> = malloc((n_estimators as i64) * 64) as ptr<DecisionTreeClassifier>
+    let trees: ptr<DecisionTreeClassifier> = malloc((n_estimators as i64) * 128) as ptr<DecisionTreeClassifier>
     srand(seed)
 
     for t in 0 to n_estimators {
@@ -525,7 +525,7 @@ export function gradient_boosting_classifier_fit(X: Matrix, y: ptr<f32>, n_class
         current_pred[i] = init_value
     }
 
-    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeRegressor>
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeRegressor>
 
     for t in 0 to n_trees {
         let residuals: ptr<f32> = array_new_f32(X.rows)
@@ -666,7 +666,7 @@ export function gradient_boosting_regressor_fit(X: Matrix, y: ptr<f32>, n_trees:
         current_pred[i] = init_value
     }
 
-    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeRegressor>
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeRegressor>
 
     for t in 0 to n_trees {
         let residuals: ptr<f32> = array_new_f32(X.rows)
@@ -773,7 +773,7 @@ export function adaboost_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
         }
     }
 
-    let trees: ptr<DecisionTreeClassifier> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeClassifier>
+    let trees: ptr<DecisionTreeClassifier> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeClassifier>
     let alphas: ptr<f32> = array_new_f32(n_trees)
 
     let weights: ptr<f32> = array_new_f32(X.rows)
@@ -950,7 +950,7 @@ export struct AdaBoostRegressor {
 }
 
 export function adaboost_regressor_fit(X: Matrix, y: ptr<f32>, n_trees: i32, max_depth: i32, seed: i32) -> AdaBoostRegressor {
-    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeRegressor>
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeRegressor>
     let alphas: ptr<f32> = array_new_f32(n_trees)
 
     let weights: ptr<f32> = array_new_f32(X.rows)
@@ -1193,7 +1193,7 @@ export function extra_trees_classifier_fit(
         }
     }
 
-    let trees: ptr<DecisionTreeClassifier> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeClassifier>
+    let trees: ptr<DecisionTreeClassifier> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeClassifier>
     let n_features: i32 = X.cols
     let n_features_per_split: i32 = 1
     if n_features > 1 {
@@ -1293,7 +1293,7 @@ export function extra_trees_regressor_fit(
     X: Matrix, y: ptr<f32>,
     n_trees: i32, max_depth: i32, seed: i32
 ) -> ExtraTreesRegressor {
-    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeRegressor>
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeRegressor>
 
     srand(seed)
 
@@ -1364,7 +1364,7 @@ export function isolation_forest_fit(X: Matrix, n_trees: i32, max_depth: i32, se
     let sub_size: i32 = 256
     if sub_size > n { sub_size = n }
 
-    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeRegressor>
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeRegressor>
     srand(seed)
 
     for t in 0 to n_trees {
@@ -2233,7 +2233,7 @@ export struct BaggingRegressor {
 export function bagging_regressor_fit(X: Matrix, y: ptr<f32>, n_estimators: i32, max_depth: i32, seed: i32) -> BaggingRegressor {
     let n: i32 = X.rows
     let n_features: i32 = X.cols
-    let trees: ptr<DecisionTreeRegressor> = malloc((n_estimators as i64) * 64) as ptr<DecisionTreeRegressor>
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_estimators as i64) * 128) as ptr<DecisionTreeRegressor>
     srand(seed)
 
     let mut i: i32 = 0
@@ -2381,7 +2381,7 @@ export function stacking_regressor_fit(
     let n: i32 = X.rows
     let p: i32 = X.cols
 
-    let base_estimators: ptr<DecisionTreeRegressor> = malloc((n_base as i64) * 64) as ptr<DecisionTreeRegressor>
+    let base_estimators: ptr<DecisionTreeRegressor> = malloc((n_base as i64) * 128) as ptr<DecisionTreeRegressor>
 
     srand(seed)
 
@@ -2551,7 +2551,7 @@ function _leaf_index(nodes: ptr<TreeNode>, node_idx: i32, x: ptr<f32>, counter: 
 export function random_trees_embedding_fit(X: Matrix, n_trees: i32, max_depth: i32, seed: i32) -> RandomTreesEmbedding {
     let n: i32 = X.rows
     let p: i32 = X.cols
-    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 64) as ptr<DecisionTreeRegressor>
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeRegressor>
     let n_leaves_arr: ptr<i32> = malloc((n_trees as i64) * 4) as ptr<i32>
 
     srand(seed)

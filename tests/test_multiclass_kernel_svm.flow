@@ -1,0 +1,91 @@
+import "lib/scikit/scikit.flow"
+
+function assert_true(cond: bool, msg: string) -> void {
+    if not cond {
+        printf("FAIL: %s\n", msg)
+        exit(1)
+    }
+}
+
+function main() -> i32 {
+    let ds: Dataset = load_iris()
+    let X: Matrix = ds.X
+    let y: ptr<f32> = ds.y
+    let n: i32 = X.rows
+
+    # Shuffle
+    let indices: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n { indices[i] = i }
+    srand(42)
+    for i in 0 to n {
+        let j: i32 = rand() % n
+        let tmp: i32 = indices[i]
+        indices[i] = indices[j]
+        indices[j] = tmp
+    }
+
+    let X_shuf: Matrix = matrix_new(n, X.cols)
+    let y_shuf: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        for j in 0 to X.cols {
+            matrix_set(X_shuf, i, j, matrix_at(X, indices[i], j))
+        }
+        y_shuf[i] = y[indices[i]]
+    }
+
+    let n_train: i32 = n * 4 / 5
+    let X_train: Matrix = matrix_new(n_train, X.cols)
+    let y_train: ptr<f32> = array_new_f32(n_train)
+    for i in 0 to n_train {
+        for j in 0 to X.cols {
+            matrix_set(X_train, i, j, matrix_at(X_shuf, i, j))
+        }
+        y_train[i] = y_shuf[i]
+    }
+
+    let n_test: i32 = n - n_train
+    let X_test: Matrix = matrix_new(n_test, X.cols)
+    let y_test: ptr<f32> = array_new_f32(n_test)
+    for i in 0 to n_test {
+        for j in 0 to X.cols {
+            matrix_set(X_test, i, j, matrix_at(X_shuf, i + n_train, j))
+        }
+        y_test[i] = y_shuf[i + n_train]
+    }
+
+    let gamma: f32 = 0.5
+    let C: f32 = 1.0
+    let model: KernelSVCMulti = kernel_svc_multi_fit(X_train, y_train, 3, gamma, C, 200)
+
+    let preds: ptr<f32> = kernel_svc_multi_predict(model, X_test)
+
+    let mut correct: i32 = 0
+    for i in 0 to n_test {
+        if preds[i] == y_test[i] {
+            correct = correct + 1
+        }
+    }
+    let acc: f32 = (correct as f32) / (n_test as f32)
+    printf("Multi-class KernelSVC accuracy = %.4f\n", acc)
+
+    assert_true(acc > 0.7, "multi-class KernelSVC accuracy should be > 0.7")
+
+    # Also test decision function
+    let scores: ptr<f32> = kernel_svc_multi_decision_function(model, X_test)
+    printf("Decision function sample 0: %.4f %.4f %.4f\n", scores[0], scores[1], scores[2])
+    array_free_f32(scores)
+
+    array_free_f32(preds)
+    kernel_svc_multi_free(model)
+    matrix_free(X_shuf)
+    array_free_f32(y_shuf)
+    matrix_free(X_train)
+    array_free_f32(y_train)
+    matrix_free(X_test)
+    array_free_f32(y_test)
+    free(indices as ptr<void>)
+    dataset_free(ds)
+
+    printf("OK: multi-class KernelSVC works\n")
+    return 0
+}
