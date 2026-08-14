@@ -585,139 +585,122 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
     let alphas: ptr<f32> = array_new_f32(n)
     let mut b: f32 = 0.0
 
+    # Error cache: E[i] = f(x_i) - y_i = sum_j(alpha_j y_j K(j,i)) + b - y_i
+    # With initial alphas=0 and b=0, E[i] = -y_i.
+    let error_cache: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        error_cache[i] = 0.0 - y_dual[i]
+    }
+
     let tol: f32 = 0.001
     let mut iter: i32 = 0
     let mut examine_all: bool = true
     let mut num_changed: i32 = 1
-    let mut i: i32 = 0
 
     while (num_changed > 0 || examine_all) && iter < max_iter {
         num_changed = 0
 
         if examine_all {
             # Full pass over all samples
-            i = 0
+            let mut i: i32 = 0
             while i < n {
-            let mut ei: f64 = 0.0
-            let mut j: i32 = 0
-            while j < n {
-                ei = ei + (alphas[j] * y_dual[j] * matrix_at(kernel, i, j)) as f64
-                j = j + 1
+                let ei_f: f32 = error_cache[i]
+                let yi_ei: f32 = y_dual[i] * ei_f
+                if (yi_ei < -tol && alphas[i] < C) || (yi_ei > tol && alphas[i] > 0.0) {
+                    # Second-order working set selection using error cache.
+                    let mut best_j: i32 = (iter * 7 + i * 13 + 3) % n
+                    if best_j == i { best_j = (best_j + 1) % n }
+                    let mut best_gain: f32 = 0.0
+                    let mut j_scan: i32 = 0
+                    while j_scan < n {
+                        if j_scan == i { j_scan = j_scan + 1; continue }
+                        let ej_test: f32 = error_cache[j_scan]
+                        let diff: f32 = ei_f - ej_test
+                        let abs_diff: f32 = diff
+                        if diff < 0.0 { abs_diff = -diff }
+                        if abs_diff > best_gain {
+                            best_gain = abs_diff
+                            best_j = j_scan
+                        }
+                        j_scan = j_scan + 1
+                    }
+
+                    let j2: i32 = best_j
+                    let ej: f32 = error_cache[j2]
+
+                    let alpha_i_old: f32 = alphas[i]
+                    let alpha_j_old: f32 = alphas[j2]
+
+                    let mut L: f32 = 0.0
+                    let mut H: f32 = C
+                    if y_dual[i] == y_dual[j2] {
+                        L = alpha_i_old + alpha_j_old - C
+                        H = alpha_i_old + alpha_j_old
+                        if L < 0.0 { L = 0.0 }
+                        if H > C { H = C }
+                    } else {
+                        L = alpha_i_old - alpha_j_old
+                        H = alpha_i_old - alpha_j_old + C
+                        if L < 0.0 { L = 0.0 }
+                        if H > C { H = C }
+                    }
+
+                    if L == H { i = i + 1; continue }
+
+                    let eta: f32 = 2.0 * matrix_at(kernel, i, j2) - matrix_at(kernel, i, i) - matrix_at(kernel, j2, j2)
+                    if eta >= -0.0000000001 { i = i + 1; continue }
+
+                    let mut alpha_j_new: f32 = alpha_j_old - y_dual[j2] * (ei_f - ej) / eta
+                    if alpha_j_new < L { alpha_j_new = L }
+                    if alpha_j_new > H { alpha_j_new = H }
+
+                    let alpha_i_new: f32 = alpha_i_old + y_dual[i] * y_dual[j2] * (alpha_j_old - alpha_j_new)
+
+                    let di: f32 = alpha_i_new - alpha_i_old
+                    let dj: f32 = alpha_j_new - alpha_j_old
+
+                    alphas[i] = alpha_i_new
+                    alphas[j2] = alpha_j_new
+
+                    let b1: f32 = b - ei_f - y_dual[i] * di * matrix_at(kernel, i, i) - y_dual[j2] * dj * matrix_at(kernel, i, j2)
+                    let b2: f32 = b - ej - y_dual[i] * di * matrix_at(kernel, i, j2) - y_dual[j2] * dj * matrix_at(kernel, j2, j2)
+
+                    let b_old: f32 = b
+                    if alpha_i_new > 0.0 && alpha_i_new < C {
+                        b = b1
+                    } elif alpha_j_new > 0.0 && alpha_j_new < C {
+                        b = b2
+                    } else {
+                        b = (b1 + b2) / 2.0
+                    }
+
+                    # Update error cache: E[k] += di*y_i*K(i,k) + dj*y_j*K(j,k) + (b_new - b_old)
+                    let db: f32 = b - b_old
+                    let mut k: i32 = 0
+                    while k < n {
+                        error_cache[k] = error_cache[k] + y_dual[i] * di * matrix_at(kernel, i, k) + y_dual[j2] * dj * matrix_at(kernel, j2, k) + db
+                        k = k + 1
+                    }
+
+                    num_changed = num_changed + 1
+                }
+                i = i + 1
             }
-            ei = ei + (b) as f64 - (y_dual[i]) as f64
-            let ei_f: f32 = ei as f32
-
-            let yi_ei: f32 = y_dual[i] * ei_f
-            if (yi_ei < -tol && alphas[i] < C) || (yi_ei > tol && alphas[i] > 0.0) {
-                # Second-order working set selection: pick j maximizing |Ei - Ej|
-                let mut best_j: i32 = (iter * 7 + i * 13 + 3) % n
-                if best_j == i { best_j = (best_j + 1) % n }
-                let mut best_gain: f32 = 0.0
-                let mut j_scan: i32 = 0
-                while j_scan < n {
-                    if j_scan == i { j_scan = j_scan + 1; continue }
-                    let ej_test: f32 = _svm_compute_ej(kernel, alphas, y_dual, n, b, j_scan)
-                    let diff: f32 = ei_f - ej_test
-                    let abs_diff: f32 = diff
-                    if diff < 0.0 { abs_diff = -diff }
-                    if abs_diff > best_gain {
-                        best_gain = abs_diff
-                        best_j = j_scan
-                    }
-                    j_scan = j_scan + 1
-                }
-
-                let j2: i32 = best_j
-                let ej: f32 = _svm_compute_ej(kernel, alphas, y_dual, n, b, j2)
-
-                let alpha_i_old: f32 = alphas[i]
-                let alpha_j_old: f32 = alphas[j2]
-
-                let mut L: f32 = 0.0
-                let mut H: f32 = C
-                if y_dual[i] == y_dual[j2] {
-                    L = alpha_i_old + alpha_j_old - C
-                    H = alpha_i_old + alpha_j_old
-                    if L < 0.0 {
-                        L = 0.0
-                    }
-                    if H > C {
-                        H = C
-                    }
-                } else {
-                    L = alpha_i_old - alpha_j_old
-                    H = alpha_i_old - alpha_j_old + C
-                    if L < 0.0 {
-                        L = 0.0
-                    }
-                    if H > C {
-                        H = C
-                    }
-                }
-
-                if L == H {
-                    i = i + 1
-                    continue
-                }
-
-                let eta: f32 = 2.0 * matrix_at(kernel, i, j2) - matrix_at(kernel, i, i) - matrix_at(kernel, j2, j2)
-                if eta >= -0.0000000001 {
-                    i = i + 1
-                    continue
-                }
-
-                let mut alpha_j_new: f32 = alpha_j_old - y_dual[j2] * (ei_f - ej) / eta
-                if alpha_j_new < L {
-                    alpha_j_new = L
-                }
-                if alpha_j_new > H {
-                    alpha_j_new = H
-                }
-
-                let alpha_i_new: f32 = alpha_i_old + y_dual[i] * y_dual[j2] * (alpha_j_old - alpha_j_new)
-
-                alphas[i] = alpha_i_new
-                alphas[j2] = alpha_j_new
-
-                let b1: f32 = b - ei_f - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, i) - y_dual[j2] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, i, j2)
-                let b2: f32 = b - ej - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, j2) - y_dual[j2] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, j2, j2)
-
-                if alpha_i_new > 0.0 && alpha_i_new < C {
-                    b = b1
-                } elif alpha_j_new > 0.0 && alpha_j_new < C {
-                    b = b2
-                } else {
-                    b = (b1 + b2) / 2.0
-                }
-
-                num_changed = num_changed + 1
-            }
-            i = i + 1
-        }
         } else {
             # Non-boundary pass: only examine samples with 0 < alpha < C
-            i = 0
+            let mut i: i32 = 0
             while i < n {
                 if alphas[i] > 0.0 && alphas[i] < C {
-                    let mut ei: f64 = 0.0
-                    let mut j: i32 = 0
-                    while j < n {
-                        ei = ei + (alphas[j] * y_dual[j] * matrix_at(kernel, i, j)) as f64
-                        j = j + 1
-                    }
-                    ei = ei + (b) as f64 - (y_dual[i]) as f64
-                    let ei_f: f32 = ei as f32
-
+                    let ei_f: f32 = error_cache[i]
                     let yi_ei: f32 = y_dual[i] * ei_f
                     if (yi_ei < -tol && alphas[i] < C) || (yi_ei > tol && alphas[i] > 0.0) {
-                        # Second-order working set selection
                         let mut best_j: i32 = (iter * 7 + i * 13 + 3) % n
                         if best_j == i { best_j = (best_j + 1) % n }
                         let mut best_gain: f32 = 0.0
                         let mut j_scan: i32 = 0
                         while j_scan < n {
                             if j_scan == i { j_scan = j_scan + 1; continue }
-                            let ej_test: f32 = _svm_compute_ej(kernel, alphas, y_dual, n, b, j_scan)
+                            let ej_test: f32 = error_cache[j_scan]
                             let diff: f32 = ei_f - ej_test
                             let abs_diff: f32 = diff
                             if diff < 0.0 { abs_diff = -diff }
@@ -729,7 +712,7 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
                         }
 
                         let j2: i32 = best_j
-                        let ej: f32 = _svm_compute_ej(kernel, alphas, y_dual, n, b, j2)
+                        let ej: f32 = error_cache[j2]
 
                         let alpha_i_old: f32 = alphas[i]
                         let alpha_j_old: f32 = alphas[j2]
@@ -759,18 +742,29 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
 
                         let alpha_i_new: f32 = alpha_i_old + y_dual[i] * y_dual[j2] * (alpha_j_old - alpha_j_new)
 
+                        let di: f32 = alpha_i_new - alpha_i_old
+                        let dj: f32 = alpha_j_new - alpha_j_old
+
                         alphas[i] = alpha_i_new
                         alphas[j2] = alpha_j_new
 
-                        let b1: f32 = b - ei_f - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, i) - y_dual[j2] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, i, j2)
-                        let b2: f32 = b - ej - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, j2) - y_dual[j2] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, j2, j2)
+                        let b1: f32 = b - ei_f - y_dual[i] * di * matrix_at(kernel, i, i) - y_dual[j2] * dj * matrix_at(kernel, i, j2)
+                        let b2: f32 = b - ej - y_dual[i] * di * matrix_at(kernel, i, j2) - y_dual[j2] * dj * matrix_at(kernel, j2, j2)
 
+                        let b_old: f32 = b
                         if alpha_i_new > 0.0 && alpha_i_new < C {
                             b = b1
                         } elif alpha_j_new > 0.0 && alpha_j_new < C {
                             b = b2
                         } else {
                             b = (b1 + b2) / 2.0
+                        }
+
+                        let db: f32 = b - b_old
+                        let mut k: i32 = 0
+                        while k < n {
+                            error_cache[k] = error_cache[k] + y_dual[i] * di * matrix_at(kernel, i, k) + y_dual[j2] * dj * matrix_at(kernel, j2, k) + db
+                            k = k + 1
                         }
 
                         num_changed = num_changed + 1
@@ -789,6 +783,7 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
         iter = iter + 1
     }
 
+    array_free_f32(error_cache)
     matrix_free(kernel)
 
     let X_copy: Matrix = matrix_copy(X)

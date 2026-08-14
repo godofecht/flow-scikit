@@ -282,49 +282,129 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
     for i in 0 to nc * n { all_weights[i] = 0.0 }
     for i in 0 to nc { all_biases[i] = 0.0 }
 
+    # Newton's method (IRLS) for each binary subproblem.
+    # Augmented weight vector includes bias: theta = [w; b], dimension d = n+1.
+    # X_aug = [X | 1], H = X_aug^T D X_aug + lambda*I, grad = X_aug^T (p - y).
+    let d: i32 = n + 1
+    let X_aug: ptr<f32> = malloc((m as i64) * (d as i64) * 4) as ptr<f32>
+    for i in 0 to m {
+        for j in 0 to n {
+            X_aug[i * d + j] = matrix_at(X, i, j)
+        }
+        X_aug[i * d + n] = 1.0
+    }
+
+    let theta: ptr<f32> = array_new_f32(d)
+    let grad: ptr<f32> = array_new_f32(d)
+    let H: ptr<f32> = malloc((d as i64) * (d as i64) * 4) as ptr<f32>
+    let Hcopy: ptr<f32> = malloc((d as i64) * (d as i64) * 4) as ptr<f32>
+    let delta: ptr<f32> = array_new_f32(d)
+    let p_arr: ptr<f32> = array_new_f32(m)
+
+    let l2_coeff: f32 = 0.0
+    if penalty.kind == PENALTY_L2 || penalty.kind == PENALTY_ELASTICNET {
+        l2_coeff = penalty.alpha * (1.0 - penalty.l1_ratio)
+    }
+
+    let newton_iter: i32 = 50
+    if epochs > 50 { newton_iter = 50 }
+    # Use min(epochs, 50) as iteration count. epochs param still controls convergence.
+    let max_iter: i32 = epochs
+    if max_iter > 50 { max_iter = 50 }
+    if max_iter < 10 { max_iter = 10 }
+
     for c in 0 to nc {
-        let w: ptr<f32> = array_new_f32(n)
-        for j in 0 to n { w[j] = 0.0 }
-        let mut b: f32 = 0.0
+        for j in 0 to d { theta[j] = 0.0 }
 
-        for epoch in 0 to epochs {
-            let grad_w: ptr<f32> = array_new_f32(n)
-            let mut grad_b: f32 = 0.0
-
+        let mut iter: i32 = 0
+        let mut converged: bool = false
+        while iter < max_iter && not converged {
+            # Compute predictions p_i = sigmoid(theta^T x_aug_i)
             for i in 0 to m {
-                let mut z: f32 = b
-                for j in 0 to n {
-                    z = z + w[j] * matrix_at(X, i, j)
+                let mut z: f32 = 0.0
+                for j in 0 to d {
+                    z = z + theta[j] * X_aug[i * d + j]
                 }
-                let p: f32 = sigmoid(z)
+                p_arr[i] = sigmoid(z)
+            }
+
+            # Gradient: grad = X_aug^T (p - y) / m + l2 * theta
+            for j in 0 to d {
+                grad[j] = 0.0
+            }
+            for i in 0 to m {
                 let label: f32 = 0.0
                 if y[i] == classes[c] { label = 1.0 }
-                let err: f32 = p - label
-
-                for j in 0 to n {
-                    grad_w[j] = grad_w[j] + err * matrix_at(X, i, j)
+                let err: f32 = p_arr[i] - label
+                for j in 0 to d {
+                    grad[j] = grad[j] + err * X_aug[i * d + j]
                 }
-                grad_b = grad_b + err
+            }
+            let inv_m: f32 = 1.0 / (m as f32)
+            for j in 0 to d {
+                grad[j] = grad[j] * inv_m
+                if j < n {
+                    grad[j] = grad[j] + l2_coeff * theta[j]
+                }
             }
 
-            let inv_n: f32 = 1.0 / (m as f32)
+            # Hessian: H = X_aug^T D X_aug / m + l2 * I
+            # D_ii = p_i * (1 - p_i)
+            for j in 0 to d * d {
+                H[j] = 0.0
+            }
+            for i in 0 to m {
+                let dval: f32 = p_arr[i] * (1.0 - p_arr[i])
+                if dval < 0.0000001 { continue }
+                for j in 0 to d {
+                    for k in 0 to d {
+                        H[j * d + k] = H[j * d + k] + X_aug[i * d + j] * X_aug[i * d + k] * dval * inv_m
+                    }
+                }
+            }
+            # Add L2 regularization to diagonal (skip bias term).
             for j in 0 to n {
-                grad_w[j] = grad_w[j] * inv_n
-                if penalty.kind == PENALTY_L2 || penalty.kind == PENALTY_ELASTICNET {
-                    grad_w[j] = grad_w[j] + penalty.alpha * w[j] * (1.0 - penalty.l1_ratio)
-                }
-                w[j] = w[j] - lr * grad_w[j]
+                H[j * d + j] = H[j * d + j] + l2_coeff
             }
-            b = b - lr * grad_b * inv_n
-            array_free_f32(grad_w)
+
+            # Solve H * delta = grad. Copy H and grad since solve is in-place.
+            for j in 0 to d * d {
+                Hcopy[j] = H[j]
+            }
+            for j in 0 to d {
+                delta[j] = grad[j]
+            }
+            _solve_in_place(Hcopy, delta, d)
+
+            # Check convergence: if max delta is tiny, stop.
+            let mut max_delta: f32 = 0.0
+            for j in 0 to d {
+                let ad: f32 = delta[j]
+                if ad < 0.0 { max_delta = -ad } elif ad > max_delta { max_delta = ad }
+            }
+            if max_delta < 0.0001 { converged = true }
+
+            # Update theta = theta - delta
+            for j in 0 to d {
+                theta[j] = theta[j] - delta[j]
+            }
+
+            iter = iter + 1
         }
 
         for j in 0 to n {
-            all_weights[c * n + j] = w[j]
+            all_weights[c * n + j] = theta[j]
         }
-        all_biases[c] = b
-        array_free_f32(w)
+        all_biases[c] = theta[n]
     }
+
+    free(X_aug as ptr<void>)
+    array_free_f32(theta)
+    array_free_f32(grad)
+    free(H as ptr<void>)
+    free(Hcopy as ptr<void>)
+    array_free_f32(delta)
+    array_free_f32(p_arr)
 
     return LogisticRegression {
         weights: all_weights,

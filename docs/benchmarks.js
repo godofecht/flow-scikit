@@ -3,35 +3,35 @@
 
 const BENCH = {
   iris: [
-    { algo: "LogisticRegression",  sk_score: 0.9333, fl_score: 0.8333, sk_ms: 0.86,  fl_ms: 0.01 },
-    { algo: "LinearSVC",            sk_score: 0.9000, fl_score: 0.7000, sk_ms: 2.35,  fl_ms: 0.44 },
-    { algo: "KernelSVC_RBF",        sk_score: 0.9333, fl_score: 0.8000, sk_ms: 1.47,  fl_ms: 16.26 },
-    { algo: "DecisionTree",         sk_score: 0.9333, fl_score: 0.9333, sk_ms: 1.87,  fl_ms: 1.15 },
-    { algo: "RandomForest",         sk_score: 0.9667, fl_score: 0.9333, sk_ms: 10.11, fl_ms: 10.17 },
+    { algo: "LogisticRegression",  sk_score: 0.9333, fl_score: 0.9000, sk_ms: 0.86,  fl_ms: 0.15 },
+    { algo: "LinearSVC",            sk_score: 0.9000, fl_score: 0.7000, sk_ms: 2.35,  fl_ms: 0.45 },
+    { algo: "KernelSVC_RBF",        sk_score: 0.9333, fl_score: 0.9000, sk_ms: 1.47,  fl_ms: 0.80 },
+    { algo: "DecisionTree",         sk_score: 0.9333, fl_score: 0.9333, sk_ms: 1.87,  fl_ms: 0.11 },
+    { algo: "RandomForest",         sk_score: 0.9667, fl_score: 0.9333, sk_ms: 10.11, fl_ms: 0.91 },
     { algo: "GaussianNB",           sk_score: 0.9667, fl_score: 0.9333, sk_ms: 0.86,  fl_ms: 0.01 },
-    { algo: "KMeans",               sk_score: 0.1000, fl_score: 0.8000, sk_ms: 46.87, fl_ms: 0.04 },
+    { algo: "KMeans",               sk_score: 0.1000, fl_score: 0.8000, sk_ms: 46.87, fl_ms: 0.03 },
     { algo: "PCA",                  sk_score: 0.7268, fl_score: 0.7292, sk_ms: 7.76,  fl_ms: 0.05, metric: "explained_var" }
   ],
   digits: [
-    { algo: "LogisticRegression",  sk_score: 0.9722, fl_score: 0.9415, sk_ms: 16.73,  fl_ms: 495.13 },
-    { algo: "LinearSVC",            sk_score: 0.9556, fl_score: 0.6462, sk_ms: 527.05, fl_ms: 535.22 },
-    { algo: "DecisionTree",         sk_score: 0.8139, fl_score: 0.8691, sk_ms: 19.80,  fl_ms: 6431.50 },
-    { algo: "RandomForest",         sk_score: 0.9361, fl_score: 0.9081, sk_ms: 32.09,  fl_ms: 46919.86 },
-    { algo: "GaussianNB",           sk_score: 0.7417, fl_score: 0.7772, sk_ms: 2.09,   fl_ms: 1.99 },
-    { algo: "KMeans",               sk_score: 0.1167, fl_score: 0.6295, sk_ms: 87.94,  fl_ms: 13.85 }
+    { algo: "LogisticRegression",  sk_score: 0.9722, fl_score: 0.9749, sk_ms: 16.73,  fl_ms: 588.39 },
+    { algo: "LinearSVC",            sk_score: 0.9556, fl_score: 0.6462, sk_ms: 527.05, fl_ms: 462.24 },
+    { algo: "DecisionTree",         sk_score: 0.8139, fl_score: 0.8691, sk_ms: 19.80,  fl_ms: 27.95 },
+    { algo: "RandomForest",         sk_score: 0.9361, fl_score: 0.9081, sk_ms: 32.09,  fl_ms: 266.97 },
+    { algo: "GaussianNB",           sk_score: 0.7417, fl_score: 0.7772, sk_ms: 2.09,   fl_ms: 1.95 },
+    { algo: "KMeans",               sk_score: 0.1167, fl_score: 0.6295, sk_ms: 87.94,  fl_ms: 21.62 }
   ],
   diabetes: [
-    { algo: "Ridge",                sk_score: 0.4541, fl_score: 0.1489, sk_ms: 5.51,  fl_ms: 0.02 },
-    { algo: "Lasso",                sk_score: 0.4555, fl_score: 0.1497, sk_ms: 2.34,  fl_ms: 0.39 },
-    { algo: "LinearRegression",     sk_score: 0.4526, fl_score: 0.1482, sk_ms: 10.48, fl_ms: 0.02 },
-    { algo: "KernelRidge_RBF",      sk_score: 0.4619, fl_score: 0.1811, sk_ms: 46.00, fl_ms: 9.77 }
+    { algo: "Ridge",                sk_score: 0.4541, fl_score: 0.1489, sk_ms: 5.51,  fl_ms: 0.04 },
+    { algo: "Lasso",                sk_score: 0.4555, fl_score: 0.1497, sk_ms: 2.34,  fl_ms: 0.61 },
+    { algo: "LinearRegression",     sk_score: 0.4526, fl_score: 0.1482, sk_ms: 10.48, fl_ms: 0.05 },
+    { algo: "KernelRidge_RBF",      sk_score: 0.4619, fl_score: 0.1811, sk_ms: 46.00, fl_ms: 14.72 }
   ],
   iris_combo: [
     { algo: "GaussianNB",      sk_acc: 0.9667, fl_acc: 0.9333, sk_train: 1.04,  fl_train: 0.03 },
-    { algo: "DecisionTree",    sk_acc: 0.9333, fl_acc: 0.9333, sk_train: 1.81,  fl_train: 1.38 },
+    { algo: "DecisionTree",    sk_acc: 0.9333, fl_acc: 0.9333, sk_train: 1.81,  fl_train: 0.11 },
     { algo: "KNN_k5",          sk_acc: 0.9333, fl_acc: 0.9667, sk_train: 1.84,  fl_train: 0.03 },
     { algo: "LinearSVC_OVR",   sk_acc: 0.9000, fl_acc: 0.7000, sk_train: 2.13,  fl_train: 0.48 },
-    { algo: "RandomForest_10", sk_acc: 0.9667, fl_acc: 0.9333, sk_train: 8.42,  fl_train: 11.72 }
+    { algo: "RandomForest_10", sk_acc: 0.9667, fl_acc: 0.9333, sk_train: 8.42,  fl_train: 0.91 }
   ]
 };
 
