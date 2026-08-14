@@ -1009,53 +1009,230 @@ export function nu_svc_fit(X: Matrix, y: ptr<f32>, nu: f32, gamma: f32, max_iter
     let n: i32 = X.rows
     let p: i32 = X.cols
 
+    # Detect classes from data
     let classes: ptr<f32> = array_new_f32(2)
-    classes[0] = 0.0
-    classes[1] = 1.0
+    let mut n_found: i32 = 0
+    let mut i: i32 = 0
+    while i < n {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] { found = true }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+        i = i + 1
+    }
 
     let y_dual: ptr<f32> = array_new_f32(n)
-    for i in 0 to n {
-        if y[i] == 0.0 { y_dual[i] = -1.0 }
-        else { y_dual[i] = 1.0 }
+    i = 0
+    while i < n {
+        if y[i] == classes[1] {
+            y_dual[i] = 1.0
+        } else {
+            y_dual[i] = -1.0
+        }
+        i = i + 1
     }
+
+    # nu-SVM: upper bound is C/nu, and sum(alpha_i * y_i) = 0
+    # The nu parameter controls the fraction of support vectors and errors.
+    let alpha_upper: f32 = C / nu
+    let kernel: Matrix = _rbf_kernel(X, X, gamma)
 
     let alphas: ptr<f32> = array_new_f32(n)
     for i in 0 to n { alphas[i] = 0.0 }
 
     let mut b: f32 = 0.0
-    let n_upper: f32 = nu * (n as f32) / 2.0
+    let tol: f32 = 0.001
 
-    for iter in 0 to max_iter {
-        for i in 0 to n {
-            let mut g_i: f32 = -b
-            for j in 0 to n {
-                if alphas[j] < 0.0000000001 { continue }
-                let mut s: f32 = 0.0
-                for k in 0 to p {
-                    let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
-                    s = s + d * d
+    # SMO with nu constraint. We maintain sum(y_i * alpha_i) = 0
+    # by only updating pairs (i, j) where y_dual[i] != y_dual[j].
+    let mut iter: i32 = 0
+    let mut examine_all: bool = true
+    let mut num_changed: i32 = 1
+
+    while (num_changed > 0 || examine_all) && iter < max_iter {
+        num_changed = 0
+
+        if examine_all {
+            i = 0
+            while i < n {
+                let mut ei: f64 = 0.0
+                for j in 0 to n {
+                    ei = ei + (alphas[j] * y_dual[j] * matrix_at(kernel, i, j)) as f64
                 }
-                g_i = g_i + alphas[j] * y_dual[j] * exp((-gamma * s) as f64) as f32
+                ei = ei + (b) as f64 - (y_dual[i]) as f64
+                let ei_f: f32 = ei as f32
+
+                let yi_ei: f32 = y_dual[i] * ei_f
+                if (yi_ei < -tol && alphas[i] < alpha_upper) || (yi_ei > tol && alphas[i] > 0.0) {
+                    # Pick j with opposite label to maintain sum constraint
+                    let mut best_j: i32 = -1
+                    let mut best_gain: f32 = 0.0
+                    for j in 0 to n {
+                        if j == i { continue }
+                        if y_dual[j] == y_dual[i] { continue }
+                        let ej: f32 = _svm_compute_ej(kernel, alphas, y_dual, n, b, j)
+                        let diff: f32 = ei_f - ej
+                        let abs_diff: f32 = diff
+                        if diff < 0.0 { abs_diff = -diff }
+                        if abs_diff > best_gain {
+                            best_gain = abs_diff
+                            best_j = j
+                        }
+                    }
+
+                    if best_j >= 0 {
+                        let j2: i32 = best_j
+                        let ej: f32 = _svm_compute_ej(kernel, alphas, y_dual, n, b, j2)
+
+                        let alpha_i_old: f32 = alphas[i]
+                        let alpha_j_old: f32 = alphas[j2]
+
+                        # For opposite labels: L = max(0, aj - ai), H = min(Cnu, Cnu + aj - ai)
+                        let mut L: f32 = alpha_j_old - alpha_i_old
+                        let mut H: f32 = alpha_upper + alpha_j_old - alpha_i_old
+                        if L < 0.0 { L = 0.0 }
+                        if H > alpha_upper { H = alpha_upper }
+
+                        if L == H { i = i + 1; continue }
+
+                        let eta: f32 = 2.0 * matrix_at(kernel, i, j2) - matrix_at(kernel, i, i) - matrix_at(kernel, j2, j2)
+                        if eta >= -0.0000000001 { i = i + 1; continue }
+
+                        let mut alpha_j_new: f32 = alpha_j_old - y_dual[j2] * (ei_f - ej) / eta
+                        if alpha_j_new < L { alpha_j_new = L }
+                        if alpha_j_new > H { alpha_j_new = H }
+
+                        # Maintain sum(y_i * alpha_i) = 0:
+                        # y_i * (ai_new - ai_old) + y_j * (aj_new - aj_old) = 0
+                        # Since y_j = -y_i: ai_new = ai_old + (aj_old - aj_new)
+                        let alpha_i_new: f32 = alpha_i_old + (alpha_j_old - alpha_j_new)
+
+                        if alpha_i_new < 0.0 || alpha_i_new > alpha_upper {
+                            i = i + 1
+                            continue
+                        }
+
+                        alphas[i] = alpha_i_new
+                        alphas[j2] = alpha_j_new
+
+                        let b1: f32 = b - ei_f - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, i) - y_dual[j2] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, i, j2)
+                        let b2: f32 = b - ej - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, j2) - y_dual[j2] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, j2, j2)
+
+                        if alpha_i_new > 0.0 && alpha_i_new < alpha_upper {
+                            b = b1
+                        } elif alpha_j_new > 0.0 && alpha_j_new < alpha_upper {
+                            b = b2
+                        } else {
+                            b = (b1 + b2) / 2.0
+                        }
+
+                        num_changed = num_changed + 1
+                    }
+                }
+                i = i + 1
             }
-            let viol: f32 = y_dual[i] * g_i
-            if viol > 0 && alphas[i] < n_upper {
-                alphas[i] = alphas[i] + 0.01
-            } else {
-                if viol < 0 && alphas[i] > 0 {
-                    alphas[i] = alphas[i] - 0.01
-                    if alphas[i] < 0 { alphas[i] = 0.0 }
+        } else {
+            i = 0
+            while i < n {
+                if alphas[i] > 0.0 && alphas[i] < alpha_upper {
+                    let mut ei: f64 = 0.0
+                    for j in 0 to n {
+                        ei = ei + (alphas[j] * y_dual[j] * matrix_at(kernel, i, j)) as f64
+                    }
+                    ei = ei + (b) as f64 - (y_dual[i]) as f64
+                    let ei_f: f32 = ei as f32
+
+                    let yi_ei: f32 = y_dual[i] * ei_f
+                    if (yi_ei < -tol && alphas[i] < alpha_upper) || (yi_ei > tol && alphas[i] > 0.0) {
+                        let mut best_j: i32 = -1
+                        let mut best_gain: f32 = 0.0
+                        for j in 0 to n {
+                            if j == i { continue }
+                            if y_dual[j] == y_dual[i] { continue }
+                            let ej: f32 = _svm_compute_ej(kernel, alphas, y_dual, n, b, j)
+                            let diff: f32 = ei_f - ej
+                            let abs_diff: f32 = diff
+                            if diff < 0.0 { abs_diff = -diff }
+                            if abs_diff > best_gain {
+                                best_gain = abs_diff
+                                best_j = j
+                            }
+                        }
+
+                        if best_j >= 0 {
+                            let j2: i32 = best_j
+                            let ej: f32 = _svm_compute_ej(kernel, alphas, y_dual, n, b, j2)
+
+                            let alpha_i_old: f32 = alphas[i]
+                            let alpha_j_old: f32 = alphas[j2]
+
+                            let mut L: f32 = alpha_j_old - alpha_i_old
+                            let mut H: f32 = alpha_upper + alpha_j_old - alpha_i_old
+                            if L < 0.0 { L = 0.0 }
+                            if H > alpha_upper { H = alpha_upper }
+
+                            if L == H { i = i + 1; continue }
+
+                            let eta: f32 = 2.0 * matrix_at(kernel, i, j2) - matrix_at(kernel, i, i) - matrix_at(kernel, j2, j2)
+                            if eta >= -0.0000000001 { i = i + 1; continue }
+
+                            let mut alpha_j_new: f32 = alpha_j_old - y_dual[j2] * (ei_f - ej) / eta
+                            if alpha_j_new < L { alpha_j_new = L }
+                            if alpha_j_new > H { alpha_j_new = H }
+
+                            let alpha_i_new: f32 = alpha_i_old + (alpha_j_old - alpha_j_new)
+
+                            if alpha_i_new < 0.0 || alpha_i_new > alpha_upper {
+                                i = i + 1
+                                continue
+                            }
+
+                            alphas[i] = alpha_i_new
+                            alphas[j2] = alpha_j_new
+
+                            let b1: f32 = b - ei_f - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, i) - y_dual[j2] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, i, j2)
+                            let b2: f32 = b - ej - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(kernel, i, j2) - y_dual[j2] * (alpha_j_new - alpha_j_old) * matrix_at(kernel, j2, j2)
+
+                            if alpha_i_new > 0.0 && alpha_i_new < alpha_upper {
+                                b = b1
+                            } elif alpha_j_new > 0.0 && alpha_j_new < alpha_upper {
+                                b = b2
+                            } else {
+                                b = (b1 + b2) / 2.0
+                            }
+
+                            num_changed = num_changed + 1
+                        }
+                    }
                 }
+                i = i + 1
             }
         }
+
+        if examine_all {
+            examine_all = false
+        } elif num_changed == 0 {
+            examine_all = true
+        }
+
+        iter = iter + 1
     }
+
+    matrix_free(kernel)
 
     let mut n_support: i32 = 0
     for i in 0 to n {
         if alphas[i] > 0.000001 { n_support = n_support + 1 }
     }
 
+    let X_copy: Matrix = matrix_copy(X)
+
     return NuSVC {
-        X_train: X,
+        X_train: X_copy,
         y_train_dual: y_dual,
         alphas: alphas,
         b: b,

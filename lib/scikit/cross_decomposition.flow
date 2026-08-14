@@ -784,7 +784,8 @@ export function pls_svd_fit(X: Matrix, Y: Matrix, n_components: i32) -> PLSSVD {
         srand(42 + c)
         for j in 0 to p { u[j] = ((rand() % 1000) as f32) / 500.0 - 1.0 }
 
-        for iter in 0 to 100 {
+        let mut iter: i32 = 0
+        while iter < 200 {
             let Cv: ptr<f32> = array_new_f32(q)
             for k in 0 to q {
                 let mut s: f32 = 0.0
@@ -807,10 +808,22 @@ export function pls_svd_fit(X: Matrix, Y: Matrix, n_components: i32) -> PLSSVD {
             for j in 0 to p { u_norm = u_norm + CtCv[j] * CtCv[j] }
             u_norm = sqrt((u_norm as f64)) as f32
             if u_norm < 0.0000000001 { u_norm = 0.0000000001 }
-            for j in 0 to p { u[j] = CtCv[j] / u_norm }
+
+            # Convergence check: compare new u to old u
+            let mut max_change: f32 = 0.0
+            for j in 0 to p {
+                let new_u: f32 = CtCv[j] / u_norm
+                let diff: f32 = new_u - u[j]
+                if diff < 0.0 { diff = -diff }
+                if diff > max_change { max_change = diff }
+                u[j] = new_u
+            }
 
             array_free_f32(Cv)
             array_free_f32(CtCv)
+
+            if max_change < 0.000001 { break }
+            iter = iter + 1
         }
 
         let v: ptr<f32> = array_new_f32(q)
