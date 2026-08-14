@@ -1,0 +1,131 @@
+# Iris classification - flow-scikit
+# Self-contained native binary. No Python, no numpy, no BLAS.
+# Compiles to a single executable that runs on any arm64/x86 machine.
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+    function clock() -> i64
+}
+
+function main() -> i32 {
+    let t0: i64 = clock()
+
+    # Load the iris dataset (embedded in the binary, no file I/O needed)
+    let ds: Dataset = load_iris()
+    let n: i32 = ds.X.rows
+    let n_test: i32 = n / 5
+
+    # Shuffle with fixed seed for reproducibility
+    let indices: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n { indices[i] = i }
+    srand(42)
+    let mut i: i32 = n - 1
+    while i > 0 {
+        let j: i32 = rand() % (i + 1)
+        let tmp: i32 = indices[i]
+        indices[i] = indices[j]
+        indices[j] = tmp
+        i = i - 1
+    }
+
+    let n_train: i32 = n - n_test
+    let X_train: Matrix = matrix_new(n_train, ds.X.cols)
+    let y_train: ptr<f32> = array_new_f32(n_train)
+    let X_test: Matrix = matrix_new(n_test, ds.X.cols)
+    let y_test: ptr<f32> = array_new_f32(n_test)
+
+    for i in 0 to n_train {
+        for j in 0 to ds.X.cols {
+            matrix_set(X_train, i, j, matrix_at(ds.X, indices[i], j))
+        }
+        y_train[i] = ds.y[indices[i]]
+    }
+    for i in 0 to n_test {
+        for j in 0 to ds.X.cols {
+            matrix_set(X_test, i, j, matrix_at(ds.X, indices[i + n_train], j))
+        }
+        y_test[i] = ds.y[indices[i + n_train]]
+    }
+    free(indices as ptr<void>)
+
+    # Standardize features
+    let scaler: StandardScaler = standard_scaler_fit(X_train)
+    let X_train_s: Matrix = standard_scaler_transform(scaler, X_train)
+    let X_test_s: Matrix = standard_scaler_transform(scaler, X_test)
+
+    let t1: i64 = clock()
+
+    # Train a Gaussian Naive Bayes classifier
+    let gnb: GaussianNB = gaussian_nb_fit(X_train_s, y_train, 3, 0.0000000001)
+    let t2: i64 = clock()
+    let gnb_preds: ptr<f32> = gaussian_nb_predict(gnb, X_test_s)
+    let t3: i64 = clock()
+    let gnb_acc: f32 = accuracy_score(y_test, gnb_preds, n_test)
+
+    # Train a Decision Tree classifier
+    let dt: DecisionTreeClassifier = decision_tree_classifier_fit(X_train_s, y_train, 3, 5, 0)
+    let t4: i64 = clock()
+    let dt_preds: ptr<f32> = decision_tree_classifier_predict(dt, X_test_s)
+    let t5: i64 = clock()
+    let dt_acc: f32 = accuracy_score(y_test, dt_preds, n_test)
+
+    # Train a KNN classifier
+    let knn: KNNClassifier = knn_classifier_fit(X_train_s, y_train, 3, 5)
+    let t6: i64 = clock()
+    let knn_proba: Matrix = knn_classifier_predict(knn, X_test_s)
+    let knn_preds: ptr<f32> = knn_classifier_decide(knn, knn_proba, 0.5)
+    let t7: i64 = clock()
+    let knn_acc: f32 = accuracy_score(y_test, knn_preds, n_test)
+
+    # Train a LinearSVC (multi-class OVR)
+    let lsvc: LinearSVCMulti = linear_svc_multi_fit(X_train_s, y_train, 3, 1.0, 200)
+    let t8: i64 = clock()
+    let lsvc_preds: ptr<f32> = linear_svc_multi_predict(lsvc, X_test_s)
+    let t9: i64 = clock()
+    let lsvc_acc: f32 = accuracy_score(y_test, lsvc_preds, n_test)
+
+    # Train a RandomForest classifier
+    let rf: RandomForestClassifier = random_forest_classifier_fit(X_train_s, y_train, 3, 10, 5, 42)
+    let t10: i64 = clock()
+    let rf_preds: ptr<f32> = random_forest_classifier_predict(rf, X_test_s)
+    let t11: i64 = clock()
+    let rf_acc: f32 = accuracy_score(y_test, rf_preds, n_test)
+
+    printf("=== Iris Classification - flow-scikit (native binary) ===\n\n")
+    printf("Dataset: iris (150 samples, 4 features, 3 classes)\n")
+    printf("Train/test split: %d / %d\n\n", n_train, n_test)
+
+    printf("%-20s %-12s %-12s %-12s\n", "Algorithm", "Accuracy", "Train(ms)", "Predict(ms)")
+    printf("%-20s %-12s %-12s %-12s\n", "--------------------", "------------", "------------", "------------")
+    printf("%-20s %-12.4f %-12.3f %-12.3f\n", "GaussianNB", gnb_acc, ((t2 - t1) as f32) / 1000.0, ((t3 - t2) as f32) / 1000.0)
+    printf("%-20s %-12.4f %-12.3f %-12.3f\n", "DecisionTree", dt_acc, ((t4 - t3) as f32) / 1000.0, ((t5 - t4) as f32) / 1000.0)
+    printf("%-20s %-12.4f %-12.3f %-12.3f\n", "KNN(k=5)", knn_acc, ((t6 - t5) as f32) / 1000.0, ((t7 - t6) as f32) / 1000.0)
+    printf("%-20s %-12.4f %-12.3f %-12.3f\n", "LinearSVC(OVR)", lsvc_acc, ((t8 - t7) as f32) / 1000.0, ((t9 - t8) as f32) / 1000.0)
+    printf("%-20s %-12.4f %-12.3f %-12.3f\n", "RandomForest(10)", rf_acc, ((t10 - t9) as f32) / 1000.0, ((t11 - t10) as f32) / 1000.0)
+
+    printf("\nTotal time including data load: %.3f ms\n", ((t11 - t0) as f32) / 1000.0)
+
+    # Cleanup
+    array_free_f32(gnb_preds)
+    gaussian_nb_free(gnb)
+    array_free_f32(dt_preds)
+    decision_tree_classifier_free(dt)
+    array_free_f32(knn_preds)
+    matrix_free(knn_proba)
+    knn_classifier_free(knn)
+    array_free_f32(lsvc_preds)
+    linear_svc_multi_free(lsvc)
+    array_free_f32(rf_preds)
+    random_forest_classifier_free(rf)
+    standard_scaler_free(scaler)
+    matrix_free(X_train_s)
+    matrix_free(X_test_s)
+    matrix_free(X_train)
+    matrix_free(X_test)
+    array_free_f32(y_train)
+    array_free_f32(y_test)
+    dataset_free(ds)
+
+    return 0
+}
