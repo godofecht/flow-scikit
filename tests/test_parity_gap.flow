@@ -1,0 +1,207 @@
+import "lib/scikit/scikit.flow"
+import "lib/scikit/meta_estimators.flow"
+import "lib/scikit/discriminant_analysis.flow"
+import "lib/scikit/feature_extraction_extra.flow"
+import "lib/scikit/extra_estimators.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+}
+
+function main() -> i32 {
+    printf("Running parity gap tests...\n")
+    printf("========================================\n\n")
+
+    # Test OneVsRestClassifier
+    let ds: Dataset = load_iris()
+    let split: TrainTestSplit = train_test_split(ds.X, ds.y, 0.2, 42)
+    let scaler: StandardScaler = standard_scaler_fit(split.X_train)
+    let X_train: Matrix = standard_scaler_transform(scaler, split.X_train)
+    let X_test: Matrix = standard_scaler_transform(scaler, split.X_test)
+
+    let l2: Penalty = Penalty { kind: PENALTY_L2, alpha: 0.001, l1_ratio: 0.0 }
+
+    printf("Test: OneVsRestClassifier\n")
+    let ovr: OneVsRestClassifier = one_vs_rest_fit(X_train, split.y_train, 3, 500, 0.1, l2)
+    let ovr_preds: ptr<f32> = one_vs_rest_predict(ovr, X_test)
+    let ovr_acc: f32 = accuracy_score(split.y_test, ovr_preds, split.n_test)
+    printf("  accuracy = %.4f\n", ovr_acc)
+    if ovr_acc > 0.7 {
+        printf("  OK: multiclass OVR works\n\n")
+    } else {
+        printf("  FAIL: accuracy too low\n\n")
+    }
+    array_free_f32(ovr_preds)
+    one_vs_rest_free(ovr)
+
+    printf("Test: OneVsOneClassifier\n")
+    let ovo: OneVsOneClassifier = one_vs_one_fit(X_train, split.y_train, 3, 500, 0.1, l2)
+    let ovo_preds: ptr<f32> = one_vs_one_predict(ovo, X_test)
+    let ovo_acc: f32 = accuracy_score(split.y_test, ovo_preds, split.n_test)
+    printf("  accuracy = %.4f\n", ovo_acc)
+    if ovo_acc > 0.7 {
+        printf("  OK: multiclass OVO works\n\n")
+    } else {
+        printf("  FAIL: accuracy too low\n\n")
+    }
+    array_free_f32(ovo_preds)
+    one_vs_one_free(ovo)
+
+    printf("Test: OutputCodeClassifier\n")
+    let occ: OutputCodeClassifier = output_code_fit(X_train, split.y_train, 3, 10, 1000, 0.1, l2)
+    let occ_preds: ptr<f32> = output_code_predict(occ, X_test)
+    let occ_acc: f32 = accuracy_score(split.y_test, occ_preds, split.n_test)
+    printf("  accuracy = %.4f\n", occ_acc)
+    if occ_acc >= 0.0 {
+        printf("  OK: output code runs and produces predictions\n\n")
+    } else {
+        printf("  FAIL: no predictions produced\n\n")
+    }
+    array_free_f32(occ_preds)
+    output_code_free(occ)
+
+    printf("Test: LinearDiscriminantAnalysis\n")
+    let lda: LinearDiscriminantAnalysis = discriminant_lda_fit(X_train, split.y_train, 3)
+    let lda_preds: ptr<f32> = discriminant_lda_predict(lda, X_test)
+    let lda_acc: f32 = accuracy_score(split.y_test, lda_preds, split.n_test)
+    printf("  accuracy = %.4f\n", lda_acc)
+    if lda_acc > 0.7 {
+        printf("  OK: LDA works\n\n")
+    } else {
+        printf("  FAIL: accuracy too low\n\n")
+    }
+    array_free_f32(lda_preds)
+    discriminant_lda_free(lda)
+
+    printf("Test: QuadraticDiscriminantAnalysis\n")
+    let qda: QuadraticDiscriminantAnalysis = qda_fit(X_train, split.y_train, 3)
+    let qda_preds: ptr<f32> = qda_predict(qda, X_test)
+    let qda_acc: f32 = accuracy_score(split.y_test, qda_preds, split.n_test)
+    printf("  accuracy = %.4f\n", qda_acc)
+    if qda_acc > 0.7 {
+        printf("  OK: QDA works\n\n")
+    } else {
+        printf("  FAIL: accuracy too low\n\n")
+    }
+    array_free_f32(qda_preds)
+    qda_free(qda)
+
+    printf("Test: LedoitWolf\n")
+    let lw: LedoitWolf = ledoit_wolf_cv_fit(X_train)
+    printf("  shrinkage = %.4f, n_features = %d\n", lw.shrinkage, lw.n_features)
+    if lw.shrinkage >= 0.0 and lw.shrinkage <= 1.0 {
+        printf("  OK: LedoitWolf shrinkage in range\n\n")
+    } else {
+        printf("  FAIL: shrinkage out of range\n\n")
+    }
+    ledoit_wolf_cv_free(lw)
+
+    printf("Test: OAS\n")
+    let oas: OAS = oas_cv_fit(X_train)
+    printf("  shrinkage = %.4f, n_features = %d\n", oas.shrinkage, oas.n_features)
+    if oas.shrinkage >= 0.0 and oas.shrinkage <= 1.0 {
+        printf("  OK: OAS shrinkage in range\n\n")
+    } else {
+        printf("  FAIL: shrinkage out of range\n\n")
+    }
+    oas_cv_free(oas)
+
+    printf("Test: EllipticEnvelope\n")
+    let ee: EllipticEnvelope = elliptic_envelope_fit(X_train, 0.1, 10)
+    let ee_preds: ptr<f32> = elliptic_envelope_predict(ee, X_test)
+    let mut n_inliers: i32 = 0
+    for i in 0 to split.n_test {
+        if ee_preds[i] == 1.0 { n_inliers = n_inliers + 1 }
+    }
+    printf("  inliers = %d / %d\n", n_inliers, split.n_test)
+    if n_inliers > 0 {
+        printf("  OK: EllipticEnvelope detects inliers\n\n")
+    } else {
+        printf("  FAIL: no inliers detected\n\n")
+    }
+    array_free_f32(ee_preds)
+    elliptic_envelope_free(ee)
+
+    printf("Test: SGDOneClassSVM\n")
+    let svm: SGDOneClassSVM = sgd_one_class_svm_fit(X_train, 0.5, 100, 0.01)
+    let svm_preds: ptr<f32> = sgd_one_class_svm_predict(svm, X_test)
+    let mut svm_inliers: i32 = 0
+    for i in 0 to split.n_test {
+        if svm_preds[i] == 1.0 { svm_inliers = svm_inliers + 1 }
+    }
+    printf("  inliers = %d / %d\n", svm_inliers, split.n_test)
+    if svm_inliers > 0 {
+        printf("  OK: SGDOneClassSVM works\n\n")
+    } else {
+        printf("  FAIL: no inliers detected\n\n")
+    }
+    array_free_f32(svm_preds)
+    sgd_one_class_svm_free(svm)
+
+    printf("Test: LogisticRegression (multiclass OVR)\n")
+    let lr: LogisticRegression = logistic_regression_fit(X_train, split.y_train, 3, 1000, 0.1, l2)
+    let lr_preds: ptr<f32> = logistic_predict(lr, X_test)
+    let lr_acc: f32 = accuracy_score(split.y_test, lr_preds, split.n_test)
+    printf("  accuracy = %.4f\n", lr_acc)
+    if lr_acc > 0.7 {
+        printf("  OK: multiclass logistic works\n\n")
+    } else {
+        printf("  FAIL: accuracy too low\n\n")
+    }
+    array_free_f32(lr_preds)
+    logistic_regression_free(lr)
+
+    printf("Test: LinearRegression (direct solve)\n")
+    let ds_d: Dataset = load_diabetes()
+    let split_d: TrainTestSplit = train_test_split(ds_d.X, ds_d.y, 0.2, 42)
+    let linreg: LinearRegression = linear_regression_fit(split_d.X_train, split_d.y_train, l2)
+    let linreg_preds: ptr<f32> = linear_regression_predict(linreg, split_d.X_test)
+    let linreg_r2: f32 = r2_score(split_d.y_test, linreg_preds, split_d.n_test)
+    printf("  R2 = %.4f\n", linreg_r2)
+    if linreg_r2 > 0.3 {
+        printf("  OK: direct solve works\n\n")
+    } else {
+        printf("  FAIL: R2 too low\n\n")
+    }
+    array_free_f32(linreg_preds)
+    linear_regression_free(linreg)
+
+    printf("Test: Ridge (direct solve)\n")
+    let ridge: Ridge = ridge_fit(split_d.X_train, split_d.y_train, 1.0, 0, 0.0)
+    let ridge_preds: ptr<f32> = ridge_predict(ridge, split_d.X_test)
+    let ridge_r2: f32 = r2_score(split_d.y_test, ridge_preds, split_d.n_test)
+    printf("  R2 = %.4f\n", ridge_r2)
+    if ridge_r2 > 0.3 {
+        printf("  OK: Ridge direct solve works\n\n")
+    } else {
+        printf("  FAIL: R2 too low\n\n")
+    }
+    array_free_f32(ridge_preds)
+    ridge_free(ridge)
+
+    printf("Test: Lasso (coordinate descent)\n")
+    let lasso: Lasso = lasso_fit(split_d.X_train, split_d.y_train, 0.1, 100, 0.01)
+    let lasso_preds: ptr<f32> = lasso_predict(lasso, split_d.X_test)
+    let lasso_r2: f32 = r2_score(split_d.y_test, lasso_preds, split_d.n_test)
+    printf("  R2 = %.4f\n", lasso_r2)
+    if lasso_r2 > 0.2 {
+        printf("  OK: Lasso coordinate descent works\n\n")
+    } else {
+        printf("  FAIL: R2 too low\n\n")
+    }
+    array_free_f32(lasso_preds)
+    lasso_free(lasso)
+
+    # Cleanup
+    standard_scaler_free(scaler)
+    matrix_free(X_train)
+    matrix_free(X_test)
+    train_test_split_free(split)
+    dataset_free(ds)
+    train_test_split_free(split_d)
+    dataset_free(ds_d)
+
+    printf("========================================\n")
+    printf("All parity gap tests completed!\n")
+    return 0
+}

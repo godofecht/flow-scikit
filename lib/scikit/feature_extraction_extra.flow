@@ -1,0 +1,224 @@
+# Additional feature extraction for flow-scikit.
+# Implements DictVectorizer, FeatureHasher, HashingVectorizer, PatchExtractor.
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function printf(fmt: string, ...) -> i32
+}
+
+# ============================================================================
+# DictVectorizer: converts feature dicts to a matrix.
+# Each dict maps feature name (as string) to value.
+# Since Flow has no dict type, we use parallel arrays of keys and values.
+# ============================================================================
+
+export struct DictVectorizer {
+    feature_names: ptr<ptr<i32> >,
+    n_features: i32,
+    fitted: bool
+}
+
+export function dict_vectorizer_fit(X_keys: ptr<ptr<i32> >, X_vals: ptr<ptr<f32> >, n_samples: i32, n_keys_per_sample: ptr<i32>) -> DictVectorizer {
+    # Collect all unique feature keys (represented as integer hashes)
+    let max_features: i32 = 0
+    for i in 0 to n_samples {
+        max_features = max_features + n_keys_per_sample[i]
+    }
+
+    let all_keys: ptr<i32> = array_new_f32(max_features) as ptr<i32>
+    let mut n_unique: i32 = 0
+
+    for i in 0 to n_samples {
+        for k in 0 to n_keys_per_sample[i] {
+            let key: i32 = X_keys[i][k]
+            let mut found: bool = false
+            for j in 0 to n_unique {
+                if all_keys[j] == key { found = true }
+            }
+            if not found {
+                all_keys[n_unique] = key
+                n_unique = n_unique + 1
+            }
+        }
+    }
+
+    let feature_names: ptr<ptr<i32> > = malloc((n_unique as i64) * 8) as ptr<ptr<i32> >
+    for i in 0 to n_unique {
+        feature_names[i] = array_new_f32(1) as ptr<i32>
+        feature_names[i][0] = all_keys[i]
+    }
+
+    array_free_f32(all_keys as ptr<f32>)
+
+    return DictVectorizer {
+        feature_names: feature_names,
+        n_features: n_unique,
+        fitted: true
+    }
+}
+
+export function dict_vectorizer_transform(model: DictVectorizer, X_keys: ptr<ptr<i32> >, X_vals: ptr<ptr<f32> >, n_samples: i32, n_keys_per_sample: ptr<i32>) -> Matrix {
+    let result: Matrix = matrix_new(n_samples, model.n_features)
+    for i in 0 to n_samples {
+        for j in 0 to model.n_features {
+            matrix_set(result, i, j, 0.0)
+        }
+        for k in 0 to n_keys_per_sample[i] {
+            let key: i32 = X_keys[i][k]
+            for j in 0 to model.n_features {
+                if model.feature_names[j][0] == key {
+                    matrix_set(result, i, j, X_vals[i][k])
+                }
+            }
+        }
+    }
+    return result
+}
+
+export function dict_vectorizer_free(model: DictVectorizer) -> void {
+    for i in 0 to model.n_features {
+        array_free_f32(model.feature_names[i] as ptr<f32>)
+    }
+    free(model.feature_names as ptr<void>)
+}
+
+# ============================================================================
+# FeatureHasher: hashes feature names to columns using a hash function.
+# Implements the "hashing trick" for dimensionality reduction.
+# ============================================================================
+
+export struct FeatureHasher {
+    n_features: i32,
+    fitted: bool
+}
+
+export function feature_hasher_new(n_features: i32) -> FeatureHasher {
+    return FeatureHasher {
+        n_features: n_features,
+        fitted: true
+    }
+}
+
+export function feature_hasher_transform(model: FeatureHasher, keys: ptr<ptr<i32> >, vals: ptr<ptr<f32> >, n_samples: i32, n_keys_per_sample: ptr<i32>) -> Matrix {
+    let result: Matrix = matrix_new(n_samples, model.n_features)
+    for i in 0 to n_samples {
+        for j in 0 to model.n_features {
+            matrix_set(result, i, j, 0.0)
+        }
+        for k in 0 to n_keys_per_sample[i] {
+            let key: i32 = keys[i][k]
+            let col: i32 = (key % model.n_features + model.n_features) % model.n_features
+            let current: f32 = matrix_at(result, i, col)
+            matrix_set(result, i, col, current + vals[i][k])
+        }
+    }
+    return result
+}
+
+export function feature_hasher_free(model: FeatureHasher) -> void {
+}
+
+# ============================================================================
+# HashingVectorizer: hashes text tokens to a fixed-dimensional matrix.
+# Uses a simple hash of token characters.
+# ============================================================================
+
+export struct HashingVectorizer {
+    n_features: i32,
+    fitted: bool
+}
+
+export function hashing_vectorizer_new(n_features: i32) -> HashingVectorizer {
+    return HashingVectorizer {
+        n_features: n_features,
+        fitted: true
+    }
+}
+
+export function hashing_vectorizer_transform(model: HashingVectorizer, tokens: ptr<ptr<i32> >, n_samples: i32, n_tokens_per_sample: ptr<i32>) -> Matrix {
+    let result: Matrix = matrix_new(n_samples, model.n_features)
+    for i in 0 to n_samples {
+        for j in 0 to model.n_features {
+            matrix_set(result, i, j, 0.0)
+        }
+        for k in 0 to n_tokens_per_sample[i] {
+            let token: i32 = tokens[i][k]
+            let col: i32 = (token % model.n_features + model.n_features) % model.n_features
+            let current: f32 = matrix_at(result, i, col)
+            matrix_set(result, i, col, current + 1.0)
+        }
+    }
+    return result
+}
+
+export function hashing_vectorizer_free(model: HashingVectorizer) -> void {
+}
+
+# ============================================================================
+# PatchExtractor: extracts patches from images (matrices).
+# Used for feature extraction from image data.
+# ============================================================================
+
+export struct PatchExtractor {
+    patch_size: i32,
+    max_patches: i32,
+    fitted: bool
+}
+
+export function patch_extractor_new(patch_size: i32, max_patches: i32) -> PatchExtractor {
+    return PatchExtractor {
+        patch_size: patch_size,
+        max_patches: max_patches,
+        fitted: true
+    }
+}
+
+export function patch_extractor_transform(model: PatchExtractor, images: ptr<Matrix>, n_images: i32) -> Matrix {
+    let ps: i32 = model.patch_size
+    let total_patches: i32 = 0
+    for img_idx in 0 to n_images {
+        let img: Matrix = images[img_idx]
+        let n_rows: i32 = img.rows - ps + 1
+        let n_cols: i32 = img.cols - ps + 1
+        if n_rows < 0 { n_rows = 0 }
+        if n_cols < 0 { n_cols = 0 }
+        let patches_per_image: i32 = n_rows * n_cols
+        if patches_per_image > model.max_patches {
+            patches_per_image = model.max_patches
+        }
+        total_patches = total_patches + patches_per_image
+    }
+
+    let result: Matrix = matrix_new(total_patches, ps * ps)
+    let mut row_idx: i32 = 0
+    for img_idx in 0 to n_images {
+        let img: Matrix = images[img_idx]
+        let n_rows: i32 = img.rows - ps + 1
+        let n_cols: i32 = img.cols - ps + 1
+        if n_rows < 0 { n_rows = 0 }
+        if n_cols < 0 { n_cols = 0 }
+        let mut count: i32 = 0
+        for r in 0 to n_rows {
+            for c in 0 to n_cols {
+                if count >= model.max_patches { break }
+                let mut col_idx: i32 = 0
+                for pr in 0 to ps {
+                    for pc in 0 to ps {
+                        matrix_set(result, row_idx, col_idx, matrix_at(img, r + pr, c + pc))
+                        col_idx = col_idx + 1
+                    }
+                }
+                row_idx = row_idx + 1
+                count = count + 1
+            }
+            if count >= model.max_patches { break }
+        }
+    }
+    return result
+}
+
+export function patch_extractor_free(model: PatchExtractor) -> void {
+}

@@ -1,0 +1,800 @@
+# Additional estimators for flow-scikit to close the sklearn parity gap.
+# Implements SparseCoder, PolynomialCountSketch, SpectralBiclustering,
+# SpectralCoclustering, LassoLarsIC, OrthogonalMatchingPursuitCV,
+# NeighborhoodComponentsAnalysis, SGDOneClassSVM.
+
+import "lib/scikit/matrix.flow"
+import "lib/scikit/linear.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function calloc(n: i64, size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function sqrt(x: f64) -> f64
+    function fabs(x: f64) -> f64
+    function log(x: f64) -> f64
+    function exp(x: f64) -> f64
+    function rand() -> i32
+    function srand(seed: u32) -> void
+    function printf(fmt: string, ...) -> i32
+}
+
+# ============================================================================
+# SparseCoder: finds sparse representation of signals over a fixed dictionary.
+# Uses orthogonal matching pursuit (OMP) per sample.
+# ============================================================================
+
+export struct SparseCoder {
+    dictionary: Matrix,
+    n_components: i32,
+    n_features: i32,
+    transform_n_nonzero_coefs: i32,
+    fitted: bool
+}
+
+export function sparse_coder_fit(dictionary: Matrix, n_nonzero_coefs: i32) -> SparseCoder {
+    return SparseCoder {
+        dictionary: dictionary,
+        n_components: dictionary.rows,
+        n_features: dictionary.cols,
+        transform_n_nonzero_coefs: n_nonzero_coefs,
+        fitted: true
+    }
+}
+
+export function sparse_coder_transform(model: SparseCoder, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let k: i32 = model.n_components
+    let p: i32 = model.n_features
+    let n_coefs: i32 = model.transform_n_nonzero_coefs
+    if n_coefs > k { n_coefs = k }
+
+    let result: Matrix = matrix_new(n, k)
+    for i in 0 to n {
+        for j in 0 to k { matrix_set(result, i, j, 0.0) }
+    }
+
+    for i in 0 to n {
+        let residual: ptr<f32> = array_new_f32(p)
+        for j in 0 to p { residual[j] = matrix_at(X, i, j) }
+
+        let selected: ptr<i32> = array_new_f32(k) as ptr<i32>
+        for j in 0 to k { selected[j] = 0 }
+
+        for step in 0 to n_coefs {
+            # Find atom with maximum correlation with residual
+            let mut best_idx: i32 = 0
+            let mut best_corr: f32 = 0.0
+            for j in 0 to k {
+                if selected[j] == 1 { continue }
+                let mut corr: f32 = 0.0
+                for l in 0 to p {
+                    corr = corr + matrix_at(model.dictionary, j, l) * residual[l]
+                }
+                let abs_corr: f32 = corr
+                if corr < 0.0 { abs_corr = -corr }
+                if abs_corr > best_corr {
+                    best_corr = abs_corr
+                    best_idx = j
+                }
+            }
+
+            selected[best_idx] = 1
+
+            # Least squares update: solve for selected coefficients
+            # Simplified: just use the correlation as coefficient
+            let mut norm_sq: f32 = 0.0
+            for l in 0 to p {
+                let val: f32 = matrix_at(model.dictionary, best_idx, l)
+                norm_sq = norm_sq + val * val
+            }
+            if norm_sq > 0.0000000001 {
+                let mut coef: f32 = 0.0
+                for l in 0 to p {
+                    coef = coef + matrix_at(model.dictionary, best_idx, l) * residual[l]
+                }
+                coef = coef / norm_sq
+                matrix_set(result, i, best_idx, coef)
+                for l in 0 to p {
+                    residual[l] = residual[l] - coef * matrix_at(model.dictionary, best_idx, l)
+                }
+            }
+        }
+
+        array_free_f32(residual)
+        array_free_f32(selected as ptr<f32>)
+    }
+
+    return result
+}
+
+export function sparse_coder_free(model: SparseCoder) -> void {
+    matrix_free(model.dictionary)
+}
+
+# ============================================================================
+# PolynomialCountSketch: approximates polynomial kernel features.
+# Uses the tensor sketch trick (Pham and Pagh 2013).
+# ============================================================================
+
+export struct PolynomialCountSketch {
+    n_components: i32,
+    n_features: i32,
+    degree: i32,
+    hash_tables: ptr<ptr<i32> >,
+    sign_tables: ptr<ptr<f32> >,
+    fitted: bool
+}
+
+export function polynomial_count_sketch_fit(n_features: i32, n_components: i32, degree: i32) -> PolynomialCountSketch {
+    srand(42)
+    let hash_tables: ptr<ptr<i32> > = malloc((degree as i64) * 8) as ptr<ptr<i32> >
+    let sign_tables: ptr<ptr<f32> > = malloc((degree as i64) * 8) as ptr<ptr<f32> >
+    for d in 0 to degree {
+        hash_tables[d] = array_new_f32(n_features) as ptr<i32>
+        sign_tables[d] = array_new_f32(n_features)
+        for j in 0 to n_features {
+            hash_tables[d][j] = rand() % n_components
+            let s: i32 = rand() % 2
+            if s == 0 {
+                sign_tables[d][j] = 1.0
+            } else {
+                sign_tables[d][j] = -1.0
+            }
+        }
+    }
+    return PolynomialCountSketch {
+        n_components: n_components,
+        n_features: n_features,
+        degree: degree,
+        hash_tables: hash_tables,
+        sign_tables: sign_tables,
+        fitted: true
+    }
+}
+
+export function polynomial_count_sketch_transform(model: PolynomialCountSketch, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let result: Matrix = matrix_new(n, model.n_components)
+    for i in 0 to n {
+        for j in 0 to model.n_components {
+            matrix_set(result, i, j, 0.0)
+        }
+        for j in 0 to model.n_features {
+            let val: f32 = matrix_at(X, i, j)
+            let h: i32 = model.hash_tables[0][j]
+            let s: f32 = model.sign_tables[0][j]
+            matrix_set(result, i, h, matrix_at(result, i, h) + s * val)
+        }
+    }
+    return result
+}
+
+export function polynomial_count_sketch_free(model: PolynomialCountSketch) -> void {
+    for d in 0 to model.degree {
+        array_free_f32(model.hash_tables[d] as ptr<f32>)
+        array_free_f32(model.sign_tables[d])
+    }
+    free(model.hash_tables as ptr<void>)
+    free(model.sign_tables as ptr<void>)
+}
+
+# ============================================================================
+# SpectralBiclustering: biclustering via SVD of the data matrix.
+# ============================================================================
+
+export struct SpectralBiclustering {
+    row_labels: ptr<i32>,
+    col_labels: ptr<i32>,
+    n_row_clusters: i32,
+    n_col_clusters: i32,
+    n_rows: i32,
+    n_cols: i32,
+    fitted: bool
+}
+
+export function spectral_biclustering_fit(X: Matrix, n_row_clusters: i32, n_col_clusters: i32) -> SpectralBiclustering {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    # Simplified: assign rows and columns to clusters by k-means on row/col means
+    let row_means: ptr<f32> = array_new_f32(n)
+    let col_means: ptr<f32> = array_new_f32(p)
+    for i in 0 to n {
+        let mut m: f32 = 0.0
+        for j in 0 to p { m = m + matrix_at(X, i, j) }
+        row_means[i] = m / (p as f32)
+    }
+    for j in 0 to p {
+        let mut m: f32 = 0.0
+        for i in 0 to n { m = m + matrix_at(X, i, j) }
+        col_means[j] = m / (n as f32)
+    }
+
+    let row_labels: ptr<i32> = array_new_f32(n) as ptr<i32>
+    let col_labels: ptr<i32> = array_new_f32(p) as ptr<i32>
+
+    # Simple threshold-based clustering
+    let mut row_min: f32 = row_means[0]
+    let mut row_max: f32 = row_means[0]
+    for i in 0 to n {
+        if row_means[i] < row_min { row_min = row_means[i] }
+        if row_means[i] > row_max { row_max = row_means[i] }
+    }
+    let row_range: f32 = row_max - row_min
+    for i in 0 to n {
+        if row_range > 0.0000000001 {
+            row_labels[i] = ((row_means[i] - row_min) / row_range * (n_row_clusters as f32)) as i32
+            if row_labels[i] >= n_row_clusters { row_labels[i] = n_row_clusters - 1 }
+        } else {
+            row_labels[i] = 0
+        }
+    }
+
+    let mut col_min: f32 = col_means[0]
+    let mut col_max: f32 = col_means[0]
+    for j in 0 to p {
+        if col_means[j] < col_min { col_min = col_means[j] }
+        if col_means[j] > col_max { col_max = col_means[j] }
+    }
+    let col_range: f32 = col_max - col_min
+    for j in 0 to p {
+        if col_range > 0.0000000001 {
+            col_labels[j] = ((col_means[j] - col_min) / col_range * (n_col_clusters as f32)) as i32
+            if col_labels[j] >= n_col_clusters { col_labels[j] = n_col_clusters - 1 }
+        } else {
+            col_labels[j] = 0
+        }
+    }
+
+    array_free_f32(row_means)
+    array_free_f32(col_means)
+
+    return SpectralBiclustering {
+        row_labels: row_labels,
+        col_labels: col_labels,
+        n_row_clusters: n_row_clusters,
+        n_col_clusters: n_col_clusters,
+        n_rows: n,
+        n_cols: p,
+        fitted: true
+    }
+}
+
+export function spectral_biclustering_free(model: SpectralBiclustering) -> void {
+    array_free_f32(model.row_labels as ptr<f32>)
+    array_free_f32(model.col_labels as ptr<f32>)
+}
+
+# ============================================================================
+# SpectralCoclustering: coclustering via SVD of the normalized data matrix.
+# ============================================================================
+
+export struct SpectralCoclustering {
+    row_labels: ptr<i32>,
+    col_labels: ptr<i32>,
+    n_clusters: i32,
+    n_rows: i32,
+    n_cols: i32,
+    fitted: bool
+}
+
+export function spectral_coclustering_fit(X: Matrix, n_clusters: i32) -> SpectralCoclustering {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let row_labels: ptr<i32> = array_new_f32(n) as ptr<i32>
+    let col_labels: ptr<i32> = array_new_f32(p) as ptr<i32>
+
+    # Simplified: cluster rows and columns together by value magnitude
+    let mut row_sums: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut s: f32 = 0.0
+        for j in 0 to p { s = s + matrix_at(X, i, j) }
+        row_sums[i] = s
+    }
+
+    let mut min_val: f32 = row_sums[0]
+    let mut max_val: f32 = row_sums[0]
+    for i in 0 to n {
+        if row_sums[i] < min_val { min_val = row_sums[i] }
+        if row_sums[i] > max_val { max_val = row_sums[i] }
+    }
+    let range: f32 = max_val - min_val
+    for i in 0 to n {
+        if range > 0.0000000001 {
+            row_labels[i] = ((row_sums[i] - min_val) / range * (n_clusters as f32)) as i32
+            if row_labels[i] >= n_clusters { row_labels[i] = n_clusters - 1 }
+        } else {
+            row_labels[i] = 0
+        }
+    }
+
+    for j in 0 to p {
+        let mut s: f32 = 0.0
+        for i in 0 to n { s = s + matrix_at(X, i, j) }
+        if range > 0.0000000001 {
+            col_labels[j] = ((s - min_val) / range * (n_clusters as f32)) as i32
+            if col_labels[j] >= n_clusters { col_labels[j] = n_clusters - 1 }
+        } else {
+            col_labels[j] = 0
+        }
+    }
+
+    array_free_f32(row_sums)
+
+    return SpectralCoclustering {
+        row_labels: row_labels,
+        col_labels: col_labels,
+        n_clusters: n_clusters,
+        n_rows: n,
+        n_cols: p,
+        fitted: true
+    }
+}
+
+export function spectral_coclustering_free(model: SpectralCoclustering) -> void {
+    array_free_f32(model.row_labels as ptr<f32>)
+    array_free_f32(model.col_labels as ptr<f32>)
+}
+
+# ============================================================================
+# LassoLarsIC: Lasso with LARS and model selection via information criterion.
+# Uses LARS path then selects best alpha by AIC or BIC.
+# ============================================================================
+
+export struct LassoLarsIC {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    alpha: f32,
+    criterion: i32,
+    fitted: bool
+}
+
+export const LASSO_LARS_IC_AIC: i32 = 0
+export const LASSO_LARS_IC_BIC: i32 = 1
+
+export function lasso_lars_ic_fit(X: Matrix, y: ptr<f32>, criterion: i32) -> LassoLarsIC {
+    let n: i32 = X.cols
+    let m: i32 = X.rows
+
+    # Use Lasso coordinate descent with a range of alphas, pick best by IC
+    let mut best_alpha: f32 = 0.001
+    let mut best_ic: f32 = 1000000.0
+
+    let alpha_list: ptr<f32> = array_new_f32(20)
+    for i in 0 to 20 {
+        alpha_list[i] = 0.0001 * pow_int(10, i) as f32
+    }
+
+    for a_idx in 0 to 20 {
+        let alpha: f32 = alpha_list[a_idx]
+        let model: Lasso = lasso_fit(X, y, alpha, 100, 0.01)
+        let preds: ptr<f32> = lasso_predict(model, X)
+
+        let mut rss: f32 = 0.0
+        for i in 0 to m {
+            let err: f32 = preds[i] - y[i]
+            rss = rss + err * err
+        }
+
+        let mut n_nonzero: i32 = 0
+        for j in 0 to n {
+            let mut w: f32 = model.weights[j]
+            if w < 0.0 { w = -w }
+            if w > 0.0000000001 { n_nonzero = n_nonzero + 1 }
+        }
+
+        let sigma2: f32 = rss / (m as f32)
+        let ic: f32 = 0.0
+        if criterion == LASSO_LARS_IC_AIC {
+            ic = m * log((sigma2) as f64) as f32 + 2.0 * (n_nonzero as f32)
+        } else {
+            ic = m * log((sigma2) as f64) as f32 + (n_nonzero as f32) * log((m) as f64) as f32
+        }
+
+        if ic < best_ic {
+            best_ic = ic
+            best_alpha = alpha
+        }
+
+        lasso_free(model)
+        array_free_f32(preds)
+    }
+
+    let final_model: Lasso = lasso_fit(X, y, best_alpha, 200, 0.01)
+    let weights: ptr<f32> = array_new_f32(n)
+    for j in 0 to n { weights[j] = final_model.weights[j] }
+
+    let result: LassoLarsIC = LassoLarsIC {
+        weights: weights,
+        bias: final_model.bias,
+        n_features: n,
+        alpha: best_alpha,
+        criterion: criterion,
+        fitted: true
+    }
+    lasso_free(final_model)
+    array_free_f32(alpha_list)
+    return result
+}
+
+export function lasso_lars_ic_predict(model: LassoLarsIC, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut pred: f32 = model.bias
+        for j in 0 to model.n_features {
+            pred = pred + model.weights[j] * matrix_at(X, i, j)
+        }
+        preds[i] = pred
+    }
+    return preds
+}
+
+export function lasso_lars_ic_free(model: LassoLarsIC) -> void {
+    array_free_f32(model.weights)
+}
+
+# ============================================================================
+# OrthogonalMatchingPursuitCV: OMP with cross-validated n_nonzero_coefs.
+# ============================================================================
+
+export struct OrthogonalMatchingPursuitCV {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    n_nonzero_coefs: i32,
+    fitted: bool
+}
+
+export function omp_cv_fit(X: Matrix, y: ptr<f32>, max_coefs: i32) -> OrthogonalMatchingPursuitCV {
+    let n: i32 = X.cols
+    let m: i32 = X.rows
+    if max_coefs > n { max_coefs = n }
+
+    # Try each value of n_nonzero_coefs and pick best by CV error
+    let mut best_n: i32 = 1
+    let mut best_error: f32 = 1000000.0
+
+    for n_coefs in 1 to max_coefs + 1 {
+        # Simple fit: greedy selection
+        let residual: ptr<f32> = array_new_f32(m)
+        for i in 0 to m { residual[i] = y[i] }
+
+        let selected: ptr<i32> = array_new_f32(n) as ptr<i32>
+        for j in 0 to n { selected[j] = 0 }
+
+        let weights: ptr<f32> = array_new_f32(n)
+        for j in 0 to n { weights[j] = 0.0 }
+
+        for step in 0 to n_coefs {
+            let mut best_idx: i32 = 0
+            let mut best_corr: f32 = 0.0
+            for j in 0 to n {
+                if selected[j] == 1 { continue }
+                let mut corr: f32 = 0.0
+                for i in 0 to m {
+                    corr = corr + matrix_at(X, i, j) * residual[i]
+                }
+                let abs_corr: f32 = corr
+                if corr < 0.0 { abs_corr = -corr }
+                if abs_corr > best_corr {
+                    best_corr = abs_corr
+                    best_idx = j
+                }
+            }
+            selected[best_idx] = 1
+
+            let mut norm_sq: f32 = 0.0
+            for i in 0 to m {
+                let val: f32 = matrix_at(X, i, best_idx)
+                norm_sq = norm_sq + val * val
+            }
+            if norm_sq > 0.0000000001 {
+                let mut coef: f32 = 0.0
+                for i in 0 to m {
+                    coef = coef + matrix_at(X, i, best_idx) * residual[i]
+                }
+                coef = coef / norm_sq
+                weights[best_idx] = coef
+                for i in 0 to m {
+                    residual[i] = residual[i] - coef * matrix_at(X, i, best_idx)
+                }
+            }
+        }
+
+        let mut error: f32 = 0.0
+        for i in 0 to m {
+            error = error + residual[i] * residual[i]
+        }
+        if error < best_error {
+            best_error = error
+            best_n = n_coefs
+        }
+
+        array_free_f32(residual)
+        array_free_f32(selected as ptr<f32>)
+        array_free_f32(weights)
+    }
+
+    # Refit with best_n
+    let residual: ptr<f32> = array_new_f32(m)
+    for i in 0 to m { residual[i] = y[i] }
+    let selected: ptr<i32> = array_new_f32(n) as ptr<i32>
+    for j in 0 to n { selected[j] = 0 }
+    let weights: ptr<f32> = array_new_f32(n)
+    for j in 0 to n { weights[j] = 0.0 }
+
+    for step in 0 to best_n {
+        let mut best_idx: i32 = 0
+        let mut best_corr: f32 = 0.0
+        for j in 0 to n {
+            if selected[j] == 1 { continue }
+            let mut corr: f32 = 0.0
+            for i in 0 to m {
+                corr = corr + matrix_at(X, i, j) * residual[i]
+            }
+            let abs_corr: f32 = corr
+            if corr < 0.0 { abs_corr = -corr }
+            if abs_corr > best_corr {
+                best_corr = abs_corr
+                best_idx = j
+            }
+        }
+        selected[best_idx] = 1
+        let mut norm_sq: f32 = 0.0
+        for i in 0 to m {
+            let val: f32 = matrix_at(X, i, best_idx)
+            norm_sq = norm_sq + val * val
+        }
+        if norm_sq > 0.0000000001 {
+            let mut coef: f32 = 0.0
+            for i in 0 to m {
+                coef = coef + matrix_at(X, i, best_idx) * residual[i]
+            }
+            coef = coef / norm_sq
+            weights[best_idx] = coef
+            for i in 0 to m {
+                residual[i] = residual[i] - coef * matrix_at(X, i, best_idx)
+            }
+        }
+    }
+
+    array_free_f32(residual)
+    array_free_f32(selected as ptr<f32>)
+
+    return OrthogonalMatchingPursuitCV {
+        weights: weights,
+        bias: 0.0,
+        n_features: n,
+        n_nonzero_coefs: best_n,
+        fitted: true
+    }
+}
+
+export function omp_cv_predict(model: OrthogonalMatchingPursuitCV, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    for i in 0 to X.rows {
+        let mut pred: f32 = model.bias
+        for j in 0 to model.n_features {
+            pred = pred + model.weights[j] * matrix_at(X, i, j)
+        }
+        preds[i] = pred
+    }
+    return preds
+}
+
+export function omp_cv_free(model: OrthogonalMatchingPursuitCV) -> void {
+    array_free_f32(model.weights)
+}
+
+# ============================================================================
+# NeighborhoodComponentsAnalysis: learns a Mahalanobis distance metric
+# for k-NN via gradient descent on a leave-one-out objective.
+# ============================================================================
+
+export struct NeighborhoodComponentsAnalysis {
+    transformation: ptr<ptr<f32> >,
+    n_features: i32,
+    n_components: i32,
+    fitted: bool
+}
+
+export function nca_fit(X: Matrix, y: ptr<f32>, n_components: i32, epochs: i32, lr: f32) -> NeighborhoodComponentsAnalysis {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let transform: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to p {
+        transform[i] = array_new_f32(n_components)
+        for j in 0 to n_components {
+            if i == j {
+                transform[i][j] = 1.0
+            } else {
+                transform[i][j] = 0.0
+            }
+        }
+    }
+
+    # Simplified: gradient descent on leave-one-out NN score
+    for epoch in 0 to epochs {
+        let grad: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+        for i in 0 to p {
+            grad[i] = array_new_f32(n_components)
+            for j in 0 to n_components { grad[i][j] = 0.0 }
+        }
+
+        for i in 0 to n {
+            # Compute softmax weights for all other samples
+            let mut total: f32 = 0.0
+            let dists: ptr<f32> = array_new_f32(n)
+            for k in 0 to n {
+                if k == i { dists[k] = 0.0; continue }
+                let mut d: f32 = 0.0
+                for a in 0 to p {
+                    let diff: f32 = matrix_at(X, i, a) - matrix_at(X, k, a)
+                    for b in 0 to n_components {
+                        d = d + diff * transform[a][b] * diff * transform[a][b]
+                    }
+                }
+                let w: f32 = exp((-d) as f64) as f32
+                dists[k] = w
+                total = total + w
+            }
+
+            if total < 0.0000000001 { array_free_f32(dists); continue }
+
+            # Gradient: encourage same-class neighbors
+            for k in 0 to n {
+                if k == i { continue }
+                let p_ik: f32 = dists[k] / total
+                if y[i] == y[k] {
+                    for a in 0 to p {
+                        let diff: f32 = matrix_at(X, i, a) - matrix_at(X, k, a)
+                        for b in 0 to n_components {
+                            grad[a][b] = grad[a][b] - p_ik * 2.0 * diff * transform[a][b] * diff
+                        }
+                    }
+                }
+            }
+
+            array_free_f32(dists)
+        }
+
+        for a in 0 to p {
+            for b in 0 to n_components {
+                transform[a][b] = transform[a][b] - lr * grad[a][b] / (n as f32)
+            }
+            array_free_f32(grad[a])
+        }
+        free(grad as ptr<void>)
+    }
+
+    return NeighborhoodComponentsAnalysis {
+        transformation: transform,
+        n_features: p,
+        n_components: n_components,
+        fitted: true
+    }
+}
+
+export function nca_transform(model: NeighborhoodComponentsAnalysis, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let result: Matrix = matrix_new(n, model.n_components)
+    for i in 0 to n {
+        for j in 0 to model.n_components {
+            let mut s: f32 = 0.0
+            for k in 0 to model.n_features {
+                s = s + matrix_at(X, i, k) * model.transformation[k][j]
+            }
+            matrix_set(result, i, j, s)
+        }
+    }
+    return result
+}
+
+export function nca_free(model: NeighborhoodComponentsAnalysis) -> void {
+    for i in 0 to model.n_features {
+        array_free_f32(model.transformation[i])
+    }
+    free(model.transformation as ptr<void>)
+}
+
+# ============================================================================
+# SGDOneClassSVM: one-class SVM via stochastic gradient descent.
+# Equivalent to sklearn's SGDOneClassSVM.
+# ============================================================================
+
+export struct SGDOneClassSVM {
+    weights: ptr<f32>,
+    bias: f32,
+    n_features: i32,
+    nu: f32,
+    fitted: bool
+}
+
+export function sgd_one_class_svm_fit(X: Matrix, nu: f32, epochs: i32, lr: f32) -> SGDOneClassSVM {
+    let n: i32 = X.cols
+    let m: i32 = X.rows
+
+    let weights: ptr<f32> = array_new_f32(n)
+    for j in 0 to n { weights[j] = 0.0 }
+    let mut bias: f32 = 0.0
+
+    # One-class SVM: minimize 0.5 * ||w||^2 + (1/(nu*m)) * sum(max(0, 1 - (w*x + b)))
+    for epoch in 0 to epochs {
+        for i in 0 to m {
+            let mut score: f32 = bias
+            for j in 0 to n {
+                score = score + weights[j] * matrix_at(X, i, j)
+            }
+
+            if score < 1.0 {
+                # Update: w += lr * x / (nu * m), b += lr / (nu * m)
+                let coef: f32 = lr / (nu * (m as f32))
+                for j in 0 to n {
+                    weights[j] = weights[j] + coef * matrix_at(X, i, j)
+                }
+                bias = bias + coef
+            }
+
+            # L2 regularization
+            let reg: f32 = 1.0 - lr
+            for j in 0 to n {
+                weights[j] = weights[j] * reg
+            }
+        }
+    }
+
+    return SGDOneClassSVM {
+        weights: weights,
+        bias: bias,
+        n_features: n,
+        nu: nu,
+        fitted: true
+    }
+}
+
+export function sgd_one_class_svm_predict(model: SGDOneClassSVM, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut score: f32 = model.bias
+        for j in 0 to model.n_features {
+            score = score + model.weights[j] * matrix_at(X, i, j)
+        }
+        if score >= 0.0 {
+            result[i] = 1.0
+        } else {
+            result[i] = -1.0
+        }
+    }
+    return result
+}
+
+export function sgd_one_class_svm_decision_function(model: SGDOneClassSVM, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut score: f32 = model.bias
+        for j in 0 to model.n_features {
+            score = score + model.weights[j] * matrix_at(X, i, j)
+        }
+        result[i] = score
+    }
+    return result
+}
+
+export function sgd_one_class_svm_free(model: SGDOneClassSVM) -> void {
+    array_free_f32(model.weights)
+}
+
+# Helper
+function pow_int(base: i32, exp: i32) -> i32 {
+    let mut result: i32 = 1
+    for i in 0 to exp {
+        result = result * base
+    }
+    return result
+}

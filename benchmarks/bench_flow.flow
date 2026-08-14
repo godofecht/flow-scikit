@@ -112,18 +112,16 @@ function main() -> i32 {
     array_free_f32(lr_preds)
     logistic_regression_free(lr_model)
 
-    # LinearSVC
+    # LinearSVC (multiclass via LinearSVCMulti)
     t0 = clock()
-    let lsvc_model: LinearSVC = linear_svc_fit(X_train_iris, split_iris.y_train, 3, 1.0, 200, 0.01)
+    let lsvc_model: LinearSVCMulti = linear_svc_multi_fit(X_train_iris, split_iris.y_train, 3, 1.0, 200)
     t1 = clock()
-    let lsvc_scores: ptr<f32> = linear_svc_predict(lsvc_model, X_test_iris)
-    let lsvc_preds: ptr<f32> = linear_svc_decide(lsvc_model, lsvc_scores, split_iris.n_test)
+    let lsvc_preds: ptr<f32> = linear_svc_multi_predict(lsvc_model, X_test_iris)
     t2 = clock()
     let lsvc_acc: f32 = accuracy_score(split_iris.y_test, lsvc_preds, split_iris.n_test)
     printf("RESULT|LinearSVC|iris|accuracy|%.6f|%.6f|%.6f\n", lsvc_acc, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
-    array_free_f32(lsvc_scores)
     array_free_f32(lsvc_preds)
-    linear_svc_free(lsvc_model)
+    linear_svc_multi_free(lsvc_model)
 
     # KernelSVC (RBF) - multi-class
     t0 = clock()
@@ -243,18 +241,16 @@ function main() -> i32 {
     array_free_f32(lr_dig_preds)
     logistic_regression_free(lr_dig)
 
-    # LinearSVC
+    # LinearSVC (multiclass via LinearSVCMulti)
     t0 = clock()
-    let lsvc_dig: LinearSVC = linear_svc_fit(X_train_dig, split_dig.y_train, 10, 1.0, 200, 0.01)
+    let lsvc_dig: LinearSVCMulti = linear_svc_multi_fit(X_train_dig, split_dig.y_train, 10, 1.0, 200)
     t1 = clock()
-    let lsvc_dig_scores: ptr<f32> = linear_svc_predict(lsvc_dig, X_test_dig)
-    let lsvc_dig_preds: ptr<f32> = linear_svc_decide(lsvc_dig, lsvc_dig_scores, split_dig.n_test)
+    let lsvc_dig_preds: ptr<f32> = linear_svc_multi_predict(lsvc_dig, X_test_dig)
     t2 = clock()
     let lsvc_dig_acc: f32 = accuracy_score(split_dig.y_test, lsvc_dig_preds, split_dig.n_test)
     printf("RESULT|LinearSVC|digits|accuracy|%.6f|%.6f|%.6f\n", lsvc_dig_acc, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
-    array_free_f32(lsvc_dig_scores)
     array_free_f32(lsvc_dig_preds)
-    linear_svc_free(lsvc_dig)
+    linear_svc_multi_free(lsvc_dig)
 
     # DecisionTree
     t0 = clock()

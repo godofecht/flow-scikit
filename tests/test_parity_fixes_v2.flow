@@ -306,7 +306,7 @@ function test_ledoit_wolf_weighted() -> i32 {
     }
 
     # Test that weighted fit produces a valid covariance
-    let model: ShrunkCovariance = ledoit_wolf_fit_weighted(X, weights)
+    let model: ShrunkCovariance = ledoit_wolf_estimator_fit_weighted(X, weights)
     if not model.fitted {
         println("  FAIL: weighted fit did not set fitted=true")
         shrunk_covariance_free(model)

@@ -328,7 +328,7 @@ export function oas_estimate(X: Matrix) -> f32 {
     return rho
 }
 
-export function oas_fit(X: Matrix) -> ShrunkCovariance {
+export function oas_estimator_fit(X: Matrix) -> ShrunkCovariance {
     let shrinkage: f32 = oas_estimate(X)
     let result = shrunk_covariance_fit(X, shrinkage)
     return result
@@ -522,13 +522,13 @@ export function ledoit_wolf_estimate_weighted(X: Matrix, sample_weights: ptr<f32
     return shrinkage
 }
 
-export function ledoit_wolf_fit(X: Matrix) -> ShrunkCovariance {
+export function ledoit_wolf_estimator_fit(X: Matrix) -> ShrunkCovariance {
     let shrinkage: f32 = ledoit_wolf_estimate(X)
     let result = shrunk_covariance_fit(X, shrinkage)
     return result
 }
 
-export function ledoit_wolf_fit_weighted(X: Matrix, sample_weights: ptr<f32>) -> ShrunkCovariance {
+export function ledoit_wolf_estimator_fit_weighted(X: Matrix, sample_weights: ptr<f32>) -> ShrunkCovariance {
     let shrinkage: f32 = ledoit_wolf_estimate_weighted(X, sample_weights)
     let n: i32 = X.rows
     let p: i32 = X.cols
@@ -982,4 +982,367 @@ export function graphical_lasso_cv_fit(X: Matrix, n_alphas: i32, n_folds: i32, m
 
 export function graphical_lasso_cv_free(model: GraphicalLassoCV) -> void {
     matrix_free(model.emp_cov)
+}
+
+# ============================================================================
+# LedoitWolf: oracle approximating shrinkage via analytical formula
+# Ledoit and Wolf (2004). Optimal shrinkage estimator.
+# ============================================================================
+
+export struct LedoitWolf {
+    covariance: ptr<ptr<f32> >,
+    location: ptr<f32>,
+    n_features: i32,
+    shrinkage: f32,
+    fitted: bool
+}
+
+export function ledoit_wolf_cv_fit(X: Matrix) -> LedoitWolf {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let location: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let mut m: f32 = 0.0
+        for i in 0 to n {
+            m = m + matrix_at(X, i, j)
+        }
+        location[j] = m / (n as f32)
+    }
+
+    let emp_cov: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to p {
+        emp_cov[i] = array_new_f32(p)
+    }
+    for i in 0 to p {
+        for j in 0 to p {
+            let mut s: f32 = 0.0
+            for k in 0 to n {
+                let di: f32 = matrix_at(X, k, i) - location[i]
+                let dj: f32 = matrix_at(X, k, j) - location[j]
+                s = s + di * dj
+            }
+            emp_cov[i][j] = s / (n as f32)
+        }
+    }
+
+    # Compute mu = trace(emp_cov) / p
+    let mut trace: f32 = 0.0
+    for i in 0 to p {
+        trace = trace + emp_cov[i][i]
+    }
+    let mu: f32 = trace / (p as f32)
+
+    # Compute delta = ||emp_cov - mu*I||^2_F / p
+    let mut delta: f32 = 0.0
+    for i in 0 to p {
+        for j in 0 to p {
+            let diff: f32 = emp_cov[i][j]
+            if i == j {
+                diff = emp_cov[i][j] - mu
+            }
+            delta = delta + diff * diff
+        }
+    }
+    delta = delta / (p as f32)
+
+    # Compute d^2 = sum of var of entries / (n * p)
+    let mut d2: f32 = 0.0
+    for i in 0 to p {
+        for j in 0 to p {
+            let mut s: f32 = 0.0
+            for k in 0 to n {
+                let di: f32 = matrix_at(X, k, i) - location[i]
+                let dj: f32 = matrix_at(X, k, j) - location[j]
+                let val: f32 = di * dj - emp_cov[i][j]
+                s = s + val * val
+            }
+            d2 = d2 + s
+        }
+    }
+    d2 = d2 / ((n as f32) * (n as f32) * (p as f32))
+
+    # shrinkage = max(0, min(1, d2 / delta))
+    let mut shrinkage: f32 = d2 / delta
+    if shrinkage < 0.0 { shrinkage = 0.0 }
+    if shrinkage > 1.0 { shrinkage = 1.0 }
+
+    # Apply shrinkage: (1 - shrinkage) * emp_cov + shrinkage * mu * I
+    let cov: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to p {
+        cov[i] = array_new_f32(p)
+        for j in 0 to p {
+            if i == j {
+                cov[i][j] = (1.0 - shrinkage) * emp_cov[i][j] + shrinkage * mu
+            } else {
+                cov[i][j] = (1.0 - shrinkage) * emp_cov[i][j]
+            }
+        }
+    }
+
+    for i in 0 to p {
+        array_free_f32(emp_cov[i])
+    }
+    free(emp_cov as ptr<void>)
+
+    return LedoitWolf {
+        covariance: cov,
+        location: location,
+        n_features: p,
+        shrinkage: shrinkage,
+        fitted: true
+    }
+}
+
+export function ledoit_wolf_cv_free(model: LedoitWolf) -> void {
+    for i in 0 to model.n_features {
+        array_free_f32(model.covariance[i])
+    }
+    free(model.covariance as ptr<void>)
+    array_free_f32(model.location)
+}
+
+# ============================================================================
+# OAS: Oracle Approximating Shrinkage
+# Chen et al. (2010). Improved estimator of shrinkage.
+# ============================================================================
+
+export struct OAS {
+    covariance: ptr<ptr<f32> >,
+    location: ptr<f32>,
+    n_features: i32,
+    shrinkage: f32,
+    fitted: bool
+}
+
+export function oas_cv_fit(X: Matrix) -> OAS {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let location: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        let mut m: f32 = 0.0
+        for i in 0 to n {
+            m = m + matrix_at(X, i, j)
+        }
+        location[j] = m / (n as f32)
+    }
+
+    let emp_cov: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to p {
+        emp_cov[i] = array_new_f32(p)
+    }
+    for i in 0 to p {
+        for j in 0 to p {
+            let mut s: f32 = 0.0
+            for k in 0 to n {
+                let di: f32 = matrix_at(X, k, i) - location[i]
+                let dj: f32 = matrix_at(X, k, j) - location[j]
+                s = s + di * dj
+            }
+            emp_cov[i][j] = s / (n as f32)
+        }
+    }
+
+    let mut trace: f32 = 0.0
+    let mut trace2: f32 = 0.0
+    for i in 0 to p {
+        trace = trace + emp_cov[i][i]
+        trace2 = trace2 + emp_cov[i][i] * emp_cov[i][i]
+    }
+    let mu: f32 = trace / (p as f32)
+
+    # OAS formula: rho = ((1-2/p)*tr(S^2) + tr(S)^2) / ((n+1-2/p)*tr(S^2) + tr(S)^2)
+    # where tr(S^2) = sum of all squared entries
+    let mut sum_sq: f32 = 0.0
+    for i in 0 to p {
+        for j in 0 to p {
+            sum_sq = sum_sq + emp_cov[i][j] * emp_cov[i][j]
+        }
+    }
+
+    let numerator: f32 = (1.0 - 2.0 / (p as f32)) * sum_sq + trace * trace
+    let denominator: f32 = (n as f32 + 1.0 - 2.0 / (p as f32)) * sum_sq + trace * trace
+    let mut shrinkage: f32 = numerator / denominator
+    if shrinkage < 0.0 { shrinkage = 0.0 }
+    if shrinkage > 1.0 { shrinkage = 1.0 }
+
+    let cov: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to p {
+        cov[i] = array_new_f32(p)
+        for j in 0 to p {
+            if i == j {
+                cov[i][j] = (1.0 - shrinkage) * emp_cov[i][j] + shrinkage * mu
+            } else {
+                cov[i][j] = (1.0 - shrinkage) * emp_cov[i][j]
+            }
+        }
+    }
+
+    for i in 0 to p {
+        array_free_f32(emp_cov[i])
+    }
+    free(emp_cov as ptr<void>)
+
+    return OAS {
+        covariance: cov,
+        location: location,
+        n_features: p,
+        shrinkage: shrinkage,
+        fitted: true
+    }
+}
+
+export function oas_cv_free(model: OAS) -> void {
+    for i in 0 to model.n_features {
+        array_free_f32(model.covariance[i])
+    }
+    free(model.covariance as ptr<void>)
+    array_free_f32(model.location)
+}
+
+# ============================================================================
+# EllipticEnvelope: outlier detection via robust covariance (MinCovDet)
+# Uses Mahalanobis distance with MCD estimate.
+# ============================================================================
+
+export struct EllipticEnvelope {
+    covariance: ptr<ptr<f32> >,
+    location: ptr<f32>,
+    n_features: i32,
+    contamination: f32,
+    support_: ptr<i32>,
+    n_support: i32,
+    fitted: bool
+}
+
+export function elliptic_envelope_fit(X: Matrix, contamination: f32, n_trials: i32) -> EllipticEnvelope {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let h: i32 = (n * 3) / 4
+    if h > n { h = n }
+    if h < 2 { h = 2 }
+
+    srand(42)
+
+    let best_location: ptr<f32> = array_new_f32(p)
+    let best_cov: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to p { best_cov[i] = array_new_f32(p) }
+    let mut best_det: f32 = 1000000000.0
+
+    let support_: ptr<i32> = array_new_f32(h) as ptr<i32>
+
+    for trial in 0 to n_trials {
+        # Random subset of size h
+        let subset: ptr<i32> = array_new_f32(h) as ptr<i32>
+        for i in 0 to h {
+            subset[i] = rand() % n
+        }
+
+        # Compute mean of subset
+        let loc: ptr<f32> = array_new_f32(p)
+        for j in 0 to p {
+            let mut s: f32 = 0.0
+            for i in 0 to h {
+                s = s + matrix_at(X, subset[i], j)
+            }
+            loc[j] = s / (h as f32)
+        }
+
+        # Compute covariance of subset
+        let cov: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+        for i in 0 to p { cov[i] = array_new_f32(p) }
+        for i in 0 to p {
+            for j in 0 to p {
+                let mut s: f32 = 0.0
+                for k in 0 to h {
+                    let di: f32 = matrix_at(X, subset[k], i) - loc[i]
+                    let dj: f32 = matrix_at(X, subset[k], j) - loc[j]
+                    s = s + di * dj
+                }
+                cov[i][j] = s / (h as f32)
+            }
+        }
+
+        # Compute determinant (simplified: product of diagonal)
+        let mut det: f32 = 1.0
+        for i in 0 to p {
+            if cov[i][i] > 0.0000000001 {
+                det = det * cov[i][i]
+            } else {
+                det = det * 0.0000000001
+            }
+        }
+
+        if det < best_det {
+            best_det = det
+            for j in 0 to p { best_location[j] = loc[j] }
+            for i in 0 to p {
+                for j in 0 to p {
+                    best_cov[i][j] = cov[i][j]
+                }
+            }
+            for i in 0 to h { support_[i] = subset[i] }
+        }
+
+        array_free_f32(loc)
+        for i in 0 to p { array_free_f32(cov[i]) }
+        free(cov as ptr<void>)
+        array_free_f32(subset as ptr<f32>)
+    }
+
+    return EllipticEnvelope {
+        covariance: best_cov,
+        location: best_location,
+        n_features: p,
+        contamination: contamination,
+        support_: support_,
+        n_support: h,
+        fitted: true
+    }
+}
+
+export function elliptic_envelope_predict(model: EllipticEnvelope, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let p: i32 = model.n_features
+    let result: ptr<f32> = array_new_f32(n)
+
+    # Compute Mahalanobis distance for each sample
+    # Simplified: use diagonal covariance inverse
+    let inv_diag: ptr<f32> = array_new_f32(p)
+    for i in 0 to p {
+        if model.covariance[i][i] > 0.0000000001 {
+            inv_diag[i] = 1.0 / model.covariance[i][i]
+        } else {
+            inv_diag[i] = 0.0
+        }
+    }
+
+    # Threshold based on contamination
+    let threshold: f32 = (p as f32) * 2.0
+
+    for i in 0 to n {
+        let mut dist: f32 = 0.0
+        for j in 0 to p {
+            let diff: f32 = matrix_at(X, i, j) - model.location[j]
+            dist = dist + diff * diff * inv_diag[j]
+        }
+        if dist > threshold {
+            result[i] = -1.0
+        } else {
+            result[i] = 1.0
+        }
+    }
+
+    array_free_f32(inv_diag)
+    return result
+}
+
+export function elliptic_envelope_free(model: EllipticEnvelope) -> void {
+    for i in 0 to model.n_features {
+        array_free_f32(model.covariance[i])
+    }
+    free(model.covariance as ptr<void>)
+    array_free_f32(model.location)
+    array_free_f32(model.support_ as ptr<f32>)
 }

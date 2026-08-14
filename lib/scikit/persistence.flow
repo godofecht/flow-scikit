@@ -229,7 +229,8 @@ export function load_linear_svc(path: string) -> LinearSVC {
 # ============================================================================
 # LogisticRegression estimator save/load (single binary file)
 # Layout: [n_features: i32][n_classes: i32][bias: f32]
-#         [weights: n_features * f32][classes: n_classes * f32]
+#         [weights: n_classes * n_features * f32][biases: n_classes * f32]
+#         [classes: n_classes * f32]
 # ============================================================================
 
 export function save_logistic_regression(model: LogisticRegression, path: string) -> i32 {
@@ -238,7 +239,8 @@ export function save_logistic_regression(model: LogisticRegression, path: string
     _write_i32(fp, model.n_features)
     _write_i32(fp, model.n_classes)
     _write_f32(fp, model.bias)
-    _write_f32_array(fp, model.weights, model.n_features)
+    _write_f32_array(fp, model.weights, model.n_classes * model.n_features)
+    _write_f32_array(fp, model.biases, model.n_classes)
     _write_f32_array(fp, model.classes, model.n_classes)
     fclose(fp)
     return 0
@@ -249,7 +251,8 @@ export function load_logistic_regression(path: string) -> LogisticRegression {
     let n_features: i32 = _read_i32(fp)
     let n_classes: i32 = _read_i32(fp)
     let bias: f32 = _read_f32(fp)
-    let weights: ptr<f32> = _read_f32_array(fp, n_features)
+    let weights: ptr<f32> = _read_f32_array(fp, n_classes * n_features)
+    let biases: ptr<f32> = _read_f32_array(fp, n_classes)
     let classes: ptr<f32> = _read_f32_array(fp, n_classes)
     fclose(fp)
 
@@ -258,6 +261,7 @@ export function load_logistic_regression(path: string) -> LogisticRegression {
     return LogisticRegression {
         weights: weights,
         bias: bias,
+        biases: biases,
         n_features: n_features,
         classes: classes,
         n_classes: n_classes,
