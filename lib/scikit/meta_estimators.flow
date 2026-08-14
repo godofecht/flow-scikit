@@ -1,0 +1,418 @@
+# Meta-estimators for flow-scikit.
+# Implements OneVsRestClassifier, OneVsOneClassifier, OutputCodeClassifier.
+# These wrap any binary classifier to handle multiclass.
+# Uses separate arrays of pointers per Flow Issue #431.
+
+import "lib/scikit/matrix.flow"
+import "lib/scikit/linear.flow"
+import "lib/scikit/svm.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function rand() -> i32
+    function srand(seed: u32) -> void
+    function printf(fmt: string, ...) -> i32
+}
+
+# ============================================================================
+# OneVsRestClassifier: trains one binary classifier per class.
+# Each classifier distinguishes one class from all others.
+# Prediction uses argmax of decision scores.
+# Uses separate arrays per Flow Issue #431.
+# ============================================================================
+
+export struct OneVsRestClassifier {
+    weights: ptr<ptr<f32> >,
+    biases: ptr<f32>,
+    classes: ptr<f32>,
+    n_classes: i32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function one_vs_rest_fit(X: Matrix, y: ptr<f32>, n_classes: i32, epochs: i32, lr: f32, penalty: Penalty) -> OneVsRestClassifier {
+    let n: i32 = X.rows
+    let nf: i32 = X.cols
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] { found = true }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let weights: ptr<ptr<f32> > = malloc((n_found as i64) * 8) as ptr<ptr<f32> >
+    let biases: ptr<f32> = array_new_f32(n_found)
+
+    for c in 0 to n_found {
+        let y_binary: ptr<f32> = array_new_f32(n)
+        for i in 0 to n {
+            if y[i] == classes[c] {
+                y_binary[i] = 1.0
+            } else {
+                y_binary[i] = 0.0
+            }
+        }
+        let model: LogisticRegression = logistic_regression_fit(X, y_binary, 2, epochs, lr, penalty)
+        # Binary model has 2 classes. Positive class (label 1) is at index 1.
+        # Weights are flat: [class0_weights, class1_weights], each of size n_features.
+        # Copy the positive class weights into a new array.
+        let w_copy: ptr<f32> = array_new_f32(nf)
+        for j in 0 to nf {
+            w_copy[j] = model.weights[nf + j]
+        }
+        weights[c] = w_copy
+        biases[c] = model.biases[1]
+        array_free_f32(model.weights)
+        array_free_f32(model.biases)
+        array_free_f32(model.classes)
+        array_free_f32(y_binary)
+    }
+
+    return OneVsRestClassifier {
+        weights: weights,
+        biases: biases,
+        classes: classes,
+        n_classes: n_found,
+        n_features: nf,
+        fitted: true
+    }
+}
+
+export function one_vs_rest_predict(model: OneVsRestClassifier, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut best_score: f32 = -1000000.0
+        let mut best_class: i32 = 0
+        for c in 0 to model.n_classes {
+            let mut z: f32 = model.biases[c]
+            for j in 0 to model.n_features {
+                z = z + model.weights[c][j] * matrix_at(X, i, j)
+            }
+            if z > best_score {
+                best_score = z
+                best_class = c
+            }
+        }
+        result[i] = model.classes[best_class]
+    }
+    return result
+}
+
+export function one_vs_rest_free(model: OneVsRestClassifier) -> void {
+    for c in 0 to model.n_classes {
+        array_free_f32(model.weights[c])
+    }
+    free(model.weights as ptr<void>)
+    array_free_f32(model.biases)
+    array_free_f32(model.classes)
+}
+
+# ============================================================================
+# OneVsOneClassifier: trains one binary classifier per pair of classes.
+# Prediction uses voting.
+# Uses separate arrays per Flow Issue #431.
+# ============================================================================
+
+export struct OneVsOneClassifier {
+    weights: ptr<ptr<f32> >,
+    biases: ptr<f32>,
+    pair_a: ptr<i32>,
+    pair_b: ptr<i32>,
+    classes: ptr<f32>,
+    n_classes: i32,
+    n_pairs: i32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function one_vs_one_fit(X: Matrix, y: ptr<f32>, n_classes: i32, epochs: i32, lr: f32, penalty: Penalty) -> OneVsOneClassifier {
+    let n: i32 = X.rows
+    let nf: i32 = X.cols
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] { found = true }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let n_pairs: i32 = n_found * (n_found - 1) / 2
+    let weights: ptr<ptr<f32> > = malloc((n_pairs as i64) * 8) as ptr<ptr<f32> >
+    let biases: ptr<f32> = array_new_f32(n_pairs)
+    let pair_a: ptr<i32> = array_new_f32(n_pairs) as ptr<i32>
+    let pair_b: ptr<i32> = array_new_f32(n_pairs) as ptr<i32>
+
+    let mut pair_idx: i32 = 0
+    for a in 0 to n_found {
+        for b in (a + 1) to n_found {
+            let mut count: i32 = 0
+            for i in 0 to n {
+                if y[i] == classes[a] or y[i] == classes[b] {
+                    count = count + 1
+                }
+            }
+
+            let X_sub: Matrix = matrix_new(count, nf)
+            let y_sub: ptr<f32> = array_new_f32(count)
+            let mut idx: i32 = 0
+            for i in 0 to n {
+                if y[i] == classes[a] or y[i] == classes[b] {
+                    for j in 0 to nf {
+                        matrix_set(X_sub, idx, j, matrix_at(X, i, j))
+                    }
+                    if y[i] == classes[b] {
+                        y_sub[idx] = 1.0
+                    } else {
+                        y_sub[idx] = 0.0
+                    }
+                    idx = idx + 1
+                }
+            }
+
+            let model: LogisticRegression = logistic_regression_fit(X_sub, y_sub, 2, epochs, lr, penalty)
+            let w_copy: ptr<f32> = array_new_f32(nf)
+            for j in 0 to nf {
+                w_copy[j] = model.weights[nf + j]
+            }
+            weights[pair_idx] = w_copy
+            biases[pair_idx] = model.biases[1]
+            pair_a[pair_idx] = a
+            pair_b[pair_idx] = b
+            pair_idx = pair_idx + 1
+
+            array_free_f32(model.weights)
+            array_free_f32(model.biases)
+            array_free_f32(model.classes)
+            matrix_free(X_sub)
+            array_free_f32(y_sub)
+        }
+    }
+
+    return OneVsOneClassifier {
+        weights: weights,
+        biases: biases,
+        pair_a: pair_a,
+        pair_b: pair_b,
+        classes: classes,
+        n_classes: n_found,
+        n_pairs: n_pairs,
+        n_features: nf,
+        fitted: true
+    }
+}
+
+export function one_vs_one_predict(model: OneVsOneClassifier, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    let votes: ptr<i32> = array_new_f32(model.n_classes) as ptr<i32>
+
+    for i in 0 to n {
+        for c in 0 to model.n_classes {
+            votes[c] = 0
+        }
+
+        for p in 0 to model.n_pairs {
+            let mut z: f32 = model.biases[p]
+            for j in 0 to model.n_features {
+                z = z + model.weights[p][j] * matrix_at(X, i, j)
+            }
+            if z >= 0.0 {
+                votes[model.pair_b[p]] = votes[model.pair_b[p]] + 1
+            } else {
+                votes[model.pair_a[p]] = votes[model.pair_a[p]] + 1
+            }
+        }
+
+        let mut best_votes: i32 = -1
+        let mut best_class: i32 = 0
+        for c in 0 to model.n_classes {
+            if votes[c] > best_votes {
+                best_votes = votes[c]
+                best_class = c
+            }
+        }
+        result[i] = model.classes[best_class]
+    }
+
+    array_free_f32(votes as ptr<f32>)
+    return result
+}
+
+export function one_vs_one_free(model: OneVsOneClassifier) -> void {
+    for p in 0 to model.n_pairs {
+        array_free_f32(model.weights[p])
+    }
+    free(model.weights as ptr<void>)
+    array_free_f32(model.biases)
+    array_free_f32(model.pair_a as ptr<f32>)
+    array_free_f32(model.pair_b as ptr<f32>)
+    array_free_f32(model.classes)
+}
+
+# ============================================================================
+# OutputCodeClassifier: error-correcting output codes.
+# Assigns each class a random binary code, trains one classifier per bit.
+# Prediction uses Hamming distance to nearest code.
+# Uses separate arrays per Flow Issue #431.
+# ============================================================================
+
+export struct OutputCodeClassifier {
+    weights: ptr<ptr<f32> >,
+    biases: ptr<f32>,
+    code_matrix: ptr<ptr<i32> >,
+    classes: ptr<f32>,
+    n_classes: i32,
+    n_bits: i32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function output_code_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_bits: i32, epochs: i32, lr: f32, penalty: Penalty) -> OutputCodeClassifier {
+    let n: i32 = X.rows
+    let nf: i32 = X.cols
+    srand(123)
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] { found = true }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let code_matrix: ptr<ptr<i32> > = malloc((n_found as i64) * 8) as ptr<ptr<i32> >
+    for i in 0 to n_found {
+        code_matrix[i] = array_new_f32(n_bits) as ptr<i32>
+        for j in 0 to n_bits {
+            code_matrix[i][j] = rand() % 2
+        }
+    }
+
+    # Ensure all class codes are distinct by flipping bits if needed
+    for a in 0 to n_found {
+        for b in (a + 1) to n_found {
+            let mut same: bool = true
+            for j in 0 to n_bits {
+                if code_matrix[a][j] != code_matrix[b][j] { same = false }
+            }
+            if same {
+                # Flip a random bit in class b
+                let bit: i32 = rand() % n_bits
+                if code_matrix[b][bit] == 0 {
+                    code_matrix[b][bit] = 1
+                } else {
+                    code_matrix[b][bit] = 0
+                }
+            }
+        }
+    }
+
+    let weights: ptr<ptr<f32> > = malloc((n_bits as i64) * 8) as ptr<ptr<f32> >
+    let biases: ptr<f32> = array_new_f32(n_bits)
+
+    for bit in 0 to n_bits {
+        let y_binary: ptr<f32> = array_new_f32(n)
+        for i in 0 to n {
+            let mut class_idx: i32 = 0
+            for k in 0 to n_found {
+                if y[i] == classes[k] { class_idx = k }
+            }
+            y_binary[i] = (code_matrix[class_idx][bit]) as f32
+        }
+        let model: LogisticRegression = logistic_regression_fit(X, y_binary, 2, epochs, lr, penalty)
+        let w_copy: ptr<f32> = array_new_f32(nf)
+        for j in 0 to nf {
+            w_copy[j] = model.weights[nf + j]
+        }
+        weights[bit] = w_copy
+        biases[bit] = model.biases[1]
+        array_free_f32(model.weights)
+        array_free_f32(model.biases)
+        array_free_f32(model.classes)
+        array_free_f32(y_binary)
+    }
+
+    return OutputCodeClassifier {
+        weights: weights,
+        biases: biases,
+        code_matrix: code_matrix,
+        classes: classes,
+        n_classes: n_found,
+        n_bits: n_bits,
+        n_features: nf,
+        fitted: true
+    }
+}
+
+export function output_code_predict(model: OutputCodeClassifier, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let pred_bits: ptr<i32> = array_new_f32(model.n_bits) as ptr<i32>
+        for bit in 0 to model.n_bits {
+            let mut z: f32 = model.biases[bit]
+            for j in 0 to model.n_features {
+                z = z + model.weights[bit][j] * matrix_at(X, i, j)
+            }
+            if z >= 0.0 {
+                pred_bits[bit] = 1
+            } else {
+                pred_bits[bit] = 0
+            }
+        }
+
+        let mut best_dist: i32 = model.n_bits + 1
+        let mut best_class: i32 = 0
+        for c in 0 to model.n_classes {
+            let mut dist: i32 = 0
+            for bit in 0 to model.n_bits {
+                if model.code_matrix[c][bit] != pred_bits[bit] {
+                    dist = dist + 1
+                }
+            }
+            if dist < best_dist {
+                best_dist = dist
+                best_class = c
+            }
+        }
+        result[i] = model.classes[best_class]
+        array_free_f32(pred_bits as ptr<f32>)
+    }
+
+    return result
+}
+
+export function output_code_free(model: OutputCodeClassifier) -> void {
+    for bit in 0 to model.n_bits {
+        array_free_f32(model.weights[bit])
+    }
+    free(model.weights as ptr<void>)
+    array_free_f32(model.biases)
+    for i in 0 to model.n_classes {
+        array_free_f32(model.code_matrix[i] as ptr<f32>)
+    }
+    free(model.code_matrix as ptr<void>)
+    array_free_f32(model.classes)
+}

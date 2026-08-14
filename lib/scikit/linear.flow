@@ -30,6 +30,45 @@ export const PENALTY_L1: i32 = 1
 export const PENALTY_L2: i32 = 2
 export const PENALTY_ELASTICNET: i32 = 3
 
+function _solve_in_place(A: ptr<f32>, b: ptr<f32>, n: i32) -> void {
+    for col in 0 to n {
+        let pv: f32 = A[col * n + col]
+        let abs_pv: f32 = pv
+        if pv < 0.0 { abs_pv = -pv }
+        if abs_pv < 0.0000000001 { continue }
+        let mut row: i32 = col + 1
+        while row < n {
+            let factor: f32 = A[row * n + col] / pv
+            A[row * n + col] = 0.0
+            let mut j: i32 = col + 1
+            while j < n {
+                A[row * n + j] = A[row * n + j] - factor * A[col * n + j]
+                j = j + 1
+            }
+            b[row] = b[row] - factor * b[col]
+            row = row + 1
+        }
+    }
+    let mut i: i32 = n - 1
+    while i >= 0 {
+        let mut s: f32 = b[i]
+        let mut j: i32 = i + 1
+        while j < n {
+            s = s - A[i * n + j] * b[j]
+            j = j + 1
+        }
+        let pv2: f32 = A[i * n + i]
+        let abs_pv2: f32 = pv2
+        if pv2 < 0.0 { abs_pv2 = -pv2 }
+        if abs_pv2 < 0.0000000001 {
+            b[i] = 0.0
+        } else {
+            b[i] = s / pv2
+        }
+        i = i - 1
+    }
+}
+
 export struct Penalty {
     kind: i32,
     alpha: f32,
@@ -128,48 +167,61 @@ export struct LinearRegression {
 
 export function linear_regression_fit(X: Matrix, y: ptr<f32>, penalty: Penalty) -> LinearRegression {
     let n: i32 = X.cols
-    let weights: ptr<f32> = array_new_f32(n)
-    let bias: f32 = 0.0
+    let m: i32 = X.rows
 
-    let lr: f32 = 0.01
-    let epochs: i32 = 1000
-
-    for epoch in 0 to epochs {
-        let grad_w: ptr<f32> = array_new_f32(n)
-        let mut grad_b: f32 = 0.0
-
-        for i in 0 to X.rows {
-            let mut pred: f32 = bias
-            for j in 0 to n {
-                pred = pred + weights[j] * matrix_at(X, i, j)
-            }
-            let err: f32 = pred - y[i]
-
-            for j in 0 to n {
-                grad_w[j] = grad_w[j] + err * matrix_at(X, i, j)
-            }
-            grad_b = grad_b + err
-        }
-
-        let inv_n: f32 = 1.0 / (X.rows as f32)
+    # Center data to solve for weights without bias, then recover bias
+    let x_mean: ptr<f32> = array_new_f32(n)
+    let mut y_mean: f32 = 0.0
+    for i in 0 to m {
+        y_mean = y_mean + y[i]
         for j in 0 to n {
-            grad_w[j] = grad_w[j] * inv_n
-            if penalty.kind == PENALTY_L2 || penalty.kind == PENALTY_ELASTICNET {
-                grad_w[j] = grad_w[j] + penalty.alpha * weights[j] * (1.0 - penalty.l1_ratio)
-            }
-            if penalty.kind == PENALTY_L1 || penalty.kind == PENALTY_ELASTICNET {
-                if weights[j] > 0.0 {
-                    grad_w[j] = grad_w[j] + penalty.alpha * penalty.l1_ratio
-                } else {
-                    grad_w[j] = grad_w[j] - penalty.alpha * penalty.l1_ratio
-                }
-            }
-            weights[j] = weights[j] - lr * grad_w[j]
+            x_mean[j] = x_mean[j] + matrix_at(X, i, j)
         }
-        bias = bias - lr * grad_b * inv_n
-
-        array_free_f32(grad_w)
     }
+    y_mean = y_mean / (m as f32)
+    for j in 0 to n {
+        x_mean[j] = x_mean[j] / (m as f32)
+    }
+
+    # Build XtX and Xty from centered data
+    let XtX: ptr<f32> = array_new_f32(n * n)
+    let Xty: ptr<f32> = array_new_f32(n)
+    for i in 0 to m {
+        for j in 0 to n {
+            let xj: f32 = matrix_at(X, i, j) - x_mean[j]
+            Xty[j] = Xty[j] + xj * (y[i] - y_mean)
+            for k in 0 to n {
+                let xk: f32 = matrix_at(X, i, k) - x_mean[k]
+                XtX[j * n + k] = XtX[j * n + k] + xj * xk
+            }
+        }
+    }
+
+    # Add L2 regularization if applicable
+    if penalty.kind == PENALTY_L2 || penalty.kind == PENALTY_ELASTICNET {
+        let l2: f32 = penalty.alpha * (1.0 - penalty.l1_ratio) * (m as f32)
+        for j in 0 to n {
+            XtX[j * n + j] = XtX[j * n + j] + l2
+        }
+    }
+
+    # Solve XtX * w = Xty in place
+    _solve_in_place(XtX, Xty, n)
+
+    # Recover bias: b = y_mean - sum(x_mean[j] * w[j])
+    let mut bias: f32 = y_mean
+    for j in 0 to n {
+        bias = bias - x_mean[j] * Xty[j]
+    }
+
+    let weights: ptr<f32> = array_new_f32(n)
+    for j in 0 to n {
+        weights[j] = Xty[j]
+    }
+
+    array_free_f32(x_mean)
+    array_free_f32(XtX)
+    array_free_f32(Xty)
 
     return LinearRegression { weights: weights, bias: bias, n_features: n, penalty: penalty, fitted: true }
 }
@@ -199,6 +251,7 @@ export function linear_regression_free(model: LinearRegression) -> void {
 export struct LogisticRegression {
     weights: ptr<f32>,
     bias: f32,
+    biases: ptr<f32>,
     n_features: i32,
     classes: ptr<f32>,
     n_classes: i32,
@@ -208,92 +261,78 @@ export struct LogisticRegression {
 
 export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, epochs: i32, lr: f32, penalty: Penalty) -> LogisticRegression {
     let n: i32 = X.cols
-    let weights: ptr<f32> = array_new_f32(n)
-    let bias: f32 = 0.0
+    let m: i32 = X.rows
 
     let classes: ptr<f32> = array_new_f32(n_classes)
     let mut n_found: i32 = 0
-    for i in 0 to X.rows {
+    for i in 0 to m {
         let mut found: bool = false
         for k in 0 to n_found {
-            if classes[k] == y[i] {
-                found = true
-            }
+            if classes[k] == y[i] { found = true }
         }
         if not found {
             classes[n_found] = y[i]
             n_found = n_found + 1
         }
     }
+    let nc: i32 = n_found
 
-    for epoch in 0 to epochs {
-        let grad_w: ptr<f32> = array_new_f32(n)
-        let mut grad_b: f32 = 0.0
+    let all_weights: ptr<f32> = array_new_f32(nc * n)
+    let all_biases: ptr<f32> = array_new_f32(nc)
+    for i in 0 to nc * n { all_weights[i] = 0.0 }
+    for i in 0 to nc { all_biases[i] = 0.0 }
 
-        for i in 0 to X.rows {
-            let mut z: f32 = bias
-            for j in 0 to n {
-                z = z + weights[j] * matrix_at(X, i, j)
-            }
-            let p: f32 = sigmoid(z)
-            let label: f32 = 0.0
-            if y[i] == classes[1] {
-                label = 1.0
-            }
-            let err: f32 = p - label
+    for c in 0 to nc {
+        let w: ptr<f32> = array_new_f32(n)
+        for j in 0 to n { w[j] = 0.0 }
+        let mut b: f32 = 0.0
 
-            for j in 0 to n {
-                grad_w[j] = grad_w[j] + err * matrix_at(X, i, j)
-            }
-            grad_b = grad_b + err
-        }
+        for epoch in 0 to epochs {
+            let grad_w: ptr<f32> = array_new_f32(n)
+            let mut grad_b: f32 = 0.0
 
-        let inv_n: f32 = 1.0 / (X.rows as f32)
-        for j in 0 to n {
-            grad_w[j] = grad_w[j] * inv_n
-            if penalty.kind == PENALTY_L2 || penalty.kind == PENALTY_ELASTICNET {
-                grad_w[j] = grad_w[j] + penalty.alpha * weights[j] * (1.0 - penalty.l1_ratio)
-            }
-            weights[j] = weights[j] - lr * grad_w[j]
-        }
-        bias = bias - lr * grad_b * inv_n
-
-        if epoch % 100 == 0 {
-            let mut total_loss: f32 = 0.0
-            for i in 0 to X.rows {
-                let mut z: f32 = bias
+            for i in 0 to m {
+                let mut z: f32 = b
                 for j in 0 to n {
-                    z = z + weights[j] * matrix_at(X, i, j)
+                    z = z + w[j] * matrix_at(X, i, j)
                 }
                 let p: f32 = sigmoid(z)
                 let label: f32 = 0.0
-                if y[i] == classes[1] {
-                    label = 1.0
+                if y[i] == classes[c] { label = 1.0 }
+                let err: f32 = p - label
+
+                for j in 0 to n {
+                    grad_w[j] = grad_w[j] + err * matrix_at(X, i, j)
                 }
-                let mut loss: f32 = 0.0
-                if label > 0.5 {
-                    if p > 0.0000000001 {
-                        loss = -log(p as f64) as f32
-                    }
-                } else {
-                    if p < 1.0 - 0.0000000001 {
-                        loss = -log((1.0 - p) as f64) as f32
-                    }
-                }
-                total_loss = total_loss + loss
+                grad_b = grad_b + err
             }
-            Progress.on_epoch_start(epoch, epochs, total_loss / (X.rows as f32))
+
+            let inv_n: f32 = 1.0 / (m as f32)
+            for j in 0 to n {
+                grad_w[j] = grad_w[j] * inv_n
+                if penalty.kind == PENALTY_L2 || penalty.kind == PENALTY_ELASTICNET {
+                    grad_w[j] = grad_w[j] + penalty.alpha * w[j] * (1.0 - penalty.l1_ratio)
+                }
+                w[j] = w[j] - lr * grad_w[j]
+            }
+            b = b - lr * grad_b * inv_n
+            array_free_f32(grad_w)
         }
 
-        array_free_f32(grad_w)
+        for j in 0 to n {
+            all_weights[c * n + j] = w[j]
+        }
+        all_biases[c] = b
+        array_free_f32(w)
     }
 
     return LogisticRegression {
-        weights: weights,
-        bias: bias,
+        weights: all_weights,
+        bias: all_biases[0],
+        biases: all_biases,
         n_features: n,
         classes: classes,
-        n_classes: n_classes,
+        n_classes: nc,
         penalty: penalty,
         fitted: true
     }
@@ -304,8 +343,6 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
 export function logistic_regression_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_classes: i32, epochs: i32, lr: f32, penalty: Penalty) -> LogisticRegression {
     let n: i32 = S.n_cols
     let n_samples: i32 = S.n_rows
-    let weights: ptr<f32> = array_new_f32(n)
-    let bias: f32 = 0.0
 
     let classes: ptr<f32> = array_new_f32(n_classes)
     let mut n_found: i32 = 0
@@ -319,54 +356,70 @@ export function logistic_regression_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_c
             n_found = n_found + 1
         }
     }
+    let nc: i32 = n_found
 
-    for epoch in 0 to epochs {
-        let grad_w: ptr<f32> = array_new_f32(n)
-        let mut grad_b: f32 = 0.0
+    let all_weights: ptr<f32> = array_new_f32(nc * n)
+    let all_biases: ptr<f32> = array_new_f32(nc)
+    for i in 0 to nc * n { all_weights[i] = 0.0 }
+    for i in 0 to nc { all_biases[i] = 0.0 }
 
-        for i in 0 to n_samples {
-            # z = bias + sum over non-zero entries of w[j] * x_ij
-            let mut z: f32 = bias
-            let start: i32 = S.indptr[i]
-            let end: i32 = S.indptr[i + 1]
-            let mut k: i32 = start
-            while k < end {
-                z = z + weights[S.indices[k]] * S.data[k]
-                k = k + 1
+    for c in 0 to nc {
+        let w: ptr<f32> = array_new_f32(n)
+        for j in 0 to n { w[j] = 0.0 }
+        let mut b: f32 = 0.0
+
+        for epoch in 0 to epochs {
+            let grad_w: ptr<f32> = array_new_f32(n)
+            let mut grad_b: f32 = 0.0
+
+            for i in 0 to n_samples {
+                let mut z: f32 = b
+                let start: i32 = S.indptr[i]
+                let end: i32 = S.indptr[i + 1]
+                let mut k: i32 = start
+                while k < end {
+                    z = z + w[S.indices[k]] * S.data[k]
+                    k = k + 1
+                }
+                let p: f32 = sigmoid(z)
+                let label: f32 = 0.0
+                if y[i] == classes[c] { label = 1.0 }
+                let err: f32 = p - label
+
+                k = start
+                while k < end {
+                    grad_w[S.indices[k]] = grad_w[S.indices[k]] + err * S.data[k]
+                    k = k + 1
+                }
+                grad_b = grad_b + err
             }
-            let p: f32 = sigmoid(z)
-            let label: f32 = 0.0
-            if y[i] == classes[1] { label = 1.0 }
-            let err: f32 = p - label
 
-            # Accumulate gradient only over non-zero entries
-            k = start
-            while k < end {
-                grad_w[S.indices[k]] = grad_w[S.indices[k]] + err * S.data[k]
-                k = k + 1
+            let inv_n: f32 = 1.0 / (n_samples as f32)
+            for j in 0 to n {
+                grad_w[j] = grad_w[j] * inv_n
+                if penalty.kind == PENALTY_L2 || penalty.kind == PENALTY_ELASTICNET {
+                    grad_w[j] = grad_w[j] + penalty.alpha * w[j] * (1.0 - penalty.l1_ratio)
+                }
+                w[j] = w[j] - lr * grad_w[j]
             }
-            grad_b = grad_b + err
+            b = b - lr * grad_b * inv_n
+            array_free_f32(grad_w)
         }
 
-        let inv_n: f32 = 1.0 / (n_samples as f32)
         for j in 0 to n {
-            grad_w[j] = grad_w[j] * inv_n
-            if penalty.kind == PENALTY_L2 || penalty.kind == PENALTY_ELASTICNET {
-                grad_w[j] = grad_w[j] + penalty.alpha * weights[j] * (1.0 - penalty.l1_ratio)
-            }
-            weights[j] = weights[j] - lr * grad_w[j]
+            all_weights[c * n + j] = w[j]
         }
-        bias = bias - lr * grad_b * inv_n
-
-        array_free_f32(grad_w)
+        all_biases[c] = b
+        array_free_f32(w)
     }
 
     return LogisticRegression {
-        weights: weights,
-        bias: bias,
+        weights: all_weights,
+        bias: all_biases[0],
+        biases: all_biases,
         n_features: n,
         classes: classes,
-        n_classes: n_classes,
+        n_classes: nc,
         penalty: penalty,
         fitted: true
     }
@@ -385,17 +438,39 @@ export function logistic_predict_proba(model: LogisticRegression, X: Matrix) -> 
 }
 
 export function logistic_predict(model: LogisticRegression, X: Matrix) -> ptr<f32> {
-    let result: ptr<f32> = logistic_predict_proba(model, X)
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut best_score: f32 = -1000000.0
+        let mut best_class: i32 = 0
+        for c in 0 to model.n_classes {
+            let mut z: f32 = model.biases[c]
+            for j in 0 to model.n_features {
+                z = z + model.weights[c * model.n_features + j] * matrix_at(X, i, j)
+            }
+            if z > best_score {
+                best_score = z
+                best_class = c
+            }
+        }
+        result[i] = model.classes[best_class]
+    }
     return result
 }
 
 export function logistic_decide(model: LogisticRegression, probs: ptr<f32>, n_samples: i32, threshold: f32) -> ptr<f32> {
     let labels: ptr<f32> = array_new_f32(n_samples)
-    for i in 0 to n_samples {
-        if probs[i] >= threshold {
-            labels[i] = model.classes[1]
-        } else {
-            labels[i] = model.classes[0]
+    if model.n_classes <= 2 {
+        for i in 0 to n_samples {
+            if probs[i] >= threshold {
+                labels[i] = model.classes[1]
+            } else {
+                labels[i] = model.classes[0]
+            }
+        }
+    } else {
+        for i in 0 to n_samples {
+            labels[i] = probs[i]
         }
     }
     return labels
@@ -415,6 +490,7 @@ export function logistic_decision_function(model: LogisticRegression, X: Matrix)
 
 export function logistic_regression_free(model: LogisticRegression) -> void {
     array_free_f32(model.weights)
+    array_free_f32(model.biases)
     array_free_f32(model.classes)
 }
 
@@ -432,33 +508,58 @@ export struct Ridge {
 
 export function ridge_fit(X: Matrix, y: ptr<f32>, alpha: f32, epochs: i32, lr: f32) -> Ridge {
     let n: i32 = X.cols
-    let weights: ptr<f32> = array_new_f32(n)
-    let bias: f32 = 0.0
+    let m: i32 = X.rows
 
-    for epoch in 0 to epochs {
-        let grad_w: ptr<f32> = array_new_f32(n)
-        let mut grad_b: f32 = 0.0
-
-        for i in 0 to X.rows {
-            let mut pred: f32 = bias
-            for j in 0 to n {
-                pred = pred + weights[j] * matrix_at(X, i, j)
-            }
-            let err: f32 = pred - y[i]
-            for j in 0 to n {
-                grad_w[j] = grad_w[j] + err * matrix_at(X, i, j)
-            }
-            grad_b = grad_b + err
-        }
-
-        let inv_n: f32 = 1.0 / (X.rows as f32)
+    # Center data
+    let x_mean: ptr<f32> = array_new_f32(n)
+    let mut y_mean: f32 = 0.0
+    for i in 0 to m {
+        y_mean = y_mean + y[i]
         for j in 0 to n {
-            grad_w[j] = grad_w[j] * inv_n + alpha * weights[j]
-            weights[j] = weights[j] - lr * grad_w[j]
+            x_mean[j] = x_mean[j] + matrix_at(X, i, j)
         }
-        bias = bias - lr * grad_b * inv_n
-        array_free_f32(grad_w)
     }
+    y_mean = y_mean / (m as f32)
+    for j in 0 to n {
+        x_mean[j] = x_mean[j] / (m as f32)
+    }
+
+    # Build XtX + alpha*I and Xty from centered data
+    let XtX: ptr<f32> = array_new_f32(n * n)
+    let Xty: ptr<f32> = array_new_f32(n)
+    for i in 0 to m {
+        for j in 0 to n {
+            let xj: f32 = matrix_at(X, i, j) - x_mean[j]
+            Xty[j] = Xty[j] + xj * (y[i] - y_mean)
+            for k in 0 to n {
+                let xk: f32 = matrix_at(X, i, k) - x_mean[k]
+                XtX[j * n + k] = XtX[j * n + k] + xj * xk
+            }
+        }
+    }
+
+    # Add alpha * I (sklearn convention: alpha on diagonal, not alpha*m)
+    for j in 0 to n {
+        XtX[j * n + j] = XtX[j * n + j] + alpha
+    }
+
+    # Solve (XtX + alpha*I) * w = Xty in place
+    _solve_in_place(XtX, Xty, n)
+
+    # Recover bias
+    let mut bias: f32 = y_mean
+    for j in 0 to n {
+        bias = bias - x_mean[j] * Xty[j]
+    }
+
+    let weights: ptr<f32> = array_new_f32(n)
+    for j in 0 to n {
+        weights[j] = Xty[j]
+    }
+
+    array_free_f32(x_mean)
+    array_free_f32(XtX)
+    array_free_f32(Xty)
 
     return Ridge { weights: weights, bias: bias, n_features: n, alpha: alpha, fitted: true }
 }
@@ -493,40 +594,91 @@ export struct Lasso {
 
 export function lasso_fit(X: Matrix, y: ptr<f32>, alpha: f32, epochs: i32, lr: f32) -> Lasso {
     let n: i32 = X.cols
-    let weights: ptr<f32> = array_new_f32(n)
-    let bias: f32 = 0.0
+    let m: i32 = X.rows
 
-    for epoch in 0 to epochs {
-        let grad_w: ptr<f32> = array_new_f32(n)
-        let mut grad_b: f32 = 0.0
-
-        for i in 0 to X.rows {
-            let mut pred: f32 = bias
-            for j in 0 to n {
-                pred = pred + weights[j] * matrix_at(X, i, j)
-            }
-            let err: f32 = pred - y[i]
-            for j in 0 to n {
-                grad_w[j] = grad_w[j] + err * matrix_at(X, i, j)
-            }
-            grad_b = grad_b + err
-        }
-
-        let inv_n: f32 = 1.0 / (X.rows as f32)
+    # Center data
+    let x_mean: ptr<f32> = array_new_f32(n)
+    let mut y_mean: f32 = 0.0
+    for i in 0 to m {
+        y_mean = y_mean + y[i]
         for j in 0 to n {
-            grad_w[j] = grad_w[j] * inv_n
-            weights[j] = weights[j] - lr * grad_w[j]
-            if weights[j] > alpha {
-                weights[j] = weights[j] - alpha
-            } elif weights[j] < -alpha {
-                weights[j] = weights[j] + alpha
-            } else {
-                weights[j] = 0.0
-            }
+            x_mean[j] = x_mean[j] + matrix_at(X, i, j)
         }
-        bias = bias - lr * grad_b * inv_n
-        array_free_f32(grad_w)
     }
+    y_mean = y_mean / (m as f32)
+    for j in 0 to n {
+        x_mean[j] = x_mean[j] / (m as f32)
+    }
+
+    # Precompute centered column squared norms
+    let col_sq: ptr<f32> = array_new_f32(n)
+    for i in 0 to m {
+        for j in 0 to n {
+            let xc: f32 = matrix_at(X, i, j) - x_mean[j]
+            col_sq[j] = col_sq[j] + xc * xc
+        }
+    }
+
+    # Initialize weights and residual
+    let weights: ptr<f32> = array_new_f32(n)
+    for j in 0 to n { weights[j] = 0.0 }
+    let residual: ptr<f32> = array_new_f32(m)
+    for i in 0 to m {
+        residual[i] = (y[i] - y_mean)
+    }
+
+    # Coordinate descent with soft thresholding
+    for epoch in 0 to epochs {
+        let mut max_change: f32 = 0.0
+        for j in 0 to n {
+            if col_sq[j] < 0.0000000001 { continue }
+
+            # Compute rho_j = sum(x_cj * residual_i) + col_sq[j] * w_j
+            let mut rho: f32 = 0.0
+            for i in 0 to m {
+                let xc: f32 = matrix_at(X, i, j) - x_mean[j]
+                rho = rho + xc * residual[i]
+            }
+            rho = rho + col_sq[j] * weights[j]
+
+            # Soft threshold: w_j = sign(rho) * max(|rho| - alpha*m, 0) / col_sq[j]
+            let threshold: f32 = alpha * (m as f32)
+            let mut new_w: f32 = 0.0
+            if rho > threshold {
+                new_w = (rho - threshold) / col_sq[j]
+            } elif rho < -threshold {
+                new_w = (rho + threshold) / col_sq[j]
+            }
+
+            # Update residual: r += (w_j_old - w_j_new) * x_cj
+            let delta: f32 = weights[j] - new_w
+            if delta != 0.0 {
+                for i in 0 to m {
+                    let xc: f32 = matrix_at(X, i, j) - x_mean[j]
+                    residual[i] = residual[i] + delta * xc
+                }
+            }
+
+            let change: f32 = new_w - weights[j]
+            let abs_change: f32 = change
+            if change < 0.0 { abs_change = -change }
+            if abs_change > max_change { max_change = abs_change }
+
+            weights[j] = new_w
+        }
+
+        if max_change < 0.0000000001 { break }
+    }
+
+    # Recover bias
+    let mut bias: f32 = y_mean
+    for j in 0 to n {
+        bias = bias - x_mean[j] * weights[j]
+    }
+
+    array_free_f32(x_mean)
+    array_free_f32(col_sq)
+    array_free_f32(residual)
 
     return Lasso { weights: weights, bias: bias, n_features: n, alpha: alpha, fitted: true }
 }

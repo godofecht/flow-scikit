@@ -1,0 +1,322 @@
+# Discriminant analysis for flow-scikit.
+# Implements LinearDiscriminantAnalysis and QuadraticDiscriminantAnalysis.
+
+import "lib/scikit/matrix.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function sqrt(x: f64) -> f64
+    function log(x: f64) -> f64
+    function fabs(x: f64) -> f64
+    function printf(fmt: string, ...) -> i32
+}
+
+# ============================================================================
+# LinearDiscriminantAnalysis
+# Fits class means and a shared covariance, predicts by nearest class mean
+# in Mahalanobis distance. Uses pooled within-class covariance.
+# ============================================================================
+
+export struct LinearDiscriminantAnalysis {
+    class_means: ptr<ptr<f32> >,
+    covariance: ptr<ptr<f32> >,
+    inv_cov_diag: ptr<f32>,
+    classes: ptr<f32>,
+    priors: ptr<f32>,
+    n_classes: i32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function discriminant_lda_fit(X: Matrix, y: ptr<f32>, n_classes: i32) -> LinearDiscriminantAnalysis {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] { found = true }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    # Compute class means
+    let class_means: ptr<ptr<f32> > = malloc((n_found as i64) * 8) as ptr<ptr<f32> >
+    let class_counts: ptr<i32> = array_new_f32(n_found) as ptr<i32>
+    let priors: ptr<f32> = array_new_f32(n_found)
+    for c in 0 to n_found {
+        class_means[c] = array_new_f32(p)
+        for j in 0 to p { class_means[c][j] = 0.0 }
+        class_counts[c] = 0
+    }
+
+    for i in 0 to n {
+        for c in 0 to n_found {
+            if y[i] == classes[c] {
+                for j in 0 to p {
+                    class_means[c][j] = class_means[c][j] + matrix_at(X, i, j)
+                }
+                class_counts[c] = class_counts[c] + 1
+            }
+        }
+    }
+
+    for c in 0 to n_found {
+        for j in 0 to p {
+            class_means[c][j] = class_means[c][j] / (class_counts[c] as f32)
+        }
+        priors[c] = (class_counts[c] as f32) / (n as f32)
+    }
+
+    # Compute pooled within-class covariance
+    let cov: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to p {
+        cov[i] = array_new_f32(p)
+    }
+    for i in 0 to n {
+        let mut class_idx: i32 = 0
+        for c in 0 to n_found {
+            if y[i] == classes[c] { class_idx = c }
+        }
+        for a in 0 to p {
+            let da: f32 = matrix_at(X, i, a) - class_means[class_idx][a]
+            for b in 0 to p {
+                let db: f32 = matrix_at(X, i, b) - class_means[class_idx][b]
+                cov[a][b] = cov[a][b] + da * db
+            }
+        }
+    }
+    for a in 0 to p {
+        for b in 0 to p {
+            cov[a][b] = cov[a][b] / (n as f32)
+        }
+    }
+
+    # Regularize diagonal
+    for a in 0 to p {
+        cov[a][a] = cov[a][a] + 0.0000000001
+    }
+
+    # Store diagonal inverse for Mahalanobis distance (simplified)
+    let inv_cov_diag: ptr<f32> = array_new_f32(p)
+    for a in 0 to p {
+        if cov[a][a] > 0.0000000001 {
+            inv_cov_diag[a] = 1.0 / cov[a][a]
+        } else {
+            inv_cov_diag[a] = 0.0
+        }
+    }
+
+    array_free_f32(class_counts as ptr<f32>)
+
+    return LinearDiscriminantAnalysis {
+        class_means: class_means,
+        covariance: cov,
+        inv_cov_diag: inv_cov_diag,
+        classes: classes,
+        priors: priors,
+        n_classes: n_found,
+        n_features: p,
+        fitted: true
+    }
+}
+
+export function discriminant_lda_predict(model: LinearDiscriminantAnalysis, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let p: i32 = model.n_features
+    let result: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut best_score: f32 = -1000000.0
+        let mut best_class: i32 = 0
+        for c in 0 to model.n_classes {
+            # Mahalanobis distance using diagonal inverse
+            let mut dist: f32 = 0.0
+            for j in 0 to p {
+                let diff: f32 = matrix_at(X, i, j) - model.class_means[c][j]
+                dist = dist + diff * diff * model.inv_cov_diag[j]
+            }
+            # Score = -0.5 * dist + log(prior)
+            let score: f32 = -0.5 * dist + log((model.priors[c]) as f64) as f32
+            if score > best_score {
+                best_score = score
+                best_class = c
+            }
+        }
+        result[i] = model.classes[best_class]
+    }
+    return result
+}
+
+export function discriminant_lda_free(model: LinearDiscriminantAnalysis) -> void {
+    for c in 0 to model.n_classes {
+        array_free_f32(model.class_means[c])
+    }
+    free(model.class_means as ptr<void>)
+    for i in 0 to model.n_features {
+        array_free_f32(model.covariance[i])
+    }
+    free(model.covariance as ptr<void>)
+    array_free_f32(model.inv_cov_diag)
+    array_free_f32(model.classes)
+    array_free_f32(model.priors)
+}
+
+# ============================================================================
+# QuadraticDiscriminantAnalysis
+# Fits class means and per-class covariance, predicts by maximum likelihood.
+# ============================================================================
+
+export struct QuadraticDiscriminantAnalysis {
+    class_means: ptr<ptr<f32> >,
+    class_covariances: ptr<ptr<ptr<f32> > >,
+    class_inv_diag: ptr<ptr<f32> >,
+    classes: ptr<f32>,
+    priors: ptr<f32>,
+    n_classes: i32,
+    n_features: i32,
+    fitted: bool
+}
+
+export function qda_fit(X: Matrix, y: ptr<f32>, n_classes: i32) -> QuadraticDiscriminantAnalysis {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] { found = true }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let class_means: ptr<ptr<f32> > = malloc((n_found as i64) * 8) as ptr<ptr<f32> >
+    let class_counts: ptr<i32> = array_new_f32(n_found) as ptr<i32>
+    let priors: ptr<f32> = array_new_f32(n_found)
+    for c in 0 to n_found {
+        class_means[c] = array_new_f32(p)
+        for j in 0 to p { class_means[c][j] = 0.0 }
+        class_counts[c] = 0
+    }
+
+    for i in 0 to n {
+        for c in 0 to n_found {
+            if y[i] == classes[c] {
+                for j in 0 to p {
+                    class_means[c][j] = class_means[c][j] + matrix_at(X, i, j)
+                }
+                class_counts[c] = class_counts[c] + 1
+            }
+        }
+    }
+
+    for c in 0 to n_found {
+        for j in 0 to p {
+            class_means[c][j] = class_means[c][j] / (class_counts[c] as f32)
+        }
+        priors[c] = (class_counts[c] as f32) / (n as f32)
+    }
+
+    # Compute per-class covariance
+    let class_covariances: ptr<ptr<ptr<f32> > > = malloc((n_found as i64) * 8) as ptr<ptr<ptr<f32> > >
+    let class_inv_diag: ptr<ptr<f32> > = malloc((n_found as i64) * 8) as ptr<ptr<f32> >
+    for c in 0 to n_found {
+        class_covariances[c] = malloc((p as i64) * 8) as ptr<ptr<f32> >
+        class_inv_diag[c] = array_new_f32(p)
+        for i in 0 to p {
+            class_covariances[c][i] = array_new_f32(p)
+        }
+        for i in 0 to n {
+            if y[i] == classes[c] {
+                for a in 0 to p {
+                    let da: f32 = matrix_at(X, i, a) - class_means[c][a]
+                    for b in 0 to p {
+                        let db: f32 = matrix_at(X, i, b) - class_means[c][b]
+                        class_covariances[c][a][b] = class_covariances[c][a][b] + da * db
+                    }
+                }
+            }
+        }
+        for a in 0 to p {
+            for b in 0 to p {
+                class_covariances[c][a][b] = class_covariances[c][a][b] / (class_counts[c] as f32)
+            }
+            class_covariances[c][a][a] = class_covariances[c][a][a] + 0.0000000001
+            if class_covariances[c][a][a] > 0.0000000001 {
+                class_inv_diag[c][a] = 1.0 / class_covariances[c][a][a]
+            }
+        }
+    }
+
+    array_free_f32(class_counts as ptr<f32>)
+
+    return QuadraticDiscriminantAnalysis {
+        class_means: class_means,
+        class_covariances: class_covariances,
+        class_inv_diag: class_inv_diag,
+        classes: classes,
+        priors: priors,
+        n_classes: n_found,
+        n_features: p,
+        fitted: true
+    }
+}
+
+export function qda_predict(model: QuadraticDiscriminantAnalysis, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let p: i32 = model.n_features
+    let result: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut best_score: f32 = -1000000.0
+        let mut best_class: i32 = 0
+        for c in 0 to model.n_classes {
+            let mut dist: f32 = 0.0
+            for j in 0 to p {
+                let diff: f32 = matrix_at(X, i, j) - model.class_means[c][j]
+                dist = dist + diff * diff * model.class_inv_diag[c][j]
+            }
+            # log det (diagonal approx) = sum log(diag)
+            let mut log_det: f32 = 0.0
+            for j in 0 to p {
+                if model.class_inv_diag[c][j] > 0.0000000001 {
+                    log_det = log_det + log((1.0 / model.class_inv_diag[c][j]) as f64) as f32
+                }
+            }
+            let score: f32 = -0.5 * dist - 0.5 * log_det + log((model.priors[c]) as f64) as f32
+            if score > best_score {
+                best_score = score
+                best_class = c
+            }
+        }
+        result[i] = model.classes[best_class]
+    }
+    return result
+}
+
+export function qda_free(model: QuadraticDiscriminantAnalysis) -> void {
+    for c in 0 to model.n_classes {
+        array_free_f32(model.class_means[c])
+        array_free_f32(model.class_inv_diag[c])
+        for i in 0 to model.n_features {
+            array_free_f32(model.class_covariances[c][i])
+        }
+        free(model.class_covariances[c] as ptr<void>)
+    }
+    free(model.class_means as ptr<void>)
+    free(model.class_covariances as ptr<void>)
+    free(model.class_inv_diag as ptr<void>)
+    array_free_f32(model.classes)
+    array_free_f32(model.priors)
+}
