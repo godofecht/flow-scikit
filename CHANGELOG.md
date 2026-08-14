@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Algorithmic depth improvements
+
+- Replaced KernelRidge gradient descent with Cholesky decomposition.
+  The previous 1000-iteration gradient descent with fixed learning rate
+  was unreliable and might not converge. Now solves (K + alpha*I) * x = y
+  directly via Cholesky factorization and forward/backward substitution.
+- Rewrote NuSVC with proper SMO optimization. The previous implementation
+  used fixed-step gradient updates and never updated the bias term. Now
+  uses SMO with the nu constraint (sum(y_i * alpha_i) = 0, upper bound
+  C/nu), second-order working set selection, and proper bias updates.
+  Also detects classes from data instead of hardcoding 0/1.
+- Added deflation and convergence checks to manifold power iteration
+  (isomap_fit, lle_fit, spectral_embedding_fit). Previously ran 100
+  fixed iterations without deflation, so all components found the same
+  dominant eigenvector. Now orthogonalizes against previously found
+  eigenvectors and breaks on convergence (max change < 1e-6).
+- Added convergence check to PLS NIPALS. Previously ran 100 fixed
+  iterations. Now breaks when weight vector change drops below 1e-6.
+
 ### Bug fixes and depth improvements
 
 - Added multi-class KernelSVC (KernelSVCMulti) via one-vs-rest. Trains

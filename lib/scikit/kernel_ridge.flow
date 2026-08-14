@@ -86,30 +86,70 @@ export function kernel_ridge_fit(X: Matrix, y: ptr<f32>, alpha: f32, kernel_type
     let n: i32 = X.rows
     let K: Matrix = compute_kernel_matrix(X, kernel_type, gamma, degree, coef0)
 
-    let K_reg: Matrix = matrix_copy(K)
+    # Build K + alpha*I as a flat array for Cholesky
+    let K_reg: ptr<f32> = array_new_f32(n * n)
     for i in 0 to n {
-        let val: f32 = matrix_at(K_reg, i, i) + alpha
-        matrix_set(K_reg, i, i, val)
+        for j in 0 to n {
+            K_reg[i * n + j] = matrix_at(K, i, j)
+        }
+        K_reg[i * n + i] = K_reg[i * n + i] + alpha
     }
 
+    # Cholesky decomposition: L * L^T = K + alpha*I
+    let L: ptr<f32> = array_new_f32(n * n)
+    for i in 0 to n {
+        for j in 0 to i + 1 {
+            let mut sum: f32 = K_reg[i * n + j]
+            for k in 0 to j {
+                sum = sum - L[i * n + k] * L[j * n + k]
+            }
+            if i == j {
+                if sum < 0.0000000001 { sum = 0.0000000001 }
+                L[i * n + j] = sqrt((sum as f64) as f32)
+            } else {
+                if L[j * n + j] < 0.0000000001 {
+                    L[i * n + j] = 0.0
+                } else {
+                    L[i * n + j] = sum / L[j * n + j]
+                }
+            }
+        }
+    }
+
+    # Forward substitution: L * z = y
+    let z: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut sum: f32 = y[i]
+        for j in 0 to i {
+            sum = sum - L[i * n + j] * z[j]
+        }
+        if L[i * n + i] < 0.0000000001 {
+            z[i] = 0.0
+        } else {
+            z[i] = sum / L[i * n + i]
+        }
+    }
+
+    # Backward substitution: L^T * dual_coef = z
     let dual_coef: ptr<f32> = array_new_f32(n)
-
-    let max_iter: i32 = 1000
-    let lr: f32 = 0.01
-    for _ in 0 to max_iter {
-        let Kt_y: ptr<f32> = array_new_f32(n)
-        matrix_multiply_vec(K_reg, dual_coef, Kt_y)
-        for i in 0 to n {
-            Kt_y[i] = Kt_y[i] - y[i]
+    let mut i: i32 = n - 1
+    while i >= 0 {
+        let mut sum: f32 = z[i]
+        for j in i + 1 to n {
+            sum = sum - L[j * n + i] * dual_coef[j]
         }
-        for i in 0 to n {
-            dual_coef[i] = dual_coef[i] - lr * Kt_y[i]
+        if L[i * n + i] < 0.0000000001 {
+            dual_coef[i] = 0.0
+        } else {
+            dual_coef[i] = sum / L[i * n + i]
         }
-        array_free_f32(Kt_y)
+        i = i - 1
     }
 
+    array_free_f32(L)
+    array_free_f32(z)
+    array_free_f32(K_reg)
     matrix_free(K)
-    matrix_free(K_reg)
 
     let X_copy: Matrix = matrix_copy(X)
 

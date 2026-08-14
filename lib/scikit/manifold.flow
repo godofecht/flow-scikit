@@ -355,31 +355,64 @@ export function isomap_fit(X: Matrix, n_components: i32, n_neighbors: i32) -> Is
     }
 
     let embedding: ptr<f32> = array_new_f32(n * n_components)
+    # Track found eigenvectors for deflation
+    let found_vecs: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
     for c in 0 to n_components {
         let v: ptr<f32> = array_new_f32(n)
         srand(42 + c)
         for i in 0 to n { v[i] = ((rand() % 1000) as f32) / 500.0 - 1.0 }
 
-        for iter in 0 to 100 {
+        # Orthogonalize against previously found eigenvectors
+        for prev in 0 to c {
+            let mut dot: f32 = 0.0
+            for i in 0 to n { dot = dot + v[i] * found_vecs[prev][i] }
+            for i in 0 to n { v[i] = v[i] - dot * found_vecs[prev][i] }
+        }
+
+        let mut iter: i32 = 0
+        while iter < 200 {
             let Bv: ptr<f32> = array_new_f32(n)
             for i in 0 to n {
                 let mut s: f32 = 0.0
                 for j in 0 to n { s = s + B[i][j] * v[j] }
                 Bv[i] = s
             }
+
+            # Deflate against previous eigenvectors
+            for prev in 0 to c {
+                let mut dot: f32 = 0.0
+                for i in 0 to n { dot = dot + Bv[i] * found_vecs[prev][i] }
+                for i in 0 to n { Bv[i] = Bv[i] - dot * found_vecs[prev][i] }
+            }
+
             let mut norm: f32 = 0.0
             for i in 0 to n { norm = norm + Bv[i] * Bv[i] }
             norm = sqrt((norm as f64)) as f32
             if norm < 0.0000000001 { norm = 0.0000000001 }
-            for i in 0 to n { v[i] = Bv[i] / norm }
+
+            # Convergence check
+            let mut max_change: f32 = 0.0
+            for i in 0 to n {
+                let new_v: f32 = Bv[i] / norm
+                let diff: f32 = new_v - v[i]
+                if diff < 0.0 { diff = -diff }
+                if diff > max_change { max_change = diff }
+                v[i] = new_v
+            }
             array_free_f32(Bv)
+
+            if max_change < 0.000001 { break }
+            iter = iter + 1
         }
 
         for i in 0 to n {
             embedding[i * n_components + c] = v[i]
         }
-        array_free_f32(v)
+        found_vecs[c] = v
     }
+
+    for c in 0 to n_components { array_free_f32(found_vecs[c]) }
+    free(found_vecs as ptr<void>)
 
     for i in 0 to n { array_free_f32(D[i]); array_free_f32(geo[i]); array_free_f32(B[i]) }
     free(D as ptr<void>)
@@ -482,31 +515,61 @@ export function lle_fit(X: Matrix, n_components: i32, n_neighbors: i32) -> LLE {
     }
 
     let embedding: ptr<f32> = array_new_f32(n * n_components)
+    let found_vecs: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
     for c in 0 to n_components {
         let v: ptr<f32> = array_new_f32(n)
         srand(42 + c)
         for i in 0 to n { v[i] = ((rand() % 1000) as f32) / 500.0 - 1.0 }
 
-        for iter in 0 to 100 {
+        # Orthogonalize against previously found eigenvectors
+        for prev in 0 to c {
+            let mut dot: f32 = 0.0
+            for i in 0 to n { dot = dot + v[i] * found_vecs[prev][i] }
+            for i in 0 to n { v[i] = v[i] - dot * found_vecs[prev][i] }
+        }
+
+        let mut iter: i32 = 0
+        while iter < 200 {
             let Mv: ptr<f32> = array_new_f32(n)
             for i in 0 to n {
                 let mut s: f32 = 0.0
                 for j in 0 to n { s = s + M[i][j] * v[j] }
                 Mv[i] = s
             }
+
+            for prev in 0 to c {
+                let mut dot: f32 = 0.0
+                for i in 0 to n { dot = dot + Mv[i] * found_vecs[prev][i] }
+                for i in 0 to n { Mv[i] = Mv[i] - dot * found_vecs[prev][i] }
+            }
+
             let mut norm: f32 = 0.0
             for i in 0 to n { norm = norm + Mv[i] * Mv[i] }
             norm = sqrt((norm as f64)) as f32
             if norm < 0.0000000001 { norm = 0.0000000001 }
-            for i in 0 to n { v[i] = Mv[i] / norm }
+
+            let mut max_change: f32 = 0.0
+            for i in 0 to n {
+                let new_v: f32 = Mv[i] / norm
+                let diff: f32 = new_v - v[i]
+                if diff < 0.0 { diff = -diff }
+                if diff > max_change { max_change = diff }
+                v[i] = new_v
+            }
             array_free_f32(Mv)
+
+            if max_change < 0.000001 { break }
+            iter = iter + 1
         }
 
         for i in 0 to n {
             embedding[i * n_components + c] = v[i]
         }
-        array_free_f32(v)
+        found_vecs[c] = v
     }
+
+    for c in 0 to n_components { array_free_f32(found_vecs[c]) }
+    free(found_vecs as ptr<void>)
 
     for i in 0 to n { array_free_f32(W[i]); array_free_f32(M[i]) }
     free(W as ptr<void>)
@@ -579,31 +642,61 @@ export function spectral_embedding_fit(X: Matrix, n_components: i32, gamma: f32)
     }
 
     let embedding: ptr<f32> = array_new_f32(n * n_components)
+    let found_vecs: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
     for c in 0 to n_components {
         let v: ptr<f32> = array_new_f32(n)
         srand(42 + c)
         for i in 0 to n { v[i] = ((rand() % 1000) as f32) / 500.0 - 1.0 }
 
-        for iter in 0 to 100 {
+        # Orthogonalize against previously found eigenvectors
+        for prev in 0 to c {
+            let mut dot: f32 = 0.0
+            for i in 0 to n { dot = dot + v[i] * found_vecs[prev][i] }
+            for i in 0 to n { v[i] = v[i] - dot * found_vecs[prev][i] }
+        }
+
+        let mut iter: i32 = 0
+        while iter < 200 {
             let Lv: ptr<f32> = array_new_f32(n)
             for i in 0 to n {
                 let mut s: f32 = 0.0
                 for j in 0 to n { s = s + L[i][j] * v[j] }
                 Lv[i] = s
             }
+
+            for prev in 0 to c {
+                let mut dot: f32 = 0.0
+                for i in 0 to n { dot = dot + Lv[i] * found_vecs[prev][i] }
+                for i in 0 to n { Lv[i] = Lv[i] - dot * found_vecs[prev][i] }
+            }
+
             let mut norm: f32 = 0.0
             for i in 0 to n { norm = norm + Lv[i] * Lv[i] }
             norm = sqrt((norm as f64)) as f32
             if norm < 0.0000000001 { norm = 0.0000000001 }
-            for i in 0 to n { v[i] = Lv[i] / norm }
+
+            let mut max_change: f32 = 0.0
+            for i in 0 to n {
+                let new_v: f32 = Lv[i] / norm
+                let diff: f32 = new_v - v[i]
+                if diff < 0.0 { diff = -diff }
+                if diff > max_change { max_change = diff }
+                v[i] = new_v
+            }
             array_free_f32(Lv)
+
+            if max_change < 0.000001 { break }
+            iter = iter + 1
         }
 
         for i in 0 to n {
             embedding[i * n_components + c] = v[i]
         }
-        array_free_f32(v)
+        found_vecs[c] = v
     }
+
+    for c in 0 to n_components { array_free_f32(found_vecs[c]) }
+    free(found_vecs as ptr<void>)
 
     for i in 0 to n { array_free_f32(W[i]); array_free_f32(L[i]) }
     free(W as ptr<void>)
