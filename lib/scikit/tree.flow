@@ -139,6 +139,62 @@ function _mean_val(y: ptr<f32>, n: i32) -> f32 {
     return sum / (n as f32)
 }
 
+# Shell sort: sort values array, keeping companion i32 array in sync.
+function _sort_pairs(values: ptr<f32>, companions: ptr<i32>, n: i32) -> void {
+    let mut gap: i32 = n / 2
+    while gap > 0 {
+        let mut i: i32 = gap
+        while i < n {
+            let key_v: f32 = values[i]
+            let key_c: i32 = companions[i]
+            let mut j: i32 = i
+            while j >= gap && values[j - gap] > key_v {
+                values[j] = values[j - gap]
+                companions[j] = companions[j - gap]
+                j = j - gap
+            }
+            values[j] = key_v
+            companions[j] = key_c
+            i = i + 1
+        }
+        gap = gap / 2
+    }
+}
+
+# Shell sort: sort values array, keeping companion f32 array in sync.
+function _sort_pairs_f32(values: ptr<f32>, companions: ptr<f32>, n: i32) -> void {
+    let mut gap: i32 = n / 2
+    while gap > 0 {
+        let mut i: i32 = gap
+        while i < n {
+            let key_v: f32 = values[i]
+            let key_c: f32 = companions[i]
+            let mut j: i32 = i
+            while j >= gap && values[j - gap] > key_v {
+                values[j] = values[j - gap]
+                companions[j] = companions[j - gap]
+                j = j - gap
+            }
+            values[j] = key_v
+            companions[j] = key_c
+            i = i + 1
+        }
+        gap = gap / 2
+    }
+}
+
+# Gini impurity from precomputed class counts.
+function _gini_from_counts(counts: ptr<i32>, n_classes: i32, n: i32) -> f32 {
+    if n <= 0 { return 0.0 }
+    let mut sum_sq: f32 = 0.0
+    let nf: f32 = n as f32
+    for c in 0 to n_classes {
+        let p: f32 = (counts[c] as f32) / nf
+        sum_sq = sum_sq + p * p
+    }
+    return 1.0 - sum_sq
+}
+
 export function decision_tree_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, max_depth: i32, criterion: i32) -> DecisionTreeClassifier {
     let classes: ptr<f32> = array_new_f32(n_classes)
     let mut n_found: i32 = 0
@@ -219,66 +275,78 @@ function _build_classifier_tree(
     let mut best_threshold: f32 = 0.0
     let mut best_impurity: f32 = 9999999999.0
 
-    let y_subset: ptr<f32> = array_new_f32(n_indices)
+    # Precompute class index for each sample in this node.
+    let class_idx: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
     for i in 0 to n_indices {
-        y_subset[i] = y[indices[i]]
+        let mut ci: i32 = 0
+        for c in 0 to n_classes {
+            if y[indices[i]] == classes[c] { ci = c }
+        }
+        class_idx[i] = ci
     }
-    let parent_impurity: f32 = _gini(y_subset, n_indices, classes, n_classes)
-    array_free_f32(y_subset)
+
+    # Parent impurity from total counts.
+    let total_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    for c in 0 to n_classes { total_counts[c] = 0 }
+    for i in 0 to n_indices { total_counts[class_idx[i]] = total_counts[class_idx[i]] + 1 }
+    let parent_impurity: f32 = _gini_from_counts(total_counts, n_classes, n_indices)
+    free(total_counts as ptr<void>)
+
+    # Allocated once, reused across features.
+    let sort_values: ptr<f32> = array_new_f32(n_indices)
+    let sort_classes: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
+    let left_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    let right_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
 
     for f in 0 to X.cols {
-        let values: ptr<f32> = array_new_f32(n_indices)
+        # Build (value, class_idx) pairs for this feature.
         for i in 0 to n_indices {
-            values[i] = matrix_at(X, indices[i], f)
+            sort_values[i] = matrix_at(X, indices[i], f)
+            sort_classes[i] = class_idx[i]
+        }
+        _sort_pairs(sort_values, sort_classes, n_indices)
+
+        # All samples start in right.
+        for c in 0 to n_classes {
+            left_counts[c] = 0
+            right_counts[c] = 0
+        }
+        for i in 0 to n_indices {
+            right_counts[sort_classes[i]] = right_counts[sort_classes[i]] + 1
         }
 
-        for i in 0 to n_indices {
-            let threshold: f32 = values[i]
-            let mut left_n: i32 = 0
-            let mut right_n: i32 = 0
+        # Sweep sorted values, moving one sample at a time to left.
+        for i in 0 to n_indices - 1 {
+            left_counts[sort_classes[i]] = left_counts[sort_classes[i]] + 1
+            right_counts[sort_classes[i]] = right_counts[sort_classes[i]] - 1
 
-            for j in 0 to n_indices {
-                if values[j] <= threshold {
-                    left_n = left_n + 1
-                } else {
-                    right_n = right_n + 1
-                }
-            }
-
-            if left_n < 1 || right_n < 1 {
+            # Skip duplicate values.
+            if sort_values[i] == sort_values[i + 1] {
                 continue
             }
 
-            let left_y: ptr<f32> = array_new_f32(left_n)
-            let right_y: ptr<f32> = array_new_f32(right_n)
-            let mut li: i32 = 0
-            let mut ri: i32 = 0
-            for j in 0 to n_indices {
-                if values[j] <= threshold {
-                    left_y[li] = y[indices[j]]
-                    li = li + 1
-                } else {
-                    right_y[ri] = y[indices[j]]
-                    ri = ri + 1
-                }
-            }
+            let n_left: i32 = i + 1
+            let n_right: i32 = n_indices - n_left
+            if n_left < 1 || n_right < 1 { continue }
 
-            let left_imp: f32 = _gini(left_y, left_n, classes, n_classes)
-            let right_imp: f32 = _gini(right_y, right_n, classes, n_classes)
-            let weighted: f32 = (left_n as f32) / (n_indices as f32) * left_imp + (right_n as f32) / (n_indices as f32) * right_imp
+            let gini_left: f32 = _gini_from_counts(left_counts, n_classes, n_left)
+            let gini_right: f32 = _gini_from_counts(right_counts, n_classes, n_right)
+            let nf: f32 = n_indices as f32
+            let weighted: f32 = (n_left as f32) / nf * gini_left + (n_right as f32) / nf * gini_right
 
             if weighted < best_impurity {
                 best_impurity = weighted
                 best_feature = f
-                best_threshold = threshold
+                best_threshold = (sort_values[i] + sort_values[i + 1]) / 2.0
             }
-
-            array_free_f32(left_y)
-            array_free_f32(right_y)
         }
-
-        array_free_f32(values)
     }
+
+    array_free_f32(sort_values)
+    free(sort_classes as ptr<void>)
+    free(left_counts as ptr<void>)
+    free(right_counts as ptr<void>)
+    free(class_idx as ptr<void>)
 
     if best_feature < 0 || best_impurity >= parent_impurity - 0.0000000001 {
         let y_sub: ptr<f32> = array_new_f32(n_indices)
@@ -460,53 +528,67 @@ function _build_regressor_tree(
     let parent_impurity: f32 = _mse(y_subset, n_indices)
     array_free_f32(y_subset)
 
+    # Precompute y values for sorted sweep.
+    let y_vals: ptr<f32> = array_new_f32(n_indices)
+    for i in 0 to n_indices { y_vals[i] = y[indices[i]] }
+    let mut total_sum: f32 = 0.0
+    let mut total_sum_sq: f32 = 0.0
+    for i in 0 to n_indices {
+        total_sum = total_sum + y_vals[i]
+        total_sum_sq = total_sum_sq + y_vals[i] * y_vals[i]
+    }
+
     let mut best_feature: i32 = -1
     let mut best_threshold: f32 = 0.0
     let mut best_impurity: f32 = 9999999999.0
 
+    let sort_values: ptr<f32> = array_new_f32(n_indices)
+    let sort_y: ptr<f32> = array_new_f32(n_indices)
+
     for f in 0 to X.cols {
-        let values: ptr<f32> = array_new_f32(n_indices)
         for i in 0 to n_indices {
-            values[i] = matrix_at(X, indices[i], f)
+            sort_values[i] = matrix_at(X, indices[i], f)
+            sort_y[i] = y_vals[i]
         }
+        _sort_pairs_f32(sort_values, sort_y, n_indices)
 
-        for i in 0 to n_indices {
-            let threshold: f32 = values[i]
-            let left_y: ptr<f32> = array_new_f32(n_indices)
-            let right_y: ptr<f32> = array_new_f32(n_indices)
-            let mut left_n: i32 = 0
-            let mut right_n: i32 = 0
+        let mut left_sum: f32 = 0.0
+        let mut left_sum_sq: f32 = 0.0
 
-            for j in 0 to n_indices {
-                if values[j] <= threshold {
-                    left_y[left_n] = y[indices[j]]
-                    left_n = left_n + 1
-                } else {
-                    right_y[right_n] = y[indices[j]]
-                    right_n = right_n + 1
-                }
-            }
+        for i in 0 to n_indices - 1 {
+            left_sum = left_sum + sort_y[i]
+            left_sum_sq = left_sum_sq + sort_y[i] * sort_y[i]
 
-            if left_n < 1 || right_n < 1 {
-                continue
-            }
+            if sort_values[i] == sort_values[i + 1] { continue }
 
-            let left_imp: f32 = _mse(left_y, left_n)
-            let right_imp: f32 = _mse(right_y, right_n)
-            let weighted: f32 = (left_n as f32) / (n_indices as f32) * left_imp + (right_n as f32) / (n_indices as f32) * right_imp
+            let n_left: i32 = i + 1
+            let n_right: i32 = n_indices - n_left
+            if n_left < 1 || n_right < 1 { continue }
+
+            let right_sum: f32 = total_sum - left_sum
+            let right_sum_sq: f32 = total_sum_sq - left_sum_sq
+
+            let nl: f32 = n_left as f32
+            let nr: f32 = n_right as f32
+            let left_mean: f32 = left_sum / nl
+            let right_mean: f32 = right_sum / nr
+            let left_mse: f32 = left_sum_sq / nl - left_mean * left_mean
+            let right_mse: f32 = right_sum_sq / nr - right_mean * right_mean
+
+            let nf: f32 = n_indices as f32
+            let weighted: f32 = nl / nf * left_mse + nr / nf * right_mse
 
             if weighted < best_impurity {
                 best_impurity = weighted
                 best_feature = f
-                best_threshold = threshold
+                best_threshold = (sort_values[i] + sort_values[i + 1]) / 2.0
             }
-
-            array_free_f32(left_y)
-            array_free_f32(right_y)
         }
-
-        array_free_f32(values)
     }
+
+    array_free_f32(sort_values)
+    array_free_f32(sort_y)
+    array_free_f32(y_vals)
 
     if best_feature < 0 || best_impurity >= parent_impurity - 0.0000000001 {
         let y_sub: ptr<f32> = array_new_f32(n_indices)
