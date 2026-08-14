@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="flow-scikit vs scikit-learn 1.9.0: accuracy, training time, and deployment footprint benchmarks." />
+    <title>flow-scikit — Benchmarks vs scikit-learn</title>
+    <link rel="stylesheet" href="styles.css" />
+    <style>
+      .bench-hero { padding:100px 28px 60px max(28px,calc((100vw - 1164px)/2)); background:#fffdf8; border-bottom:1px solid var(--line); }
+      .bench-hero h1 { max-width:860px; font-size:clamp(42px,5.5vw,72px); }
+      .bench-hero .lede { color:#56617a; font-size:19px; max-width:680px; }
+      .bench-hero .meta { margin-top:24px; display:flex; flex-wrap:wrap; gap:10px; }
+      .bench-hero .meta span { border:1px solid var(--line); border-radius:99px; padding:6px 12px; font:11px "DM Mono",monospace; color:#52617f; }
+      .bench-section { max-width:1164px; margin:0 auto; padding:80px 28px; }
+      .bench-section h2 { font-size:clamp(32px,3.8vw,48px); max-width:760px; margin-bottom:14px; }
+      .bench-section > p { color:#56617a; max-width:620px; font-size:16px; margin-bottom:40px; }
+      .chart-wrap { background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:32px 28px; margin-bottom:28px; }
+      .chart-wrap h3 { font:600 22px/1.2 Fraunces,serif; margin:0 0 6px; }
+      .chart-wrap .chart-sub { color:#687493; font-size:13px; margin:0 0 24px; }
+      .chart-wrap svg { display:block; width:100%; height:auto; overflow:visible; }
+      .bench-table { width:100%; border-collapse:collapse; font-size:14px; }
+      .bench-table th { text-align:left; font:11px "DM Mono",monospace; text-transform:uppercase; letter-spacing:.8px; color:#687493; padding:10px 14px; border-bottom:2px solid var(--ink); }
+      .bench-table td { padding:11px 14px; border-bottom:1px solid var(--line); }
+      .bench-table td.num { text-align:right; font-family:"DM Mono",monospace; font-size:13px; }
+      .bench-table .pos { color:#2d8a4e; font-weight:600; }
+      .bench-table .neg { color:#c44a3a; }
+      .bench-table .neutral { color:#687493; }
+      .table-wrap { overflow-x:auto; background:var(--paper); border:1px solid var(--line); border-radius:14px; margin-bottom:28px; }
+      .portability-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin-bottom:28px; }
+      .port-card { background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:28px 24px; text-align:center; }
+      .port-card .port-value { font:600 42px/1 Fraunces,serif; color:var(--ink); margin:12px 0 4px; }
+      .port-card .port-label { font:11px "DM Mono",monospace; text-transform:uppercase; letter-spacing:1px; color:#687493; }
+      .port-card .port-sub { font-size:13px; color:#56617a; margin-top:8px; }
+      .port-card.flow .port-value { color:var(--coral); }
+      .port-card.sklearn .port-value { color:var(--blue); }
+      .legend { display:flex; gap:20px; margin-bottom:16px; font:12px "DM Mono",monospace; }
+      .legend span { display:inline-flex; align-items:center; gap:7px; }
+      .legend i { width:14px; height:14px; border-radius:3px; display:inline-block; }
+      .legend .flow-color { background:var(--coral); }
+      .legend .sklearn-color { background:var(--blue); }
+      .run-commands { background:#152446; color:#dce8ff; border-radius:13px; padding:27px; font:13px/1.75 "DM Mono",monospace; overflow:auto; box-shadow:8px 9px 0 #cfd5e3; }
+      .run-commands .cmt { color:#6b8bc7; }
+      @media (max-width:760px) { .portability-grid { grid-template-columns:1fr; } .bench-hero { padding:72px 24px 48px; } .bench-section { padding:56px 24px; } }
+    </style>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="wordmark" href="index.html" aria-label="flow-scikit home">flow<span>~</span>scikit</a>
+      <nav aria-label="Primary navigation">
+        <a href="index.html#quickstart">Quick start</a>
+        <a href="benchmarks.html">Benchmarks</a>
+        <a href="demos.html">Experiments</a>
+        <a href="https://github.com/godofecht/flow-scikit">GitHub ↗</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="bench-hero">
+        <p class="eyebrow">benchmarks / flow-scikit vs scikit-learn 1.9.0</p>
+        <h1>Same datasets. Same splits. Native binary vs Python stack.</h1>
+        <p class="lede">
+          18 algorithm/dataset combinations on iris, digits, and diabetes.
+          Accuracy, training time, prediction time, and deployment footprint.
+          All measured on the same machine with seed=42 and 80/20 train/test split.
+        </p>
+        <div class="meta">
+          <span>iris: 150 samples, 4 features</span>
+          <span>digits: 1797 samples, 64 features</span>
+          <span>diabetes: 442 samples, 10 features</span>
+          <span>scikit-learn 1.9.0</span>
+          <span>Flow C backend, arm64 macOS</span>
+        </div>
+      </section>
+
+      <section class="bench-section">
+        <p class="eyebrow">deployment footprint</p>
+        <h2>1.4 MB native binary vs 165 MB Python stack.</h2>
+        <p>The flow-scikit binary is a single executable with no Python, no numpy, no scipy, no BLAS. Copy it to another arm64 macOS machine and it runs.</p>
+
+        <div class="portability-grid">
+          <div class="port-card flow">
+            <div class="port-label">flow-scikit binary</div>
+            <div class="port-value">1.4 MB</div>
+            <div class="port-sub">single executable, 0 shared objects</div>
+          </div>
+          <div class="port-card sklearn">
+            <div class="port-label">scikit-learn stack</div>
+            <div class="port-value">165 MB</div>
+            <div class="port-sub">sklearn + numpy + scipy, 201 .so files</div>
+          </div>
+          <div class="port-card">
+            <div class="port-label">startup speedup</div>
+            <div class="port-value">65x</div>
+            <div class="port-sub">33 ms vs 2160 ms cold start</div>
+          </div>
+        </div>
+
+        <div class="chart-wrap">
+          <h3>Cold startup time</h3>
+          <p class="chart-sub">Time from invocation to first prediction. Lower is better.</p>
+          <svg id="startup-chart" viewBox="0 0 700 200"></svg>
+        </div>
+      </section>
+
+      <section class="bench-section" style="background:#f4f7f8; max-width:none; padding-left:max(28px,calc((100vw - 1164px)/2)); padding-right:max(28px,calc((100vw - 1164px)/2));">
+        <div style="max-width:1164px; margin:0 auto;">
+          <p class="eyebrow">accuracy</p>
+          <h2>Where flow-scikit matches or beats sklearn.</h2>
+          <p>18 algorithm/dataset pairs. Positive diff means flow-scikit scores higher.</p>
+
+          <div class="legend">
+            <span><i class="sklearn-color"></i> scikit-learn</span>
+            <span><i class="flow-color"></i> flow-scikit</span>
+          </div>
+
+          <div class="chart-wrap">
+            <h3>Iris accuracy (classification)</h3>
+            <p class="chart-sub">3-class classification, 150 samples, 4 features. Higher is better.</p>
+            <svg id="iris-accuracy-chart" viewBox="0 0 900 360"></svg>
+          </div>
+
+          <div class="chart-wrap">
+            <h3>Digits accuracy (classification)</h3>
+            <p class="chart-sub">10-class classification, 1797 samples, 64 features. Higher is better.</p>
+            <svg id="digits-accuracy-chart" viewBox="0 0 900 360"></svg>
+          </div>
+
+          <div class="chart-wrap">
+            <h3>Diabetes R2 (regression)</h3>
+            <p class="chart-sub">Regression, 442 samples, 10 features. Higher is better.</p>
+            <svg id="diabetes-r2-chart" viewBox="0 0 900 280"></svg>
+          </div>
+
+          <div class="table-wrap">
+            <table class="bench-table">
+              <thead>
+                <tr><th>Algorithm</th><th>Dataset</th><th>Metric</th><th class="num">sklearn</th><th class="num">flow-scikit</th><th class="num">Diff</th></tr>
+              </thead>
+              <tbody id="accuracy-table-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="bench-section">
+        <p class="eyebrow">training time</p>
+        <h2>Direct solvers and small-data speed.</h2>
+        <p>fit + predict combined, in milliseconds. flow-scikit uses direct Gaussian elimination for linear models and avoids Python import overhead.</p>
+
+        <div class="legend">
+          <span><i class="sklearn-color"></i> scikit-learn</span>
+          <span><i class="flow-color"></i> flow-scikit</span>
+        </div>
+
+        <div class="chart-wrap">
+          <h3>Iris training time (log scale)</h3>
+          <p class="chart-sub">fit + predict, milliseconds. Lower is better. Log scale because KMeans dominates.</p>
+          <svg id="iris-time-chart" viewBox="0 0 900 360"></svg>
+        </div>
+
+        <div class="chart-wrap">
+          <h3>Diabetes training time</h3>
+          <p class="chart-sub">fit + predict, milliseconds. Lower is better. Direct solvers complete in 0.02 ms.</p>
+          <svg id="diabetes-time-chart" viewBox="0 0 900 280"></svg>
+        </div>
+
+        <div class="table-wrap">
+          <table class="bench-table">
+            <thead>
+              <tr><th>Algorithm</th><th>Dataset</th><th class="num">sklearn (ms)</th><th class="num">flow (ms)</th><th class="num">Speedup</th></tr>
+            </thead>
+            <tbody id="time-table-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="bench-section" style="background:#f4f7f8; max-width:none; padding-left:max(28px,calc((100vw - 1164px)/2)); padding-right:max(28px,calc((100vw - 1164px)/2));">
+        <div style="max-width:1164px; margin:0 auto;">
+          <p class="eyebrow">iris side-by-side</p>
+          <h2>Same problem, five algorithms, two implementations.</h2>
+          <p>Same iris dataset, same 80/20 split, same algorithms. flow-scikit KNN beats sklearn on accuracy at 60x faster training.</p>
+
+          <div class="chart-wrap">
+            <h3>Iris: accuracy and training time</h3>
+            <p class="chart-sub">Left axis: accuracy (bars). Right axis: training time in ms (dots). Higher accuracy and lower time are better.</p>
+            <svg id="iris-combo-chart" viewBox="0 0 900 380"></svg>
+          </div>
+        </div>
+      </section>
+
+      <section class="bench-section">
+        <p class="eyebrow">reproduce</p>
+        <h2>Run the benchmarks yourself.</h2>
+        <div class="run-commands">
+<span class="cmt"># Run flow-scikit benchmark</span>
+FLOW_HOST=python flow run benchmarks/bench_flow.flow
+
+<span class="cmt"># Run scikit-learn benchmark</span>
+python3 benchmarks/bench_sklearn.py
+
+<span class="cmt"># Compare results side by side</span>
+python3 benchmarks/compare.py
+
+<span class="cmt"># Full iris comparison with portability metrics</span>
+bash benchmarks/iris_comparison.sh
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <a class="wordmark" href="index.html">flow<span>~</span>scikit</a>
+      <p>Built for practical experiments and readable code.</p>
+    </footer>
+
+    <script src="benchmarks.js"></script>
+  </body>
+</html>
