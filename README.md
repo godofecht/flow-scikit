@@ -2,6 +2,8 @@
 
 A rewrite of scikit-learn's core API in [Flow](https://github.com/flooooooooooow/flow), a statically-typed compiled language with algebraic effects, autodiff, and C backend.
 
+GitHub: https://github.com/godofecht/flow-scikit
+
 ## Why?
 
 Scikit-learn is excellent, but years of community feedback on GitHub issues, the scikit-learn forum, and SLEP discussions have surfaced recurring API pain points. This project reimagines the scikit-learn API from scratch in Flow, addressing those complaints as first-class design decisions rather than retrofits.
