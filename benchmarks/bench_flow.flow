@@ -1,0 +1,403 @@
+import "lib/scikit/scikit.flow"
+
+extern {
+    function clock() -> i64
+    function printf(fmt: string, ...) -> i32
+    function exit(code: i32) -> void
+}
+
+const CLOCKS_PER_SEC: i64 = 1000000
+
+function elapsed_ms(start: i64, end: i64) -> f32 {
+    return ((end - start) as f32) / ((CLOCKS_PER_SEC) as f32) * 1000.0
+}
+
+# Split data into train/test with fixed seed for reproducibility.
+# Uses the same 80/20 split as the Python benchmark (random_state=42).
+function split_data(X: Matrix, y: ptr<f32>, n: i32, n_test: i32, seed: i32) -> SplitResult {
+    let indices: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n { indices[i] = i }
+
+    # Fisher-Yates shuffle with seed
+    srand(seed)
+    let mut i: i32 = n - 1
+    while i > 0 {
+        let j: i32 = rand() % (i + 1)
+        let tmp: i32 = indices[i]
+        indices[i] = indices[j]
+        indices[j] = tmp
+        i = i - 1
+    }
+
+    let n_train: i32 = n - n_test
+    let X_train: Matrix = matrix_new(n_train, X.cols)
+    let y_train: ptr<f32> = array_new_f32(n_train)
+    let X_test: Matrix = matrix_new(n_test, X.cols)
+    let y_test: ptr<f32> = array_new_f32(n_test)
+
+    for i in 0 to n_train {
+        for j in 0 to X.cols {
+            matrix_set(X_train, i, j, matrix_at(X, indices[i], j))
+        }
+        y_train[i] = y[indices[i]]
+    }
+    for i in 0 to n_test {
+        for j in 0 to X.cols {
+            matrix_set(X_test, i, j, matrix_at(X, indices[i + n_train], j))
+        }
+        y_test[i] = y[indices[i + n_train]]
+    }
+
+    free(indices as ptr<void>)
+
+    return SplitResult {
+        X_train: X_train,
+        y_train: y_train,
+        X_test: X_test,
+        y_test: y_test,
+        n_train: n_train,
+        n_test: n_test
+    }
+}
+
+struct SplitResult {
+    X_train: Matrix,
+    y_train: ptr<f32>,
+    X_test: Matrix,
+    y_test: ptr<f32>,
+    n_train: i32,
+    n_test: i32
+}
+
+function free_split(s: SplitResult) -> void {
+    matrix_free(s.X_train)
+    array_free_f32(s.y_train)
+    matrix_free(s.X_test)
+    array_free_f32(s.y_test)
+}
+
+function main() -> i32 {
+    printf("=== flow-scikit Performance Benchmark ===\n\n")
+
+    # ================================================================
+    # Iris dataset
+    # ================================================================
+    let ds_iris: Dataset = load_iris()
+    let n_iris: i32 = ds_iris.X.rows
+    let n_test_iris: i32 = n_iris / 5  # 20% test
+    let split_iris: SplitResult = split_data(ds_iris.X, ds_iris.y, n_iris, n_test_iris, 42)
+
+    # Standardize
+    let scaler_iris: StandardScaler = standard_scaler_fit(split_iris.X_train)
+    let X_train_iris: Matrix = standard_scaler_transform(scaler_iris, split_iris.X_train)
+    let X_test_iris: Matrix = standard_scaler_transform(scaler_iris, split_iris.X_test)
+
+    let no_penalty: Penalty = penalty_none()
+    let l2_penalty: Penalty = penalty_l2(0.001)
+
+    let mut t0: i64 = 0
+    let mut t1: i64 = 0
+    let mut t2: i64 = 0
+
+    # LogisticRegression
+    t0 = clock()
+    let lr_model: LogisticRegression = logistic_regression_fit(X_train_iris, split_iris.y_train, 3, 200, 0.1, l2_penalty)
+    t1 = clock()
+    let lr_probs: ptr<f32> = logistic_predict(lr_model, X_test_iris)
+    let lr_preds: ptr<f32> = logistic_decide(lr_model, lr_probs, split_iris.n_test, 0.5)
+    t2 = clock()
+    let lr_acc: f32 = accuracy_score(split_iris.y_test, lr_preds, split_iris.n_test)
+    printf("RESULT|LogisticRegression|iris|accuracy|%.6f|%.6f|%.6f\n", lr_acc, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    array_free_f32(lr_probs)
+    array_free_f32(lr_preds)
+    logistic_regression_free(lr_model)
+
+    # LinearSVC
+    t0 = clock()
+    let lsvc_model: LinearSVC = linear_svc_fit(X_train_iris, split_iris.y_train, 3, 1.0, 200, 0.01)
+    t1 = clock()
+    let lsvc_scores: ptr<f32> = linear_svc_predict(lsvc_model, X_test_iris)
+    let lsvc_preds: ptr<f32> = linear_svc_decide(lsvc_model, lsvc_scores, split_iris.n_test)
+    t2 = clock()
+    let lsvc_acc: f32 = accuracy_score(split_iris.y_test, lsvc_preds, split_iris.n_test)
+    printf("RESULT|LinearSVC|iris|accuracy|%.6f|%.6f|%.6f\n", lsvc_acc, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    array_free_f32(lsvc_scores)
+    array_free_f32(lsvc_preds)
+    linear_svc_free(lsvc_model)
+
+    # KernelSVC (RBF) - multi-class
+    t0 = clock()
+    let ksvc_model: KernelSVCMulti = kernel_svc_multi_fit(X_train_iris, split_iris.y_train, 3, 0.5, 1.0, 200)
+    t1 = clock()
+    let ksvc_preds: ptr<f32> = kernel_svc_multi_predict(ksvc_model, X_test_iris)
+    t2 = clock()
+    let ksvc_acc: f32 = accuracy_score(split_iris.y_test, ksvc_preds, split_iris.n_test)
+    printf("RESULT|KernelSVC_RBF|iris|accuracy|%.6f|%.6f|%.6f\n", ksvc_acc, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    array_free_f32(ksvc_preds)
+    kernel_svc_multi_free(ksvc_model)
+
+    # DecisionTree
+    t0 = clock()
+    let dt_model: DecisionTreeClassifier = decision_tree_classifier_fit(X_train_iris, split_iris.y_train, 3, 5, 0)
+    t1 = clock()
+    let dt_preds: ptr<f32> = decision_tree_classifier_predict(dt_model, X_test_iris)
+    t2 = clock()
+    let dt_acc: f32 = accuracy_score(split_iris.y_test, dt_preds, split_iris.n_test)
+    printf("RESULT|DecisionTree|iris|accuracy|%.6f|%.6f|%.6f\n", dt_acc, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    array_free_f32(dt_preds)
+    decision_tree_classifier_free(dt_model)
+
+    # RandomForest
+    t0 = clock()
+    let rf_model: RandomForestClassifier = random_forest_classifier_fit(X_train_iris, split_iris.y_train, 3, 10, 5, 42)
+    t1 = clock()
+    let rf_preds: ptr<f32> = random_forest_classifier_predict(rf_model, X_test_iris)
+    t2 = clock()
+    let rf_acc: f32 = accuracy_score(split_iris.y_test, rf_preds, split_iris.n_test)
+    printf("RESULT|RandomForest|iris|accuracy|%.6f|%.6f|%.6f\n", rf_acc, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    array_free_f32(rf_preds)
+    random_forest_classifier_free(rf_model)
+
+    # GaussianNB
+    t0 = clock()
+    let gnb_model: GaussianNB = gaussian_nb_fit(X_train_iris, split_iris.y_train, 3, 0.0000000001)
+    t1 = clock()
+    let gnb_preds: ptr<f32> = gaussian_nb_predict(gnb_model, X_test_iris)
+    t2 = clock()
+    let gnb_acc: f32 = accuracy_score(split_iris.y_test, gnb_preds, split_iris.n_test)
+    printf("RESULT|GaussianNB|iris|accuracy|%.6f|%.6f|%.6f\n", gnb_acc, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    array_free_f32(gnb_preds)
+    gaussian_nb_free(gnb_model)
+
+    # KMeans
+    t0 = clock()
+    let km_model: KMeans = kmeans_fit(X_train_iris, 3, 100, 0.001, 42)
+    t1 = clock()
+    let km_preds: ptr<i32> = kmeans_predict(km_model, X_test_iris)
+    t2 = clock()
+    # KMeans accuracy is not directly comparable (cluster labels don't match class labels)
+    # Report cluster assignment accuracy by best matching
+    let mut best_acc: f32 = 0.0
+    for perm in 0 to 6 {
+        let p0: f32 = (perm % 3) as f32
+        let p1: f32 = ((perm / 3) + (perm % 3) + 1) as f32
+        let p2: f32 = (3 - (perm % 3) - ((perm / 3) + (perm % 3) + 1) % 3) as f32
+        if p1 >= 3.0 { continue }
+        if p2 < 0.0 { continue }
+        if p2 >= 3.0 { continue }
+        let mut correct: i32 = 0
+        for i in 0 to split_iris.n_test {
+            let mapped: f32 = 0.0
+            if km_preds[i] == 0 { mapped = p0 }
+            elif km_preds[i] == 1 { mapped = p1 }
+            else { mapped = p2 }
+            if mapped == split_iris.y_test[i] { correct = correct + 1 }
+        }
+        let acc: f32 = (correct as f32) / (split_iris.n_test as f32)
+        if acc > best_acc { best_acc = acc }
+    }
+    printf("RESULT|KMeans|iris|accuracy|%.6f|%.6f|%.6f\n", best_acc, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    free(km_preds as ptr<void>)
+    kmeans_free(km_model)
+
+    # PCA
+    t0 = clock()
+    let pca_model: PCA = pca_fit(X_train_iris, 2)
+    t1 = clock()
+    let _pca_result: Matrix = pca_transform(pca_model, X_test_iris)
+    t2 = clock()
+    let evr: f32 = pca_model.explained_variance_ratio[0]
+    printf("RESULT|PCA|iris|explained_var_ratio|%.6f|%.6f|%.6f\n", evr, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    matrix_free(_pca_result)
+    pca_free(pca_model)
+
+    # Cleanup iris
+    standard_scaler_free(scaler_iris)
+    matrix_free(X_train_iris)
+    matrix_free(X_test_iris)
+    free_split(split_iris)
+    dataset_free(ds_iris)
+
+    # ================================================================
+    # Digits dataset
+    # ================================================================
+    let ds_dig: Dataset = load_digits()
+    let n_dig: i32 = ds_dig.X.rows
+    let n_test_dig: i32 = n_dig / 5
+    let split_dig: SplitResult = split_data(ds_dig.X, ds_dig.y, n_dig, n_test_dig, 42)
+
+    let scaler_dig: StandardScaler = standard_scaler_fit(split_dig.X_train)
+    let X_train_dig: Matrix = standard_scaler_transform(scaler_dig, split_dig.X_train)
+    let X_test_dig: Matrix = standard_scaler_transform(scaler_dig, split_dig.X_test)
+
+    # LogisticRegression
+    t0 = clock()
+    let lr_dig: LogisticRegression = logistic_regression_fit(X_train_dig, split_dig.y_train, 10, 200, 0.1, l2_penalty)
+    t1 = clock()
+    let lr_dig_probs: ptr<f32> = logistic_predict(lr_dig, X_test_dig)
+    let lr_dig_preds: ptr<f32> = logistic_decide(lr_dig, lr_dig_probs, split_dig.n_test, 0.5)
+    t2 = clock()
+    let lr_dig_acc: f32 = accuracy_score(split_dig.y_test, lr_dig_preds, split_dig.n_test)
+    printf("RESULT|LogisticRegression|digits|accuracy|%.6f|%.6f|%.6f\n", lr_dig_acc, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    array_free_f32(lr_dig_probs)
+    array_free_f32(lr_dig_preds)
+    logistic_regression_free(lr_dig)
+
+    # LinearSVC
+    t0 = clock()
+    let lsvc_dig: LinearSVC = linear_svc_fit(X_train_dig, split_dig.y_train, 10, 1.0, 200, 0.01)
+    t1 = clock()
+    let lsvc_dig_scores: ptr<f32> = linear_svc_predict(lsvc_dig, X_test_dig)
+    let lsvc_dig_preds: ptr<f32> = linear_svc_decide(lsvc_dig, lsvc_dig_scores, split_dig.n_test)
+    t2 = clock()
+    let lsvc_dig_acc: f32 = accuracy_score(split_dig.y_test, lsvc_dig_preds, split_dig.n_test)
+    printf("RESULT|LinearSVC|digits|accuracy|%.6f|%.6f|%.6f\n", lsvc_dig_acc, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    array_free_f32(lsvc_dig_scores)
+    array_free_f32(lsvc_dig_preds)
+    linear_svc_free(lsvc_dig)
+
+    # DecisionTree
+    t0 = clock()
+    let dt_dig: DecisionTreeClassifier = decision_tree_classifier_fit(X_train_dig, split_dig.y_train, 10, 10, 0)
+    t1 = clock()
+    let dt_dig_preds: ptr<f32> = decision_tree_classifier_predict(dt_dig, X_test_dig)
+    t2 = clock()
+    let dt_dig_acc: f32 = accuracy_score(split_dig.y_test, dt_dig_preds, split_dig.n_test)
+    printf("RESULT|DecisionTree|digits|accuracy|%.6f|%.6f|%.6f\n", dt_dig_acc, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    array_free_f32(dt_dig_preds)
+    decision_tree_classifier_free(dt_dig)
+
+    # RandomForest
+    t0 = clock()
+    let rf_dig: RandomForestClassifier = random_forest_classifier_fit(X_train_dig, split_dig.y_train, 10, 10, 10, 42)
+    t1 = clock()
+    let rf_dig_preds: ptr<f32> = random_forest_classifier_predict(rf_dig, X_test_dig)
+    t2 = clock()
+    let rf_dig_acc: f32 = accuracy_score(split_dig.y_test, rf_dig_preds, split_dig.n_test)
+    printf("RESULT|RandomForest|digits|accuracy|%.6f|%.6f|%.6f\n", rf_dig_acc, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    array_free_f32(rf_dig_preds)
+    random_forest_classifier_free(rf_dig)
+
+    # GaussianNB
+    t0 = clock()
+    let gnb_dig: GaussianNB = gaussian_nb_fit(X_train_dig, split_dig.y_train, 10, 0.0000000001)
+    t1 = clock()
+    let gnb_dig_preds: ptr<f32> = gaussian_nb_predict(gnb_dig, X_test_dig)
+    t2 = clock()
+    let gnb_dig_acc: f32 = accuracy_score(split_dig.y_test, gnb_dig_preds, split_dig.n_test)
+    printf("RESULT|GaussianNB|digits|accuracy|%.6f|%.6f|%.6f\n", gnb_dig_acc, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    array_free_f32(gnb_dig_preds)
+    gaussian_nb_free(gnb_dig)
+
+    # KMeans
+    t0 = clock()
+    let km_dig: KMeans = kmeans_fit(X_train_dig, 10, 100, 0.001, 42)
+    t1 = clock()
+    let km_dig_preds: ptr<i32> = kmeans_predict(km_dig, X_test_dig)
+    t2 = clock()
+    # Best-match accuracy for KMeans
+    let mut best_acc_dig: f32 = 0.0
+    # Simple greedy matching: for each cluster, find the most common true label
+    let cluster_labels: ptr<i32> = malloc((10 as i64) * 4) as ptr<i32>
+    for c in 0 to 10 {
+        let counts: ptr<i32> = malloc((10 as i64) * 4) as ptr<i32>
+        for k in 0 to 10 { counts[k] = 0 }
+        for i in 0 to split_dig.n_test {
+            if km_dig_preds[i] == c {
+                let label: i32 = split_dig.y_test[i] as i32
+                if label >= 0 && label < 10 { counts[label] = counts[label] + 1 }
+            }
+        }
+        let mut best_label: i32 = 0
+        let mut best_count: i32 = 0
+        for k in 0 to 10 {
+            if counts[k] > best_count { best_count = counts[k]; best_label = k }
+        }
+        cluster_labels[c] = best_label
+        free(counts as ptr<void>)
+    }
+    let mut km_correct: i32 = 0
+    for i in 0 to split_dig.n_test {
+        if cluster_labels[km_dig_preds[i]] == (split_dig.y_test[i] as i32) {
+            km_correct = km_correct + 1
+        }
+    }
+    best_acc_dig = (km_correct as f32) / (split_dig.n_test as f32)
+    printf("RESULT|KMeans|digits|accuracy|%.6f|%.6f|%.6f\n", best_acc_dig, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    free(cluster_labels as ptr<void>)
+    free(km_dig_preds as ptr<void>)
+    kmeans_free(km_dig)
+
+    # Cleanup digits
+    standard_scaler_free(scaler_dig)
+    matrix_free(X_train_dig)
+    matrix_free(X_test_dig)
+    free_split(split_dig)
+    dataset_free(ds_dig)
+
+    # ================================================================
+    # Diabetes dataset (regression)
+    # ================================================================
+    let ds_dia: Dataset = load_diabetes()
+    let n_dia: i32 = ds_dia.X.rows
+    let n_test_dia: i32 = n_dia / 5
+    let split_dia: SplitResult = split_data(ds_dia.X, ds_dia.y, n_dia, n_test_dia, 42)
+
+    let scaler_dia: StandardScaler = standard_scaler_fit(split_dia.X_train)
+    let X_train_dia: Matrix = standard_scaler_transform(scaler_dia, split_dia.X_train)
+    let X_test_dia: Matrix = standard_scaler_transform(scaler_dia, split_dia.X_test)
+
+    # Ridge
+    t0 = clock()
+    let ridge_model: Ridge = ridge_fit(X_train_dia, split_dia.y_train, 1.0, 1000, 0.01)
+    t1 = clock()
+    let ridge_preds: ptr<f32> = ridge_predict(ridge_model, X_test_dia)
+    t2 = clock()
+    let ridge_r2: f32 = r2_score(split_dia.y_test, ridge_preds, split_dia.n_test)
+    printf("RESULT|Ridge|diabetes|r2|%.6f|%.6f|%.6f\n", ridge_r2, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    array_free_f32(ridge_preds)
+    ridge_free(ridge_model)
+
+    # Lasso
+    t0 = clock()
+    let lasso_model: Lasso = lasso_fit(X_train_dia, split_dia.y_train, 0.1, 1000, 0.01)
+    t1 = clock()
+    let lasso_preds: ptr<f32> = lasso_predict(lasso_model, X_test_dia)
+    t2 = clock()
+    let lasso_r2: f32 = r2_score(split_dia.y_test, lasso_preds, split_dia.n_test)
+    printf("RESULT|Lasso|diabetes|r2|%.6f|%.6f|%.6f\n", lasso_r2, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    array_free_f32(lasso_preds)
+    lasso_free(lasso_model)
+
+    # LinearRegression
+    t0 = clock()
+    let linreg_model: LinearRegression = linear_regression_fit(X_train_dia, split_dia.y_train, no_penalty)
+    t1 = clock()
+    let linreg_preds: ptr<f32> = linear_regression_predict(linreg_model, X_test_dia)
+    t2 = clock()
+    let linreg_r2: f32 = r2_score(split_dia.y_test, linreg_preds, split_dia.n_test)
+    printf("RESULT|LinearRegression|diabetes|r2|%.6f|%.6f|%.6f\n", linreg_r2, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    array_free_f32(linreg_preds)
+    linear_regression_free(linreg_model)
+
+    # KernelRidge (RBF)
+    t0 = clock()
+    let kr_model: KernelRidge = kernel_ridge_fit(X_train_dia, split_dia.y_train, 1.0, KERNEL_TYPE_RBF, 0.1, 3, 0.0)
+    t1 = clock()
+    let kr_preds: ptr<f32> = kernel_ridge_predict(kr_model, X_test_dia)
+    t2 = clock()
+    let kr_r2: f32 = r2_score(split_dia.y_test, kr_preds, split_dia.n_test)
+    printf("RESULT|KernelRidge_RBF|diabetes|r2|%.6f|%.6f|%.6f\n", kr_r2, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    array_free_f32(kr_preds)
+    kernel_ridge_free(kr_model)
+
+    # Cleanup diabetes
+    standard_scaler_free(scaler_dia)
+    matrix_free(X_train_dia)
+    matrix_free(X_test_dia)
+    free_split(split_dia)
+    dataset_free(ds_dia)
+
+    printf("\n=== Benchmark complete ===\n")
+    return 0
+}
