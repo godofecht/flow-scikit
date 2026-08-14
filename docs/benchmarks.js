@@ -346,4 +346,90 @@ document.addEventListener("DOMContentLoaded", () => {
   irisComboChart();
   buildAccuracyTable();
   buildTimeTable();
+  paritySpeedupChart();
+  buildParityTable();
 });
+
+// Per-algorithm parity data.
+const PARITY = [
+  { algo: "StandardScaler",            match: true,  maxDiff: 0.000001, py_ms: 0.89,  fl_ms: 0.005, speedup: 178.4 },
+  { algo: "MinMaxScaler",              match: true,  maxDiff: 0.000001, py_ms: 0.24,  fl_ms: 0.004, speedup: 60.4 },
+  { algo: "MaxAbsScaler",              match: true,  maxDiff: 0.000000, py_ms: 0.18,  fl_ms: 0.003, speedup: 59.2 },
+  { algo: "GaussianNB",                match: true,  maxDiff: 0.000000, py_ms: 1.92,  fl_ms: 0.012, speedup: 160.1 },
+  { algo: "KNNClassifier_k5",          match: true,  maxDiff: 0.000000, py_ms: 2.85,  fl_ms: 0.062, speedup: 46.0 },
+  { algo: "NearestCentroid",           match: true,  maxDiff: 0.000000, py_ms: 23.35, fl_ms: 0.002, speedup: 11674.5 },
+  { algo: "DummyClassifier_mf",        match: true,  maxDiff: 0.000000, py_ms: 0.17,  fl_ms: 0.008, speedup: 20.9 },
+  { algo: "DummyRegressor_mean",       match: true,  maxDiff: 0.000008, py_ms: 0.12,  fl_ms: 0.005, speedup: 23.2 },
+  { algo: "PCA_2comp",                 match: true,  maxDiff: 0.000001, py_ms: 3.84,  fl_ms: 0.048, speedup: 80.1 },
+  { algo: "LDA",                       match: false, maxDiff: 1.000000, py_ms: 3.10,  fl_ms: 0.009, speedup: 344.8 },
+  { algo: "QDA",                       match: false, maxDiff: 1.000000, py_ms: 1.86,  fl_ms: 0.008, speedup: 232.7 },
+  { algo: "KMeans_k3",                 match: false, maxDiff: 1.000000, py_ms: 2.15,  fl_ms: 0.027, speedup: 79.6 },
+  { algo: "KNNRegressor_k3",           match: false, maxDiff: 106.33,  py_ms: 0.70,  fl_ms: 0.268, speedup: 2.6 },
+  { algo: "LinearRegression",          match: false, maxDiff: 82.87,   py_ms: 10.15, fl_ms: 0.030, speedup: 338.3 },
+  { algo: "Ridge_a1",                  match: false, maxDiff: 39.36,   py_ms: 5.47,  fl_ms: 0.028, speedup: 195.2 },
+  { algo: "Lasso_a0.1",                match: false, maxDiff: 72.27,   py_ms: 1.84,  fl_ms: 26.31, speedup: 0.07 }
+];
+
+// Parity speedup bar chart.
+function paritySpeedupChart() {
+  const svg = clearSvg("parity-speedup-chart");
+  const W = 900, H = 480;
+  const ml = 80, mr = 30, mt = 20, mb = 90;
+  const cw = W - ml - mr;
+  const ch = H - mt - mb;
+  const data = PARITY;
+  const n = data.length;
+  const barW = cw / n * 0.7;
+  const gap = cw / n * 0.3;
+
+  // Log scale for speedup
+  const logMin = 0;
+  const logMax = 5; // 100000x
+
+  function speedupToY(s) {
+    if (s <= 1) return mt + ch;
+    const l = Math.log10(Math.min(s, 100000));
+    return mt + ch - (l / logMax) * ch;
+  }
+
+  // Grid lines at decades
+  for (let i = 0; i <= 5; i++) {
+    const y = mt + ch - (i / 5) * ch;
+    svg.appendChild(el("line", { x1: ml, y1: y, x2: W - mr, y2: y, stroke: COLORS.grid, "stroke-width": 1 }));
+    const val = Math.pow(10, i);
+    svg.appendChild(el("text", { x: ml - 8, y: y + 4, "text-anchor": "end", "font-size": 11, "font-family": "DM Mono, monospace", fill: COLORS.muted }, val >= 1000 ? (val/1000).toFixed(0) + "kx" : val.toFixed(0) + "x"));
+  }
+
+  data.forEach((d, i) => {
+    const x = ml + i * (barW + gap) + gap / 2;
+    const y = speedupToY(d.speedup);
+    const color = d.match ? COLORS.green : COLORS.coral;
+    svg.appendChild(el("rect", { x: x, y: y, width: barW, height: mt + ch - y, fill: color, rx: 3 }));
+
+    // Speedup label
+    const label = d.speedup > 1000 ? (d.speedup/1000).toFixed(1) + "kx" : d.speedup > 10 ? d.speedup.toFixed(0) + "x" : d.speedup.toFixed(1) + "x";
+    svg.appendChild(el("text", { x: x + barW/2, y: y - 5, "text-anchor": "middle", "font-size": 10, "font-family": "DM Mono, monospace", fill: color }, label));
+
+    // X label (rotated)
+    const shortName = d.algo.length > 16 ? d.algo.substring(0, 14) + ".." : d.algo;
+    const text = el("text", { x: x + barW/2, y: mt + ch + 15, "text-anchor": "end", "font-size": 10, "font-family": "DM Sans, sans-serif", fill: COLORS.ink, transform: `rotate(-35, ${x + barW/2}, ${mt + ch + 15})` }, shortName);
+    svg.appendChild(text);
+  });
+
+  svg.appendChild(el("line", { x1: ml, y1: mt + ch, x2: W - mr, y2: mt + ch, stroke: COLORS.ink, "stroke-width": 1.5 }));
+}
+
+// Build parity table.
+function buildParityTable() {
+  const tbody = document.getElementById("parity-table-body");
+  PARITY.forEach(d => {
+    const matchClass = d.match ? "pos" : "neg";
+    const matchText = d.match ? "EXACT" : "DIFF";
+    const speedupStr = d.speedup > 1000 ? (d.speedup/1000).toFixed(1) + "kx" : d.speedup > 10 ? d.speedup.toFixed(0) + "x" : d.speedup.toFixed(1) + "x";
+    const speedupClass = d.speedup > 1 ? "pos" : "neg";
+    const diffStr = d.maxDiff < 0.001 ? d.maxDiff.toFixed(6) : d.maxDiff.toFixed(2);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${d.algo}</td><td>${d.match ? "EXACT" : "close"}</td><td class="${matchClass}">${matchText}</td><td class="num">${diffStr}</td><td class="num">${d.py_ms.toFixed(4)}</td><td class="num">${d.fl_ms.toFixed(4)}</td><td class="num ${speedupClass}">${speedupStr}</td>`;
+    tbody.appendChild(tr);
+  });
+}
