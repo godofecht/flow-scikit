@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="flow-scikit vs scikit-learn 1.9.0: accuracy, training time, and deployment footprint benchmarks." />
-    <title>flow-scikit — Benchmarks vs scikit-learn</title>
+    <meta name="description" content="scikit-learn (Flow) vs scikit-learn (Python) 1.9.0: accuracy, training time, and deployment footprint benchmarks." />
+    <title>scikit-learn (Flow) vs scikit-learn (Python) — Benchmarks</title>
     <link rel="stylesheet" href="styles.css" />
     <style>
       .bench-hero { padding:100px 28px 60px max(28px,calc((100vw - 1164px)/2)); background:#fffdf8; border-bottom:1px solid var(--line); }
@@ -57,7 +57,7 @@
 
     <main>
       <section class="bench-hero">
-        <p class="eyebrow">benchmarks / flow-scikit vs scikit-learn 1.9.0</p>
+        <p class="eyebrow">benchmarks / scikit-learn (Flow) vs scikit-learn (Python) 1.9.0</p>
         <h1>Same datasets. Same splits. Native binary vs Python stack.</h1>
         <p class="lede">
           18 algorithm/dataset combinations on iris, digits, and diabetes.
@@ -68,24 +68,24 @@
           <span>iris: 150 samples, 4 features</span>
           <span>digits: 1797 samples, 64 features</span>
           <span>diabetes: 442 samples, 10 features</span>
-          <span>scikit-learn 1.9.0</span>
-          <span>Flow C backend, arm64 macOS</span>
+          <span>scikit-learn (Python) 1.9.0</span>
+          <span>scikit-learn (Flow), C backend, arm64 macOS</span>
         </div>
       </section>
 
       <section class="bench-section">
         <p class="eyebrow">deployment footprint</p>
         <h2>1.4 MB native binary vs 165 MB Python stack.</h2>
-        <p>The flow-scikit binary is a single executable with no Python, no numpy, no scipy, no BLAS. Copy it to another arm64 macOS machine and it runs.</p>
+        <p>scikit-learn (Flow) compiles to a single executable with no Python, no numpy, no scipy, no BLAS. Copy it to another arm64 macOS machine and it runs.</p>
 
         <div class="portability-grid">
           <div class="port-card flow">
-            <div class="port-label">flow-scikit binary</div>
+            <div class="port-label">scikit-learn (Flow)</div>
             <div class="port-value">1.4 MB</div>
             <div class="port-sub">single executable, 0 shared objects</div>
           </div>
           <div class="port-card sklearn">
-            <div class="port-label">scikit-learn stack</div>
+            <div class="port-label">scikit-learn (Python)</div>
             <div class="port-value">165 MB</div>
             <div class="port-sub">sklearn + numpy + scipy, 201 .so files</div>
           </div>
@@ -106,12 +106,12 @@
       <section class="bench-section" style="background:#f4f7f8; max-width:none; padding-left:max(28px,calc((100vw - 1164px)/2)); padding-right:max(28px,calc((100vw - 1164px)/2));">
         <div style="max-width:1164px; margin:0 auto;">
           <p class="eyebrow">accuracy</p>
-          <h2>Where flow-scikit matches or beats sklearn.</h2>
-          <p>18 algorithm/dataset pairs. Positive diff means flow-scikit scores higher.</p>
+          <h2>Where scikit-learn (Flow) matches or beats scikit-learn (Python).</h2>
+          <p>18 algorithm/dataset pairs. Positive diff means scikit-learn (Flow) scores higher.</p>
 
           <div class="legend">
-            <span><i class="sklearn-color"></i> scikit-learn</span>
-            <span><i class="flow-color"></i> flow-scikit</span>
+            <span><i class="sklearn-color"></i> scikit-learn (Python)</span>
+            <span><i class="flow-color"></i> scikit-learn (Flow)</span>
           </div>
 
           <div class="chart-wrap">
@@ -135,7 +135,7 @@
           <div class="table-wrap">
             <table class="bench-table">
               <thead>
-                <tr><th>Algorithm</th><th>Dataset</th><th>Metric</th><th class="num">sklearn</th><th class="num">flow-scikit</th><th class="num">Diff</th></tr>
+                <tr><th>Algorithm</th><th>Dataset</th><th>Metric</th><th class="num">Python</th><th class="num">Flow</th><th class="num">Diff</th></tr>
               </thead>
               <tbody id="accuracy-table-body"></tbody>
             </table>
@@ -146,11 +146,11 @@
       <section class="bench-section">
         <p class="eyebrow">training time</p>
         <h2>Direct solvers and small-data speed.</h2>
-        <p>fit + predict combined, in milliseconds. flow-scikit uses direct Gaussian elimination for linear models and avoids Python import overhead.</p>
+        <p>fit + predict combined, in milliseconds. scikit-learn (Flow) uses direct Gaussian elimination for linear models and avoids Python import overhead.</p>
 
         <div class="legend">
-          <span><i class="sklearn-color"></i> scikit-learn</span>
-          <span><i class="flow-color"></i> flow-scikit</span>
+          <span><i class="sklearn-color"></i> scikit-learn (Python)</span>
+          <span><i class="flow-color"></i> scikit-learn (Flow)</span>
         </div>
 
         <div class="chart-wrap">
@@ -168,7 +168,7 @@
         <div class="table-wrap">
           <table class="bench-table">
             <thead>
-              <tr><th>Algorithm</th><th>Dataset</th><th class="num">sklearn (ms)</th><th class="num">flow (ms)</th><th class="num">Speedup</th></tr>
+              <tr><th>Algorithm</th><th>Dataset</th><th class="num">Python (ms)</th><th class="num">Flow (ms)</th><th class="num">Speedup</th></tr>
             </thead>
             <tbody id="time-table-body"></tbody>
           </table>
@@ -179,7 +179,7 @@
         <div style="max-width:1164px; margin:0 auto;">
           <p class="eyebrow">iris side-by-side</p>
           <h2>Same problem, five algorithms, two implementations.</h2>
-          <p>Same iris dataset, same 80/20 split, same algorithms. flow-scikit KNN beats sklearn on accuracy at 60x faster training.</p>
+          <p>Same iris dataset, same 80/20 split, same algorithms. scikit-learn (Flow) KNN beats scikit-learn (Python) on accuracy at 60x faster training.</p>
 
           <div class="chart-wrap">
             <h3>Iris: accuracy and training time</h3>
@@ -193,10 +193,10 @@
         <p class="eyebrow">reproduce</p>
         <h2>Run the benchmarks yourself.</h2>
         <div class="run-commands">
-<span class="cmt"># Run flow-scikit benchmark</span>
+<span class="cmt"># Run scikit-learn (Flow) benchmark</span>
 FLOW_HOST=python flow run benchmarks/bench_flow.flow
 
-<span class="cmt"># Run scikit-learn benchmark</span>
+<span class="cmt"># Run scikit-learn (Python) benchmark</span>
 python3 benchmarks/bench_sklearn.py
 
 <span class="cmt"># Compare results side by side</span>

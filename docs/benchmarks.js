@@ -206,8 +206,8 @@ function startupChart() {
   const cw = W - ml - mr;
   const ch = H - mt - mb;
   const data = [
-    { label: "flow-scikit", ms: 33, color: COLORS.flow },
-    { label: "scikit-learn", ms: 2160, color: COLORS.sklearn }
+    { label: "scikit-learn (Flow)", ms: 33, color: COLORS.flow },
+    { label: "scikit-learn (Python)", ms: 2160, color: COLORS.sklearn }
   ];
   const yMax = 2400;
   const barW = 120;
