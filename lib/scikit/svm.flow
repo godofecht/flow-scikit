@@ -41,14 +41,7 @@ export function linear_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, e
         }
     }
 
-    # Dual coordinate descent for L2-regularized L1-loss SVM
-    # (Hsieh et al. 2008, used by liblinear)
-    # Uses f64 internally for weight accumulation to reduce float error.
-
     # Ensure classes[1] is the positive class (larger value).
-    # In OvR, y_binary has values {0.0, 1.0} where 1.0 is the target class.
-    # If 1.0 appears first in the data, classes[0]=1.0 and classes[1]=0.0,
-    # which would invert the y_dual encoding. Swap to fix.
     if n_found == 2 {
         if classes[0] > classes[1] {
             let tmp: f32 = classes[0]
@@ -67,89 +60,241 @@ export function linear_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, e
         }
     }
 
-    # f64 internal weight vector
-    let w64: ptr<f64> = array_new_f64(n_features)
-    let alpha: ptr<f64> = array_new_f64(n_samples)
+    # Primal Newton method for L2-regularized L2-loss (squared hinge) SVM.
+    # This is what LIBLINEAR uses with dual=False (sklearn dual='auto' picks
+    # primal when n_samples > n_features). The bias is handled by augmenting
+    # the feature vector with a constant 1.0 column.
+    # Objective: min (1/2)||w||^2 + C * sum max(0, 1 - y_i*(w^T x_i))^2
+
+    let n_aug: i32 = n_features + 1
+    let w: ptr<f64> = array_new_f64(n_aug)
     let C64: f64 = C as f64
 
-    let eps: f64 = 0.001
-    let mut epoch: i32 = 0
-    while epoch < epochs {
-        let mut max_pg: f64 = 0.0
-        for i in 0 to n_samples {
-            # Compute Q_ii = x_i^T x_i
-            let mut Q_ii: f64 = 0.0
-            for j in 0 to n_features {
-                let xv: f64 = (matrix_at(X, i, j)) as f64
-                Q_ii = Q_ii + xv * xv
-            }
-
-            if Q_ii < 0.0000000001 { continue }
-
-            # Compute G = y_i * w^T x_i - 1
-            let mut w_dot_x: f64 = 0.0
-            for j in 0 to n_features {
-                w_dot_x = w_dot_x + w64[j] * (matrix_at(X, i, j)) as f64
-            }
-            let G: f64 = (y_dual[i]) as f64 * w_dot_x - 1.0
-
-            # Projected gradient
-            let mut PG: f64 = G
-            if alpha[i] <= 0.0 {
-                if G > 0.0 { PG = 0.0 }
-            }
-            if alpha[i] >= C64 {
-                if G < 0.0 { PG = 0.0 }
-            }
-
-            let abs_pg: f64 = PG
-            if PG < 0.0 { abs_pg = -PG }
-            if abs_pg > max_pg { max_pg = abs_pg }
-
-            if abs_pg > eps {
-                # Update alpha
-                let alpha_new: f64 = alpha[i] - G / Q_ii
-                if alpha_new < 0.0 { alpha_new = 0.0 }
-                if alpha_new > C64 { alpha_new = C64 }
-
-                # Update w: w += (alpha_new - alpha_i) * y_i * x_i
-                let delta: f64 = (alpha_new - alpha[i]) * (y_dual[i]) as f64
-                for j in 0 to n_features {
-                    w64[j] = w64[j] + delta * (matrix_at(X, i, j)) as f64
-                }
-
-                alpha[i] = alpha_new
-            }
-        }
-        if max_pg < eps { break }
-        epoch = epoch + 1
-    }
-
-    # Compute bias: average over support vectors (0 < alpha < C)
-    let mut bias_sum: f64 = 0.0
-    let mut n_sv: i32 = 0
+    # Precompute x_i^T x_i for each sample (augmented)
+    let x_norm_sq: ptr<f64> = array_new_f64(n_samples)
     for i in 0 to n_samples {
-        if alpha[i] > 0.0 and alpha[i] < C64 {
-            let mut w_dot_x: f64 = 0.0
-            for j in 0 to n_features {
-                w_dot_x = w_dot_x + w64[j] * (matrix_at(X, i, j)) as f64
-            }
-            bias_sum = bias_sum + ((y_dual[i]) as f64 - w_dot_x)
-            n_sv = n_sv + 1
+        let mut s: f64 = 0.0
+        for j in 0 to n_features {
+            let xv: f64 = (matrix_at(X, i, j)) as f64
+            s = s + xv * xv
         }
-    }
-    if n_sv > 0 {
-        bias = (bias_sum / (n_sv as f64)) as f32
+        s = s + 1.0  # bias term
+        x_norm_sq[i] = s
     }
 
-    # Copy f64 weights to f32 output
-    for j in 0 to n_features {
-        weights[j] = w64[j] as f32
+    let mut iter: i32 = 0
+    while iter < epochs {
+        # Compute margins y_i * w^T x_i and identify active set
+        # Active set I = {i : y_i * w^T x_i < 1}
+        let margins: ptr<f64> = array_new_f64(n_samples)
+        let active: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+        let mut n_active: i32 = 0
+        for i in 0 to n_samples {
+            let mut dot: f64 = 0.0
+            for j in 0 to n_features {
+                dot = dot + w[j] * (matrix_at(X, i, j)) as f64
+            }
+            dot = dot + w[n_features]  # bias weight
+            let m: f64 = (y_dual[i]) as f64 * dot
+            margins[i] = m
+            if m < 1.0 {
+                active[n_active] = i
+                n_active = n_active + 1
+            }
+        }
+
+        # Gradient: g_j = w_j - 2*C * sum_{i in I} y_i*(1 - m_i) * x_ij
+        let g: ptr<f64> = array_new_f64(n_aug)
+        for j in 0 to n_aug {
+            g[j] = w[j]
+        }
+        for k in 0 to n_active {
+            let i: i32 = active[k]
+            let yi: f64 = (y_dual[i]) as f64
+            let residual: f64 = 1.0 - margins[i]
+            for j in 0 to n_features {
+                g[j] = g[j] - 2.0 * C64 * yi * residual * (matrix_at(X, i, j)) as f64
+            }
+            g[n_features] = g[n_features] - 2.0 * C64 * yi * residual  # bias term
+        }
+
+        # Check gradient norm
+        let mut g_norm: f64 = 0.0
+        for j in 0 to n_aug {
+            g_norm = g_norm + g[j] * g[j]
+        }
+        if g_norm < 0.000001 {
+            free(active as ptr<void>)
+            array_free_f64(margins)
+            array_free_f64(g)
+            break
+        }
+
+        # Hessian: H_jk = delta_jk + 2*C * sum_{i in I} x_ij * x_ik
+        # For small n_aug, build and solve directly with Gaussian elimination.
+        # The augmented matrix has n2 rows and (n2+1) columns (last col = -g).
+        let n2: i32 = n_aug
+        let stride: i32 = n2 + 1
+        let H: ptr<f64> = malloc((n2 as i64) * (stride as i64) * 8) as ptr<f64>
+        for j in 0 to n2 {
+            for k in 0 to n2 {
+                if j == k {
+                    H[j * stride + k] = 1.0
+                } else {
+                    H[j * stride + k] = 0.0
+                }
+            }
+        }
+        for kk in 0 to n_active {
+            let i: i32 = active[kk]
+            for j in 0 to n_features {
+                let xij: f64 = (matrix_at(X, i, j)) as f64
+                for k in 0 to n_features {
+                    H[j * stride + k] = H[j * stride + k] + 2.0 * C64 * xij * ((matrix_at(X, i, k)) as f64)
+                }
+                # bias column/row
+                H[j * stride + n_features] = H[j * stride + n_features] + 2.0 * C64 * xij
+                H[n_features * stride + j] = H[n_features * stride + j] + 2.0 * C64 * xij
+            }
+            H[n_features * stride + n_features] = H[n_features * stride + n_features] + 2.0 * C64
+        }
+
+        # Solve H * d = -g using Gaussian elimination with partial pivoting
+        # Augment H with -g as the last column
+        for j in 0 to n2 {
+            H[j * stride + n2] = 0.0 - g[j]
+        }
+
+        # Forward elimination
+        let mut col: i32 = 0
+        while col < n2 {
+            # Find pivot
+            let mut max_row: i32 = col
+            let mut max_val: f64 = H[col * stride + col]
+            if max_val < 0.0 { max_val = -max_val }
+            let mut row: i32 = col + 1
+            while row < n2 {
+                let val: f64 = H[row * stride + col]
+                let abs_val: f64 = val
+                if val < 0.0 { abs_val = -val }
+                if abs_val > max_val {
+                    max_val = abs_val
+                    max_row = row
+                }
+                row = row + 1
+            }
+            # Swap rows
+            if max_row != col {
+                let mut k: i32 = 0
+                while k <= n2 {
+                    let tmp: f64 = H[col * stride + k]
+                    H[col * stride + k] = H[max_row * stride + k]
+                    H[max_row * stride + k] = tmp
+                    k = k + 1
+                }
+            }
+            # Eliminate
+            let pivot: f64 = H[col * stride + col]
+            if pivot > 0.0000000001 || pivot < -0.0000000001 {
+                let mut row: i32 = col + 1
+                while row < n2 {
+                    let factor: f64 = H[row * stride + col] / pivot
+                    let mut k: i32 = col
+                    while k <= n2 {
+                        H[row * stride + k] = H[row * stride + k] - factor * H[col * stride + k]
+                        k = k + 1
+                    }
+                    row = row + 1
+                }
+            }
+            col = col + 1
+        }
+
+        # Back substitution
+        let d: ptr<f64> = array_new_f64(n2)
+        let mut row: i32 = n2 - 1
+        while row >= 0 {
+            let mut sum: f64 = H[row * stride + n2]
+            let mut k: i32 = row + 1
+            while k < n2 {
+                sum = sum - H[row * stride + k] * d[k]
+                k = k + 1
+            }
+            d[row] = sum / H[row * stride + row]
+            row = row - 1
+        }
+
+        # Line search: find step size beta that minimizes objective
+        # f(w + beta*d) = (1/2)||w+beta*d||^2 + C*sum max(0, 1 - y_i*(w+beta*d)^T x_i)^2
+        # Use backtracking with Wolfe-like conditions
+        let mut beta: f64 = 1.0
+        let mut best_beta: f64 = 0.0
+        let mut best_obj: f64 = 0.0
+        # Compute current objective
+        for j in 0 to n_aug { best_obj = best_obj + 0.5 * w[j] * w[j] }
+        for k in 0 to n_active {
+            let i: i32 = active[k]
+            let yi: f64 = (y_dual[i]) as f64
+            let mut dot: f64 = 0.0
+            for j in 0 to n_features {
+                dot = dot + w[j] * (matrix_at(X, i, j)) as f64
+            }
+            dot = dot + w[n_features]
+            let loss: f64 = 1.0 - yi * dot
+            if loss > 0.0 { best_obj = best_obj + C64 * loss * loss }
+        }
+
+        # Try several step sizes
+        let mut trial: i32 = 0
+        while trial < 20 {
+            let b: f64 = beta
+            let mut obj: f64 = 0.0
+            for j in 0 to n_aug {
+                let wj: f64 = w[j] + b * d[j]
+                obj = obj + 0.5 * wj * wj
+            }
+            for k in 0 to n_active {
+                let i: i32 = active[k]
+                let yi: f64 = (y_dual[i]) as f64
+                let mut dot: f64 = 0.0
+                for j in 0 to n_features {
+                    dot = dot + (w[j] + b * d[j]) * (matrix_at(X, i, j)) as f64
+                }
+                dot = dot + (w[n_features] + b * d[n_features])
+                let loss: f64 = 1.0 - yi * dot
+                if loss > 0.0 { obj = obj + C64 * loss * loss }
+            }
+            if obj < best_obj {
+                best_obj = obj
+                best_beta = b
+            }
+            beta = beta * 0.5
+            trial = trial + 1
+        }
+
+        # Update w
+        for j in 0 to n_aug {
+            w[j] = w[j] + best_beta * d[j]
+        }
+
+        free(H as ptr<void>)
+        free(active as ptr<void>)
+        array_free_f64(margins)
+        array_free_f64(g)
+        array_free_f64(d)
+
+        iter = iter + 1
     }
+
+    # Extract weights and bias
+    for j in 0 to n_features {
+        weights[j] = w[j] as f32
+    }
+    bias = w[n_features] as f32
 
     array_free_f32(y_dual)
-    array_free_f64(w64)
-    array_free_f64(alpha)
+    array_free_f64(w)
+    array_free_f64(x_norm_sq)
 
     return LinearSVC {
         weights: weights,
@@ -232,7 +377,7 @@ export function linear_svc_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_classes: i
                 w_dot_x = w_dot_x + w64[S.indices[k]] * (S.data[k]) as f64
                 k = k + 1
             }
-            let G: f64 = (y_dual[i]) as f64 * w_dot_x - 1.0
+            let G: f64 = (y_dual[i]) as f64 * w_dot_x - 1.0 + 2.0 * alpha[i]
 
             let mut PG: f64 = G
             if alpha[i] <= 0.0 {
@@ -247,7 +392,7 @@ export function linear_svc_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_classes: i
             if abs_pg > max_pg { max_pg = abs_pg }
 
             if abs_pg > eps {
-                let alpha_new: f64 = alpha[i] - G / Q_ii
+                let alpha_new: f64 = alpha[i] - G / (Q_ii + 1.0)
                 if alpha_new < 0.0 { alpha_new = 0.0 }
                 if alpha_new > C64 { alpha_new = C64 }
 
@@ -648,9 +793,10 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
                 let ei_f: f64 = error_cache[i]
                 let yi_ei: f64 = y_d[i] * ei_f
                 if (yi_ei < -tol && alphas_d[i] < C_d) || (yi_ei > tol && alphas_d[i] > 0.0) {
-                    # Second-order working set selection using error cache.
-                    let mut best_j: i32 = (iter * 7 + i * 13 + 3) % n
-                    if best_j == i { best_j = (best_j + 1) % n }
+                    # Working set selection: pick j maximizing |Ei - Ej|.
+                    # If the best j has L == H (e.g. both alphas at same bound
+                    # with same label), fall back to j with opposite label.
+                    let mut best_j: i32 = -1
                     let mut best_gain: f64 = 0.0
                     let mut j_scan: i32 = 0
                     while j_scan < n {
@@ -666,11 +812,11 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
                         j_scan = j_scan + 1
                     }
 
-                    let j2: i32 = best_j
-                    let ej: f64 = error_cache[j2]
+                    if best_j < 0 { i = i + 1; continue }
+                    let mut j2: i32 = best_j
 
                     let alpha_i_old: f64 = alphas_d[i]
-                    let alpha_j_old: f64 = alphas_d[j2]
+                    let mut alpha_j_old: f64 = alphas_d[j2]
 
                     let mut L: f64 = 0.0
                     let mut H: f64 = C_d
@@ -686,7 +832,35 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
                         if H > C_d { H = C_d }
                     }
 
-                    if L == H { i = i + 1; continue }
+                    # If L == H, try to find a j with opposite label
+                    if L == H {
+                        let mut best_j2: i32 = -1
+                        let mut best_gain2: f64 = 0.0
+                        let mut j_scan2: i32 = 0
+                        while j_scan2 < n {
+                            if j_scan2 == i { j_scan2 = j_scan2 + 1; continue }
+                            if y_d[j_scan2] == y_d[i] { j_scan2 = j_scan2 + 1; continue }
+                            let ej_test2: f64 = error_cache[j_scan2]
+                            let diff2: f64 = ei_f - ej_test2
+                            let abs_diff2: f64 = diff2
+                            if diff2 < 0.0 { abs_diff2 = -diff2 }
+                            if abs_diff2 > best_gain2 {
+                                best_gain2 = abs_diff2
+                                best_j2 = j_scan2
+                            }
+                            j_scan2 = j_scan2 + 1
+                        }
+                        if best_j2 < 0 { i = i + 1; continue }
+                        j2 = best_j2
+                        alpha_j_old = alphas_d[j2]
+                        L = alpha_i_old - alpha_j_old
+                        H = alpha_i_old - alpha_j_old + C_d
+                        if L < 0.0 { L = 0.0 }
+                        if H > C_d { H = C_d }
+                        if L == H { i = i + 1; continue }
+                    }
+
+                    let ej: f64 = error_cache[j2]
 
                     let eta: f64 = 2.0 * kernel_d[i * n + j2] - kernel_d[i * n + i] - kernel_d[j2 * n + j2]
                     if eta >= -0.0000000001 { i = i + 1; continue }
@@ -694,6 +868,11 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
                     let mut alpha_j_new: f64 = alpha_j_old - y_d[j2] * (ei_f - ej) / eta
                     if alpha_j_new < L { alpha_j_new = L }
                     if alpha_j_new > H { alpha_j_new = H }
+
+                    # Skip negligible updates to prevent oscillation
+                    let abs_dj: f64 = alpha_j_new - alpha_j_old
+                    if abs_dj < 0.0 { abs_dj = -abs_dj }
+                    if abs_dj < 0.00001 { i = i + 1; continue }
 
                     let alpha_i_new: f64 = alpha_i_old + y_d[i] * y_d[j2] * (alpha_j_old - alpha_j_new)
 
@@ -735,8 +914,7 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
                     let ei_f: f64 = error_cache[i]
                     let yi_ei: f64 = y_d[i] * ei_f
                     if (yi_ei < -tol && alphas_d[i] < C_d) || (yi_ei > tol && alphas_d[i] > 0.0) {
-                        let mut best_j: i32 = (iter * 7 + i * 13 + 3) % n
-                        if best_j == i { best_j = (best_j + 1) % n }
+                        let mut best_j: i32 = -1
                         let mut best_gain: f64 = 0.0
                         let mut j_scan: i32 = 0
                         while j_scan < n {
@@ -752,6 +930,7 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
                             j_scan = j_scan + 1
                         }
 
+                        if best_j < 0 { i = i + 1; continue }
                         let j2: i32 = best_j
                         let ej: f64 = error_cache[j2]
 
@@ -780,6 +959,11 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
                         let mut alpha_j_new: f64 = alpha_j_old - y_d[j2] * (ei_f - ej) / eta
                         if alpha_j_new < L { alpha_j_new = L }
                         if alpha_j_new > H { alpha_j_new = H }
+
+                        # Skip negligible updates to prevent oscillation
+                        let abs_dj2: f64 = alpha_j_new - alpha_j_old
+                        if abs_dj2 < 0.0 { abs_dj2 = -abs_dj2 }
+                        if abs_dj2 < 0.00001 { i = i + 1; continue }
 
                         let alpha_i_new: f64 = alpha_i_old + y_d[i] * y_d[j2] * (alpha_j_old - alpha_j_new)
 
