@@ -1,37 +1,37 @@
 // flow-scikit benchmark data and SVG chart rendering.
-// All data measured on the same arm64 macOS machine with seed=42, 80/20 split.
+// All data measured with seed=42, 80/20 split, xorshift32 PRNG.
 
 const BENCH = {
   iris: [
-    { algo: "LogisticRegression",  sk_score: 0.9333, fl_score: 0.9000, sk_ms: 0.02,  fl_ms: 0.11,  sk_fit: 0.02,  fl_fit: 0.11,  sk_pred: 0.00, fl_pred: 0.00 },
-    { algo: "LinearSVC",            sk_score: 0.8667, fl_score: 0.8667, sk_ms: 0.00,  fl_ms: 0.13,  sk_fit: 0.00,  fl_fit: 0.13,  sk_pred: 0.00, fl_pred: 0.00 },
-    { algo: "KernelSVC_RBF",        sk_score: 0.9667, fl_score: 0.9667, sk_ms: 0.00,  fl_ms: 3.82,  sk_fit: 0.00,  fl_fit: 3.82,  sk_pred: 0.00, fl_pred: 0.03 },
-    { algo: "DecisionTree",         sk_score: 0.9333, fl_score: 0.9333, sk_ms: 0.00,  fl_ms: 0.10,  sk_fit: 0.00,  fl_fit: 0.10,  sk_pred: 0.00, fl_pred: 0.00 },
+    { algo: "LogisticRegression",  sk_score: 0.9333, fl_score: 0.9333, sk_ms: 0.01,  fl_ms: 3.13,  sk_fit: 0.01,  fl_fit: 3.13,  sk_pred: 0.00, fl_pred: 0.01 },
+    { algo: "LinearSVC",            sk_score: 0.9000, fl_score: 0.9000, sk_ms: 0.00,  fl_ms: 0.27,  sk_fit: 0.00,  fl_fit: 0.27,  sk_pred: 0.00, fl_pred: 0.00 },
+    { algo: "KernelSVC_RBF",        sk_score: 0.9333, fl_score: 0.9333, sk_ms: 0.00,  fl_ms: 4.76,  sk_fit: 0.00,  fl_fit: 4.76,  sk_pred: 0.00, fl_pred: 0.05 },
+    { algo: "DecisionTree",         sk_score: 0.9333, fl_score: 0.9333, sk_ms: 0.00,  fl_ms: 0.12,  sk_fit: 0.00,  fl_fit: 0.12,  sk_pred: 0.00, fl_pred: 0.00 },
     { algo: "RandomForest",         sk_score: 0.9333, fl_score: 0.9333, sk_ms: 0.01,  fl_ms: 0.67,  sk_fit: 0.01,  fl_fit: 0.67,  sk_pred: 0.00, fl_pred: 0.01 },
     { algo: "GaussianNB",           sk_score: 0.9333, fl_score: 0.9333, sk_ms: 0.00,  fl_ms: 0.01,  sk_fit: 0.00,  fl_fit: 0.01,  sk_pred: 0.00, fl_pred: 0.00 },
-    { algo: "KMeans",               sk_score: 0.8000, fl_score: 0.8000, sk_ms: 0.24,  fl_ms: 0.02,  sk_fit: 0.24,  fl_fit: 0.02,  sk_pred: 0.00, fl_pred: 0.00 },
-    { algo: "PCA",                  sk_score: 0.7292, fl_score: 0.7292, sk_ms: 0.01,  fl_ms: 0.02,  sk_fit: 0.01,  fl_fit: 0.02,  sk_pred: 0.00, fl_pred: 0.00, metric: "explained_var" }
+    { algo: "KMeans",               sk_score: 0.8333, fl_score: 0.4667, sk_ms: 0.17,  fl_ms: 0.02,  sk_fit: 0.17,  fl_fit: 0.02,  sk_pred: 0.00, fl_pred: 0.00 },
+    { algo: "PCA",                  sk_score: 0.7262, fl_score: 0.7262, sk_ms: 0.02,  fl_ms: 0.03,  sk_fit: 0.02,  fl_fit: 0.03,  sk_pred: 0.00, fl_pred: 0.00, metric: "explained_var" }
   ],
   digits: [
-    { algo: "LogisticRegression",  sk_score: 0.9805, fl_score: 0.9749, sk_ms: 0.11,  fl_ms: 451.94, sk_fit: 0.11,  fl_fit: 451.94, sk_pred: 0.00, fl_pred: 0.17 },
-    { algo: "LinearSVC",            sk_score: 0.9554, fl_score: 0.9554, sk_ms: 2.89,  fl_ms: 142.56, sk_fit: 2.89,  fl_fit: 142.56, sk_pred: 0.00, fl_pred: 0.15 },
-    { algo: "KernelSVC_RBF",        sk_score: 0.9554, fl_score: 0.9471, sk_ms: 0.21,  fl_ms: 3924.46, sk_fit: 0.21,  fl_fit: 3924.46, sk_pred: 0.14, fl_pred: 143.31 },
-    { algo: "DecisionTree",         sk_score: 0.8607, fl_score: 0.8663, sk_ms: 0.06,  fl_ms: 21.92,  sk_fit: 0.06,  fl_fit: 21.92,  sk_pred: 0.05, fl_pred: 0.04 },
-    { algo: "RandomForest",         sk_score: 0.9526, fl_score: 0.9081, sk_ms: 0.13,  fl_ms: 210.04, sk_fit: 0.13,  fl_fit: 210.04, sk_pred: 0.01, fl_pred: 0.27 },
-    { algo: "GaussianNB",           sk_score: 0.7994, fl_score: 0.7744, sk_ms: 0.00,  fl_ms: 1.64,   sk_fit: 0.00,  fl_fit: 1.64,   sk_pred: 0.00, fl_pred: 0.88 },
-    { algo: "KMeans",               sk_score: 0.6435, fl_score: 0.6295, sk_ms: 0.47,  fl_ms: 17.74,  sk_fit: 0.47,  fl_fit: 17.74,  sk_pred: 0.00, fl_pred: 0.16 }
+    { algo: "LogisticRegression",  sk_score: 0.9749, fl_score: 0.9554, sk_ms: 0.01,  fl_ms: 787.18,  sk_fit: 0.01,  fl_fit: 787.18,  sk_pred: 0.00, fl_pred: 0.18 },
+    { algo: "LinearSVC",            sk_score: 0.9694, fl_score: 0.9694, sk_ms: 0.39,  fl_ms: 183.12,  sk_fit: 0.39,  fl_fit: 183.12,  sk_pred: 0.00, fl_pred: 0.15 },
+    { algo: "KernelSVC_RBF",        sk_score: 0.9499, fl_score: 0.9471, sk_ms: 0.03,  fl_ms: 4573.19,  sk_fit: 0.03,  fl_fit: 4573.19,  sk_pred: 0.02, fl_pred: 145.79 },
+    { algo: "DecisionTree",         sk_score: 0.8886, fl_score: 0.8774, sk_ms: 0.01,  fl_ms: 22.20,   sk_fit: 0.01,  fl_fit: 22.20,   sk_pred: 0.00, fl_pred: 0.04 },
+    { algo: "RandomForest",         sk_score: 0.9666, fl_score: 0.9248, sk_ms: 0.02,  fl_ms: 213.40,   sk_fit: 0.02,  fl_fit: 213.40,   sk_pred: 0.00, fl_pred: 0.26 },
+    { algo: "GaussianNB",           sk_score: 0.8134, fl_score: 0.7883, sk_ms: 0.00,  fl_ms: 1.57,     sk_fit: 0.00,  fl_fit: 1.57,     sk_pred: 0.00, fl_pred: 0.87 },
+    { algo: "KMeans",               sk_score: 0.6323, fl_score: 0.6295, sk_ms: 0.07,  fl_ms: 7.70,     sk_fit: 0.07,  fl_fit: 7.70,     sk_pred: 0.00, fl_pred: 0.16 }
   ],
   diabetes: [
-    { algo: "Ridge",                sk_score: 0.3324, fl_score: 0.3324, sk_ms: 0.01,  fl_ms: 0.03,  sk_fit: 0.01,  fl_fit: 0.03,  sk_pred: 0.00, fl_pred: 0.00 },
-    { algo: "Lasso",                sk_score: 0.3317, fl_score: 0.3317, sk_ms: 0.00,  fl_ms: 4.88,  sk_fit: 0.00,  fl_fit: 4.88,  sk_pred: 0.00, fl_pred: 0.00 },
-    { algo: "LinearRegression",     sk_score: 0.3341, fl_score: 0.3341, sk_ms: 0.02,  fl_ms: 0.03,  sk_fit: 0.02,  fl_fit: 0.03,  sk_pred: 0.00, fl_pred: 0.00 },
-    { algo: "KernelRidge_RBF",      sk_score: 0.3373, fl_score: 0.3376, sk_ms: 0.11,  fl_ms: 11.44, sk_fit: 0.11,  fl_fit: 11.44, sk_pred: 0.00, fl_pred: 1.27 }
+    { algo: "Ridge",                sk_score: 0.6089, fl_score: 0.6089, sk_ms: 0.00,  fl_ms: 0.04,  sk_fit: 0.00,  fl_fit: 0.04,  sk_pred: 0.00, fl_pred: 0.00 },
+    { algo: "Lasso",                sk_score: 0.6084, fl_score: 0.6085, sk_ms: 0.00,  fl_ms: 4.69,  sk_fit: 0.00,  fl_fit: 4.69,  sk_pred: 0.00, fl_pred: 0.00 },
+    { algo: "LinearRegression",     sk_score: 0.6108, fl_score: 0.6108, sk_ms: 0.01,  fl_ms: 0.03,  sk_fit: 0.01,  fl_fit: 0.03,  sk_pred: 0.00, fl_pred: 0.00 },
+    { algo: "KernelRidge_RBF",      sk_score: 0.4173, fl_score: 0.4181, sk_ms: 0.04,  fl_ms: 11.66, sk_fit: 0.04,  fl_fit: 11.66, sk_pred: 0.00, fl_pred: 0.99 }
   ],
   iris_combo: [
     { algo: "GaussianNB",      sk_acc: 0.9333, fl_acc: 0.9333, sk_train: 0.00,  fl_train: 0.01 },
-    { algo: "DecisionTree",    sk_acc: 0.9333, fl_acc: 0.9333, sk_train: 0.00,  fl_train: 0.10 },
+    { algo: "DecisionTree",    sk_acc: 0.9333, fl_acc: 0.9333, sk_train: 0.00,  fl_train: 0.12 },
     { algo: "KNN_k5",          sk_acc: 0.9333, fl_acc: 0.9667, sk_train: 1.84,  fl_train: 0.03 },
-    { algo: "LinearSVC_OVR",   sk_acc: 0.8667, fl_acc: 0.8667, sk_train: 0.00,  fl_train: 0.13 },
+    { algo: "LinearSVC_OVR",   sk_acc: 0.9000, fl_acc: 0.9000, sk_train: 0.00,  fl_train: 0.27 },
     { algo: "RandomForest_10", sk_acc: 0.9333, fl_acc: 0.9333, sk_train: 0.01,  fl_train: 0.67 }
   ],
   // Android: scikit-learn (Flow) cross-compiled to aarch64-linux-android,
@@ -40,29 +40,29 @@ const BENCH = {
   // mac_ms is the macOS arm64 Flow time from BENCH above, for comparison.
   android: {
     iris: [
-      { algo: "LogisticRegression",  score: 0.9000, mac_ms: 0.11,  and_ms: 0.12 },
-      { algo: "LinearSVC",            score: 0.8667, mac_ms: 0.13,  and_ms: 0.10 },
-      { algo: "KernelSVC_RBF",        score: 0.9667, mac_ms: 3.82,  and_ms: 3.83 },
-      { algo: "DecisionTree",         score: 0.9333, mac_ms: 0.10,  and_ms: 0.13 },
-      { algo: "RandomForest",         score: 0.9333, mac_ms: 0.67,  and_ms: 0.75 },
+      { algo: "LogisticRegression",  score: 0.9333, mac_ms: 3.13,  and_ms: 0.10 },
+      { algo: "LinearSVC",            score: 0.9000, mac_ms: 0.27,  and_ms: 0.14 },
+      { algo: "KernelSVC_RBF",        score: 0.9333, mac_ms: 4.76,  and_ms: 3.45 },
+      { algo: "DecisionTree",         score: 0.9333, mac_ms: 0.12,  and_ms: 0.17 },
+      { algo: "RandomForest",         score: 0.9333, mac_ms: 0.67,  and_ms: 0.70 },
       { algo: "GaussianNB",           score: 0.9333, mac_ms: 0.01,  and_ms: 0.01 },
-      { algo: "KMeans",               score: 0.8000, mac_ms: 0.02,  and_ms: 0.01 },
-      { algo: "PCA",                  score: 0.7292, mac_ms: 0.02,  and_ms: 0.03 }
+      { algo: "KMeans",               score: 0.4667, mac_ms: 0.02,  and_ms: 0.01 },
+      { algo: "PCA",                  score: 0.7262, mac_ms: 0.03,  and_ms: 0.04 }
     ],
     digits: [
-      { algo: "LogisticRegression",  score: 0.9749, mac_ms: 451.94,   and_ms: 922.00 },
-      { algo: "LinearSVC",            score: 0.9554, mac_ms: 142.56,   and_ms: 317.87 },
-      { algo: "KernelSVC_RBF",        score: 0.9471, mac_ms: 3924.46,  and_ms: 371.13 },
-      { algo: "DecisionTree",         score: 0.8663, mac_ms: 21.92,    and_ms: 27.59 },
-      { algo: "RandomForest",         score: 0.9081, mac_ms: 210.04,   and_ms: 291.80 },
-      { algo: "GaussianNB",           score: 0.7744, mac_ms: 1.64,     and_ms: 2.84 },
-      { algo: "KMeans",               score: 0.6295, mac_ms: 17.74,    and_ms: 13.13 }
+      { algo: "LogisticRegression",  score: 0.9666, mac_ms: 787.18,   and_ms: 392.96 },
+      { algo: "LinearSVC",            score: 0.9694, mac_ms: 183.12,   and_ms: 122.81 },
+      { algo: "KernelSVC_RBF",        score: 0.9471, mac_ms: 4573.19,  and_ms: 3624.26 },
+      { algo: "DecisionTree",         score: 0.8774, mac_ms: 22.20,    and_ms: 19.32 },
+      { algo: "RandomForest",         score: 0.9248, mac_ms: 213.40,   and_ms: 188.17 },
+      { algo: "GaussianNB",           score: 0.7883, mac_ms: 1.57,     and_ms: 1.32 },
+      { algo: "KMeans",               score: 0.6295, mac_ms: 7.70,     and_ms: 6.05 }
     ],
     diabetes: [
-      { algo: "Ridge",                score: 0.3324, mac_ms: 0.03,  and_ms: 0.03 },
-      { algo: "Lasso",                score: 0.3317, mac_ms: 4.88,  and_ms: 9.43 },
-      { algo: "LinearRegression",     score: 0.3341, mac_ms: 0.03,  and_ms: 0.06 },
-      { algo: "KernelRidge_RBF",      score: 0.3376, mac_ms: 11.44, and_ms: 16.56 }
+      { algo: "Ridge",                score: 0.6089, mac_ms: 0.04,  and_ms: 0.02 },
+      { algo: "Lasso",                score: 0.6085, mac_ms: 4.69,  and_ms: 3.70 },
+      { algo: "LinearRegression",     score: 0.6108, mac_ms: 0.03,  and_ms: 0.03 },
+      { algo: "KernelRidge_RBF",      score: 0.4181, mac_ms: 11.66, and_ms: 10.28 }
     ]
   }
 };

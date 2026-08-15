@@ -14,15 +14,18 @@ function elapsed_ms(start: i64, end: i64) -> f32 {
 
 # Split data into train/test with fixed seed for reproducibility.
 # Uses the same 80/20 split as the Python benchmark (random_state=42).
+# Uses xorshift32 PRNG instead of libc rand() for cross-platform consistency.
 function split_data(X: Matrix, y: ptr<f32>, n: i32, n_test: i32, seed: i32) -> SplitResult {
     let indices: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
     for i in 0 to n { indices[i] = i }
 
-    # Fisher-Yates shuffle with seed
-    srand(seed)
+    # Fisher-Yates shuffle with deterministic PRNG
+    let mut prng: PRNG = prng_seed(seed)
     let mut i: i32 = n - 1
     while i > 0 {
-        let j: i32 = rand() % (i + 1)
+        let res: PRNGResult = prng_int(prng, i + 1)
+        prng = PRNG { state: res.state }
+        let j: i32 = res.value
         let tmp: i32 = indices[i]
         indices[i] = indices[j]
         indices[j] = tmp

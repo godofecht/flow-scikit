@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
 """Benchmark real scikit-learn on iris, digits, diabetes.
 Outputs results in parseable format for comparison with flow-scikit.
-Uses the same C rand() split as the Flow benchmark for exact parity.
+Uses the same xorshift32 PRNG split as the Flow benchmark for exact parity.
 """
 import time
-import ctypes
 import numpy as np
 from sklearn.datasets import load_iris, load_digits, load_diabetes
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, r2_score
 
-libc = ctypes.CDLL('/usr/lib/libc.dylib')
-
-def c_rand_split(n, n_test, seed=42):
-    """Replicate Flow's split_data: Fisher-Yates shuffle with C rand()."""
+def xorshift32_split(n, n_test, seed=42):
+    """Replicate Flow's split_data: Fisher-Yates shuffle with xorshift32 PRNG."""
     indices = list(range(n))
-    libc.srand(seed)
+    state = seed & 0xFFFFFFFF
+    if state == 0:
+        state = 1
     for i in range(n - 1, 0, -1):
-        j = libc.rand() % (i + 1)
+        x = state
+        x = (x ^ ((x << 13) & 0xFFFFFFFF)) & 0xFFFFFFFF
+        x = (x ^ (x >> 17)) & 0xFFFFFFFF
+        x = (x ^ ((x << 5) & 0xFFFFFFFF)) & 0xFFFFFFFF
+        state = x
+        j = (x & 0x7FFFFFFF) % (i + 1)
         indices[i], indices[j] = indices[j], indices[i]
     n_train = n - n_test
     return np.array(indices[:n_train]), np.array(indices[n_train:])
@@ -27,7 +31,7 @@ results = []
 def bench(name, dataset_name, X, y, fit_fn, predict_fn, is_classification=True):
     n = len(X)
     n_test = n // 5
-    train_idx, test_idx = c_rand_split(n, n_test)
+    train_idx, test_idx = xorshift32_split(n, n_test)
     X_train, X_test = X[train_idx], X[test_idx]
     y_train, y_test = y[train_idx], y[test_idx]
     scaler = StandardScaler()
@@ -100,7 +104,7 @@ def kmeans_predict(m, X):
 def kmeans_bench(name, ds, X, y, n_clusters):
     n = len(X)
     n_test = n // 5
-    train_idx, test_idx = c_rand_split(n, n_test)
+    train_idx, test_idx = xorshift32_split(n, n_test)
     X_train, X_test = X[train_idx], X[test_idx]
     y_train, y_test = y[train_idx], y[test_idx]
     scaler = StandardScaler()
@@ -134,7 +138,7 @@ def pca_transform(m, X):
     return m.transform(X)
 # PCA is transform, not predict - measure explained variance ratio instead
 n_iris = len(X_iris)
-train_idx_i, test_idx_i = c_rand_split(n_iris, n_iris // 5)
+train_idx_i, test_idx_i = xorshift32_split(n_iris, n_iris // 5)
 X_train_i = scaler_fit_i = StandardScaler().fit(X_iris[train_idx_i])
 X_train_i_s = scaler_fit_i.transform(X_iris[train_idx_i])
 X_test_i_s = scaler_fit_i.transform(X_iris[test_idx_i])
