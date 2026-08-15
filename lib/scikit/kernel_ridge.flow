@@ -84,30 +84,49 @@ function compute_kernel_matrix(X: Matrix, kernel_type: i32, gamma: f32, degree: 
 
 export function kernel_ridge_fit(X: Matrix, y: ptr<f32>, alpha: f32, kernel_type: i32, gamma: f32, degree: i32, coef0: f32) -> KernelRidge {
     let n: i32 = X.rows
-    let K: Matrix = compute_kernel_matrix(X, kernel_type, gamma, degree, coef0)
+    let n_features: i32 = X.cols
+    let gamma_d: f64 = (gamma) as f64
 
-    # Build K + alpha*I as a flat array for Cholesky
-    let K_reg: ptr<f32> = array_new_f32(n * n)
-    for i in 0 to n {
-        for j in 0 to n {
-            K_reg[i * n + j] = matrix_at(K, i, j)
+    # Build K + alpha*I directly in f64 for maximum precision.
+    # For RBF kernel (kernel_type == 1), compute in f64 directly.
+    # For other kernels, fall back to f32 compute_kernel_matrix.
+    let K_reg: ptr<f64> = array_new_f64(n * n)
+    if kernel_type == 1 {
+        for i in 0 to n {
+            for j in 0 to n {
+                let mut sq_dist: f64 = 0.0
+                for f in 0 to n_features {
+                    let d: f64 = (matrix_at(X, i, f) - matrix_at(X, j, f)) as f64
+                    sq_dist = sq_dist + d * d
+                }
+                K_reg[i * n + j] = _kr_exp_f64(0.0 - gamma_d * sq_dist)
+            }
+            K_reg[i * n + i] = K_reg[i * n + i] + (alpha as f64)
         }
-        K_reg[i * n + i] = K_reg[i * n + i] + alpha
+    } else {
+        let K: Matrix = compute_kernel_matrix(X, kernel_type, gamma, degree, coef0)
+        for i in 0 to n {
+            for j in 0 to n {
+                K_reg[i * n + j] = (matrix_at(K, i, j)) as f64
+            }
+            K_reg[i * n + i] = K_reg[i * n + i] + (alpha as f64)
+        }
+        matrix_free(K)
     }
 
-    # Cholesky decomposition: L * L^T = K + alpha*I
-    let L: ptr<f32> = array_new_f32(n * n)
+    # Cholesky decomposition in f64: L * L^T = K + alpha*I
+    let L: ptr<f64> = array_new_f64(n * n)
     for i in 0 to n {
         for j in 0 to i + 1 {
-            let mut sum: f32 = K_reg[i * n + j]
+            let mut sum: f64 = K_reg[i * n + j]
             for k in 0 to j {
                 sum = sum - L[i * n + k] * L[j * n + k]
             }
             if i == j {
-                if sum < 0.0000000001 { sum = 0.0000000001 }
-                L[i * n + j] = sqrt((sum as f64) as f32)
+                if sum < 0.000000000000001 { sum = 0.000000000000001 }
+                L[i * n + j] = sqrt(sum)
             } else {
-                if L[j * n + j] < 0.0000000001 {
+                if L[j * n + j] < 0.000000000000001 {
                     L[i * n + j] = 0.0
                 } else {
                     L[i * n + j] = sum / L[j * n + j]
@@ -116,40 +135,46 @@ export function kernel_ridge_fit(X: Matrix, y: ptr<f32>, alpha: f32, kernel_type
         }
     }
 
-    # Forward substitution: L * z = y
-    let z: ptr<f32> = array_new_f32(n)
+    # Forward substitution: L * z = y (f64)
+    let z: ptr<f64> = array_new_f64(n)
     for i in 0 to n {
-        let mut sum: f32 = y[i]
+        let mut sum: f64 = (y[i]) as f64
         for j in 0 to i {
             sum = sum - L[i * n + j] * z[j]
         }
-        if L[i * n + i] < 0.0000000001 {
+        if L[i * n + i] < 0.000000000000001 {
             z[i] = 0.0
         } else {
             z[i] = sum / L[i * n + i]
         }
     }
 
-    # Backward substitution: L^T * dual_coef = z
-    let dual_coef: ptr<f32> = array_new_f32(n)
+    # Backward substitution: L^T * dual_coef = z (f64)
+    let dual_coef_d: ptr<f64> = array_new_f64(n)
     let mut i: i32 = n - 1
     while i >= 0 {
-        let mut sum: f32 = z[i]
+        let mut sum: f64 = z[i]
         for j in i + 1 to n {
-            sum = sum - L[j * n + i] * dual_coef[j]
+            sum = sum - L[j * n + i] * dual_coef_d[j]
         }
-        if L[i * n + i] < 0.0000000001 {
-            dual_coef[i] = 0.0
+        if L[i * n + i] < 0.000000000000001 {
+            dual_coef_d[i] = 0.0
         } else {
-            dual_coef[i] = sum / L[i * n + i]
+            dual_coef_d[i] = sum / L[i * n + i]
         }
         i = i - 1
     }
 
-    array_free_f32(L)
-    array_free_f32(z)
-    array_free_f32(K_reg)
-    matrix_free(K)
+    # Convert dual_coef to f32 for storage
+    let dual_coef: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        dual_coef[i] = dual_coef_d[i] as f32
+    }
+
+    array_free_f64(L)
+    array_free_f64(z)
+    array_free_f64(K_reg)
+    array_free_f64(dual_coef_d)
 
     let X_copy: Matrix = matrix_copy(X)
 
@@ -168,23 +193,47 @@ export function kernel_ridge_fit(X: Matrix, y: ptr<f32>, alpha: f32, kernel_type
     }
 }
 
+function _kr_exp_f64(x: f64) -> f64 {
+    return exp(x)
+}
+
 export function kernel_ridge_predict(model: KernelRidge, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
     let result: ptr<f32> = array_new_f32(n)
+    let gamma_d: f64 = (model.gamma) as f64
 
-    for i in 0 to n {
-        let xi: ptr<f32> = array_new_f32(X.cols)
-        matrix_row(X, i, xi)
-        let mut sum: f32 = 0.0
-        for j in 0 to model.n_samples {
-            let xj: ptr<f32> = array_new_f32(model.n_features)
-            matrix_row(model.X_train, j, xj)
-            let k: f32 = kernel_compute(xi, xj, model.n_features, model.kernel_type, model.gamma, model.degree, model.coef0)
-            sum = sum + model.dual_coef[j] * k
-            array_free_f32(xj)
+    if model.kernel_type == 1 {
+        # RBF kernel in f64 for precision
+        for i in 0 to n {
+            let mut sum: f64 = 0.0
+            for j in 0 to model.n_samples {
+                let dc: f64 = (model.dual_coef[j]) as f64
+                if fabs(dc) < 0.0000000001 { continue }
+                let mut sq_dist: f64 = 0.0
+                for f in 0 to model.n_features {
+                    let d: f64 = (matrix_at(X, i, f) - matrix_at(model.X_train, j, f)) as f64
+                    sq_dist = sq_dist + d * d
+                }
+                let k_val: f64 = _kr_exp_f64(0.0 - gamma_d * sq_dist)
+                sum = sum + dc * k_val
+            }
+            result[i] = sum as f32
         }
-        result[i] = sum
-        array_free_f32(xi)
+    } else {
+        for i in 0 to n {
+            let xi: ptr<f32> = array_new_f32(X.cols)
+            matrix_row(X, i, xi)
+            let mut sum: f32 = 0.0
+            for j in 0 to model.n_samples {
+                let xj: ptr<f32> = array_new_f32(model.n_features)
+                matrix_row(model.X_train, j, xj)
+                let k: f32 = kernel_compute(xi, xj, model.n_features, model.kernel_type, model.gamma, model.degree, model.coef0)
+                sum = sum + model.dual_coef[j] * k
+                array_free_f32(xj)
+            }
+            result[i] = sum
+            array_free_f32(xi)
+        }
     }
 
     return result
