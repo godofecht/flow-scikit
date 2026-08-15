@@ -4,6 +4,7 @@
 
 import "lib/scikit/matrix.flow"
 import "lib/scikit/sparse.flow"
+import "lib/scikit/kernel_ridge.flow"
 
 # ============================================================================
 # LinearSVC (linear SVM classifier via SGD on hinge loss)
@@ -740,23 +741,18 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
     return result
 }
 
-# Core SMO training loop. Takes y_dual directly (-1/+1) so callers
-# can control class encoding without relying on class detection order.
+# Core SVM training using projected gradient descent on the dual QP.
+# Solves: min (1/2) alpha^T Q alpha - sum alpha_i  s.t. 0 <= alpha_i <= C
+# where Q_ij = y_i * y_j * K[i,j].
+# Takes y_dual directly (-1/+1) so callers can control class encoding.
 function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_classes: i32, C: f32, gamma: f32, max_iter: i32) -> KernelSVC {
     let n: i32 = X.rows
     let n_features: i32 = X.cols
 
-    # Use f64 internally for alphas, error cache, and b for precision.
+    # Use f64 internally for alphas and b for precision.
     let alphas_d: ptr<f64> = array_new_f64(n)
     let mut b: f64 = 0.0
     let C_d: f64 = C as f64
-
-    # Error cache: E[i] = f(x_i) - y_i = sum_j(alpha_j y_j K(j,i)) + b - y_i
-    # With initial alphas=0 and b=0, E[i] = -y_i.
-    let error_cache: ptr<f64> = array_new_f64(n)
-    for i in 0 to n {
-        error_cache[i] = 0.0 - (y_dual[i] as f64)
-    }
 
     # Precompute y_dual in f64
     let y_d: ptr<f64> = array_new_f64(n)
@@ -764,7 +760,7 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
         y_d[i] = y_dual[i] as f64
     }
 
-    # Precompute kernel values in f64 directly from data for precision
+    # Precompute kernel matrix in f64
     let gamma_d: f64 = gamma as f64
     let kernel_d: ptr<f64> = malloc((n as i64) * (n as i64) * 8) as ptr<f64>
     for i in 0 to n {
@@ -778,239 +774,74 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
         }
     }
 
-    let tol: f64 = 0.001
+    # Precompute Q matrix: Q[i*n+j] = y_i * y_j * K[i,j]
+    let Q: ptr<f64> = malloc((n as i64) * (n as i64) * 8) as ptr<f64>
+    for i in 0 to n {
+        for j in 0 to n {
+            Q[i * n + j] = y_d[i] * y_d[j] * kernel_d[i * n + j]
+        }
+    }
+
+    # Step size: 1 / trace(Q) for convergence
+    let mut trace_Q: f64 = 0.0
+    for i in 0 to n {
+        trace_Q = trace_Q + Q[i * n + i]
+    }
+    let lr: f64 = 1.0 / trace_Q
+
+    # PGD iterations
     let mut iter: i32 = 0
-    let mut examine_all: bool = true
-    let mut num_changed: i32 = 1
-
-    while (num_changed > 0 || examine_all) && iter < max_iter {
-        num_changed = 0
-
-        if examine_all {
-            # Full pass over all samples
-            let mut i: i32 = 0
-            while i < n {
-                let ei_f: f64 = error_cache[i]
-                let yi_ei: f64 = y_d[i] * ei_f
-                if (yi_ei < -tol && alphas_d[i] < C_d) || (yi_ei > tol && alphas_d[i] > 0.0) {
-                    # Working set selection: pick j maximizing |Ei - Ej|.
-                    # If the best j has L == H (e.g. both alphas at same bound
-                    # with same label), fall back to j with opposite label.
-                    let mut best_j: i32 = -1
-                    let mut best_gain: f64 = 0.0
-                    let mut j_scan: i32 = 0
-                    while j_scan < n {
-                        if j_scan == i { j_scan = j_scan + 1; continue }
-                        let ej_test: f64 = error_cache[j_scan]
-                        let diff: f64 = ei_f - ej_test
-                        let abs_diff: f64 = diff
-                        if diff < 0.0 { abs_diff = -diff }
-                        if abs_diff > best_gain {
-                            best_gain = abs_diff
-                            best_j = j_scan
-                        }
-                        j_scan = j_scan + 1
-                    }
-
-                    if best_j < 0 { i = i + 1; continue }
-                    let mut j2: i32 = best_j
-
-                    let alpha_i_old: f64 = alphas_d[i]
-                    let mut alpha_j_old: f64 = alphas_d[j2]
-
-                    let mut L: f64 = 0.0
-                    let mut H: f64 = C_d
-                    if y_d[i] == y_d[j2] {
-                        L = alpha_i_old + alpha_j_old - C_d
-                        H = alpha_i_old + alpha_j_old
-                        if L < 0.0 { L = 0.0 }
-                        if H > C_d { H = C_d }
-                    } else {
-                        L = alpha_i_old - alpha_j_old
-                        H = alpha_i_old - alpha_j_old + C_d
-                        if L < 0.0 { L = 0.0 }
-                        if H > C_d { H = C_d }
-                    }
-
-                    # If L == H, try to find a j with opposite label
-                    if L == H {
-                        let mut best_j2: i32 = -1
-                        let mut best_gain2: f64 = 0.0
-                        let mut j_scan2: i32 = 0
-                        while j_scan2 < n {
-                            if j_scan2 == i { j_scan2 = j_scan2 + 1; continue }
-                            if y_d[j_scan2] == y_d[i] { j_scan2 = j_scan2 + 1; continue }
-                            let ej_test2: f64 = error_cache[j_scan2]
-                            let diff2: f64 = ei_f - ej_test2
-                            let abs_diff2: f64 = diff2
-                            if diff2 < 0.0 { abs_diff2 = -diff2 }
-                            if abs_diff2 > best_gain2 {
-                                best_gain2 = abs_diff2
-                                best_j2 = j_scan2
-                            }
-                            j_scan2 = j_scan2 + 1
-                        }
-                        if best_j2 < 0 { i = i + 1; continue }
-                        j2 = best_j2
-                        alpha_j_old = alphas_d[j2]
-                        L = alpha_i_old - alpha_j_old
-                        H = alpha_i_old - alpha_j_old + C_d
-                        if L < 0.0 { L = 0.0 }
-                        if H > C_d { H = C_d }
-                        if L == H { i = i + 1; continue }
-                    }
-
-                    let ej: f64 = error_cache[j2]
-
-                    let eta: f64 = 2.0 * kernel_d[i * n + j2] - kernel_d[i * n + i] - kernel_d[j2 * n + j2]
-                    if eta >= -0.0000000001 { i = i + 1; continue }
-
-                    let mut alpha_j_new: f64 = alpha_j_old - y_d[j2] * (ei_f - ej) / eta
-                    if alpha_j_new < L { alpha_j_new = L }
-                    if alpha_j_new > H { alpha_j_new = H }
-
-                    # Skip negligible updates to prevent oscillation
-                    let abs_dj: f64 = alpha_j_new - alpha_j_old
-                    if abs_dj < 0.0 { abs_dj = -abs_dj }
-                    if abs_dj < 0.00001 { i = i + 1; continue }
-
-                    let alpha_i_new: f64 = alpha_i_old + y_d[i] * y_d[j2] * (alpha_j_old - alpha_j_new)
-
-                    let di: f64 = alpha_i_new - alpha_i_old
-                    let dj: f64 = alpha_j_new - alpha_j_old
-
-                    alphas_d[i] = alpha_i_new
-                    alphas_d[j2] = alpha_j_new
-
-                    let b1: f64 = b - ei_f - y_d[i] * di * kernel_d[i * n + i] - y_d[j2] * dj * kernel_d[i * n + j2]
-                    let b2: f64 = b - ej - y_d[i] * di * kernel_d[i * n + j2] - y_d[j2] * dj * kernel_d[j2 * n + j2]
-
-                    let b_old: f64 = b
-                    if alpha_i_new > 0.0 && alpha_i_new < C_d {
-                        b = b1
-                    } elif alpha_j_new > 0.0 && alpha_j_new < C_d {
-                        b = b2
-                    } else {
-                        b = (b1 + b2) / 2.0
-                    }
-
-                    # Update error cache: E[k] += di*y_i*K(i,k) + dj*y_j*K(j,k) + (b_new - b_old)
-                    let db: f64 = b - b_old
-                    let mut k: i32 = 0
-                    while k < n {
-                        error_cache[k] = error_cache[k] + y_d[i] * di * kernel_d[i * n + k] + y_d[j2] * dj * kernel_d[j2 * n + k] + db
-                        k = k + 1
-                    }
-
-                    num_changed = num_changed + 1
-                }
-                i = i + 1
+    while iter < max_iter {
+        let mut max_diff: f64 = 0.0
+        for i in 0 to n {
+            # Gradient: g[i] = sum_j Q[i,j] * alpha_j - 1
+            let mut gi: f64 = 0.0
+            for j in 0 to n {
+                gi = gi + Q[i * n + j] * alphas_d[j]
             }
-        } else {
-            # Non-boundary pass: only examine samples with 0 < alpha < C
-            let mut i: i32 = 0
-            while i < n {
-                if alphas_d[i] > 0.0 && alphas_d[i] < C_d {
-                    let ei_f: f64 = error_cache[i]
-                    let yi_ei: f64 = y_d[i] * ei_f
-                    if (yi_ei < -tol && alphas_d[i] < C_d) || (yi_ei > tol && alphas_d[i] > 0.0) {
-                        let mut best_j: i32 = -1
-                        let mut best_gain: f64 = 0.0
-                        let mut j_scan: i32 = 0
-                        while j_scan < n {
-                            if j_scan == i { j_scan = j_scan + 1; continue }
-                            let ej_test: f64 = error_cache[j_scan]
-                            let diff: f64 = ei_f - ej_test
-                            let abs_diff: f64 = diff
-                            if diff < 0.0 { abs_diff = -diff }
-                            if abs_diff > best_gain {
-                                best_gain = abs_diff
-                                best_j = j_scan
-                            }
-                            j_scan = j_scan + 1
-                        }
+            gi = gi - 1.0
 
-                        if best_j < 0 { i = i + 1; continue }
-                        let j2: i32 = best_j
-                        let ej: f64 = error_cache[j2]
+            # Projected gradient step
+            let mut alpha_new: f64 = alphas_d[i] - lr * gi
+            if alpha_new < 0.0 { alpha_new = 0.0 }
+            if alpha_new > C_d { alpha_new = C_d }
 
-                        let alpha_i_old: f64 = alphas_d[i]
-                        let alpha_j_old: f64 = alphas_d[j2]
-
-                        let mut L: f64 = 0.0
-                        let mut H: f64 = C_d
-                        if y_d[i] == y_d[j2] {
-                            L = alpha_i_old + alpha_j_old - C_d
-                            H = alpha_i_old + alpha_j_old
-                            if L < 0.0 { L = 0.0 }
-                            if H > C_d { H = C_d }
-                        } else {
-                            L = alpha_i_old - alpha_j_old
-                            H = alpha_i_old - alpha_j_old + C_d
-                            if L < 0.0 { L = 0.0 }
-                            if H > C_d { H = C_d }
-                        }
-
-                        if L == H { i = i + 1; continue }
-
-                        let eta: f64 = 2.0 * kernel_d[i * n + j2] - kernel_d[i * n + i] - kernel_d[j2 * n + j2]
-                        if eta >= -0.0000000001 { i = i + 1; continue }
-
-                        let mut alpha_j_new: f64 = alpha_j_old - y_d[j2] * (ei_f - ej) / eta
-                        if alpha_j_new < L { alpha_j_new = L }
-                        if alpha_j_new > H { alpha_j_new = H }
-
-                        # Skip negligible updates to prevent oscillation
-                        let abs_dj2: f64 = alpha_j_new - alpha_j_old
-                        if abs_dj2 < 0.0 { abs_dj2 = -abs_dj2 }
-                        if abs_dj2 < 0.00001 { i = i + 1; continue }
-
-                        let alpha_i_new: f64 = alpha_i_old + y_d[i] * y_d[j2] * (alpha_j_old - alpha_j_new)
-
-                        let di: f64 = alpha_i_new - alpha_i_old
-                        let dj: f64 = alpha_j_new - alpha_j_old
-
-                        alphas_d[i] = alpha_i_new
-                        alphas_d[j2] = alpha_j_new
-
-                        let b1: f64 = b - ei_f - y_d[i] * di * kernel_d[i * n + i] - y_d[j2] * dj * kernel_d[i * n + j2]
-                        let b2: f64 = b - ej - y_d[i] * di * kernel_d[i * n + j2] - y_d[j2] * dj * kernel_d[j2 * n + j2]
-
-                        let b_old: f64 = b
-                        if alpha_i_new > 0.0 && alpha_i_new < C_d {
-                            b = b1
-                        } elif alpha_j_new > 0.0 && alpha_j_new < C_d {
-                            b = b2
-                        } else {
-                            b = (b1 + b2) / 2.0
-                        }
-
-                        let db: f64 = b - b_old
-                        let mut k: i32 = 0
-                        while k < n {
-                            error_cache[k] = error_cache[k] + y_d[i] * di * kernel_d[i * n + k] + y_d[j2] * dj * kernel_d[j2 * n + k] + db
-                            k = k + 1
-                        }
-
-                        num_changed = num_changed + 1
-                    }
-                }
-                i = i + 1
-            }
+            let diff: f64 = alpha_new - alphas_d[i]
+            let abs_diff: f64 = diff
+            if diff < 0.0 { abs_diff = 0.0 - diff }
+            if abs_diff > max_diff { max_diff = abs_diff }
+            alphas_d[i] = alpha_new
         }
 
-        if examine_all {
-            examine_all = false
-        } elif num_changed == 0 {
-            examine_all = true
+        if max_diff < 0.000001 {
+            iter = iter + 1
+            break
         }
-
         iter = iter + 1
     }
 
-    array_free_f64(error_cache)
+    # Compute bias from free support vectors (0 < alpha < C)
+    let mut n_free: i32 = 0
+    for i in 0 to n {
+        if alphas_d[i] > 0.0 && alphas_d[i] < C_d {
+            let mut fi: f64 = 0.0
+            for j in 0 to n {
+                if alphas_d[j] > 0.0 {
+                    fi = fi + alphas_d[j] * y_d[j] * kernel_d[i * n + j]
+                }
+            }
+            b = b + (y_d[i] - fi)
+            n_free = n_free + 1
+        }
+    }
+    if n_free > 0 {
+        b = b / (n_free as f64)
+    }
+
+    free(Q as ptr<void>)
     array_free_f64(y_d)
     free(kernel_d as ptr<void>)
+
 
     # Convert f64 alphas to f32 for storage
     let alphas: ptr<f32> = array_new_f32(n)
@@ -2203,4 +2034,109 @@ export function svr_predict(model: SVR, X: Matrix) -> ptr<f32> {
 export function svr_free(model: SVR) -> void {
     matrix_free(model.X_train)
     array_free_f32(model.alpha_diff)
+}
+
+# ============================================================================
+# LS-SVM (Least Squares SVM) classifier via KernelRidge one-vs-rest.
+# Solves (K + alpha*I) w = y for each class, then picks argmax.
+# More reliable than SMO for multi-class problems.
+# ============================================================================
+
+export struct LSSVMClassifier {
+    models: ptr<KernelRidge>,
+    classes: ptr<f32>,
+    n_classes: i32,
+    n_features: i32,
+    gamma: f32,
+    alpha: f32,
+    fitted: bool
+}
+
+export function lssvm_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gamma: f32, alpha: f32) -> LSSVMClassifier {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] { found = true }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let models: ptr<KernelRidge> = malloc((n_found as i64) * 256) as ptr<KernelRidge>
+
+    let mut c: i32 = 0
+    while c < n_found {
+        let y_bin: ptr<f32> = array_new_f32(n)
+        for i in 0 to n {
+            if y[i] == classes[c] {
+                y_bin[i] = 1.0
+            } else {
+                y_bin[i] = -1.0
+            }
+        }
+        models[c] = kernel_ridge_fit(X, y_bin, alpha, 1, gamma, 3, 0.0)
+        array_free_f32(y_bin)
+        c = c + 1
+    }
+
+    return LSSVMClassifier {
+        models: models,
+        classes: classes,
+        n_classes: n_found,
+        n_features: n_features,
+        gamma: gamma,
+        alpha: alpha,
+        fitted: true
+    }
+}
+
+export function lssvm_classifier_predict(model: LSSVMClassifier, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let preds: ptr<f32> = array_new_f32(n)
+
+    # Compute scores for each class, then pick argmax.
+    let all_scores: ptr<f32> = malloc((n as i64) * (model.n_classes as i64) * 4) as ptr<f32>
+    let mut c2: i32 = 0
+    while c2 < model.n_classes {
+        let scores: ptr<f32> = kernel_ridge_predict(model.models[c2], X)
+        for i in 0 to n {
+            all_scores[i * model.n_classes + c2] = scores[i]
+        }
+        array_free_f32(scores)
+        c2 = c2 + 1
+    }
+
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best_score: f32 = all_scores[i * model.n_classes + 0]
+        let mut c3: i32 = 1
+        while c3 < model.n_classes {
+            if all_scores[i * model.n_classes + c3] > best_score {
+                best_score = all_scores[i * model.n_classes + c3]
+                best_c = c3
+            }
+            c3 = c3 + 1
+        }
+        preds[i] = model.classes[best_c]
+    }
+
+    free(all_scores as ptr<void>)
+    return preds
+}
+
+export function lssvm_classifier_free(model: LSSVMClassifier) -> void {
+    let mut c: i32 = 0
+    while c < model.n_classes {
+        kernel_ridge_free(model.models[c])
+        c = c + 1
+    }
+    free(model.models as ptr<void>)
+    array_free_f32(model.classes)
 }
