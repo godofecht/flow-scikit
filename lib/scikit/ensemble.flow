@@ -40,13 +40,15 @@ export function random_forest_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: 
     }
 
     let trees: ptr<DecisionTreeClassifier> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeClassifier>
-    srand(seed)
+    let mut prng: PRNG = prng_seed(seed)
 
     for t in 0 to n_trees {
         let n_samples: i32 = X.rows
         let bootstrap_indices: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
         for i in 0 to n_samples {
-            bootstrap_indices[i] = rand() % n_samples
+            let res: PRNGResult = prng_int(prng, n_samples)
+            prng = PRNG { state: res.state }
+            bootstrap_indices[i] = res.value
         }
 
         let X_boot: Matrix = matrix_new(n_samples, X.cols)
