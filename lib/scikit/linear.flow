@@ -69,6 +69,69 @@ function _solve_in_place(A: ptr<f32>, b: ptr<f32>, n: i32) -> void {
     }
 }
 
+# f64 Gaussian elimination with partial pivoting for higher precision.
+# Used by linear_regression and ridge where f32 is insufficient.
+export function _solve_f64(A: ptr<f64>, b: ptr<f64>, n: i32) -> void {
+    for col in 0 to n {
+        let mut pivot_row: i32 = col
+        let mut max_val: f64 = fabs(A[col * n + col])
+        let mut row: i32 = col + 1
+        while row < n {
+            let val: f64 = fabs(A[row * n + col])
+            if val > max_val {
+                max_val = val
+                pivot_row = row
+            }
+            row = row + 1
+        }
+        if max_val < 0.000000000000001 { continue }
+
+        if pivot_row != col {
+            let mut j: i32 = 0
+            while j < n {
+                let tmp: f64 = A[col * n + j]
+                A[col * n + j] = A[pivot_row * n + j]
+                A[pivot_row * n + j] = tmp
+                j = j + 1
+            }
+            let tmp_b: f64 = b[col]
+            b[col] = b[pivot_row]
+            b[pivot_row] = tmp_b
+        }
+
+        let pv: f64 = A[col * n + col]
+        let mut r: i32 = col + 1
+        while r < n {
+            let factor: f64 = A[r * n + col] / pv
+            A[r * n + col] = 0.0
+            let mut j: i32 = col + 1
+            while j < n {
+                A[r * n + j] = A[r * n + j] - factor * A[col * n + j]
+                j = j + 1
+            }
+            b[r] = b[r] - factor * b[col]
+            r = r + 1
+        }
+    }
+    let mut i: i32 = n - 1
+    while i >= 0 {
+        let mut s: f64 = b[i]
+        let mut j: i32 = i + 1
+        while j < n {
+            s = s - A[i * n + j] * b[j]
+            j = j + 1
+        }
+        let pv2: f64 = A[i * n + i]
+        let abs_pv2: f64 = fabs(pv2)
+        if abs_pv2 < 0.000000000000001 {
+            b[i] = 0.0
+        } else {
+            b[i] = s / pv2
+        }
+        i = i - 1
+    }
+}
+
 export struct Penalty {
     kind: i32,
     alpha: f32,
@@ -169,29 +232,29 @@ export function linear_regression_fit(X: Matrix, y: ptr<f32>, penalty: Penalty) 
     let n: i32 = X.cols
     let m: i32 = X.rows
 
-    # Center data to solve for weights without bias, then recover bias
-    let x_mean: ptr<f32> = array_new_f32(n)
-    let mut y_mean: f32 = 0.0
+    # Center data in f64 for precision.
+    let x_mean: ptr<f64> = array_new_f64(n)
+    let mut y_mean: f64 = 0.0
     for i in 0 to m {
-        y_mean = y_mean + y[i]
+        y_mean = y_mean + (y[i] as f64)
         for j in 0 to n {
-            x_mean[j] = x_mean[j] + matrix_at(X, i, j)
+            x_mean[j] = x_mean[j] + (matrix_at(X, i, j) as f64)
         }
     }
-    y_mean = y_mean / (m as f32)
+    y_mean = y_mean / (m as f64)
     for j in 0 to n {
-        x_mean[j] = x_mean[j] / (m as f32)
+        x_mean[j] = x_mean[j] / (m as f64)
     }
 
-    # Build XtX and Xty from centered data
-    let XtX: ptr<f32> = array_new_f32(n * n)
-    let Xty: ptr<f32> = array_new_f32(n)
+    # Build XtX and Xty in f64 from centered data.
+    let XtX: ptr<f64> = array_new_f64(n * n)
+    let Xty: ptr<f64> = array_new_f64(n)
     for i in 0 to m {
         for j in 0 to n {
-            let xj: f32 = matrix_at(X, i, j) - x_mean[j]
-            Xty[j] = Xty[j] + xj * (y[i] - y_mean)
+            let xj: f64 = (matrix_at(X, i, j) as f64) - x_mean[j]
+            Xty[j] = Xty[j] + xj * ((y[i] as f64) - y_mean)
             for k in 0 to n {
-                let xk: f32 = matrix_at(X, i, k) - x_mean[k]
+                let xk: f64 = (matrix_at(X, i, k) as f64) - x_mean[k]
                 XtX[j * n + k] = XtX[j * n + k] + xj * xk
             }
         }
@@ -199,29 +262,29 @@ export function linear_regression_fit(X: Matrix, y: ptr<f32>, penalty: Penalty) 
 
     # Add L2 regularization if applicable
     if penalty.kind == PENALTY_L2 || penalty.kind == PENALTY_ELASTICNET {
-        let l2: f32 = penalty.alpha * (1.0 - penalty.l1_ratio) * (m as f32)
+        let l2: f64 = (penalty.alpha as f64) * (1.0 - (penalty.l1_ratio as f64)) * (m as f64)
         for j in 0 to n {
             XtX[j * n + j] = XtX[j * n + j] + l2
         }
     }
 
-    # Solve XtX * w = Xty in place
-    _solve_in_place(XtX, Xty, n)
+    # Solve XtX * w = Xty in f64.
+    _solve_f64(XtX, Xty, n)
 
     # Recover bias: b = y_mean - sum(x_mean[j] * w[j])
-    let mut bias: f32 = y_mean
+    let mut bias: f32 = y_mean as f32
     for j in 0 to n {
-        bias = bias - x_mean[j] * Xty[j]
+        bias = bias - (x_mean[j] * Xty[j]) as f32
     }
 
     let weights: ptr<f32> = array_new_f32(n)
     for j in 0 to n {
-        weights[j] = Xty[j]
+        weights[j] = Xty[j] as f32
     }
 
-    array_free_f32(x_mean)
-    array_free_f32(XtX)
-    array_free_f32(Xty)
+    array_free_f64(x_mean)
+    array_free_f64(XtX)
+    array_free_f64(Xty)
 
     return LinearRegression { weights: weights, bias: bias, n_features: n, penalty: penalty, fitted: true }
 }
@@ -590,56 +653,57 @@ export function ridge_fit(X: Matrix, y: ptr<f32>, alpha: f32, epochs: i32, lr: f
     let n: i32 = X.cols
     let m: i32 = X.rows
 
-    # Center data
-    let x_mean: ptr<f32> = array_new_f32(n)
-    let mut y_mean: f32 = 0.0
+    # Center data in f64 for precision.
+    let x_mean: ptr<f64> = array_new_f64(n)
+    let mut y_mean: f64 = 0.0
     for i in 0 to m {
-        y_mean = y_mean + y[i]
+        y_mean = y_mean + (y[i] as f64)
         for j in 0 to n {
-            x_mean[j] = x_mean[j] + matrix_at(X, i, j)
+            x_mean[j] = x_mean[j] + (matrix_at(X, i, j) as f64)
         }
     }
-    y_mean = y_mean / (m as f32)
+    y_mean = y_mean / (m as f64)
     for j in 0 to n {
-        x_mean[j] = x_mean[j] / (m as f32)
+        x_mean[j] = x_mean[j] / (m as f64)
     }
 
-    # Build XtX + alpha*I and Xty from centered data
-    let XtX: ptr<f32> = array_new_f32(n * n)
-    let Xty: ptr<f32> = array_new_f32(n)
+    # Build XtX + alpha*I and Xty in f64 from centered data.
+    let XtX: ptr<f64> = array_new_f64(n * n)
+    let Xty: ptr<f64> = array_new_f64(n)
     for i in 0 to m {
         for j in 0 to n {
-            let xj: f32 = matrix_at(X, i, j) - x_mean[j]
-            Xty[j] = Xty[j] + xj * (y[i] - y_mean)
+            let xj: f64 = (matrix_at(X, i, j) as f64) - x_mean[j]
+            Xty[j] = Xty[j] + xj * ((y[i] as f64) - y_mean)
             for k in 0 to n {
-                let xk: f32 = matrix_at(X, i, k) - x_mean[k]
+                let xk: f64 = (matrix_at(X, i, k) as f64) - x_mean[k]
                 XtX[j * n + k] = XtX[j * n + k] + xj * xk
             }
         }
     }
 
     # Add alpha * I (sklearn convention: alpha on diagonal, not alpha*m)
+    let alpha_d: f64 = alpha as f64
     for j in 0 to n {
-        XtX[j * n + j] = XtX[j * n + j] + alpha
+        XtX[j * n + j] = XtX[j * n + j] + alpha_d
     }
 
-    # Solve (XtX + alpha*I) * w = Xty in place
-    _solve_in_place(XtX, Xty, n)
+    # Solve (XtX + alpha*I) * w = Xty in f64.
+    _solve_f64(XtX, Xty, n)
 
     # Recover bias
-    let mut bias: f32 = y_mean
+    let mut bias: f32 = y_mean as f32
     for j in 0 to n {
-        bias = bias - x_mean[j] * Xty[j]
+        bias = bias - (x_mean[j] * Xty[j]) as f32
     }
 
     let weights: ptr<f32> = array_new_f32(n)
     for j in 0 to n {
-        weights[j] = Xty[j]
+        weights[j] = Xty[j] as f32
     }
 
-    array_free_f32(x_mean)
-    array_free_f32(XtX)
-    array_free_f32(Xty)
+    array_free_f64(x_mean)
+    array_free_f64(XtX)
+    array_free_f64(Xty)
 
     return Ridge { weights: weights, bias: bias, n_features: n, alpha: alpha, fitted: true }
 }

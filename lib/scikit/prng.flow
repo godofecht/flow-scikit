@@ -1,0 +1,33 @@
+# Deterministic PRNG for cross-platform reproducibility.
+# libc rand() differs between platforms (macOS libSystem vs Android bionic),
+# causing different model outputs. This xorshift32 implementation produces
+# identical sequences on all platforms given the same seed.
+
+export struct PRNG {
+    state: u32
+}
+
+export struct PRNGResult {
+    state: u32,
+    value: i32
+}
+
+export function prng_seed(seed: i32) -> PRNG {
+    let mut s: u32 = (seed as u32)
+    if s == 0 { s = 1 }
+    return PRNG { state: s }
+}
+
+export function prng_next(p: PRNG) -> PRNGResult {
+    let mut x: u32 = p.state
+    x = x ^ (x << 13)
+    x = x ^ (x >> 17)
+    x = x ^ (x << 5)
+    return PRNGResult { state: x, value: (x & 0x7FFFFFFF) as i32 }
+}
+
+export function prng_int(p: PRNG, n: i32) -> PRNGResult {
+    let r: PRNGResult = prng_next(p)
+    if n <= 0 { return PRNGResult { state: r.state, value: 0 } }
+    return PRNGResult { state: r.state, value: r.value % n }
+}

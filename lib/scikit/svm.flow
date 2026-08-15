@@ -45,6 +45,18 @@ export function linear_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, e
     # (Hsieh et al. 2008, used by liblinear)
     # Uses f64 internally for weight accumulation to reduce float error.
 
+    # Ensure classes[1] is the positive class (larger value).
+    # In OvR, y_binary has values {0.0, 1.0} where 1.0 is the target class.
+    # If 1.0 appears first in the data, classes[0]=1.0 and classes[1]=0.0,
+    # which would invert the y_dual encoding. Swap to fix.
+    if n_found == 2 {
+        if classes[0] > classes[1] {
+            let tmp: f32 = classes[0]
+            classes[0] = classes[1]
+            classes[1] = tmp
+        }
+    }
+
     # Binary encoding: class[1] = +1, others = -1
     let y_dual: ptr<f32> = array_new_f32(n_samples)
     for i in 0 to n_samples {
@@ -170,6 +182,15 @@ export function linear_svc_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_classes: i
         if not found {
             classes[n_found] = y[i]
             n_found = n_found + 1
+        }
+    }
+
+    # Ensure classes[1] is the positive class (larger value).
+    if n_found == 2 {
+        if classes[0] > classes[1] {
+            let tmp: f32 = classes[0]
+            classes[0] = classes[1]
+            classes[1] = tmp
         }
     }
 
@@ -580,19 +601,39 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
     let n: i32 = X.rows
     let n_features: i32 = X.cols
 
-    let kernel: Matrix = _rbf_kernel(X, X, gamma)
-
-    let alphas: ptr<f32> = array_new_f32(n)
-    let mut b: f32 = 0.0
+    # Use f64 internally for alphas, error cache, and b for precision.
+    let alphas_d: ptr<f64> = array_new_f64(n)
+    let mut b: f64 = 0.0
+    let C_d: f64 = C as f64
 
     # Error cache: E[i] = f(x_i) - y_i = sum_j(alpha_j y_j K(j,i)) + b - y_i
     # With initial alphas=0 and b=0, E[i] = -y_i.
-    let error_cache: ptr<f32> = array_new_f32(n)
+    let error_cache: ptr<f64> = array_new_f64(n)
     for i in 0 to n {
-        error_cache[i] = 0.0 - y_dual[i]
+        error_cache[i] = 0.0 - (y_dual[i] as f64)
     }
 
-    let tol: f32 = 0.001
+    # Precompute y_dual in f64
+    let y_d: ptr<f64> = array_new_f64(n)
+    for i in 0 to n {
+        y_d[i] = y_dual[i] as f64
+    }
+
+    # Precompute kernel values in f64 directly from data for precision
+    let gamma_d: f64 = gamma as f64
+    let kernel_d: ptr<f64> = malloc((n as i64) * (n as i64) * 8) as ptr<f64>
+    for i in 0 to n {
+        for j in 0 to n {
+            let mut sq_dist: f64 = 0.0
+            for f in 0 to n_features {
+                let d: f64 = (matrix_at(X, i, f) - matrix_at(X, j, f)) as f64
+                sq_dist = sq_dist + d * d
+            }
+            kernel_d[i * n + j] = _rbf_exp_f64(0.0 - gamma_d * sq_dist)
+        }
+    }
+
+    let tol: f64 = 0.001
     let mut iter: i32 = 0
     let mut examine_all: bool = true
     let mut num_changed: i32 = 1
@@ -604,19 +645,19 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
             # Full pass over all samples
             let mut i: i32 = 0
             while i < n {
-                let ei_f: f32 = error_cache[i]
-                let yi_ei: f32 = y_dual[i] * ei_f
-                if (yi_ei < -tol && alphas[i] < C) || (yi_ei > tol && alphas[i] > 0.0) {
+                let ei_f: f64 = error_cache[i]
+                let yi_ei: f64 = y_d[i] * ei_f
+                if (yi_ei < -tol && alphas_d[i] < C_d) || (yi_ei > tol && alphas_d[i] > 0.0) {
                     # Second-order working set selection using error cache.
                     let mut best_j: i32 = (iter * 7 + i * 13 + 3) % n
                     if best_j == i { best_j = (best_j + 1) % n }
-                    let mut best_gain: f32 = 0.0
+                    let mut best_gain: f64 = 0.0
                     let mut j_scan: i32 = 0
                     while j_scan < n {
                         if j_scan == i { j_scan = j_scan + 1; continue }
-                        let ej_test: f32 = error_cache[j_scan]
-                        let diff: f32 = ei_f - ej_test
-                        let abs_diff: f32 = diff
+                        let ej_test: f64 = error_cache[j_scan]
+                        let diff: f64 = ei_f - ej_test
+                        let abs_diff: f64 = diff
                         if diff < 0.0 { abs_diff = -diff }
                         if abs_diff > best_gain {
                             best_gain = abs_diff
@@ -626,59 +667,59 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
                     }
 
                     let j2: i32 = best_j
-                    let ej: f32 = error_cache[j2]
+                    let ej: f64 = error_cache[j2]
 
-                    let alpha_i_old: f32 = alphas[i]
-                    let alpha_j_old: f32 = alphas[j2]
+                    let alpha_i_old: f64 = alphas_d[i]
+                    let alpha_j_old: f64 = alphas_d[j2]
 
-                    let mut L: f32 = 0.0
-                    let mut H: f32 = C
-                    if y_dual[i] == y_dual[j2] {
-                        L = alpha_i_old + alpha_j_old - C
+                    let mut L: f64 = 0.0
+                    let mut H: f64 = C_d
+                    if y_d[i] == y_d[j2] {
+                        L = alpha_i_old + alpha_j_old - C_d
                         H = alpha_i_old + alpha_j_old
                         if L < 0.0 { L = 0.0 }
-                        if H > C { H = C }
+                        if H > C_d { H = C_d }
                     } else {
                         L = alpha_i_old - alpha_j_old
-                        H = alpha_i_old - alpha_j_old + C
+                        H = alpha_i_old - alpha_j_old + C_d
                         if L < 0.0 { L = 0.0 }
-                        if H > C { H = C }
+                        if H > C_d { H = C_d }
                     }
 
                     if L == H { i = i + 1; continue }
 
-                    let eta: f32 = 2.0 * matrix_at(kernel, i, j2) - matrix_at(kernel, i, i) - matrix_at(kernel, j2, j2)
+                    let eta: f64 = 2.0 * kernel_d[i * n + j2] - kernel_d[i * n + i] - kernel_d[j2 * n + j2]
                     if eta >= -0.0000000001 { i = i + 1; continue }
 
-                    let mut alpha_j_new: f32 = alpha_j_old - y_dual[j2] * (ei_f - ej) / eta
+                    let mut alpha_j_new: f64 = alpha_j_old - y_d[j2] * (ei_f - ej) / eta
                     if alpha_j_new < L { alpha_j_new = L }
                     if alpha_j_new > H { alpha_j_new = H }
 
-                    let alpha_i_new: f32 = alpha_i_old + y_dual[i] * y_dual[j2] * (alpha_j_old - alpha_j_new)
+                    let alpha_i_new: f64 = alpha_i_old + y_d[i] * y_d[j2] * (alpha_j_old - alpha_j_new)
 
-                    let di: f32 = alpha_i_new - alpha_i_old
-                    let dj: f32 = alpha_j_new - alpha_j_old
+                    let di: f64 = alpha_i_new - alpha_i_old
+                    let dj: f64 = alpha_j_new - alpha_j_old
 
-                    alphas[i] = alpha_i_new
-                    alphas[j2] = alpha_j_new
+                    alphas_d[i] = alpha_i_new
+                    alphas_d[j2] = alpha_j_new
 
-                    let b1: f32 = b - ei_f - y_dual[i] * di * matrix_at(kernel, i, i) - y_dual[j2] * dj * matrix_at(kernel, i, j2)
-                    let b2: f32 = b - ej - y_dual[i] * di * matrix_at(kernel, i, j2) - y_dual[j2] * dj * matrix_at(kernel, j2, j2)
+                    let b1: f64 = b - ei_f - y_d[i] * di * kernel_d[i * n + i] - y_d[j2] * dj * kernel_d[i * n + j2]
+                    let b2: f64 = b - ej - y_d[i] * di * kernel_d[i * n + j2] - y_d[j2] * dj * kernel_d[j2 * n + j2]
 
-                    let b_old: f32 = b
-                    if alpha_i_new > 0.0 && alpha_i_new < C {
+                    let b_old: f64 = b
+                    if alpha_i_new > 0.0 && alpha_i_new < C_d {
                         b = b1
-                    } elif alpha_j_new > 0.0 && alpha_j_new < C {
+                    } elif alpha_j_new > 0.0 && alpha_j_new < C_d {
                         b = b2
                     } else {
                         b = (b1 + b2) / 2.0
                     }
 
                     # Update error cache: E[k] += di*y_i*K(i,k) + dj*y_j*K(j,k) + (b_new - b_old)
-                    let db: f32 = b - b_old
+                    let db: f64 = b - b_old
                     let mut k: i32 = 0
                     while k < n {
-                        error_cache[k] = error_cache[k] + y_dual[i] * di * matrix_at(kernel, i, k) + y_dual[j2] * dj * matrix_at(kernel, j2, k) + db
+                        error_cache[k] = error_cache[k] + y_d[i] * di * kernel_d[i * n + k] + y_d[j2] * dj * kernel_d[j2 * n + k] + db
                         k = k + 1
                     }
 
@@ -690,19 +731,19 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
             # Non-boundary pass: only examine samples with 0 < alpha < C
             let mut i: i32 = 0
             while i < n {
-                if alphas[i] > 0.0 && alphas[i] < C {
-                    let ei_f: f32 = error_cache[i]
-                    let yi_ei: f32 = y_dual[i] * ei_f
-                    if (yi_ei < -tol && alphas[i] < C) || (yi_ei > tol && alphas[i] > 0.0) {
+                if alphas_d[i] > 0.0 && alphas_d[i] < C_d {
+                    let ei_f: f64 = error_cache[i]
+                    let yi_ei: f64 = y_d[i] * ei_f
+                    if (yi_ei < -tol && alphas_d[i] < C_d) || (yi_ei > tol && alphas_d[i] > 0.0) {
                         let mut best_j: i32 = (iter * 7 + i * 13 + 3) % n
                         if best_j == i { best_j = (best_j + 1) % n }
-                        let mut best_gain: f32 = 0.0
+                        let mut best_gain: f64 = 0.0
                         let mut j_scan: i32 = 0
                         while j_scan < n {
                             if j_scan == i { j_scan = j_scan + 1; continue }
-                            let ej_test: f32 = error_cache[j_scan]
-                            let diff: f32 = ei_f - ej_test
-                            let abs_diff: f32 = diff
+                            let ej_test: f64 = error_cache[j_scan]
+                            let diff: f64 = ei_f - ej_test
+                            let abs_diff: f64 = diff
                             if diff < 0.0 { abs_diff = -diff }
                             if abs_diff > best_gain {
                                 best_gain = abs_diff
@@ -712,58 +753,58 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
                         }
 
                         let j2: i32 = best_j
-                        let ej: f32 = error_cache[j2]
+                        let ej: f64 = error_cache[j2]
 
-                        let alpha_i_old: f32 = alphas[i]
-                        let alpha_j_old: f32 = alphas[j2]
+                        let alpha_i_old: f64 = alphas_d[i]
+                        let alpha_j_old: f64 = alphas_d[j2]
 
-                        let mut L: f32 = 0.0
-                        let mut H: f32 = C
-                        if y_dual[i] == y_dual[j2] {
-                            L = alpha_i_old + alpha_j_old - C
+                        let mut L: f64 = 0.0
+                        let mut H: f64 = C_d
+                        if y_d[i] == y_d[j2] {
+                            L = alpha_i_old + alpha_j_old - C_d
                             H = alpha_i_old + alpha_j_old
                             if L < 0.0 { L = 0.0 }
-                            if H > C { H = C }
+                            if H > C_d { H = C_d }
                         } else {
                             L = alpha_i_old - alpha_j_old
-                            H = alpha_i_old - alpha_j_old + C
+                            H = alpha_i_old - alpha_j_old + C_d
                             if L < 0.0 { L = 0.0 }
-                            if H > C { H = C }
+                            if H > C_d { H = C_d }
                         }
 
                         if L == H { i = i + 1; continue }
 
-                        let eta: f32 = 2.0 * matrix_at(kernel, i, j2) - matrix_at(kernel, i, i) - matrix_at(kernel, j2, j2)
+                        let eta: f64 = 2.0 * kernel_d[i * n + j2] - kernel_d[i * n + i] - kernel_d[j2 * n + j2]
                         if eta >= -0.0000000001 { i = i + 1; continue }
 
-                        let mut alpha_j_new: f32 = alpha_j_old - y_dual[j2] * (ei_f - ej) / eta
+                        let mut alpha_j_new: f64 = alpha_j_old - y_d[j2] * (ei_f - ej) / eta
                         if alpha_j_new < L { alpha_j_new = L }
                         if alpha_j_new > H { alpha_j_new = H }
 
-                        let alpha_i_new: f32 = alpha_i_old + y_dual[i] * y_dual[j2] * (alpha_j_old - alpha_j_new)
+                        let alpha_i_new: f64 = alpha_i_old + y_d[i] * y_d[j2] * (alpha_j_old - alpha_j_new)
 
-                        let di: f32 = alpha_i_new - alpha_i_old
-                        let dj: f32 = alpha_j_new - alpha_j_old
+                        let di: f64 = alpha_i_new - alpha_i_old
+                        let dj: f64 = alpha_j_new - alpha_j_old
 
-                        alphas[i] = alpha_i_new
-                        alphas[j2] = alpha_j_new
+                        alphas_d[i] = alpha_i_new
+                        alphas_d[j2] = alpha_j_new
 
-                        let b1: f32 = b - ei_f - y_dual[i] * di * matrix_at(kernel, i, i) - y_dual[j2] * dj * matrix_at(kernel, i, j2)
-                        let b2: f32 = b - ej - y_dual[i] * di * matrix_at(kernel, i, j2) - y_dual[j2] * dj * matrix_at(kernel, j2, j2)
+                        let b1: f64 = b - ei_f - y_d[i] * di * kernel_d[i * n + i] - y_d[j2] * dj * kernel_d[i * n + j2]
+                        let b2: f64 = b - ej - y_d[i] * di * kernel_d[i * n + j2] - y_d[j2] * dj * kernel_d[j2 * n + j2]
 
-                        let b_old: f32 = b
-                        if alpha_i_new > 0.0 && alpha_i_new < C {
+                        let b_old: f64 = b
+                        if alpha_i_new > 0.0 && alpha_i_new < C_d {
                             b = b1
-                        } elif alpha_j_new > 0.0 && alpha_j_new < C {
+                        } elif alpha_j_new > 0.0 && alpha_j_new < C_d {
                             b = b2
                         } else {
                             b = (b1 + b2) / 2.0
                         }
 
-                        let db: f32 = b - b_old
+                        let db: f64 = b - b_old
                         let mut k: i32 = 0
                         while k < n {
-                            error_cache[k] = error_cache[k] + y_dual[i] * di * matrix_at(kernel, i, k) + y_dual[j2] * dj * matrix_at(kernel, j2, k) + db
+                            error_cache[k] = error_cache[k] + y_d[i] * di * kernel_d[i * n + k] + y_d[j2] * dj * kernel_d[j2 * n + k] + db
                             k = k + 1
                         }
 
@@ -783,15 +824,23 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
         iter = iter + 1
     }
 
-    array_free_f32(error_cache)
-    matrix_free(kernel)
+    array_free_f64(error_cache)
+    array_free_f64(y_d)
+    free(kernel_d as ptr<void>)
+
+    # Convert f64 alphas to f32 for storage
+    let alphas: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        alphas[i] = alphas_d[i] as f32
+    }
+    array_free_f64(alphas_d)
 
     let X_copy: Matrix = matrix_copy(X)
     let result: KernelSVC = KernelSVC {
         X_train: X_copy,
         y_train_dual: y_dual,
         alphas: alphas,
-        b: b,
+        b: b as f32,
         n_samples: n,
         n_features: n_features,
         classes: classes,
@@ -808,16 +857,21 @@ function _rbf_exp(neg_gamma_sum: f32) -> f32 {
     return val
 }
 
+function _rbf_exp_f64(neg_gamma_sum: f64) -> f64 {
+    let val: f64 = exp(neg_gamma_sum)
+    return val
+}
+
 function _rbf_kernel(X1: Matrix, X2: Matrix, gamma: f32) -> Matrix {
     let result: Matrix = matrix_new(X1.rows, X2.rows)
     for i in 0 to X1.rows {
         for j in 0 to X2.rows {
-            let mut sum: f32 = 0.0
+            let mut sum: f64 = 0.0
             for k in 0 to X1.cols {
-                let d: f32 = matrix_at(X1, i, k) - matrix_at(X2, j, k)
+                let d: f64 = (matrix_at(X1, i, k) - matrix_at(X2, j, k)) as f64
                 sum = sum + d * d
             }
-            let val: f32 = _rbf_exp(0.0 - gamma * sum)
+            let val: f32 = _rbf_exp_f64(0.0 - (gamma as f64) * sum) as f32
             matrix_set(result, i, j, val)
         }
     }
@@ -826,20 +880,21 @@ function _rbf_kernel(X1: Matrix, X2: Matrix, gamma: f32) -> Matrix {
 
 export function kernel_svc_decision_function(model: KernelSVC, X: Matrix) -> ptr<f32> {
     let scores: ptr<f32> = array_new_f32(X.rows)
+    let gamma_d: f64 = model.gamma as f64
     for i in 0 to X.rows {
-        let mut sum: f32 = model.b
+        let mut sum: f64 = model.b as f64
         for j in 0 to model.n_samples {
             if model.alphas[j] > 0.0 {
-                let mut k_val: f32 = 0.0
+                let mut k_val: f64 = 0.0
                 for f in 0 to model.n_features {
-                    let d: f32 = matrix_at(X, i, f) - matrix_at(model.X_train, j, f)
+                    let d: f64 = (matrix_at(X, i, f) - matrix_at(model.X_train, j, f)) as f64
                     k_val = k_val + d * d
                 }
-                k_val = _rbf_exp(0.0 - model.gamma * k_val)
-                sum = sum + model.alphas[j] * model.y_train_dual[j] * k_val
+                k_val = _rbf_exp_f64(0.0 - gamma_d * k_val)
+                sum = sum + (model.alphas[j] as f64) * (model.y_train_dual[j] as f64) * k_val
             }
         }
-        scores[i] = sum
+        scores[i] = sum as f32
     }
     return scores
 }
@@ -869,15 +924,18 @@ export function kernel_svc_free(model: KernelSVC) -> void {
 }
 
 # ============================================================================
-# Multi-class KernelSVC via One-vs-Rest
-# Trains one binary kernel SVM per class. Prediction uses argmax of
-# decision function scores across all binary classifiers.
+# Multi-class KernelSVC via One-vs-One (OvO)
+# Trains one binary kernel SVM per pair of classes, matching sklearn's SVC.
+# Prediction uses voting across all binary classifiers.
 # ============================================================================
 
 export struct KernelSVCMulti {
     models: ptr<KernelSVC>,
+    pair_a: ptr<i32>,
+    pair_b: ptr<i32>,
     classes: ptr<f32>,
     n_classes: i32,
+    n_pairs: i32,
     n_features: i32,
     gamma: f32,
     C: f32,
@@ -901,31 +959,66 @@ export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gam
         }
     }
 
-    let models: ptr<KernelSVC> = malloc((n_classes as i64) * 128) as ptr<KernelSVC>
+    # Count pairs: n_found * (n_found - 1) / 2
+    let n_pairs: i32 = (n_found * (n_found - 1)) / 2
+    let models: ptr<KernelSVC> = malloc((n_pairs as i64) * 128) as ptr<KernelSVC>
+    let pair_a: ptr<i32> = malloc((n_pairs as i64) * 4) as ptr<i32>
+    let pair_b: ptr<i32> = malloc((n_pairs as i64) * 4) as ptr<i32>
 
-    let mut c: i32 = 0
-    while c < n_classes {
-        # Build y_dual directly: +1 for current class, -1 otherwise.
-        # This avoids the class-ordering dependency in kernel_svc_fit.
-        let y_dual: ptr<f32> = array_new_f32(n)
-        for i in 0 to n {
-            if y[i] == classes[c] {
-                y_dual[i] = 1.0
-            } else {
-                y_dual[i] = -1.0
+    let mut pair_idx: i32 = 0
+    let mut a: i32 = 0
+    while a < n_found {
+        let mut b: i32 = a + 1
+        while b < n_found {
+            # Collect samples belonging to class a or class b
+            let mut count: i32 = 0
+            for i in 0 to n {
+                if y[i] == classes[a] || y[i] == classes[b] {
+                    count = count + 1
+                }
             }
+
+            let X_sub: Matrix = matrix_new(count, n_features)
+            let y_dual: ptr<f32> = array_new_f32(count)
+            let mut idx: i32 = 0
+            for i in 0 to n {
+                if y[i] == classes[a] || y[i] == classes[b] {
+                    for j in 0 to n_features {
+                        matrix_set(X_sub, idx, j, matrix_at(X, i, j))
+                    }
+                    if y[i] == classes[a] {
+                        y_dual[idx] = 1.0
+                    } else {
+                        y_dual[idx] = -1.0
+                    }
+                    idx = idx + 1
+                }
+            }
+
+            let binary_classes: ptr<f32> = array_new_f32(2)
+            binary_classes[0] = -1.0
+            binary_classes[1] = 1.0
+            models[pair_idx] = _kernel_svc_smo(X_sub, y_dual, binary_classes, 2, C, gamma, max_iter)
+            pair_a[pair_idx] = a
+            pair_b[pair_idx] = b
+
+            # Note: binary_classes and y_dual are NOT freed here because
+            # _kernel_svc_smo stores them in the returned model.
+            # They will be freed in kernel_svc_multi_free via kernel_svc_free.
+
+            pair_idx = pair_idx + 1
+            b = b + 1
         }
-        let binary_classes: ptr<f32> = array_new_f32(2)
-        binary_classes[0] = -1.0
-        binary_classes[1] = 1.0
-        models[c] = _kernel_svc_smo(X, y_dual, binary_classes, 2, C, gamma, max_iter)
-        c = c + 1
+        a = a + 1
     }
 
     return KernelSVCMulti {
         models: models,
+        pair_a: pair_a,
+        pair_b: pair_b,
         classes: classes,
-        n_classes: n_classes,
+        n_classes: n_found,
+        n_pairs: n_pairs,
         n_features: n_features,
         gamma: gamma,
         C: C,
@@ -933,36 +1026,39 @@ export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gam
     }
 }
 
-export function kernel_svc_multi_decision_function(model: KernelSVCMulti, X: Matrix) -> ptr<f32> {
-    let n: i32 = X.rows
-    let scores: ptr<f32> = array_new_f32(n * model.n_classes)
-
-    let mut c: i32 = 0
-    while c < model.n_classes {
-        let binary_scores: ptr<f32> = kernel_svc_predict(model.models[c], X)
-        for i in 0 to n {
-            scores[i * model.n_classes + c] = binary_scores[i]
-        }
-        array_free_f32(binary_scores)
-        c = c + 1
-    }
-
-    return scores
-}
-
 export function kernel_svc_multi_predict(model: KernelSVCMulti, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
-    let scores: ptr<f32> = kernel_svc_multi_decision_function(model, X)
-    let preds: ptr<f32> = array_new_f32(n)
+    let total_votes: i32 = n * model.n_classes
+    let votes: ptr<i32> = malloc((total_votes as i64) * 4) as ptr<i32>
+    for i in 0 to total_votes {
+        votes[i] = 0
+    }
 
+    let mut p: i32 = 0
+    while p < model.n_pairs {
+        let binary_scores: ptr<f32> = kernel_svc_predict(model.models[p], X)
+        let a: i32 = model.pair_a[p]
+        let b: i32 = model.pair_b[p]
+        for i in 0 to n {
+            if binary_scores[i] > 0.0 {
+                votes[i * model.n_classes + a] = votes[i * model.n_classes + a] + 1
+            } else {
+                votes[i * model.n_classes + b] = votes[i * model.n_classes + b] + 1
+            }
+        }
+        array_free_f32(binary_scores)
+        p = p + 1
+    }
+
+    let preds: ptr<f32> = array_new_f32(n)
     for i in 0 to n {
         let mut best_c: i32 = 0
-        let mut best_score: f32 = scores[i * model.n_classes]
+        let mut best_votes: i32 = votes[i * model.n_classes]
         let mut c: i32 = 1
         while c < model.n_classes {
-            let s: f32 = scores[i * model.n_classes + c]
-            if s > best_score {
-                best_score = s
+            let v: i32 = votes[i * model.n_classes + c]
+            if v > best_votes {
+                best_votes = v
                 best_c = c
             }
             c = c + 1
@@ -970,17 +1066,19 @@ export function kernel_svc_multi_predict(model: KernelSVCMulti, X: Matrix) -> pt
         preds[i] = model.classes[best_c]
     }
 
-    array_free_f32(scores)
+    free(votes as ptr<void>)
     return preds
 }
 
 export function kernel_svc_multi_free(model: KernelSVCMulti) -> void {
-    let mut c: i32 = 0
-    while c < model.n_classes {
-        kernel_svc_free(model.models[c])
-        c = c + 1
+    let mut p: i32 = 0
+    while p < model.n_pairs {
+        kernel_svc_free(model.models[p])
+        p = p + 1
     }
     free(model.models as ptr<void>)
+    free(model.pair_a as ptr<void>)
+    free(model.pair_b as ptr<void>)
     array_free_f32(model.classes)
 }
 
