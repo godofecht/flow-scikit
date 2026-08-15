@@ -1,25 +1,35 @@
 #!/usr/bin/env python3
 """Benchmark real scikit-learn on iris, digits, diabetes.
 Outputs results in parseable format for comparison with flow-scikit.
+Uses the same C rand() split as the Flow benchmark for exact parity.
 """
 import time
+import ctypes
 import numpy as np
 from sklearn.datasets import load_iris, load_digits, load_diabetes
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, r2_score
 
-# Load datasets
-iris = load_iris()
-digits = load_digits()
-diabetes = load_diabetes()
+libc = ctypes.CDLL('/usr/lib/libc.dylib')
+
+def c_rand_split(n, n_test, seed=42):
+    """Replicate Flow's split_data: Fisher-Yates shuffle with C rand()."""
+    indices = list(range(n))
+    libc.srand(seed)
+    for i in range(n - 1, 0, -1):
+        j = libc.rand() % (i + 1)
+        indices[i], indices[j] = indices[j], indices[i]
+    n_train = n - n_test
+    return np.array(indices[:n_train]), np.array(indices[n_train:])
 
 results = []
 
 def bench(name, dataset_name, X, y, fit_fn, predict_fn, is_classification=True):
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y if is_classification else None
-    )
+    n = len(X)
+    n_test = n // 5
+    train_idx, test_idx = c_rand_split(n, n_test)
+    X_train, X_test = X[train_idx], X[test_idx]
+    y_train, y_test = y[train_idx], y[test_idx]
     scaler = StandardScaler()
     X_train = scaler.fit_transform(X_train)
     X_test = scaler.transform(X_test)
@@ -42,6 +52,11 @@ def bench(name, dataset_name, X, y, fit_fn, predict_fn, is_classification=True):
     results.append((name, dataset_name, metric, score, fit_time, pred_time))
     print(f"RESULT|{name}|{dataset_name}|{metric}|{score:.6f}|{fit_time:.6f}|{pred_time:.6f}")
 
+# Load datasets
+iris = load_iris()
+digits = load_digits()
+diabetes = load_diabetes()
+
 # ---- Iris (classification) ----
 X_iris = iris.data.astype(np.float32)
 y_iris = iris.target.astype(np.float32)
@@ -58,7 +73,7 @@ bench("LinearSVC", "iris", X_iris, y_iris,
 
 from sklearn.svm import SVC
 bench("KernelSVC_RBF", "iris", X_iris, y_iris,
-      lambda X, y: SVC(C=1.0, gamma=0.5, max_iter=200).fit(X, y),
+      lambda X, y: SVC(C=1.0, gamma=0.25, max_iter=1000).fit(X, y),
       lambda m, X: m.predict(X))
 
 from sklearn.tree import DecisionTreeClassifier
@@ -81,7 +96,36 @@ def kmeans_fit(X, y):
     return KMeans(n_clusters=3, n_init=10, random_state=42).fit(X)
 def kmeans_predict(m, X):
     return m.predict(X)
-bench("KMeans", "iris", X_iris, y_iris, kmeans_fit, kmeans_predict)
+# KMeans: use best-match cluster labeling like Flow
+def kmeans_bench(name, ds, X, y, n_clusters):
+    n = len(X)
+    n_test = n // 5
+    train_idx, test_idx = c_rand_split(n, n_test)
+    X_train, X_test = X[train_idx], X[test_idx]
+    y_train, y_test = y[train_idx], y[test_idx]
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
+    t0 = time.perf_counter()
+    km = KMeans(n_clusters=n_clusters, n_init=10, random_state=42).fit(X_train)
+    fit_time = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    preds = km.predict(X_test)
+    pred_time = time.perf_counter() - t0
+    # Best-match: for each cluster, find most common true label
+    from collections import Counter
+    cluster_map = {}
+    for c in range(n_clusters):
+        labels = y_test[preds == c]
+        if len(labels) > 0:
+            cluster_map[c] = Counter(labels.astype(int)).most_common(1)[0][0]
+        else:
+            cluster_map[c] = 0
+    mapped = np.array([cluster_map[p] for p in preds])
+    score = accuracy_score(y_test, mapped.astype(float))
+    results.append((name, ds, "accuracy", score, fit_time, pred_time))
+    print(f"RESULT|{name}|{ds}|accuracy|{score:.6f}|{fit_time:.6f}|{pred_time:.6f}")
+kmeans_bench("KMeans", "iris", X_iris, y_iris, 3)
 
 from sklearn.decomposition import PCA
 def pca_fit(X, y):
@@ -89,17 +133,16 @@ def pca_fit(X, y):
 def pca_transform(m, X):
     return m.transform(X)
 # PCA is transform, not predict - measure explained variance ratio instead
-X_train_i, X_test_i, y_train_i, y_test_i = train_test_split(
-    X_iris, y_iris, test_size=0.2, random_state=42, stratify=y_iris
-)
-scaler_i = StandardScaler()
-X_train_i = scaler_i.fit_transform(X_train_i)
-X_test_i = scaler_i.transform(X_test_i)
+n_iris = len(X_iris)
+train_idx_i, test_idx_i = c_rand_split(n_iris, n_iris // 5)
+X_train_i = scaler_fit_i = StandardScaler().fit(X_iris[train_idx_i])
+X_train_i_s = scaler_fit_i.transform(X_iris[train_idx_i])
+X_test_i_s = scaler_fit_i.transform(X_iris[test_idx_i])
 t0 = time.perf_counter()
-pca = PCA(n_components=2).fit(X_train_i)
+pca = PCA(n_components=2).fit(X_train_i_s)
 fit_time = time.perf_counter() - t0
 t0 = time.perf_counter()
-_ = pca.transform(X_test_i)
+_ = pca.transform(X_test_i_s)
 pred_time = time.perf_counter() - t0
 evr = pca.explained_variance_ratio_[0]
 results.append(("PCA", "iris", "explained_var_ratio", evr, fit_time, pred_time))
@@ -118,7 +161,7 @@ bench("LinearSVC", "digits", X_dig, y_dig,
       lambda m, X: m.predict(X))
 
 bench("KernelSVC_RBF", "digits", X_dig, y_dig,
-      lambda X, y: SVC(C=1.0, gamma=0.001, max_iter=200).fit(X, y),
+      lambda X, y: SVC(C=1.0, gamma=0.001, max_iter=1000).fit(X, y),
       lambda m, X: m.predict(X))
 
 bench("DecisionTree", "digits", X_dig, y_dig,
@@ -133,9 +176,7 @@ bench("GaussianNB", "digits", X_dig, y_dig,
       lambda X, y: GaussianNB().fit(X, y),
       lambda m, X: m.predict(X))
 
-bench("KMeans", "digits", X_dig, y_dig,
-      lambda X, y: KMeans(n_clusters=10, n_init=10, random_state=42).fit(X),
-      lambda m, X: m.predict(X))
+kmeans_bench("KMeans", "digits", X_dig, y_dig, 10)
 
 # ---- Diabetes (regression) ----
 X_dia = diabetes.data.astype(np.float32)

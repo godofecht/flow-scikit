@@ -31,6 +31,10 @@ Filed issues so far:
   pointers (ptr<ptr<T>>) instead of arrays of structs with pointer fields.
 - #465: Non-exported functions with same name in different modules collide
   in generated C. Only one definition is emitted. Workaround: rename one.
+- #469: Large programs produce incorrect code for certain functions.
+  LinearSVC accuracy drops from 0.833 to 0.033 when surrounding code grows.
+  Adding a comment to svm.flow changes the result. Workaround: split
+  benchmarks into smaller files.
 
 ## Flow transpiler constraints (workarounds)
 

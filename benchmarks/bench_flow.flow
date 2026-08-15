@@ -114,7 +114,7 @@ function main() -> i32 {
 
     # LinearSVC (multiclass via LinearSVCMulti)
     t0 = clock()
-    let lsvc_model: LinearSVCMulti = linear_svc_multi_fit(X_train_iris, split_iris.y_train, 3, 1.0, 200)
+    let lsvc_model: LinearSVCMulti = linear_svc_multi_fit(X_train_iris, split_iris.y_train, 3, 1.0, 1000)
     t1 = clock()
     let lsvc_preds: ptr<f32> = linear_svc_multi_predict(lsvc_model, X_test_iris)
     t2 = clock()
@@ -125,7 +125,7 @@ function main() -> i32 {
 
     # KernelSVC (RBF) - multi-class
     t0 = clock()
-    let ksvc_model: KernelSVCMulti = kernel_svc_multi_fit(X_train_iris, split_iris.y_train, 3, 0.5, 1.0, 200)
+    let ksvc_model: KernelSVCMulti = kernel_svc_multi_fit(X_train_iris, split_iris.y_train, 3, 0.25, 1.0, 50)
     t1 = clock()
     let ksvc_preds: ptr<f32> = kernel_svc_multi_predict(ksvc_model, X_test_iris)
     t2 = clock()
@@ -243,7 +243,7 @@ function main() -> i32 {
 
     # LinearSVC (multiclass via LinearSVCMulti)
     t0 = clock()
-    let lsvc_dig: LinearSVCMulti = linear_svc_multi_fit(X_train_dig, split_dig.y_train, 10, 1.0, 200)
+    let lsvc_dig: LinearSVCMulti = linear_svc_multi_fit(X_train_dig, split_dig.y_train, 10, 1.0, 1000)
     t1 = clock()
     let lsvc_dig_preds: ptr<f32> = linear_svc_multi_predict(lsvc_dig, X_test_dig)
     t2 = clock()
@@ -251,6 +251,17 @@ function main() -> i32 {
     printf("RESULT|LinearSVC|digits|accuracy|%.6f|%.6f|%.6f\n", lsvc_dig_acc, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
     array_free_f32(lsvc_dig_preds)
     linear_svc_multi_free(lsvc_dig)
+
+    # KernelSVC (RBF) - multi-class
+    t0 = clock()
+    let ksvc_dig: KernelSVCMulti = kernel_svc_multi_fit(X_train_dig, split_dig.y_train, 10, 0.001, 1.0, 100)
+    t1 = clock()
+    let ksvc_dig_preds: ptr<f32> = kernel_svc_multi_predict(ksvc_dig, X_test_dig)
+    t2 = clock()
+    let ksvc_dig_acc: f32 = accuracy_score(split_dig.y_test, ksvc_dig_preds, split_dig.n_test)
+    printf("RESULT|KernelSVC_RBF|digits|accuracy|%.6f|%.6f|%.6f\n", ksvc_dig_acc, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    array_free_f32(ksvc_dig_preds)
+    kernel_svc_multi_free(ksvc_dig)
 
     # DecisionTree
     t0 = clock()
