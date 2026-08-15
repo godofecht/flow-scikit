@@ -32,7 +32,38 @@ const BENCH = {
     { algo: "KNN_k5",          sk_acc: 0.9333, fl_acc: 0.9667, sk_train: 1.84,  fl_train: 0.03 },
     { algo: "LinearSVC_OVR",   sk_acc: 0.9000, fl_acc: 0.7000, sk_train: 2.13,  fl_train: 0.48 },
     { algo: "RandomForest_10", sk_acc: 0.9667, fl_acc: 0.9333, sk_train: 8.42,  fl_train: 0.91 }
-  ]
+  ],
+  // Android: scikit-learn (Flow) cross-compiled to aarch64-linux-android,
+  // run on the Android emulator (arm64-v8a, Android 15, API 35). Same source,
+  // same datasets, same seed. Times are median of 3 runs (fit + predict, ms).
+  // mac_ms is the macOS arm64 Flow time from BENCH above, for comparison.
+  android: {
+    iris: [
+      { algo: "LogisticRegression",  score: 0.9333, mac_ms: 0.15,  and_ms: 0.12 },
+      { algo: "LinearSVC",            score: 0.9000, mac_ms: 0.45,  and_ms: 0.10 },
+      { algo: "KernelSVC_RBF",        score: 0.8000, mac_ms: 0.80,  and_ms: 3.83 },
+      { algo: "DecisionTree",         score: 0.9000, mac_ms: 0.11,  and_ms: 0.13 },
+      { algo: "RandomForest",         score: 0.9333, mac_ms: 0.91,  and_ms: 0.75 },
+      { algo: "GaussianNB",           score: 0.9667, mac_ms: 0.01,  and_ms: 0.01 },
+      { algo: "KMeans",               score: 0.2333, mac_ms: 0.03,  and_ms: 0.01 },
+      { algo: "PCA",                  score: 0.7268, mac_ms: 0.05,  and_ms: 0.03 }
+    ],
+    digits: [
+      { algo: "LogisticRegression",  score: 0.9722, mac_ms: 588.39, and_ms: 922.00 },
+      { algo: "LinearSVC",            score: 0.9556, mac_ms: 462.24, and_ms: 317.87 },
+      { algo: "KernelSVC_RBF",        score: 0.8111, mac_ms: null,   and_ms: 371.13 },
+      { algo: "DecisionTree",         score: 0.8333, mac_ms: 27.95,  and_ms: 27.59 },
+      { algo: "RandomForest",         score: 0.9111, mac_ms: 266.97, and_ms: 291.80 },
+      { algo: "GaussianNB",           score: 0.7222, mac_ms: 1.95,   and_ms: 2.84 },
+      { algo: "KMeans",               score: 0.6222, mac_ms: 21.62,  and_ms: 13.13 }
+    ],
+    diabetes: [
+      { algo: "Ridge",                score: 0.4541, mac_ms: 0.04,  and_ms: 0.03 },
+      { algo: "Lasso",                score: 0.4555, mac_ms: 0.61,  and_ms: 9.43 },
+      { algo: "LinearRegression",     score: 0.4526, mac_ms: 0.05,  and_ms: 0.06 },
+      { algo: "KernelRidge_RBF",      score: 0.4619, mac_ms: 14.72, and_ms: 16.56 }
+    ]
+  }
 };
 
 const COLORS = {
@@ -45,6 +76,7 @@ const COLORS = {
   blue: "#5669e8",
   green: "#2d8a4e",
   red: "#c44a3a",
+  android: "#1f9d76",
   muted: "#687493"
 };
 
@@ -348,6 +380,10 @@ document.addEventListener("DOMContentLoaded", () => {
   buildTimeTable();
   paritySpeedupChart();
   buildParityTable();
+  androidTimeChart("android-iris-chart", BENCH.android.iris, { height: 320 });
+  androidTimeChart("android-digits-chart", BENCH.android.digits, { height: 360 });
+  androidTimeChart("android-diabetes-chart", BENCH.android.diabetes, { height: 280 });
+  buildAndroidTable();
 });
 
 // Per-algorithm parity data.
@@ -430,6 +466,78 @@ function buildParityTable() {
     const diffStr = d.maxDiff < 0.001 ? d.maxDiff.toFixed(6) : d.maxDiff.toFixed(2);
     const tr = document.createElement("tr");
     tr.innerHTML = `<td>${d.algo}</td><td>${d.match ? "EXACT" : "close"}</td><td class="${matchClass}">${matchText}</td><td class="num">${diffStr}</td><td class="num">${d.py_ms.toFixed(4)}</td><td class="num">${d.fl_ms.toFixed(4)}</td><td class="num ${speedupClass}">${speedupStr}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+// Android: macOS Flow vs Android Flow time, log-scale grouped bars.
+function androidTimeChart(svgId, data, opts) {
+  const svg = clearSvg(svgId);
+  const W = 900, H = opts.height || 320;
+  const ml = 70, mr = 30, mt = 20, mb = 70;
+  const cw = W - ml - mr;
+  const ch = H - mt - mb;
+  const n = data.length;
+  const groupW = cw / n;
+  const barW = groupW * 0.32;
+  const gap = groupW * 0.06;
+
+  const logMin = -2, logMax = 4;
+  const logRange = logMax - logMin;
+  function msToY(ms) {
+    const l = Math.log10(Math.max(ms, 0.01));
+    return mt + ch - ((l - logMin) / logRange) * ch;
+  }
+
+  for (let i = 0; i <= logRange; i++) {
+    const y = mt + ch - (i / logRange) * ch;
+    svg.appendChild(el("line", { x1: ml, y1: y, x2: W - mr, y2: y, stroke: COLORS.grid, "stroke-width": 1 }));
+    const val = Math.pow(10, logMin + i);
+    let label;
+    if (val < 1) label = val.toFixed(2);
+    else if (val < 1000) label = val.toFixed(0);
+    else label = (val / 1000).toFixed(0) + "k";
+    svg.appendChild(el("text", { x: ml - 8, y: y + 4, "text-anchor": "end", "font-size": 11, "font-family": "DM Mono, monospace", fill: COLORS.muted }, label + "ms"));
+  }
+
+  data.forEach((d, i) => {
+    const gx = ml + i * groupW + groupW / 2;
+    const baseY = mt + ch;
+    const flY = msToY(d.and_ms);
+    svg.appendChild(el("rect", { x: gx + gap/2, y: flY, width: barW, height: baseY - flY, fill: COLORS.android, rx: 3 }));
+    const flLabel = d.and_ms < 1 ? d.and_ms.toFixed(2) : d.and_ms < 100 ? d.and_ms.toFixed(1) : d.and_ms.toFixed(0);
+    svg.appendChild(el("text", { x: gx + barW/2 + gap/2, y: flY - 5, "text-anchor": "middle", "font-size": 10, "font-family": "DM Mono, monospace", fill: COLORS.android }, flLabel));
+
+    if (d.mac_ms != null) {
+      const macY = msToY(d.mac_ms);
+      svg.appendChild(el("rect", { x: gx - barW - gap/2, y: macY, width: barW, height: baseY - macY, fill: COLORS.flow, rx: 3 }));
+      const macLabel = d.mac_ms < 1 ? d.mac_ms.toFixed(2) : d.mac_ms < 100 ? d.mac_ms.toFixed(1) : d.mac_ms.toFixed(0);
+      svg.appendChild(el("text", { x: gx - barW/2 - gap/2, y: macY - 5, "text-anchor": "middle", "font-size": 10, "font-family": "DM Mono, monospace", fill: COLORS.flow }, macLabel));
+    }
+
+    const label = d.algo.replace(/_/g, " ").length > 14 ? d.algo.substring(0, 12) + ".." : d.algo.replace(/_/g, " ");
+    svg.appendChild(el("text", { x: gx, y: mt + ch + 18, "text-anchor": "middle", "font-size": 11, "font-family": "DM Sans, sans-serif", fill: COLORS.ink }, label));
+  });
+
+  svg.appendChild(el("line", { x1: ml, y1: mt + ch, x2: W - mr, y2: mt + ch, stroke: COLORS.ink, "stroke-width": 1.5 }));
+}
+
+// Android results table.
+function buildAndroidTable() {
+  const tbody = document.getElementById("android-table-body");
+  const all = [
+    ...BENCH.android.iris.map(d => ({ ...d, dataset: "iris" })),
+    ...BENCH.android.digits.map(d => ({ ...d, dataset: "digits" })),
+    ...BENCH.android.diabetes.map(d => ({ ...d, dataset: "diabetes" }))
+  ];
+  all.forEach(d => {
+    const ratio = d.mac_ms != null ? d.mac_ms / d.and_ms : null;
+    let ratioStr, ratioCls;
+    if (ratio == null) { ratioStr = "-"; ratioCls = "neutral"; }
+    else if (ratio > 1) { ratioStr = ratio.toFixed(2) + "x"; ratioCls = "neg"; }
+    else { ratioStr = (1 / ratio).toFixed(2) + "x"; ratioCls = "pos"; }
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${d.algo.replace(/_/g, " ")}</td><td>${d.dataset}</td><td class="num">${d.score.toFixed(4)}</td><td class="num">${d.mac_ms != null ? d.mac_ms.toFixed(2) : "-"}</td><td class="num">${d.and_ms.toFixed(2)}</td><td class="num ${ratioCls}">${ratioStr}</td>`;
     tbody.appendChild(tr);
   });
 }

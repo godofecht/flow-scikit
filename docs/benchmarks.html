@@ -210,6 +210,64 @@
         </div>
       </section>
 
+      <section class="bench-section" style="background:#f4f7f8; max-width:none; padding-left:max(28px,calc((100vw - 1164px)/2)); padding-right:max(28px,calc((100vw - 1164px)/2));">
+        <div style="max-width:1164px; margin:0 auto;">
+          <p class="eyebrow">android</p>
+          <h2>Same binary, cross-compiled to Android.</h2>
+          <p>scikit-learn (Flow) emits standard C. Cross-compiled with the Android NDK (aarch64-linux-android, API 24) to a 1.4 MB ELF. Same source, same datasets, same seed=42 split, run on the Android emulator (arm64-v8a, Android 15). No Python, no JVM, no native activity, no APK. Just an executable pushed to <code>/data/local/tmp</code>.</p>
+
+          <div class="portability-grid">
+            <div class="port-card flow">
+              <div class="port-label">Android binary</div>
+              <div class="port-value">1.4 MB</div>
+              <div class="port-sub">aarch64-linux-android ELF, 0 shared objects</div>
+            </div>
+            <div class="port-card sklearn">
+              <div class="port-label">target</div>
+              <div class="port-value">arm64-v8a</div>
+              <div class="port-sub">Android 15, API 35, NDK r28</div>
+            </div>
+            <div class="port-card">
+              <div class="port-label">accuracy delta vs macOS</div>
+              <div class="port-value">0.000</div>
+              <div class="port-sub">identical output, same float32 math</div>
+            </div>
+          </div>
+
+          <div class="legend">
+            <span><i class="flow-color"></i> macOS arm64 (Flow)</span>
+            <span><i style="background:var(--android,#1f9d76)"></i> Android arm64 (Flow)</span>
+          </div>
+
+          <div class="chart-wrap">
+            <h3>Iris: macOS vs Android training time (log scale)</h3>
+            <p class="chart-sub">fit + predict, milliseconds. Lower is better. Log scale because KernelSVC dominates.</p>
+            <svg id="android-iris-chart" viewBox="0 0 900 320"></svg>
+          </div>
+
+          <div class="chart-wrap">
+            <h3>Digits: macOS vs Android training time (log scale)</h3>
+            <p class="chart-sub">fit + predict, milliseconds. Lower is better. Emulator CPU is slower than the host on the heavy O(n^2) workloads.</p>
+            <svg id="android-digits-chart" viewBox="0 0 900 360"></svg>
+          </div>
+
+          <div class="chart-wrap">
+            <h3>Diabetes: macOS vs Android training time</h3>
+            <p class="chart-sub">fit + predict, milliseconds. Lower is better. Direct solvers stay sub-millisecond on both.</p>
+            <svg id="android-diabetes-chart" viewBox="0 0 900 280"></svg>
+          </div>
+
+          <div class="table-wrap">
+            <table class="bench-table">
+              <thead>
+                <tr><th>Algorithm</th><th>Dataset</th><th class="num">Score</th><th class="num">macOS (ms)</th><th class="num">Android (ms)</th><th class="num">Ratio</th></tr>
+              </thead>
+              <tbody id="android-table-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
       <section class="bench-section">
         <p class="eyebrow">reproduce</p>
         <h2>Run the benchmarks yourself.</h2>
@@ -230,6 +288,15 @@ bash benchmarks/iris_comparison.sh
 python3 benchmarks/bench_per_algorithm.py
 ~/.local/bin/build/bench_per_algorithm
 python3 benchmarks/compare_parity.py
+
+<span class="cmt"># Cross-compile to Android (aarch64, API 24) and run on a device/emulator</span>
+FLOW_HOST=python flow compile benchmarks/bench_flow.flow
+$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android24-clang \
+  -O2 -std=c11 -D_DEFAULT_SOURCE ~/.local/bin/build/bench_flow.c -lm \
+  -o bench_flow_android
+adb push bench_flow_android /data/local/tmp/bench_flow
+adb push benchmarks/*.bin /data/local/tmp/benchmarks/
+adb shell "cd /data/local/tmp && /data/local/tmp/bench_flow"
         </div>
       </section>
     </main>
