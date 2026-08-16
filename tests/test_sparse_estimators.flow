@@ -58,8 +58,11 @@ function main() -> i32 {
     # Test sparse LogisticRegression
     let penalty: Penalty = Penalty { kind: PENALTY_L2, alpha: 0.001, l1_ratio: 0.0 }
     let model_lr: LogisticRegression = logistic_regression_fit_sparse(S, y, 2, 500, 0.5, penalty)
+    # logistic_predict returns class labels (sklearn-style predict).
+    # Keep a separate buffer because the cleanup below owns both variables.
     let probs_lr: ptr<f32> = logistic_predict(model_lr, X)
-    let preds_lr: ptr<f32> = logistic_decide(model_lr, probs_lr, n, 0.5)
+    let preds_lr: ptr<f32> = array_new_f32(n)
+    for i in 0 to n { preds_lr[i] = probs_lr[i] }
     let acc_lr: f32 = accuracy_score(y, preds_lr, n)
     print("  LogisticRegression (sparse) accuracy = ")
     printf("%.4f", acc_lr)

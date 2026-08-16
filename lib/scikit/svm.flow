@@ -2059,8 +2059,10 @@ function _smo_train(K: Matrix, y_dual: ptr<f32>, n: i32, C: f32, max_iter: i32) 
                         H = C
                     }
                 } else {
-                    L = alpha_i_old - alpha_j_old
-                    H = alpha_i_old - alpha_j_old + C
+                    # Standard SMO bounds when y_i != y_j:
+                    # L=max(0, a_j-a_i), H=min(C, C+a_j-a_i).
+                    L = alpha_j_old - alpha_i_old
+                    H = alpha_j_old - alpha_i_old + C
                     if L < 0.0 {
                         L = 0.0
                     }

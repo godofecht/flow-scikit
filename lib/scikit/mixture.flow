@@ -50,15 +50,47 @@ export function gaussian_mixture_fit(X: Matrix, n_components: i32, max_iter: i32
     let variances: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
     let weights: ptr<f32> = array_new_f32(n_components)
 
+    # Allocate parameters first. Initialize means with farthest-point seeding
+    # so distinct components do not accidentally start in the same cluster.
     for k in 0 to n_components {
         means[k] = array_new_f32(n_features)
         variances[k] = array_new_f32(n_features)
-        let idx: i32 = rand() % n
         for j in 0 to n_features {
-            means[k][j] = matrix_at(X, idx, j)
             variances[k][j] = 1.0
         }
         weights[k] = 1.0 / (n_components as f32)
+    }
+
+    let first_idx: i32 = rand() % n
+    for j in 0 to n_features {
+        means[0][j] = matrix_at(X, first_idx, j)
+    }
+
+    let mut init_k: i32 = 1
+    while init_k < n_components {
+        let mut best_idx: i32 = 0
+        let mut best_dist: f32 = -1.0
+        for i in 0 to n {
+            let mut min_dist: f32 = 10000000000.0
+            let mut prev_k: i32 = 0
+            while prev_k < init_k {
+                let mut dist: f32 = 0.0
+                for j in 0 to n_features {
+                    let d: f32 = matrix_at(X, i, j) - means[prev_k][j]
+                    dist = dist + d * d
+                }
+                if dist < min_dist { min_dist = dist }
+                prev_k = prev_k + 1
+            }
+            if min_dist > best_dist {
+                best_dist = min_dist
+                best_idx = i
+            }
+        }
+        for j in 0 to n_features {
+            means[init_k][j] = matrix_at(X, best_idx, j)
+        }
+        init_k = init_k + 1
     }
 
     let resp: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
