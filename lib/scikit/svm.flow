@@ -742,93 +742,121 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
     return result
 }
 
-# Core SVM training using projected gradient descent on the dual QP.
-# Solves: min (1/2) alpha^T Q alpha - sum alpha_i  s.t. 0 <= alpha_i <= C
-# where Q_ij = y_i * y_j * K[i,j].
-# Takes y_dual directly (-1/+1) so callers can control class encoding.
+# Wrapper: build kernel from X, then call precomputed SMO.
 function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_classes: i32, C: f32, gamma: f32, max_iter: i32) -> KernelSVC {
     let n: i32 = X.rows
     let n_features: i32 = X.cols
 
-    # Use f64 internally for alphas and b for precision.
+    # Build kernel matrix in f64 (BLAS for large, scalar for small)
+    let kernel_d: ptr<f64> = _build_full_kernel(X, n, n_features, gamma)
+
+    # Identity index map
+    let idx_map: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        idx_map[i] = i
+    }
+
+    let result: KernelSVC = _kernel_svc_smo_precomputed(X, y_dual, classes, n_classes, C, gamma, max_iter, kernel_d, idx_map, n)
+
+    free(kernel_d as ptr<void>)
+    free(idx_map as ptr<void>)
+    return result
+}
+
+# Core SVM training using SMO (Sequential Minimal Optimization).
+# Solves: min (1/2) alpha^T Q alpha - sum alpha_i  s.t. 0 <= alpha_i <= C
+# where Q_ij = y_i * y_j * K[i,j].
+# Takes y_dual directly (-1/+1) so callers can control class encoding.
+# Takes a precomputed kernel matrix (full n_total x n_total) and an index
+# array mapping local rows to kernel rows, so the multiclass wrapper can
+# build the kernel once and slice it for each OvO pair.
+function _kernel_svc_smo_precomputed(
+    X: Matrix,
+    y_dual: ptr<f32>,
+    classes: ptr<f32>,
+    n_classes: i32,
+    C: f32,
+    gamma: f32,
+    max_iter: i32,
+    kernel_full: ptr<f64>,
+    idx_map: ptr<i32>,
+    n_total: i32
+) -> KernelSVC {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
     let alphas_d: ptr<f64> = array_new_f64(n)
     let mut b: f64 = 0.0
     let C_d: f64 = C as f64
 
-    # Precompute y_dual in f64
     let y_d: ptr<f64> = array_new_f64(n)
     for i in 0 to n {
         y_d[i] = y_dual[i] as f64
     }
 
-    # Precompute kernel matrix in f64
-    let gamma_d: f64 = gamma as f64
-    let kernel_d: ptr<f64> = malloc((n as i64) * (n as i64) * 8) as ptr<f64>
-    for i in 0 to n {
-        for j in 0 to n {
-            let mut sq_dist: f64 = 0.0
-            for f in 0 to n_features {
-                let d: f64 = (matrix_at(X, i, f) - matrix_at(X, j, f)) as f64
-                sq_dist = sq_dist + d * d
-            }
-            kernel_d[i * n + j] = _rbf_exp_f64(0.0 - gamma_d * sq_dist)
-        }
-    }
-
-    # Precompute Q matrix: Q[i*n+j] = y_i * y_j * K[i,j]
+    # Extract the n x n sub-kernel for this pair from the full kernel.
+    # Fold y_i * y_j into the kernel to get Q directly, saving one O(n^2) pass.
     let Q: ptr<f64> = malloc((n as i64) * (n as i64) * 8) as ptr<f64>
     for i in 0 to n {
+        let gi: i32 = idx_map[i]
+        let yi: f64 = y_d[i]
         for j in 0 to n {
-            Q[i * n + j] = y_d[i] * y_d[j] * kernel_d[i * n + j]
+            let gj: i32 = idx_map[j]
+            Q[i * n + j] = yi * y_d[j] * kernel_full[gi * n_total + gj]
         }
     }
 
-    # Step size: 1 / trace(Q) for convergence
-    let mut trace_Q: f64 = 0.0
+    # Maintain gradient incrementally: G[i] = sum_j Q[i,j] * alpha_j - 1
+    let G: ptr<f64> = array_new_f64(n)
     for i in 0 to n {
-        trace_Q = trace_Q + Q[i * n + i]
+        G[i] = -1.0
     }
-    let lr: f64 = 1.0 / trace_Q
 
-    # PGD iterations
+    let tol: f64 = 0.001
     let mut iter: i32 = 0
+    let mut examine_all: bool = true
+    let mut n_changed: i32 = 0
+
     while iter < max_iter {
-        let mut max_diff: f64 = 0.0
-        for i in 0 to n {
-            # Gradient: g[i] = sum_j Q[i,j] * alpha_j - 1
-            let mut gi: f64 = 0.0
-            for j in 0 to n {
-                gi = gi + Q[i * n + j] * alphas_d[j]
+        n_changed = 0
+        if examine_all {
+            for i in 0 to n {
+                if _smo_examine(i, n, alphas_d, y_d, G, Q, C_d, tol) {
+                    n_changed = n_changed + 1
+                }
             }
-            gi = gi - 1.0
-
-            # Projected gradient step
-            let mut alpha_new: f64 = alphas_d[i] - lr * gi
-            if alpha_new < 0.0 { alpha_new = 0.0 }
-            if alpha_new > C_d { alpha_new = C_d }
-
-            let diff: f64 = alpha_new - alphas_d[i]
-            let abs_diff: f64 = diff
-            if diff < 0.0 { abs_diff = 0.0 - diff }
-            if abs_diff > max_diff { max_diff = abs_diff }
-            alphas_d[i] = alpha_new
+        } else {
+            for i in 0 to n {
+                if alphas_d[i] > 0.0 && alphas_d[i] < C_d {
+                    if _smo_examine(i, n, alphas_d, y_d, G, Q, C_d, tol) {
+                        n_changed = n_changed + 1
+                    }
+                }
+            }
         }
 
-        if max_diff < 0.000001 {
-            iter = iter + 1
+        if examine_all {
+            examine_all = false
+        } elif n_changed == 0 {
+            examine_all = true
+        }
+
+        iter = iter + 1
+        if n_changed == 0 && examine_all {
             break
         }
-        iter = iter + 1
     }
 
     # Compute bias from free support vectors (0 < alpha < C)
+    # K[i,j] = Q[i,j] * y_i * y_j (since y^2 = 1, so 1/(y_i*y_j) = y_i*y_j)
     let mut n_free: i32 = 0
     for i in 0 to n {
         if alphas_d[i] > 0.0 && alphas_d[i] < C_d {
             let mut fi: f64 = 0.0
             for j in 0 to n {
                 if alphas_d[j] > 0.0 {
-                    fi = fi + alphas_d[j] * y_d[j] * kernel_d[i * n + j]
+                    let K_ij: f64 = Q[i * n + j] * y_d[i] * y_d[j]
+                    fi = fi + alphas_d[j] * y_d[j] * K_ij
                 }
             }
             b = b + (y_d[i] - fi)
@@ -840,9 +868,8 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
     }
 
     free(Q as ptr<void>)
+    array_free_f64(G)
     array_free_f64(y_d)
-    free(kernel_d as ptr<void>)
-
 
     # Convert f64 alphas to f32 for storage
     let alphas: ptr<f32> = array_new_f32(n)
@@ -866,6 +893,146 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
         fitted: true
     }
     return result
+}
+
+# SMO: examine example i. Try to find a j that violates KKT and do a 2-variable step.
+function _smo_examine(
+    i2: i32,
+    n: i32,
+    alphas: ptr<f64>,
+    y: ptr<f64>,
+    G: ptr<f64>,
+    Q: ptr<f64>,
+    C: f64,
+    tol: f64
+) -> bool {
+    let y2: f64 = y[i2]
+    let alpha2: f64 = alphas[i2]
+    # r = y_i * E_i = G[i] (since G[i] = y_i * E_i)
+    let r2: f64 = G[i2]
+
+    # KKT violation check
+    if (r2 < -tol && alpha2 < C) || (r2 > tol && alpha2 > 0.0) {
+        # Find j that maximizes |E1 - E2| (second-order heuristic)
+        # E_i = G[i] * y_i
+        let E2: f64 = G[i2] * y2
+        let mut best_j: i32 = -1
+        let mut best_gain: f64 = 0.0
+        for j in 0 to n {
+            if alphas[j] > 0.0 && alphas[j] < C {
+                let E1: f64 = G[j] * y[j]
+                let gain: f64 = (E1 - E2) * (E1 - E2)
+                if gain > best_gain {
+                    best_gain = gain
+                    best_j = j
+                }
+            }
+        }
+
+        if best_j >= 0 {
+            if _smo_step(best_j, i2, n, alphas, y, G, Q, C) {
+                return true
+            }
+        }
+
+        # Fall back to iterating over non-bound examples
+        let mut start: i32 = (i2 + 1) % n
+        let mut k: i32 = 0
+        while k < n {
+            let j: i32 = (start + k) % n
+            if alphas[j] > 0.0 && alphas[j] < C {
+                if _smo_step(j, i2, n, alphas, y, G, Q, C) {
+                    return true
+                }
+            }
+            k = k + 1
+        }
+
+        # Fall back to iterating over all examples
+        let mut k2: i32 = 0
+        while k2 < n {
+            let j: i32 = (start + k2) % n
+            if _smo_step(j, i2, n, alphas, y, G, Q, C) {
+                return true
+            }
+            k2 = k2 + 1
+        }
+    }
+    return false
+}
+
+# SMO 2-variable analytic step. Updates alpha_i1, alpha_i2, G, and returns true if progress.
+function _smo_step(
+    i1: i32,
+    i2: i32,
+    n: i32,
+    alphas: ptr<f64>,
+    y: ptr<f64>,
+    G: ptr<f64>,
+    Q: ptr<f64>,
+    C: f64
+) -> bool {
+    if i1 == i2 { return false }
+
+    let alpha1: f64 = alphas[i1]
+    let alpha2: f64 = alphas[i2]
+    let y1: f64 = y[i1]
+    let y2: f64 = y[i2]
+
+    # Q values
+    let q11: f64 = Q[i1 * n + i1]
+    let q12: f64 = Q[i1 * n + i2]
+    let q22: f64 = Q[i2 * n + i2]
+
+    let eta: f64 = q11 + q22 - 2.0 * q12
+
+    # G[i] = y_i * E_i, so E_i = G[i] * y_i (since y_i^2 = 1)
+    # SMO update: a2_new = alpha2 + y2 * (E1 - E2) / eta
+    #            = alpha2 + (y1*y2*G[i1] - G[i2]) / eta
+    let mut a2_new: f64 = 0.0
+    if eta > 0.0000000001 {
+        a2_new = alpha2 + (y1 * y2 * G[i1] - G[i2]) / eta
+    } else {
+        return false
+    }
+
+    # Clip
+    let mut L: f64 = 0.0
+    let mut H: f64 = C
+    if y1 == y2 {
+        L = alpha1 + alpha2 - C
+        H = alpha1 + alpha2
+        if L < 0.0 { L = 0.0 }
+        if H > C { H = C }
+    } else {
+        L = alpha2 - alpha1
+        H = alpha2 - alpha1 + C
+        if L < 0.0 { L = 0.0 }
+        if H > C { H = C }
+    }
+
+    if a2_new < L { a2_new = L }
+    if a2_new > H { a2_new = H }
+
+    let a1_new: f64 = alpha1 + y1 * y2 * (alpha2 - a2_new)
+
+    # Check for negligible change
+    let d2: f64 = a2_new - alpha2
+    let d1: f64 = a1_new - alpha1
+    let abs_d2: f64 = d2
+    if d2 < 0.0 { abs_d2 = 0.0 - d2 }
+    if abs_d2 < 0.0000000001 { return false }
+
+    # Update alphas
+    alphas[i1] = a1_new
+    alphas[i2] = a2_new
+
+    # Update gradient: G += d1 * Q[:,i1] + d2 * Q[:,i2]
+    for j in 0 to n {
+        G[j] = G[j] + d1 * Q[j * n + i1] + d2 * Q[j * n + i2]
+    }
+
+    return true
 }
 
 function _rbf_exp(neg_gamma_sum: f32) -> f32 {
@@ -1050,6 +1217,26 @@ export function kernel_svc_free(model: KernelSVC) -> void {
     array_free_f32(model.classes)
 }
 
+# Build full RBF kernel matrix. Uses BLAS for large n, scalar for small.
+function _build_full_kernel(X: Matrix, n: i32, n_features: i32, gamma: f32) -> ptr<f64> {
+    if n > 500 {
+        return _rbf_kernel_blas_f64(X, X, gamma)
+    }
+    let gamma_d: f64 = gamma as f64
+    let kernel: ptr<f64> = malloc((n as i64) * (n as i64) * 8) as ptr<f64>
+    for i in 0 to n {
+        for j in 0 to n {
+            let mut sq_dist: f64 = 0.0
+            for f in 0 to n_features {
+                let d: f64 = (matrix_at(X, i, f) - matrix_at(X, j, f)) as f64
+                sq_dist = sq_dist + d * d
+            }
+            kernel[i * n + j] = _rbf_exp_f64(0.0 - gamma_d * sq_dist)
+        }
+    }
+    return kernel
+}
+
 # ============================================================================
 # Multi-class KernelSVC via One-vs-One (OvO)
 # Trains one binary kernel SVM per pair of classes, matching sklearn's SVC.
@@ -1086,6 +1273,10 @@ export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gam
         }
     }
 
+    # Build the full kernel matrix once in f64.
+    # Use BLAS for large datasets, scalar for small (BLAS call overhead dominates below ~500 samples).
+    let kernel_full: ptr<f64> = _build_full_kernel(X, n, n_features, gamma)
+
     # Count pairs: n_found * (n_found - 1) / 2
     let n_pairs: i32 = (n_found * (n_found - 1)) / 2
     let models: ptr<KernelSVC> = malloc((n_pairs as i64) * 128) as ptr<KernelSVC>
@@ -1107,6 +1298,7 @@ export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gam
 
             let X_sub: Matrix = matrix_new(count, n_features)
             let y_dual: ptr<f32> = array_new_f32(count)
+            let idx_map: ptr<i32> = malloc((count as i64) * 4) as ptr<i32>
             let mut idx: i32 = 0
             for i in 0 to n {
                 if y[i] == classes[a] || y[i] == classes[b] {
@@ -1118,6 +1310,7 @@ export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gam
                     } else {
                         y_dual[idx] = -1.0
                     }
+                    idx_map[idx] = i
                     idx = idx + 1
                 }
             }
@@ -1125,19 +1318,22 @@ export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gam
             let binary_classes: ptr<f32> = array_new_f32(2)
             binary_classes[0] = -1.0
             binary_classes[1] = 1.0
-            models[pair_idx] = _kernel_svc_smo(X_sub, y_dual, binary_classes, 2, C, gamma, max_iter)
+            models[pair_idx] = _kernel_svc_smo_precomputed(X_sub, y_dual, binary_classes, 2, C, gamma, max_iter, kernel_full, idx_map, n)
             pair_a[pair_idx] = a
             pair_b[pair_idx] = b
 
-            # Note: binary_classes and y_dual are NOT freed here because
-            # _kernel_svc_smo stores them in the returned model.
-            # They will be freed in kernel_svc_multi_free via kernel_svc_free.
+            # idx_map is consumed by the solver (it copies the kernel slice).
+            free(idx_map as ptr<void>)
+            # X_sub is stored in the model (matrix_copy inside solver).
+            matrix_free(X_sub)
 
             pair_idx = pair_idx + 1
             b = b + 1
         }
         a = a + 1
     }
+
+    free(kernel_full as ptr<void>)
 
     return KernelSVCMulti {
         models: models,
