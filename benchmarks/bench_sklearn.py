@@ -96,10 +96,6 @@ bench("GaussianNB", "iris", X_iris, y_iris,
       lambda m, X: m.predict(X))
 
 from sklearn.cluster import KMeans
-def kmeans_fit(X, y):
-    return KMeans(n_clusters=3, n_init=10, random_state=42).fit(X)
-def kmeans_predict(m, X):
-    return m.predict(X)
 # KMeans: use best-match cluster labeling like Flow
 def kmeans_bench(name, ds, X, y, n_clusters):
     n = len(X)
