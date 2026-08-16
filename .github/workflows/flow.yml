@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: flooooooooooow/flow
-          ref: 494f9e30e951f47fb95f2421a4163e58074e9bfc
+          ref: ef82631ac6e1d78a1a81e73340b1e2ad0a8bfae4
           path: .flow-toolchain
 
       - uses: actions/setup-python@v5
@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: flooooooooooow/flow
-          ref: 494f9e30e951f47fb95f2421a4163e58074e9bfc
+          ref: ef82631ac6e1d78a1a81e73340b1e2ad0a8bfae4
           path: .flow-toolchain
 
       - uses: actions/setup-python@v5
@@ -49,9 +49,12 @@ jobs:
       - name: Install Flow compiler deps
         run: pip install -r .flow-toolchain/requirements.txt
 
+      - name: Install OpenBLAS
+        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
+
       - name: Run tests and examples
         env:
           FLOW_BIN: ${{ github.workspace }}/.flow-toolchain/flow
           FLOW_HOST: python
-          FLOW_LDFLAGS: "-lm"
+          FLOW_LDFLAGS: "-lm -lopenblas"
         run: python tools/run_all.py
