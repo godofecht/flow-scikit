@@ -2018,7 +2018,8 @@ function _smo_train(K: Matrix, y_dual: ptr<f32>, n: i32, C: f32, max_iter: i32) 
     let tol: f32 = 0.001
 
     let mut iter: i32 = 0
-    while iter < max_iter {
+    let mut passes_without_change: i32 = 0
+    while iter < max_iter && passes_without_change < 5 {
         let mut num_changed: i32 = 0
 
         for i in 0 to n {
@@ -2030,13 +2031,26 @@ function _smo_train(K: Matrix, y_dual: ptr<f32>, n: i32, C: f32, max_iter: i32) 
 
             let yi_ei: f32 = y_dual[i] * ei
             if (yi_ei < -tol && alphas[i] < C) || (yi_ei > tol && alphas[i] > 0.0) {
-                let mut j: i32 = (iter * 7 + i * 13 + 3) % n
-                if j < 0 {
-                    j = j + n
+                # Platt-style second-choice heuristic: choose the partner
+                # with the largest |E_i - E_j| so each step has useful gain.
+                let mut j: i32 = -1
+                let mut best_gap: f32 = -1.0
+                for candidate in 0 to n {
+                    if candidate != i {
+                        let mut candidate_e: f32 = 0.0
+                        for k in 0 to n {
+                            candidate_e = candidate_e + alphas[k] * y_dual[k] * matrix_at(K, candidate, k)
+                        }
+                        candidate_e = candidate_e + b - y_dual[candidate]
+                        let mut gap: f32 = ei - candidate_e
+                        if gap < 0.0 { gap = -gap }
+                        if gap > best_gap {
+                            best_gap = gap
+                            j = candidate
+                        }
+                    }
                 }
-                if j == i {
-                    j = (j + 1) % n
-                }
+                if j < 0 { continue }
 
                 let mut ej: f32 = 0.0
                 for k in 0 to n {
@@ -2110,7 +2124,9 @@ function _smo_train(K: Matrix, y_dual: ptr<f32>, n: i32, C: f32, max_iter: i32) 
 
         iter = iter + 1
         if num_changed == 0 {
-            break
+            passes_without_change = passes_without_change + 1
+        } else {
+            passes_without_change = 0
         }
     }
 
