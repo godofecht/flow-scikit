@@ -145,8 +145,8 @@
 
       <section class="bench-section">
         <p class="eyebrow">training time</p>
-        <h2>Direct solvers and small-data speed.</h2>
-        <p>fit + predict combined, in milliseconds. Flow uses LBFGS for logistic regression, BLAS (Accelerate) for matrix products, and direct solvers for linear models. Built with -O3 -march=native.</p>
+        <h2>SMO solver, BLAS kernel, direct linear solvers.</h2>
+        <p>fit + predict combined, in milliseconds. Flow uses SMO for kernel SVM, LBFGS for logistic regression, BLAS (Accelerate) for matrix products, QR decomposition for least squares, and direct solvers for linear models. Built with -O3 -march=native. scikit-learn (Python) dispatches to compiled C and Cython, so it wins on raw training time. Flow's advantage is cross-platform portability and binary size, not training speed.</p>
 
         <div class="legend">
           <span><i class="sklearn-color"></i> scikit-learn (Python)</span>
@@ -155,7 +155,7 @@
 
         <div class="chart-wrap">
           <h3>Iris training time (log scale)</h3>
-          <p class="chart-sub">fit + predict, milliseconds. Lower is better. Log scale because KMeans dominates.</p>
+          <p class="chart-sub">fit + predict, milliseconds. Lower is better. Python wins on iris because 120 samples is too small for Flow's per-call overhead to amortize.</p>
           <svg id="iris-time-chart" viewBox="0 0 900 360"></svg>
         </div>
 

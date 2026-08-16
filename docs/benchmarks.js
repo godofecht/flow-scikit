@@ -1,32 +1,33 @@
 // flow-scikit benchmark data and SVG chart rendering.
 // All data measured with seed=42, 80/20 split, xorshift32 PRNG.
-// Flow builds use -O3 -march=native, BLAS (Accelerate), and LBFGS optimizer.
+// Flow builds use -O3 -march=native, BLAS (Accelerate), SMO for kernel SVM,
+// and LBFGS for logistic regression.
 
 const BENCH = {
   iris: [
-    { algo: "LogisticRegression",  sk_score: 0.9333, fl_score: 0.9333, sk_ms: 0.00,  fl_ms: 0.12,  sk_fit: 0.00,  fl_fit: 0.12,  sk_pred: 0.00, fl_pred: 0.00 },
-    { algo: "LinearSVC",            sk_score: 0.9000, fl_score: 0.9000, sk_ms: 0.00,  fl_ms: 0.11,  sk_fit: 0.00,  fl_fit: 0.11,  sk_pred: 0.00, fl_pred: 0.00 },
-    { algo: "KernelSVC_RBF",        sk_score: 0.9333, fl_score: 0.9333, sk_ms: 0.00,  fl_ms: 3.31,  sk_fit: 0.00,  fl_fit: 3.31,  sk_pred: 0.00, fl_pred: 0.04 },
-    { algo: "DecisionTree",         sk_score: 0.9333, fl_score: 0.9333, sk_ms: 0.00,  fl_ms: 0.10,  sk_fit: 0.00,  fl_fit: 0.10,  sk_pred: 0.00, fl_pred: 0.00 },
-    { algo: "RandomForest",         sk_score: 0.9333, fl_score: 0.9333, sk_ms: 0.00,  fl_ms: 0.46,  sk_fit: 0.00,  fl_fit: 0.46,  sk_pred: 0.00, fl_pred: 0.01 },
-    { algo: "GaussianNB",           sk_score: 0.9333, fl_score: 0.9333, sk_ms: 0.00,  fl_ms: 0.01,  sk_fit: 0.00,  fl_fit: 0.01,  sk_pred: 0.00, fl_pred: 0.00 },
-    { algo: "KMeans",               sk_score: 0.8333, fl_score: 0.8333, sk_ms: 0.02,  fl_ms: 0.13,  sk_fit: 0.02,  fl_fit: 0.13,  sk_pred: 0.00, fl_pred: 0.00 },
-    { algo: "PCA",                  sk_score: 0.7262, fl_score: 0.7262, sk_ms: 0.00,  fl_ms: 0.02,  sk_fit: 0.00,  fl_fit: 0.02,  sk_pred: 0.00, fl_pred: 0.00, metric: "explained_var" }
+    { algo: "LogisticRegression",  sk_score: 0.9333, fl_score: 0.9333, sk_ms: 0.004,  fl_ms: 0.095, sk_fit: 0.004,  fl_fit: 0.093, sk_pred: 0.000, fl_pred: 0.002 },
+    { algo: "LinearSVC",            sk_score: 0.9000, fl_score: 0.9000, sk_ms: 0.001,  fl_ms: 0.100, sk_fit: 0.001,  fl_fit: 0.099, sk_pred: 0.000, fl_pred: 0.001 },
+    { algo: "KernelSVC_RBF",        sk_score: 0.9333, fl_score: 1.0000, sk_ms: 0.001,  fl_ms: 0.549, sk_fit: 0.001,  fl_fit: 0.511, sk_pred: 0.000, fl_pred: 0.038 },
+    { algo: "DecisionTree",         sk_score: 0.9333, fl_score: 0.9333, sk_ms: 0.001,  fl_ms: 0.082, sk_fit: 0.001,  fl_fit: 0.081, sk_pred: 0.000, fl_pred: 0.001 },
+    { algo: "RandomForest",         sk_score: 0.9333, fl_score: 0.9333, sk_ms: 0.005,  fl_ms: 0.333, sk_fit: 0.004,  fl_fit: 0.329, sk_pred: 0.000, fl_pred: 0.004 },
+    { algo: "GaussianNB",           sk_score: 0.9333, fl_score: 0.9333, sk_ms: 0.000,  fl_ms: 0.019, sk_fit: 0.000,  fl_fit: 0.017, sk_pred: 0.000, fl_pred: 0.002 },
+    { algo: "KMeans",               sk_score: 0.8333, fl_score: 0.8333, sk_ms: 0.028,  fl_ms: 0.114, sk_fit: 0.028,  fl_fit: 0.113, sk_pred: 0.000, fl_pred: 0.001 },
+    { algo: "PCA",                  sk_score: 0.7262, fl_score: 0.7262, sk_ms: 0.000,  fl_ms: 0.020, sk_fit: 0.000,  fl_fit: 0.020, sk_pred: 0.000, fl_pred: 0.000, metric: "explained_var" }
   ],
   digits: [
-    { algo: "LogisticRegression",  sk_score: 0.9749, fl_score: 0.9666, sk_ms: 0.01,  fl_ms: 23.91,  sk_fit: 0.01,  fl_fit: 23.91,  sk_pred: 0.00, fl_pred: 0.13 },
-    { algo: "LinearSVC",            sk_score: 0.9694, fl_score: 0.9694, sk_ms: 0.23,  fl_ms: 125.50,  sk_fit: 0.23,  fl_fit: 125.50,  sk_pred: 0.00, fl_pred: 0.14 },
-    { algo: "KernelSVC_RBF",        sk_score: 0.9499, fl_score: 0.9471, sk_ms: 0.02,  fl_ms: 4015.19,  sk_fit: 0.02,  fl_fit: 4015.19,  sk_pred: 0.02, fl_pred: 18.41 },
-    { algo: "DecisionTree",         sk_score: 0.8886, fl_score: 0.8774, sk_ms: 0.01,  fl_ms: 23.10,   sk_fit: 0.01,  fl_fit: 23.10,   sk_pred: 0.00, fl_pred: 0.04 },
-    { algo: "RandomForest",         sk_score: 0.9666, fl_score: 0.9499, sk_ms: 0.01,  fl_ms: 34.18,    sk_fit: 0.01,  fl_fit: 34.18,    sk_pred: 0.00, fl_pred: 0.48 },
-    { algo: "GaussianNB",           sk_score: 0.8134, fl_score: 0.8134, sk_ms: 0.00,  fl_ms: 1.78,     sk_fit: 0.00,  fl_fit: 1.78,     sk_pred: 0.00, fl_pred: 0.87 },
-    { algo: "KMeans",               sk_score: 0.6323, fl_score: 0.6267, sk_ms: 0.03,  fl_ms: 159.63,   sk_fit: 0.03,  fl_fit: 159.63,   sk_pred: 0.00, fl_pred: 0.17 }
+    { algo: "LogisticRegression",  sk_score: 0.9749, fl_score: 0.9666, sk_ms: 0.007,  fl_ms: 21.801,  sk_fit: 0.007,  fl_fit: 21.687,  sk_pred: 0.000, fl_pred: 0.114 },
+    { algo: "LinearSVC",            sk_score: 0.9694, fl_score: 0.9694, sk_ms: 0.237,  fl_ms: 100.524,  sk_fit: 0.237,  fl_fit: 100.417,  sk_pred: 0.000, fl_pred: 0.107 },
+    { algo: "KernelSVC_RBF",        sk_score: 0.9499, fl_score: 0.9443, sk_ms: 0.044,  fl_ms: 173.044,  sk_fit: 0.025,  fl_fit: 160.648,  sk_pred: 0.019, fl_pred: 12.396 },
+    { algo: "DecisionTree",         sk_score: 0.8886, fl_score: 0.8802, sk_ms: 0.010,  fl_ms: 15.259,   sk_fit: 0.009,  fl_fit: 15.232,   sk_pred: 0.000, fl_pred: 0.027 },
+    { algo: "RandomForest",         sk_score: 0.9666, fl_score: 0.9499, sk_ms: 0.016,  fl_ms: 22.483,    sk_fit: 0.015,  fl_fit: 22.236,    sk_pred: 0.001, fl_pred: 0.247 },
+    { algo: "GaussianNB",           sk_score: 0.8134, fl_score: 0.8134, sk_ms: 0.001,  fl_ms: 1.673,     sk_fit: 0.001,  fl_fit: 1.077,     sk_pred: 0.000, fl_pred: 0.596 },
+    { algo: "KMeans",               sk_score: 0.6323, fl_score: 0.6267, sk_ms: 0.034,  fl_ms: 103.908,   sk_fit: 0.034,  fl_fit: 103.792,   sk_pred: 0.000, fl_pred: 0.116 }
   ],
   diabetes: [
-    { algo: "Ridge",                sk_score: 0.6089, fl_score: 0.6089, sk_ms: 0.00,  fl_ms: 0.03,  sk_fit: 0.00,  fl_fit: 0.03,  sk_pred: 0.00, fl_pred: 0.00 },
-    { algo: "Lasso",                sk_score: 0.6084, fl_score: 0.6085, sk_ms: 0.00,  fl_ms: 4.60,  sk_fit: 0.00,  fl_fit: 4.60,  sk_pred: 0.00, fl_pred: 0.00 },
-    { algo: "LinearRegression",     sk_score: 0.6108, fl_score: 0.6108, sk_ms: 0.01,  fl_ms: 0.03,  sk_fit: 0.01,  fl_fit: 0.03,  sk_pred: 0.00, fl_pred: 0.00 },
-    { algo: "KernelRidge_RBF",      sk_score: 0.4173, fl_score: 0.4181, sk_ms: 0.04,  fl_ms: 11.59, sk_fit: 0.04,  fl_fit: 11.59, sk_pred: 0.00, fl_pred: 1.28 }
+    { algo: "Ridge",                sk_score: 0.6089, fl_score: 0.6089, sk_ms: 0.001,  fl_ms: 0.032,  sk_fit: 0.001,  fl_fit: 0.032,  sk_pred: 0.000, fl_pred: 0.000 },
+    { algo: "Lasso",                sk_score: 0.6084, fl_score: 0.6085, sk_ms: 0.001,  fl_ms: 4.830,  sk_fit: 0.001,  fl_fit: 4.829,  sk_pred: 0.000, fl_pred: 0.001 },
+    { algo: "LinearRegression",     sk_score: 0.6108, fl_score: 0.6108, sk_ms: 0.001,  fl_ms: 0.040,  sk_fit: 0.001,  fl_fit: 0.040,  sk_pred: 0.000, fl_pred: 0.000 },
+    { algo: "KernelRidge_RBF",      sk_score: 0.4173, fl_score: 0.4173, sk_ms: 0.021,  fl_ms: 8.562,  sk_fit: 0.020,  fl_fit: 7.787,  sk_pred: 0.000, fl_pred: 0.775 }
   ],
   iris_combo: [
     { algo: "GaussianNB",      sk_acc: 0.9333, fl_acc: 0.9333, sk_train: 0.00,  fl_train: 0.01 },
@@ -394,22 +395,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // Per-algorithm parity data.
 const PARITY = [
-  { algo: "StandardScaler",            match: true,  maxDiff: 0.000001, py_ms: 1.59,  fl_ms: 0.004, speedup: 397.3 },
-  { algo: "MinMaxScaler",              match: true,  maxDiff: 0.000001, py_ms: 0.36,  fl_ms: 0.002, speedup: 177.9 },
-  { algo: "MaxAbsScaler",              match: true,  maxDiff: 0.000000, py_ms: 0.32,  fl_ms: 0.013, speedup: 25.0 },
-  { algo: "GaussianNB",                match: true,  maxDiff: 0.000000, py_ms: 3.81,  fl_ms: 0.020, speedup: 190.3 },
-  { algo: "KNNClassifier_k5",          match: true,  maxDiff: 0.000000, py_ms: 8.32,  fl_ms: 0.060, speedup: 138.6 },
-  { algo: "NearestCentroid",           match: true,  maxDiff: 0.000000, py_ms: 72.69, fl_ms: 0.002, speedup: 36343.0 },
-  { algo: "DummyClassifier_mf",        match: true,  maxDiff: 0.000000, py_ms: 0.29,  fl_ms: 0.013, speedup: 22.4 },
+  { algo: "StandardScaler",            match: true,  maxDiff: 0.000001, py_ms: 1.59,  fl_ms: 0.005, speedup: 317.8 },
+  { algo: "MinMaxScaler",              match: true,  maxDiff: 0.000001, py_ms: 0.36,  fl_ms: 0.003, speedup: 118.6 },
+  { algo: "MaxAbsScaler",              match: true,  maxDiff: 0.000000, py_ms: 0.32,  fl_ms: 0.014, speedup: 23.2 },
+  { algo: "GaussianNB",                match: true,  maxDiff: 0.000000, py_ms: 3.81,  fl_ms: 0.019, speedup: 200.3 },
+  { algo: "KNNClassifier_k5",          match: true,  maxDiff: 0.000000, py_ms: 8.32,  fl_ms: 0.061, speedup: 136.4 },
+  { algo: "NearestCentroid",           match: true,  maxDiff: 0.000000, py_ms: 72.69, fl_ms: 0.003, speedup: 24228.7 },
+  { algo: "DummyClassifier_mf",        match: true,  maxDiff: 0.000000, py_ms: 0.29,  fl_ms: 0.014, speedup: 20.8 },
   { algo: "DummyRegressor_mean",       match: true,  maxDiff: 0.000008, py_ms: 0.18,  fl_ms: 0.001, speedup: 178.4 },
-  { algo: "PCA_2comp",                 match: true,  maxDiff: 0.000001, py_ms: 5.23,  fl_ms: 0.024, speedup: 217.9 },
+  { algo: "PCA_2comp",                 match: true,  maxDiff: 0.000001, py_ms: 5.23,  fl_ms: 0.027, speedup: 193.7 },
   { algo: "LDA",                       match: true,  maxDiff: 0.000000, py_ms: 4.13,  fl_ms: 0.016, speedup: 258.0 },
-  { algo: "QDA",                       match: true,  maxDiff: 0.000000, py_ms: 9.63,  fl_ms: 0.008, speedup: 1203.4 },
-  { algo: "KMeans_k3",                 match: true,  maxDiff: 0.000000, py_ms: 15.96, fl_ms: 0.022, speedup: 725.4 },
-  { algo: "KNNRegressor_k3",           match: true,  maxDiff: 0.000011, py_ms: 1.83,  fl_ms: 0.230, speedup: 8.0 },
-  { algo: "LinearRegression",          match: true,  maxDiff: 0.000010, py_ms: 21.15, fl_ms: 0.058, speedup: 364.7 },
-  { algo: "Ridge_a1",                  match: true,  maxDiff: 0.000015, py_ms: 12.53, fl_ms: 0.034, speedup: 368.5 },
-  { algo: "Lasso_a0.1",                match: true,  maxDiff: 0.003916, py_ms: 5.55,  fl_ms: 0.435, speedup: 12.7 }
+  { algo: "QDA",                       match: true,  maxDiff: 0.000000, py_ms: 9.63,  fl_ms: 0.007, speedup: 1375.3 },
+  { algo: "KMeans_k3",                 match: true,  maxDiff: 0.000000, py_ms: 15.96, fl_ms: 0.023, speedup: 693.8 },
+  { algo: "KNNRegressor_k3",           match: true,  maxDiff: 0.000011, py_ms: 1.83,  fl_ms: 0.240, speedup: 7.6 },
+  { algo: "LinearRegression",          match: true,  maxDiff: 0.000010, py_ms: 21.15, fl_ms: 0.061, speedup: 346.7 },
+  { algo: "Ridge_a1",                  match: true,  maxDiff: 0.000015, py_ms: 12.53, fl_ms: 0.035, speedup: 357.9 },
+  { algo: "Lasso_a0.1",                match: true,  maxDiff: 0.003916, py_ms: 5.55,  fl_ms: 0.460, speedup: 12.1 }
 ];
 
 // Parity speedup bar chart.
