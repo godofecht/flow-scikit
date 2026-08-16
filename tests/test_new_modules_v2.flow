@@ -491,6 +491,82 @@ function test_gaussian_process() -> i32 {
     return 0
 }
 
+function test_classifier_chain() -> i32 {
+    println("Test: ClassifierChain")
+    let n_samples: i32 = 40
+    let n_features: i32 = 2
+    let n_outputs: i32 = 2
+
+    let X: Matrix = matrix_new(n_samples, n_features)
+    let Y: ptr<ptr<f32> > = malloc((n_outputs as i64) * 8) as ptr<ptr<f32> >
+    for o in 0 to n_outputs {
+        Y[o] = array_new_f32(n_samples)
+    }
+
+    srand(42)
+    for i in 0 to n_samples {
+        let x0: f32 = ((rand() % 100) as f32) / 50.0 - 1.0
+        let x1: f32 = ((rand() % 100) as f32) / 50.0 - 1.0
+        matrix_set(X, i, 0, x0)
+        matrix_set(X, i, 1, x1)
+
+        if x0 + x1 > 0.0 {
+            Y[0][i] = 1.0
+        } else {
+            Y[0][i] = 0.0
+        }
+
+        # Second output depends on the first one
+        if x0 - x1 + Y[0][i] > 0.5 {
+            Y[1][i] = 1.0
+        } else {
+            Y[1][i] = 0.0
+        }
+    }
+
+    let model: ClassifierChain = classifier_chain_fit(X, Y, n_samples, n_features, n_outputs, 0.1, 100)
+    let preds: ptr<ptr<f32> > = classifier_chain_predict(model, X)
+
+    let mut correct: i32 = 0
+    let total: i32 = n_samples * n_outputs
+
+    for i in 0 to n_samples {
+        for o in 0 to n_outputs {
+            let p: f32 = preds[i][o]
+            let mut pred_class: f32 = 0.0
+            if p > 0.5 { pred_class = 1.0 }
+            if pred_class == Y[o][i] {
+                correct = correct + 1
+            }
+        }
+    }
+
+    let acc: f32 = (correct as f32) / (total as f32)
+
+    if acc < 0.6 {
+        println("  FAIL: ClassifierChain accuracy too low")
+        return 1
+    }
+
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+
+    classifier_chain_free(model)
+    for i in 0 to n_samples {
+        array_free_f32(preds[i])
+    }
+    free(preds as ptr<void>)
+
+    for o in 0 to n_outputs {
+        array_free_f32(Y[o])
+    }
+    free(Y as ptr<void>)
+    matrix_free(X)
+
+    return 0
+}
+
 function test_multi_output_regressor() -> i32 {
     println("Test: MultiOutputRegressor")
     let n: i32 = 30
@@ -921,6 +997,8 @@ function main() -> i32 {
     if test_gaussian_process() != 0 { failures = failures + 1 }
     println("")
     if test_multi_output_regressor() != 0 { failures = failures + 1 }
+    println("")
+    if test_classifier_chain() != 0 { failures = failures + 1 }
     println("")
     if test_extra_trees_classifier() != 0 { failures = failures + 1 }
     println("")
