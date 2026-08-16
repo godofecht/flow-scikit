@@ -161,7 +161,7 @@ function main() -> i32 {
 
     # GaussianNB
     t0 = clock()
-    let gnb_model: GaussianNB = gaussian_nb_fit(X_train_iris, split_iris.y_train, 3, 0.0000000001)
+    let gnb_model: GaussianNB = gaussian_nb_fit(X_train_iris, split_iris.y_train, 3, 0.000000001)
     t1 = clock()
     let gnb_preds: ptr<f32> = gaussian_nb_predict(gnb_model, X_test_iris)
     t2 = clock()
@@ -172,7 +172,7 @@ function main() -> i32 {
 
     # KMeans
     t0 = clock()
-    let km_model: KMeans = kmeans_fit(X_train_iris, 3, 100, 0.001, 42)
+    let km_model: KMeans = kmeans_fit_plus_plus(X_train_iris, 3, 100, 0.001, 42, 10)
     t1 = clock()
     let km_preds: ptr<i32> = kmeans_predict(km_model, X_test_iris)
     t2 = clock()
@@ -290,7 +290,7 @@ function main() -> i32 {
 
     # GaussianNB
     t0 = clock()
-    let gnb_dig: GaussianNB = gaussian_nb_fit(X_train_dig, split_dig.y_train, 10, 0.0000000001)
+    let gnb_dig: GaussianNB = gaussian_nb_fit(X_train_dig, split_dig.y_train, 10, 0.000000001)
     t1 = clock()
     let gnb_dig_preds: ptr<f32> = gaussian_nb_predict(gnb_dig, X_test_dig)
     t2 = clock()
@@ -301,7 +301,7 @@ function main() -> i32 {
 
     # KMeans
     t0 = clock()
-    let km_dig: KMeans = kmeans_fit(X_train_dig, 10, 100, 0.001, 42)
+    let km_dig: KMeans = kmeans_fit_plus_plus(X_train_dig, 10, 100, 0.001, 42, 10)
     t1 = clock()
     let km_dig_preds: ptr<i32> = kmeans_predict(km_dig, X_test_dig)
     t2 = clock()

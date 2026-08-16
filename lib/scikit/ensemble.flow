@@ -7,6 +7,11 @@
 
 import "lib/scikit/matrix.flow"
 import "lib/scikit/tree.flow"
+import "lib/scikit/prng.flow"
+
+extern {
+    function sqrt(x: f64) -> f64
+}
 
 extern {
     function rand() -> i32
@@ -42,6 +47,14 @@ export function random_forest_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: 
     let trees: ptr<DecisionTreeClassifier> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeClassifier>
     let mut prng: PRNG = prng_seed(seed)
 
+    # max_features = sqrt(n_features) for classification (sklearn default)
+    let max_features_f64: f64 = sqrt((X.cols as f64))
+    let max_features: i32 = (max_features_f64 as i32)
+    if max_features < 1 { max_features = 1 }
+
+    # Shared PRNG state pointer for the RF tree builder
+    let prng_state: ptr<u32> = malloc(4) as ptr<u32>
+
     for t in 0 to n_trees {
         let n_samples: i32 = X.rows
         let bootstrap_indices: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
@@ -60,12 +73,19 @@ export function random_forest_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: 
             }
         }
 
-        trees[t] = decision_tree_classifier_fit(X_boot, y_boot, n_classes, max_depth, CRITERION_GINI)
+        # Set PRNG state for this tree's feature subsampling
+        let res: PRNGResult = prng_int(prng, 2147483647)
+        prng = PRNG { state: res.state }
+        prng_state[0] = res.state
+
+        trees[t] = decision_tree_classifier_fit_rf(X_boot, y_boot, n_classes, max_depth, CRITERION_GINI, max_features, prng_state)
 
         free(bootstrap_indices as ptr<void>)
         matrix_free(X_boot)
         array_free_f32(y_boot)
     }
+
+    free(prng_state as ptr<void>)
 
     return RandomForestClassifier {
         trees: trees,

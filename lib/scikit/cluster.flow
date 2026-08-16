@@ -2,6 +2,7 @@
 # Implements KMeans clustering.
 
 import "lib/scikit/matrix.flow"
+import "lib/scikit/prng.flow"
 
 export struct KMeans {
     centroids: ptr<ptr<f32> >,
@@ -143,6 +144,211 @@ export function kmeans_fit(X: Matrix, n_clusters: i32, max_iter: i32, tol: f32, 
         labels: labels,
         inertia: inertia,
         n_iter: n_iter_run,
+        max_iter: max_iter,
+        tol: tol,
+        fitted: true
+    }
+}
+
+# K-means++ initialization: picks initial centroids with probability
+# proportional to squared distance from nearest existing centroid.
+function _kmeans_plus_plus_init(X: Matrix, n_clusters: i32, prng_state: u32) -> ptr<ptr<f32> > {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+    let centroids: ptr<ptr<f32> > = malloc((n_clusters as i64) * 8) as ptr<ptr<f32> >
+    for k in 0 to n_clusters {
+        centroids[k] = array_new_f32(n_features)
+    }
+
+    let mut prng: PRNG = PRNG { state: prng_state }
+
+    # Pick first centroid randomly
+    let res0: PRNGResult = prng_int(prng, n)
+    prng = PRNG { state: res0.state }
+    for j in 0 to n_features {
+        centroids[0][j] = matrix_at(X, res0.value, j)
+    }
+
+    # Squared distances to nearest centroid
+    let dist_sq: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut d: f32 = 0.0
+        for j in 0 to n_features {
+            let diff: f32 = matrix_at(X, i, j) - centroids[0][j]
+            d = d + diff * diff
+        }
+        dist_sq[i] = d
+    }
+
+    for k in 1 to n_clusters {
+        # Sum of squared distances
+        let mut total: f32 = 0.0
+        for i in 0 to n {
+            total = total + dist_sq[i]
+        }
+        if total <= 0.0 {
+            # All points are identical to centroids, pick random
+            let res: PRNGResult = prng_int(prng, n)
+            prng = PRNG { state: res.state }
+            for j in 0 to n_features {
+                centroids[k][j] = matrix_at(X, res.value, j)
+            }
+        } else {
+            # Pick next centroid with probability proportional to dist_sq
+            let res: PRNGResult = prng_int(prng, 2147483647)
+            prng = PRNG { state: res.state }
+            let threshold: f32 = (res.value as f32) / 2147483647.0 * total
+            let mut cumsum: f32 = 0.0
+            let mut chosen: i32 = n - 1
+            for i in 0 to n {
+                cumsum = cumsum + dist_sq[i]
+                if cumsum >= threshold {
+                    chosen = i
+                    break
+                }
+            }
+            for j in 0 to n_features {
+                centroids[k][j] = matrix_at(X, chosen, j)
+            }
+        }
+        # Update distances
+        for i in 0 to n {
+            let mut d: f32 = 0.0
+            for j in 0 to n_features {
+                let diff: f32 = matrix_at(X, i, j) - centroids[k][j]
+                d = d + diff * diff
+            }
+            if d < dist_sq[i] { dist_sq[i] = d }
+        }
+    }
+
+    array_free_f32(dist_sq)
+    return centroids
+}
+
+# Run a single Lloyd iteration starting from given centroids.
+function _kmeans_lloyd(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, max_iter: i32, tol: f32) -> KMeans {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let mut inertia: f32 = 0.0
+    let mut n_iter_run: i32 = 0
+
+    for iter in 0 to max_iter {
+        n_iter_run = iter + 1
+        let mut new_inertia: f32 = 0.0
+
+        for i in 0 to n {
+            let mut best_k: i32 = 0
+            let mut best_dist: f32 = 9999999999.0
+            for k in 0 to n_clusters {
+                let mut dist: f32 = 0.0
+                for j in 0 to n_features {
+                    let d: f32 = matrix_at(X, i, j) - centroids[k][j]
+                    dist = dist + d * d
+                }
+                if dist < best_dist { best_dist = dist; best_k = k }
+            }
+            labels[i] = best_k
+            new_inertia = new_inertia + best_dist
+        }
+
+        let sums: ptr<ptr<f32> > = malloc((n_clusters as i64) * 8) as ptr<ptr<f32> >
+        let counts: ptr<i32> = malloc((n_clusters as i64) * 4) as ptr<i32>
+        for k in 0 to n_clusters {
+            sums[k] = array_new_f32(n_features)
+            counts[k] = 0
+        }
+        for i in 0 to n {
+            let k: i32 = labels[i]
+            counts[k] = counts[k] + 1
+            for j in 0 to n_features {
+                sums[k][j] = sums[k][j] + matrix_at(X, i, j)
+            }
+        }
+
+        let mut max_shift: f32 = 0.0
+        for k in 0 to n_clusters {
+            if counts[k] > 0 {
+                for j in 0 to n_features {
+                    let new_val: f32 = sums[k][j] / (counts[k] as f32)
+                    let shift: f32 = new_val - centroids[k][j]
+                    if shift < 0.0 {
+                        let abs_shift: f32 = 0.0 - shift
+                        if abs_shift > max_shift { max_shift = abs_shift }
+                    } else {
+                        if shift > max_shift { max_shift = shift }
+                    }
+                    centroids[k][j] = new_val
+                }
+            }
+            array_free_f32(sums[k])
+        }
+        free(sums as ptr<void>)
+        free(counts as ptr<void>)
+
+        inertia = new_inertia
+        if max_shift < tol { break }
+    }
+
+    return KMeans {
+        centroids: centroids,
+        n_clusters: n_clusters,
+        n_features: n_features,
+        labels: labels,
+        inertia: inertia,
+        n_iter: n_iter_run,
+        max_iter: max_iter,
+        tol: tol,
+        fitted: true
+    }
+}
+
+# KMeans with k-means++ initialization and n_init restarts.
+# Matches sklearn's default init='k-means++', n_init=10.
+export function kmeans_fit_plus_plus(X: Matrix, n_clusters: i32, max_iter: i32, tol: f32, seed: i32, n_init: i32) -> KMeans {
+    let n_features: i32 = X.cols
+    let mut best_inertia: f32 = 9999999999.0
+    let best_centroids: ptr<ptr<f32> > = malloc((n_clusters as i64) * 8) as ptr<ptr<f32> >
+    for k in 0 to n_clusters {
+        best_centroids[k] = array_new_f32(n_features)
+    }
+    let best_labels: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
+    let mut best_n_iter: i32 = 0
+
+    for init in 0 to n_init {
+        let init_seed: u32 = ((seed + init * 17) as u32)
+        let centroids: ptr<ptr<f32> > = _kmeans_plus_plus_init(X, n_clusters, init_seed)
+        let result: KMeans = _kmeans_lloyd(X, centroids, n_clusters, max_iter, tol)
+
+        if result.inertia < best_inertia {
+            best_inertia = result.inertia
+            best_n_iter = result.n_iter
+            for k in 0 to n_clusters {
+                for j in 0 to n_features {
+                    best_centroids[k][j] = result.centroids[k][j]
+                }
+            }
+            for i in 0 to X.rows {
+                best_labels[i] = result.labels[i]
+            }
+        }
+
+        # Free this run's centroids and labels
+        for k in 0 to n_clusters {
+            array_free_f32(result.centroids[k])
+        }
+        free(result.centroids as ptr<void>)
+        free(result.labels as ptr<void>)
+    }
+
+    return KMeans {
+        centroids: best_centroids,
+        n_clusters: n_clusters,
+        n_features: n_features,
+        labels: best_labels,
+        inertia: best_inertia,
+        n_iter: best_n_iter,
         max_iter: max_iter,
         tol: tol,
         fitted: true
