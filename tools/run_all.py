@@ -49,8 +49,10 @@ def run_file(flow_bin: str, file: Path) -> tuple[bool, float, str]:
         text=True,
     )
     elapsed = time.perf_counter() - start
-    tail = result.stderr.strip() or result.stdout.strip()
-    return result.returncode == 0, elapsed, tail
+    output = "\n".join(
+        part for part in (result.stdout.strip(), result.stderr.strip()) if part
+    )
+    return result.returncode == 0, elapsed, output
 
 
 def main() -> int:
@@ -110,7 +112,7 @@ def main() -> int:
         for group, file, tail in failures:
             rel = str(file.relative_to(ROOT))
             print(f"  {rel}:")
-            for line in tail.splitlines()[-8:]:
+            for line in tail.splitlines()[-20:]:
                 print(f"    {line}")
         print("")
 
