@@ -321,9 +321,15 @@ function main() -> i32 {
     pca_free(pca)
 
     # ---- KMeans k=3 fixed init ----
-    # Use first 3 training samples as init centers
+    # Use first 3 training samples as init centers (matches sklearn init=array)
+    let init_centers: Matrix = matrix_new(3, 4)
+    for k in 0 to 3 {
+        for j in 0 to 4 {
+            matrix_set(init_centers, k, j, matrix_at(X_tr_i, k, j))
+        }
+    }
     t0 = clock()
-    let km: KMeans = kmeans_fit(X_tr_i, 3, 100, 0.000001, 42)
+    let km: KMeans = kmeans_fit_init(X_tr_i, init_centers, 3, 100, 0.000001)
     t1 = clock()
     fit_ms = elapsed_ms(t0, t1)
     t0 = clock()

@@ -21,7 +21,7 @@ extern {
 export struct LinearDiscriminantAnalysis {
     class_means: ptr<ptr<f32> >,
     covariance: ptr<ptr<f32> >,
-    inv_cov_diag: ptr<f32>,
+    inv_cov: ptr<ptr<f32> >,
     classes: ptr<f32>,
     priors: ptr<f32>,
     n_classes: i32,
@@ -103,22 +103,93 @@ export function discriminant_lda_fit(X: Matrix, y: ptr<f32>, n_classes: i32) -> 
         cov[a][a] = cov[a][a] + 0.0000000001
     }
 
-    # Store diagonal inverse for Mahalanobis distance (simplified)
-    let inv_cov_diag: ptr<f32> = array_new_f32(p)
+    # Compute full inverse covariance via Gaussian elimination in f64
+    # Build augmented [cov | I] in f64
+    let aug: ptr<f64> = malloc((p as i64) * (p as i64) * 2 * 8) as ptr<f64>
     for a in 0 to p {
-        if cov[a][a] > 0.0000000001 {
-            inv_cov_diag[a] = 1.0 / cov[a][a]
-        } else {
-            inv_cov_diag[a] = 0.0
+        for b in 0 to p {
+            aug[a * (2 * p) + b] = cov[a][b] as f64
+        }
+        for b in 0 to p {
+            if a == b {
+                aug[a * (2 * p) + p + b] = 1.0
+            } else {
+                aug[a * (2 * p) + p + b] = 0.0
+            }
         }
     }
 
+    # Forward elimination with partial pivoting
+    for col in 0 to p {
+        let mut pivot: i32 = col
+        let mut max_val: f64 = fabs(aug[col * (2 * p) + col])
+        let mut row: i32 = col + 1
+        while row < p {
+            let val: f64 = fabs(aug[row * (2 * p) + col])
+            if val > max_val { max_val = val; pivot = row }
+            row = row + 1
+        }
+        if max_val < 0.0000000000000001 { continue }
+        if pivot != col {
+            let mut j: i32 = 0
+            while j < 2 * p {
+                let tmp: f64 = aug[col * (2 * p) + j]
+                aug[col * (2 * p) + j] = aug[pivot * (2 * p) + j]
+                aug[pivot * (2 * p) + j] = tmp
+                j = j + 1
+            }
+        }
+        let pv: f64 = aug[col * (2 * p) + col]
+        let mut r: i32 = col + 1
+        while r < p {
+            let factor: f64 = aug[r * (2 * p) + col] / pv
+            let mut j: i32 = col
+            while j < 2 * p {
+                aug[r * (2 * p) + j] = aug[r * (2 * p) + j] - factor * aug[col * (2 * p) + j]
+                j = j + 1
+            }
+            r = r + 1
+        }
+    }
+
+    # Back-substitution
+    let mut i: i32 = p - 1
+    while i >= 0 {
+        let pv: f64 = aug[i * (2 * p) + i]
+        let mut j: i32 = 0
+        while j < 2 * p {
+            aug[i * (2 * p) + j] = aug[i * (2 * p) + j] / pv
+            j = j + 1
+        }
+        let mut r: i32 = 0
+        while r < i {
+            let factor: f64 = aug[r * (2 * p) + i]
+            let mut j: i32 = i
+            while j < 2 * p {
+                aug[r * (2 * p) + j] = aug[r * (2 * p) + j] - factor * aug[i * (2 * p) + j]
+                j = j + 1
+            }
+            r = r + 1
+        }
+        i = i - 1
+    }
+
+    # Extract inverse
+    let inv_cov: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for a in 0 to p {
+        inv_cov[a] = array_new_f32(p)
+        for b in 0 to p {
+            inv_cov[a][b] = aug[a * (2 * p) + p + b] as f32
+        }
+    }
+
+    free(aug as ptr<void>)
     array_free_f32(class_counts as ptr<f32>)
 
     return LinearDiscriminantAnalysis {
         class_means: class_means,
         covariance: cov,
-        inv_cov_diag: inv_cov_diag,
+        inv_cov: inv_cov,
         classes: classes,
         priors: priors,
         n_classes: n_found,
@@ -133,17 +204,22 @@ export function discriminant_lda_predict(model: LinearDiscriminantAnalysis, X: M
     let result: ptr<f32> = array_new_f32(n)
 
     for i in 0 to n {
-        let mut best_score: f32 = -1000000.0
+        let mut best_score: f64 = -1000000000.0
         let mut best_class: i32 = 0
         for c in 0 to model.n_classes {
-            # Mahalanobis distance using diagonal inverse
-            let mut dist: f32 = 0.0
-            for j in 0 to p {
-                let diff: f32 = matrix_at(X, i, j) - model.class_means[c][j]
-                dist = dist + diff * diff * model.inv_cov_diag[j]
+            # Full Mahalanobis distance: diff^T * inv_cov * diff
+            let mut dist: f64 = 0.0
+            for a in 0 to p {
+                let diff_a: f64 = (matrix_at(X, i, a) - model.class_means[c][a]) as f64
+                let mut row_sum: f64 = 0.0
+                for b in 0 to p {
+                    let diff_b: f64 = (matrix_at(X, i, b) - model.class_means[c][b]) as f64
+                    row_sum = row_sum + (model.inv_cov[a][b] as f64) * diff_b
+                }
+                dist = dist + diff_a * row_sum
             }
             # Score = -0.5 * dist + log(prior)
-            let score: f32 = -0.5 * dist + log((model.priors[c]) as f64) as f32
+            let score: f64 = -0.5 * dist + log((model.priors[c]) as f64)
             if score > best_score {
                 best_score = score
                 best_class = c
@@ -163,7 +239,10 @@ export function discriminant_lda_free(model: LinearDiscriminantAnalysis) -> void
         array_free_f32(model.covariance[i])
     }
     free(model.covariance as ptr<void>)
-    array_free_f32(model.inv_cov_diag)
+    for i in 0 to model.n_features {
+        array_free_f32(model.inv_cov[i])
+    }
+    free(model.inv_cov as ptr<void>)
     array_free_f32(model.classes)
     array_free_f32(model.priors)
 }
@@ -176,7 +255,8 @@ export function discriminant_lda_free(model: LinearDiscriminantAnalysis) -> void
 export struct QuadraticDiscriminantAnalysis {
     class_means: ptr<ptr<f32> >,
     class_covariances: ptr<ptr<ptr<f32> > >,
-    class_inv_diag: ptr<ptr<f32> >,
+    class_inv_cov: ptr<ptr<ptr<f32> > >,
+    class_log_det: ptr<f32>,
     classes: ptr<f32>,
     priors: ptr<f32>,
     n_classes: i32,
@@ -228,14 +308,16 @@ export function qda_fit(X: Matrix, y: ptr<f32>, n_classes: i32) -> QuadraticDisc
         priors[c] = (class_counts[c] as f32) / (n as f32)
     }
 
-    # Compute per-class covariance
+    # Compute per-class covariance, full inverse, and log determinant
     let class_covariances: ptr<ptr<ptr<f32> > > = malloc((n_found as i64) * 8) as ptr<ptr<ptr<f32> > >
-    let class_inv_diag: ptr<ptr<f32> > = malloc((n_found as i64) * 8) as ptr<ptr<f32> >
+    let class_inv_cov: ptr<ptr<ptr<f32> > > = malloc((n_found as i64) * 8) as ptr<ptr<ptr<f32> > >
+    let class_log_det: ptr<f32> = array_new_f32(n_found)
     for c in 0 to n_found {
         class_covariances[c] = malloc((p as i64) * 8) as ptr<ptr<f32> >
-        class_inv_diag[c] = array_new_f32(p)
+        class_inv_cov[c] = malloc((p as i64) * 8) as ptr<ptr<f32> >
         for i in 0 to p {
             class_covariances[c][i] = array_new_f32(p)
+            class_inv_cov[c][i] = array_new_f32(p)
         }
         for i in 0 to n {
             if y[i] == classes[c] {
@@ -253,10 +335,79 @@ export function qda_fit(X: Matrix, y: ptr<f32>, n_classes: i32) -> QuadraticDisc
                 class_covariances[c][a][b] = class_covariances[c][a][b] / (class_counts[c] as f32)
             }
             class_covariances[c][a][a] = class_covariances[c][a][a] + 0.0000000001
-            if class_covariances[c][a][a] > 0.0000000001 {
-                class_inv_diag[c][a] = 1.0 / class_covariances[c][a][a]
+        }
+
+        # Compute inverse and log det via LU decomposition in f64
+        let aug: ptr<f64> = malloc((p as i64) * (p as i64) * 2 * 8) as ptr<f64>
+        for a in 0 to p {
+            for b in 0 to p {
+                aug[a * (2 * p) + b] = class_covariances[c][a][b] as f64
+            }
+            for b in 0 to p {
+                if a == b { aug[a * (2 * p) + p + b] = 1.0 }
+                else { aug[a * (2 * p) + p + b] = 0.0 }
             }
         }
+        let mut log_det: f64 = 0.0
+        for col in 0 to p {
+            let mut pivot: i32 = col
+            let mut max_val: f64 = fabs(aug[col * (2 * p) + col])
+            let mut row: i32 = col + 1
+            while row < p {
+                let val: f64 = fabs(aug[row * (2 * p) + col])
+                if val > max_val { max_val = val; pivot = row }
+                row = row + 1
+            }
+            if max_val < 0.0000000000000001 { continue }
+            if pivot != col {
+                let mut j: i32 = 0
+                while j < 2 * p {
+                    let tmp: f64 = aug[col * (2 * p) + j]
+                    aug[col * (2 * p) + j] = aug[pivot * (2 * p) + j]
+                    aug[pivot * (2 * p) + j] = tmp
+                    j = j + 1
+                }
+            }
+            let pv: f64 = aug[col * (2 * p) + col]
+            log_det = log_det + log(fabs(pv))
+            let mut r: i32 = col + 1
+            while r < p {
+                let factor: f64 = aug[r * (2 * p) + col] / pv
+                let mut j: i32 = col
+                while j < 2 * p {
+                    aug[r * (2 * p) + j] = aug[r * (2 * p) + j] - factor * aug[col * (2 * p) + j]
+                    j = j + 1
+                }
+                r = r + 1
+            }
+        }
+        let mut i2: i32 = p - 1
+        while i2 >= 0 {
+            let pv: f64 = aug[i2 * (2 * p) + i2]
+            let mut j: i32 = 0
+            while j < 2 * p {
+                aug[i2 * (2 * p) + j] = aug[i2 * (2 * p) + j] / pv
+                j = j + 1
+            }
+            let mut r: i32 = 0
+            while r < i2 {
+                let factor: f64 = aug[r * (2 * p) + i2]
+                let mut j: i32 = i2
+                while j < 2 * p {
+                    aug[r * (2 * p) + j] = aug[r * (2 * p) + j] - factor * aug[i2 * (2 * p) + j]
+                    j = j + 1
+                }
+                r = r + 1
+            }
+            i2 = i2 - 1
+        }
+        for a in 0 to p {
+            for b in 0 to p {
+                class_inv_cov[c][a][b] = aug[a * (2 * p) + p + b] as f32
+            }
+        }
+        class_log_det[c] = log_det as f32
+        free(aug as ptr<void>)
     }
 
     array_free_f32(class_counts as ptr<f32>)
@@ -264,7 +415,8 @@ export function qda_fit(X: Matrix, y: ptr<f32>, n_classes: i32) -> QuadraticDisc
     return QuadraticDiscriminantAnalysis {
         class_means: class_means,
         class_covariances: class_covariances,
-        class_inv_diag: class_inv_diag,
+        class_inv_cov: class_inv_cov,
+        class_log_det: class_log_det,
         classes: classes,
         priors: priors,
         n_classes: n_found,
@@ -279,22 +431,21 @@ export function qda_predict(model: QuadraticDiscriminantAnalysis, X: Matrix) -> 
     let result: ptr<f32> = array_new_f32(n)
 
     for i in 0 to n {
-        let mut best_score: f32 = -1000000.0
+        let mut best_score: f64 = -1000000000.0
         let mut best_class: i32 = 0
         for c in 0 to model.n_classes {
-            let mut dist: f32 = 0.0
-            for j in 0 to p {
-                let diff: f32 = matrix_at(X, i, j) - model.class_means[c][j]
-                dist = dist + diff * diff * model.class_inv_diag[c][j]
-            }
-            # log det (diagonal approx) = sum log(diag)
-            let mut log_det: f32 = 0.0
-            for j in 0 to p {
-                if model.class_inv_diag[c][j] > 0.0000000001 {
-                    log_det = log_det + log((1.0 / model.class_inv_diag[c][j]) as f64) as f32
+            # Full Mahalanobis distance: diff^T * inv_cov * diff
+            let mut dist: f64 = 0.0
+            for a in 0 to p {
+                let diff_a: f64 = (matrix_at(X, i, a) - model.class_means[c][a]) as f64
+                let mut row_sum: f64 = 0.0
+                for b in 0 to p {
+                    let diff_b: f64 = (matrix_at(X, i, b) - model.class_means[c][b]) as f64
+                    row_sum = row_sum + (model.class_inv_cov[c][a][b] as f64) * diff_b
                 }
+                dist = dist + diff_a * row_sum
             }
-            let score: f32 = -0.5 * dist - 0.5 * log_det + log((model.priors[c]) as f64) as f32
+            let score: f64 = -0.5 * dist - 0.5 * (model.class_log_det[c] as f64) + log((model.priors[c]) as f64)
             if score > best_score {
                 best_score = score
                 best_class = c
@@ -308,15 +459,17 @@ export function qda_predict(model: QuadraticDiscriminantAnalysis, X: Matrix) -> 
 export function qda_free(model: QuadraticDiscriminantAnalysis) -> void {
     for c in 0 to model.n_classes {
         array_free_f32(model.class_means[c])
-        array_free_f32(model.class_inv_diag[c])
         for i in 0 to model.n_features {
             array_free_f32(model.class_covariances[c][i])
+            array_free_f32(model.class_inv_cov[c][i])
         }
         free(model.class_covariances[c] as ptr<void>)
+        free(model.class_inv_cov[c] as ptr<void>)
     }
     free(model.class_means as ptr<void>)
     free(model.class_covariances as ptr<void>)
-    free(model.class_inv_diag as ptr<void>)
+    free(model.class_inv_cov as ptr<void>)
+    array_free_f32(model.class_log_det)
     array_free_f32(model.classes)
     array_free_f32(model.priors)
 }
