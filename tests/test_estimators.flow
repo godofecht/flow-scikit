@@ -52,6 +52,30 @@ function test_decision_tree() -> i32 {
     return 0
 }
 
+function test_bagging_classifier() -> i32 {
+    println("Test: BaggingClassifier")
+    let data: Dataset = make_classification_data()
+
+    let model: BaggingClassifier = bagging_classifier_fit(data.X, data.y, 2, 10, 5, 42)
+    let preds: ptr<f32> = bagging_classifier_predict(model, data.X)
+
+    let acc: f32 = accuracy_score(data.y, preds, data.n_samples)
+    if acc < 0.7 {
+        println("  FAIL: accuracy should be > 0.7")
+        return 1
+    }
+
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+
+    bagging_classifier_free(model)
+    array_free_f32(preds)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+    return 0
+}
+
 function test_random_forest() -> i32 {
     println("Test: RandomForestClassifier")
     let data: Dataset = make_classification_data()
@@ -341,6 +365,8 @@ function main() -> i32 {
     if test_decision_tree() != 0 { failures = failures + 1 }
     println("")
     if test_random_forest() != 0 { failures = failures + 1 }
+    println("")
+    if test_bagging_classifier() != 0 { failures = failures + 1 }
     println("")
     if test_gaussian_nb() != 0 { failures = failures + 1 }
     println("")
