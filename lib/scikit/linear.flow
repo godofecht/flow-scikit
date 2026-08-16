@@ -714,6 +714,7 @@ export function logistic_regression_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_c
 
         for epoch in 0 to epochs {
             let grad_w: ptr<f32> = array_new_f32(n)
+            for j in 0 to n { grad_w[j] = 0.0 }
             let mut grad_b: f32 = 0.0
 
             for i in 0 to n_samples {
