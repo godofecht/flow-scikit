@@ -23,13 +23,15 @@ function compute_pairwise_distances(X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
     let dist: ptr<f32> = array_new_f32(n * n)
     for i in 0 to n {
+        let row_i_offset: i32 = i * X.cols
         for j in 0 to n {
             if i == j {
                 dist[i * n + j] = 0.0
             } else {
+                let row_j_offset: i32 = j * X.cols
                 let mut sum: f32 = 0.0
                 for k in 0 to X.cols {
-                    let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                    let d: f32 = X.data[row_i_offset + k] - X.data[row_j_offset + k]
                     sum = sum + d * d
                 }
                 dist[i * n + j] = sqrt(sum as f64) as f32
@@ -311,11 +313,13 @@ export function isomap_fit(X: Matrix, n_components: i32, n_neighbors: i32) -> Is
 
     let D: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
     for i in 0 to n {
+        let row_i_offset: i32 = i * p
         D[i] = array_new_f32(n)
         for j in 0 to n {
+            let row_j_offset: i32 = j * p
             let mut s: f32 = 0.0
             for k in 0 to p {
-                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                let d: f32 = X.data[row_i_offset + k] - X.data[row_j_offset + k]
                 s = s + d * d
             }
             D[i][j] = sqrt((s as f64)) as f32
@@ -461,13 +465,15 @@ export function lle_fit(X: Matrix, n_components: i32, n_neighbors: i32) -> LLE {
 
     let W: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
     for i in 0 to n {
+        let row_i_offset: i32 = i * p
         W[i] = array_new_f32(n)
 
         let dists: ptr<f32> = array_new_f32(n)
         for j in 0 to n {
+            let row_j_offset: i32 = j * p
             let mut s: f32 = 0.0
             for k in 0 to p {
-                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                let d: f32 = X.data[row_i_offset + k] - X.data[row_j_offset + k]
                 s = s + d * d
             }
             dists[j] = s
@@ -615,11 +621,13 @@ export function spectral_embedding_fit(X: Matrix, n_components: i32, gamma: f32)
 
     let W: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
     for i in 0 to n {
+        let row_i_offset: i32 = i * p
         W[i] = array_new_f32(n)
         for j in 0 to n {
+            let row_j_offset: i32 = j * p
             let mut s: f32 = 0.0
             for k in 0 to p {
-                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                let d: f32 = X.data[row_i_offset + k] - X.data[row_j_offset + k]
                 s = s + d * d
             }
             W[i][j] = exp((-gamma * s) as f64) as f32
@@ -744,11 +752,13 @@ export function mds_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f32, s
 
     let D: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
     for i in 0 to n {
+        let row_i_offset: i32 = i * p
         D[i] = array_new_f32(n)
         for j in 0 to n {
+            let row_j_offset: i32 = j * p
             let mut s: f32 = 0.0
             for k in 0 to p {
-                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                let d: f32 = X.data[row_i_offset + k] - X.data[row_j_offset + k]
                 s = s + d * d
             }
             D[i][j] = sqrt((s as f64)) as f32
@@ -831,12 +841,14 @@ export function trustworthiness(X: Matrix, X_embedded: Matrix, n_neighbors: i32)
     let dist_orig: ptr<f32> = array_new_f32(n * n)
     let mut i: i32 = 0
     while i < n {
+        let row_i_offset: i32 = i * n_features
         let mut j: i32 = 0
         while j < n {
+            let row_j_offset: i32 = j * n_features
             let mut s: f32 = 0.0
             let mut k: i32 = 0
             while k < n_features {
-                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                let d: f32 = X.data[row_i_offset + k] - X.data[row_j_offset + k]
                 s = s + d * d
                 k = k + 1
             }
@@ -851,12 +863,14 @@ export function trustworthiness(X: Matrix, X_embedded: Matrix, n_neighbors: i32)
     let dist_emb: ptr<f32> = array_new_f32(n * n)
     i = 0
     while i < n {
+        let row_i_offset: i32 = i * n_emb
         let mut j: i32 = 0
         while j < n {
+            let row_j_offset: i32 = j * n_emb
             let mut s: f32 = 0.0
             let mut k: i32 = 0
             while k < n_emb {
-                let d: f32 = matrix_at(X_embedded, i, k) - matrix_at(X_embedded, j, k)
+                let d: f32 = X_embedded.data[row_i_offset + k] - X_embedded.data[row_j_offset + k]
                 s = s + d * d
                 k = k + 1
             }
