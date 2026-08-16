@@ -35,6 +35,10 @@ Filed issues so far:
   LinearSVC accuracy drops from 0.833 to 0.033 when surrounding code grows.
   Adding a comment to svm.flow changes the result. Workaround: split
   benchmarks into smaller files.
+- #472: Adding prng.flow import to scikit.flow umbrella triggers incorrect
+  code generation for regression and clustering. Ridge R2 jumps from 0.33
+  to 0.61, KMeans iris drops from 0.80 to 0.47. Workaround: import prng.flow
+  directly from cluster.flow and ensemble.flow instead of through scikit.flow.
 
 ## Flow transpiler constraints (workarounds)
 
