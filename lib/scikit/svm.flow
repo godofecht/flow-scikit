@@ -5,6 +5,7 @@
 import "lib/scikit/matrix.flow"
 import "lib/scikit/sparse.flow"
 import "lib/scikit/kernel_ridge.flow"
+import "lib/scikit/blas.flow"
 
 # ============================================================================
 # LinearSVC (linear SVM classifier via SGD on hinge loss)
@@ -877,6 +878,110 @@ function _rbf_exp_f64(neg_gamma_sum: f64) -> f64 {
     return val
 }
 
+# BLAS-accelerated RBF kernel matrix computation.
+# K[i,j] = exp(-gamma * ||x1_i - x2_j||^2)
+# Uses the identity: ||a-b||^2 = ||a||^2 + ||b||^2 - 2*a^T*b
+# The cross term a^T*b is computed via cblas_sgemm.
+function _rbf_kernel_blas(X1: Matrix, X2: Matrix, gamma: f32) -> Matrix {
+    let n1: i32 = X1.rows
+    let n2: i32 = X2.rows
+    let nf: i32 = X1.cols
+    let result: Matrix = matrix_new(n1, n2)
+
+    # Compute squared norms of X1 and X2
+    let x1_sq: ptr<f32> = array_new_f32(n1)
+    let x2_sq: ptr<f32> = array_new_f32(n2)
+    for i in 0 to n1 {
+        let mut s: f32 = 0.0
+        for k in 0 to nf {
+            let v: f32 = matrix_at(X1, i, k)
+            s = s + v * v
+        }
+        x1_sq[i] = s
+    }
+    for j in 0 to n2 {
+        let mut s: f32 = 0.0
+        for k in 0 to nf {
+            let v: f32 = matrix_at(X2, j, k)
+            s = s + v * v
+        }
+        x2_sq[j] = s
+    }
+
+    # Cross term: X1 * X2^T via cblas_sgemm
+    # X1 is n1 x nf (row-major), X2 is n2 x nf (row-major)
+    # We need X1 * X2^T which is n1 x n2.
+    # cblas_sgemm with transb=CblasTrans computes C = alpha * X1 * X2^T + beta * C
+    let gamma_f: f32 = gamma
+    let cross: ptr<f32> = malloc((n1 as i64) * (n2 as i64) * 4) as ptr<f32>
+    # Use the BLAS matmat wrapper with transposed B
+    # But our wrapper doesn't support trans. Call cblas_sgemm directly.
+    cblas_sgemm(CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, CBLAS_TRANS, n1, n2, nf, 1.0, X1.data, nf, X2.data, nf, 0.0, cross, n2)
+
+    # Combine: sq_dist = x1_sq + x2_sq - 2*cross, then exp(-gamma * sq_dist)
+    let gamma_d: f64 = gamma as f64
+    for i in 0 to n1 {
+        for j in 0 to n2 {
+            let sq: f32 = x1_sq[i] + x2_sq[j] - 2.0 * cross[i * n2 + j]
+            let val: f32 = _rbf_exp_f64(0.0 - gamma_d * (sq as f64)) as f32
+            matrix_set(result, i, j, val)
+        }
+    }
+
+    free(cross as ptr<void>)
+    array_free_f32(x1_sq)
+    array_free_f32(x2_sq)
+    return result
+}
+
+# BLAS-accelerated f64 RBF kernel matrix for training.
+# Returns a flat n1 x n2 f64 array (row-major).
+# Uses f32 sgemm for the cross term (faster than dgemm), then casts to f64 for exp.
+function _rbf_kernel_blas_f64(X1: Matrix, X2: Matrix, gamma: f32) -> ptr<f64> {
+    let n1: i32 = X1.rows
+    let n2: i32 = X2.rows
+    let nf: i32 = X1.cols
+
+    # Compute squared norms in f32 (cheap)
+    let x1_sq: ptr<f32> = array_new_f32(n1)
+    let x2_sq: ptr<f32> = array_new_f32(n2)
+    for i in 0 to n1 {
+        let mut s: f32 = 0.0
+        for k in 0 to nf {
+            let v: f32 = matrix_at(X1, i, k)
+            s = s + v * v
+        }
+        x1_sq[i] = s
+    }
+    for j in 0 to n2 {
+        let mut s: f32 = 0.0
+        for k in 0 to nf {
+            let v: f32 = matrix_at(X2, j, k)
+            s = s + v * v
+        }
+        x2_sq[j] = s
+    }
+
+    # Cross term: X1 * X2^T via f32 cblas_sgemm (much faster than dgemm)
+    let cross: ptr<f32> = malloc((n1 as i64) * (n2 as i64) * 4) as ptr<f32>
+    cblas_sgemm(CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, CBLAS_TRANS, n1, n2, nf, 1.0, X1.data, nf, X2.data, nf, 0.0, cross, n2)
+
+    # Combine and apply exp in f64
+    let gamma_d: f64 = gamma as f64
+    let result: ptr<f64> = malloc((n1 as i64) * (n2 as i64) * 8) as ptr<f64>
+    for i in 0 to n1 {
+        for j in 0 to n2 {
+            let sq: f64 = (x1_sq[i] + x2_sq[j] - 2.0 * cross[i * n2 + j]) as f64
+            result[i * n2 + j] = _rbf_exp_f64(0.0 - gamma_d * sq)
+        }
+    }
+
+    free(cross as ptr<void>)
+    array_free_f32(x1_sq)
+    array_free_f32(x2_sq)
+    return result
+}
+
 function _rbf_kernel(X1: Matrix, X2: Matrix, gamma: f32) -> Matrix {
     let result: Matrix = matrix_new(X1.rows, X2.rows)
     for i in 0 to X1.rows {
@@ -894,23 +999,30 @@ function _rbf_kernel(X1: Matrix, X2: Matrix, gamma: f32) -> Matrix {
 }
 
 export function kernel_svc_decision_function(model: KernelSVC, X: Matrix) -> ptr<f32> {
-    let scores: ptr<f32> = array_new_f32(X.rows)
-    let gamma_d: f64 = model.gamma as f64
-    for i in 0 to X.rows {
-        let mut sum: f64 = model.b as f64
-        for j in 0 to model.n_samples {
-            if model.alphas[j] > 0.0 {
-                let mut k_val: f64 = 0.0
-                for f in 0 to model.n_features {
-                    let d: f64 = (matrix_at(X, i, f) - matrix_at(model.X_train, j, f)) as f64
-                    k_val = k_val + d * d
-                }
-                k_val = _rbf_exp_f64(0.0 - gamma_d * k_val)
-                sum = sum + (model.alphas[j] as f64) * (model.y_train_dual[j] as f64) * k_val
-            }
-        }
-        scores[i] = sum as f32
+    let n_test: i32 = X.rows
+    let scores: ptr<f32> = array_new_f32(n_test)
+
+    # Use BLAS-accelerated RBF kernel: K = exp(-gamma * ||x - x_train||^2)
+    let K: Matrix = _rbf_kernel_blas(X, model.X_train, model.gamma)
+
+    # scores = K * (alpha .* y_dual) + b
+    # Build the coefficient vector
+    let coef: ptr<f32> = array_new_f32(model.n_samples)
+    for j in 0 to model.n_samples {
+        coef[j] = model.alphas[j] * model.y_train_dual[j]
     }
+
+    # scores = K * coef (BLAS sgemv)
+    blas_matvec(K.data, n_test, model.n_samples, coef, scores, 1.0, 0.0)
+
+    # Add bias
+    let b_val: f32 = model.b
+    for i in 0 to n_test {
+        scores[i] = scores[i] + b_val
+    }
+
+    array_free_f32(coef)
+    matrix_free(K)
     return scores
 }
 

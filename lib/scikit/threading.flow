@@ -1,0 +1,21 @@
+# Threading helpers using Grand Central Dispatch (macOS) and pthreads (Linux).
+# Enables parallel OvR/OvO training for multiclass classifiers.
+
+# On macOS, use dispatch_apply_f from libdispatch.
+# On Linux/Android, fall back to pthreads.
+# For simplicity, we use a C helper that wraps both.
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    # dispatch_apply_f is available on macOS via libdispatch.
+    # On Linux, we provide a pthreads fallback in the build.
+    function flow_parallel_for(n_tasks: i32, callback: ptr<void>, ctx: ptr<void>) -> void
+}
+
+# Parallel for: each task index [0, n_tasks) is dispatched to a thread.
+# The callback is a C function: void (*)(void *ctx, size_t idx).
+# On macOS it uses dispatch_apply_f, on Linux pthreads.
+export function parallel_for(n_tasks: i32, callback: ptr<void>, ctx: ptr<void>) -> void {
+    flow_parallel_for(n_tasks, callback, ctx)
+}

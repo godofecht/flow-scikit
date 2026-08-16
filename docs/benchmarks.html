@@ -76,7 +76,7 @@
       <section class="bench-section">
         <p class="eyebrow">deployment footprint</p>
         <h2>1.4 MB native binary vs 165 MB Python stack.</h2>
-        <p>scikit-learn (Flow) compiles to a single executable with no Python, no numpy, no scipy, no BLAS. Copy it to another arm64 macOS machine and it runs.</p>
+        <p>scikit-learn (Flow) compiles to a single executable with no Python, no numpy, no scipy. On macOS it links Accelerate (vecLib) for BLAS. On Android it ships a scalar fallback. Copy the binary to another arm64 machine and it runs.</p>
 
         <div class="portability-grid">
           <div class="port-card flow">
@@ -146,7 +146,7 @@
       <section class="bench-section">
         <p class="eyebrow">training time</p>
         <h2>Direct solvers and small-data speed.</h2>
-        <p>fit + predict combined, in milliseconds. scikit-learn (Flow) uses direct Gaussian elimination for linear models and avoids Python import overhead.</p>
+        <p>fit + predict combined, in milliseconds. Flow uses LBFGS for logistic regression, BLAS (Accelerate) for matrix products, and direct solvers for linear models. Built with -O3 -march=native.</p>
 
         <div class="legend">
           <span><i class="sklearn-color"></i> scikit-learn (Python)</span>
