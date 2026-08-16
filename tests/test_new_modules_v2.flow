@@ -491,6 +491,65 @@ function test_gaussian_process() -> i32 {
     return 0
 }
 
+function test_multi_output_classifier() -> i32 {
+    println("Test: MultiOutputClassifier")
+    let n: i32 = 40
+    let X: Matrix = matrix_new(n, 2)
+    let Y: Matrix = matrix_new(n, 2)
+
+    srand(42)
+    for i in 0 to n {
+        let x0: f32 = ((rand() % 100) as f32) / 10.0
+        let x1: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 0, x0)
+        matrix_set(X, i, 1, x1)
+
+        if x0 > 5.0 {
+            matrix_set(Y, i, 0, 1.0)
+        } else {
+            matrix_set(Y, i, 0, 0.0)
+        }
+
+        if x1 > 5.0 {
+            matrix_set(Y, i, 1, 1.0)
+        } else {
+            matrix_set(Y, i, 1, 0.0)
+        }
+    }
+
+    let model: MultiOutputClassifier = multi_output_classifier_fit(X, Y, 2, 2, 200, 0.1)
+    let preds: Matrix = multi_output_classifier_predict(model, X)
+
+    let mut correct: i32 = 0
+    for i in 0 to n {
+        let mut match_both: bool = true
+        for o in 0 to 2 {
+            if matrix_at(Y, i, o) != matrix_at(preds, i, o) {
+                match_both = false
+            }
+        }
+        if match_both {
+            correct = correct + 1
+        }
+    }
+
+    let accuracy: f32 = (correct as f32) / (n as f32)
+    if accuracy < 0.75 {
+        println("  FAIL: MultiOutputClassifier accuracy should be >= 0.75")
+        return 1
+    }
+
+    print("  OK: Accuracy = ")
+    printf("%.4f", accuracy)
+    println("")
+
+    matrix_free(preds)
+    multi_output_classifier_free(model)
+    matrix_free(X)
+    matrix_free(Y)
+    return 0
+}
+
 function test_multi_output_regressor() -> i32 {
     println("Test: MultiOutputRegressor")
     let n: i32 = 30
@@ -919,6 +978,8 @@ function main() -> i32 {
     if test_tfidf_vectorizer() != 0 { failures = failures + 1 }
     println("")
     if test_gaussian_process() != 0 { failures = failures + 1 }
+    println("")
+    if test_multi_output_classifier() != 0 { failures = failures + 1 }
     println("")
     if test_multi_output_regressor() != 0 { failures = failures + 1 }
     println("")
