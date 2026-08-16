@@ -8,6 +8,20 @@ import "lib/scikit/matrix.flow"
 import "lib/scikit/validation.flow"
 import "lib/scikit/progress.flow"
 import "lib/scikit/sparse.flow"
+import "lib/scikit/blas.flow"
+
+extern {
+    function sqrt(x: f64) -> f64
+    function log(x: f64) -> f64
+}
+
+function sqrt_f32(x: f32) -> f32 {
+    return sqrt((x as f64)) as f32
+}
+
+function log_f32(x: f32) -> f32 {
+    return log((x as f64)) as f32
+}
 
 # ============================================================================
 # Term specification for linear models (Issue #28394)
@@ -345,9 +359,11 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
     for i in 0 to nc * n { all_weights[i] = 0.0 }
     for i in 0 to nc { all_biases[i] = 0.0 }
 
-    # Newton's method (IRLS) for each binary subproblem.
+    # LBFGS optimizer for each binary subproblem.
     # Augmented weight vector includes bias: theta = [w; b], dimension d = n+1.
-    # X_aug = [X | 1], H = X_aug^T D X_aug + lambda*I, grad = X_aug^T (p - y).
+    # X_aug = [X | 1] stored as row-major m x d.
+    # Uses BLAS (cblas_sgemv) for forward pass and gradient.
+    # LBFGS avoids the O(m*d^2) Hessian, needing only O(m*d) per iteration.
     let d: i32 = n + 1
     let X_aug: ptr<f32> = malloc((m as i64) * (d as i64) * 4) as ptr<f32>
     for i in 0 to m {
@@ -359,21 +375,29 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
 
     let theta: ptr<f32> = array_new_f32(d)
     let grad: ptr<f32> = array_new_f32(d)
-    let H: ptr<f32> = malloc((d as i64) * (d as i64) * 4) as ptr<f32>
-    let Hcopy: ptr<f32> = malloc((d as i64) * (d as i64) * 4) as ptr<f32>
-    let delta: ptr<f32> = array_new_f32(d)
     let p_arr: ptr<f32> = array_new_f32(m)
+    let z_arr: ptr<f32> = array_new_f32(m)
+    let err_arr: ptr<f32> = array_new_f32(m)
+
+    # LBFGS history buffers (memory = 10)
+    let mem: i32 = 10
+    let s_hist: ptr<f32> = malloc((mem as i64) * (d as i64) * 4) as ptr<f32>
+    let y_hist: ptr<f32> = malloc((mem as i64) * (d as i64) * 4) as ptr<f32>
+    let rho_hist: ptr<f32> = array_new_f32(mem)
+    let alpha_lb: ptr<f32> = array_new_f32(mem)
+    let q: ptr<f32> = array_new_f32(d)
+    let r_lb: ptr<f32> = array_new_f32(d)
+    let grad_prev: ptr<f32> = array_new_f32(d)
+    let theta_prev: ptr<f32> = array_new_f32(d)
+    let direction: ptr<f32> = array_new_f32(d)
 
     let l2_coeff: f32 = 0.0
     if penalty.kind == PENALTY_L2 || penalty.kind == PENALTY_ELASTICNET {
         l2_coeff = penalty.alpha * (1.0 - penalty.l1_ratio)
     }
 
-    let newton_iter: i32 = 50
-    if epochs > 50 { newton_iter = 50 }
-    # Use min(epochs, 50) as iteration count. epochs param still controls convergence.
     let max_iter: i32 = epochs
-    if max_iter > 50 { max_iter = 50 }
+    if max_iter > 100 { max_iter = 100 }
     if max_iter < 10 { max_iter = 10 }
 
     for c in 0 to nc {
@@ -381,75 +405,140 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
 
         let mut iter: i32 = 0
         let mut converged: bool = false
-        while iter < max_iter && not converged {
-            # Compute predictions p_i = sigmoid(theta^T x_aug_i)
-            for i in 0 to m {
-                let mut z: f32 = 0.0
-                for j in 0 to d {
-                    z = z + theta[j] * X_aug[i * d + j]
-                }
-                p_arr[i] = sigmoid(z)
-            }
+        let mut hist_size: i32 = 0
+        let mut hist_idx: i32 = 0
 
-            # Gradient: grad = X_aug^T (p - y) / m + l2 * theta
-            for j in 0 to d {
-                grad[j] = 0.0
-            }
+        while iter < max_iter && not converged {
+            # Forward pass: z = X_aug * theta (BLAS sgemv)
+            blas_matvec(X_aug, m, d, theta, z_arr, 1.0, 0.0)
+
+            # Sigmoid and error
             for i in 0 to m {
+                p_arr[i] = sigmoid(z_arr[i])
                 let label: f32 = 0.0
                 if y[i] == classes[c] { label = 1.0 }
-                let err: f32 = p_arr[i] - label
-                for j in 0 to d {
-                    grad[j] = grad[j] + err * X_aug[i * d + j]
-                }
+                err_arr[i] = p_arr[i] - label
             }
+
+            # Gradient: grad = X_aug^T * err / m + l2 * theta (BLAS sgemv)
             let inv_m: f32 = 1.0 / (m as f32)
-            for j in 0 to d {
-                grad[j] = grad[j] * inv_m
-                if j < n {
-                    grad[j] = grad[j] + l2_coeff * theta[j]
-                }
-            }
-
-            # Hessian: H = X_aug^T D X_aug / m + l2 * I
-            # D_ii = p_i * (1 - p_i)
-            for j in 0 to d * d {
-                H[j] = 0.0
-            }
-            for i in 0 to m {
-                let dval: f32 = p_arr[i] * (1.0 - p_arr[i])
-                if dval < 0.0000001 { continue }
-                for j in 0 to d {
-                    for k in 0 to d {
-                        H[j * d + k] = H[j * d + k] + X_aug[i * d + j] * X_aug[i * d + k] * dval * inv_m
-                    }
-                }
-            }
-            # Add L2 regularization to diagonal (skip bias term).
+            blas_matvec_trans(X_aug, m, d, err_arr, grad, inv_m, 0.0)
             for j in 0 to n {
-                H[j * d + j] = H[j * d + j] + l2_coeff
+                grad[j] = grad[j] + l2_coeff * theta[j]
             }
 
-            # Solve H * delta = grad. Copy H and grad since solve is in-place.
-            for j in 0 to d * d {
-                Hcopy[j] = H[j]
-            }
+            # Check convergence
+            let mut gnorm: f32 = 0.0
             for j in 0 to d {
-                delta[j] = grad[j]
+                let g: f32 = grad[j]
+                gnorm = gnorm + g * g
             }
-            _solve_in_place(Hcopy, delta, d)
+            # Approximate sqrt via repeated multiply
+            gnorm = sqrt_f32(gnorm)
+            if gnorm < 0.0001 { converged = true; break }
 
-            # Check convergence: if max delta is tiny, stop.
-            let mut max_delta: f32 = 0.0
+            # Save gradient and theta for history
             for j in 0 to d {
-                let ad: f32 = delta[j]
-                if ad < 0.0 { max_delta = -ad } elif ad > max_delta { max_delta = ad }
+                grad_prev[j] = grad[j]
+                theta_prev[j] = theta[j]
             }
-            if max_delta < 0.0001 { converged = true }
 
-            # Update theta = theta - delta
+            # LBFGS two-loop recursion to compute direction = -H * grad
+            if hist_size == 0 {
+                # First iteration: steepest descent
+                for j in 0 to d {
+                    direction[j] = -grad[j]
+                }
+            } else {
+                # q = grad
+                for j in 0 to d { q[j] = grad[j] }
+
+                # First loop (newest to oldest)
+                let mut count: i32 = hist_size
+                if count > mem { count = mem }
+                let mut start: i32 = hist_idx - 1
+                if start < 0 { start = mem - 1 }
+                let mut k: i32 = 0
+                while k < count {
+                    let si: i32 = start * d
+                    let yi: i32 = start * d
+                    let s_dot_q: f32 = blas_dot(d, s_hist + si, q)
+                    alpha_lb[k] = rho_hist[start] * s_dot_q
+                    # q = q - alpha * y
+                    blas_axpy(d, -alpha_lb[k], y_hist + yi, q)
+
+                    start = start - 1
+                    if start < 0 { start = mem - 1 }
+                    k = k + 1
+                }
+
+                # Scaling: r = q * (s_dot_y / y_dot_y) from most recent
+                let last: i32 = hist_idx - 1
+                if last < 0 { last = mem - 1 }
+                let sy: f32 = blas_dot(d, s_hist + last * d, y_hist + last * d)
+                let yy: f32 = blas_dot(d, y_hist + last * d, y_hist + last * d)
+                let gamma: f32 = 1.0
+                if yy > 0.0000001 { gamma = sy / yy }
+                for j in 0 to d { r_lb[j] = gamma * q[j] }
+
+                # Second loop (oldest to newest)
+                start = hist_idx - count
+                if start < 0 { start = start + mem }
+                k = count - 1
+                while k >= 0 {
+                    let si: i32 = start * d
+                    let yi: i32 = start * d
+                    let y_dot_r: f32 = blas_dot(d, y_hist + yi, r_lb)
+                    let beta: f32 = rho_hist[start] * y_dot_r
+                    # r = r + (alpha - beta) * s
+                    blas_axpy(d, alpha_lb[k] - beta, s_hist + si, r_lb)
+
+                    start = start + 1
+                    if start >= mem { start = 0 }
+                    k = k - 1
+                }
+
+                # direction = -r
+                for j in 0 to d { direction[j] = -r_lb[j] }
+            }
+
+            # Take LBFGS step directly (no line search for speed)
+            let mut step: f32 = 1.0
+            if iter == 0 {
+                # Scale first step by inverse gradient norm
+                let mut gnorm2: f32 = 0.0
+                for j in 0 to d { gnorm2 = gnorm2 + grad[j] * grad[j] }
+                if gnorm2 > 0.0000001 { step = 1.0 / gnorm2 }
+            }
+
+            # theta = theta + step * direction
+            for j in 0 to d { theta[j] = theta_prev[j] + step * direction[j] }
+
+            # Recompute gradient at new theta for LBFGS history
+            blas_matvec(X_aug, m, d, theta, z_arr, 1.0, 0.0)
+            for i in 0 to m {
+                p_arr[i] = sigmoid(z_arr[i])
+                let label: f32 = 0.0
+                if y[i] == classes[c] { label = 1.0 }
+                err_arr[i] = p_arr[i] - label
+            }
+            blas_matvec_trans(X_aug, m, d, err_arr, grad, inv_m, 0.0)
+            for j in 0 to n {
+                grad[j] = grad[j] + l2_coeff * theta[j]
+            }
+
+            # s = theta - theta_prev, y = grad - grad_prev
+            let si: i32 = hist_idx * d
             for j in 0 to d {
-                theta[j] = theta[j] - delta[j]
+                s_hist[si + j] = theta[j] - theta_prev[j]
+                y_hist[si + j] = grad[j] - grad_prev[j]
+            }
+            let sy: f32 = blas_dot(d, s_hist + si, y_hist + si)
+            if sy > 0.0000001 {
+                rho_hist[hist_idx] = 1.0 / sy
+                hist_idx = hist_idx + 1
+                if hist_idx >= mem { hist_idx = 0 }
+                if hist_size < mem { hist_size = hist_size + 1 }
             }
 
             iter = iter + 1
@@ -464,10 +553,18 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
     free(X_aug as ptr<void>)
     array_free_f32(theta)
     array_free_f32(grad)
-    free(H as ptr<void>)
-    free(Hcopy as ptr<void>)
-    array_free_f32(delta)
     array_free_f32(p_arr)
+    array_free_f32(z_arr)
+    array_free_f32(err_arr)
+    free(s_hist as ptr<void>)
+    free(y_hist as ptr<void>)
+    array_free_f32(rho_hist)
+    array_free_f32(alpha_lb)
+    array_free_f32(q)
+    array_free_f32(r_lb)
+    array_free_f32(grad_prev)
+    array_free_f32(theta_prev)
+    array_free_f32(direction)
 
     return LogisticRegression {
         weights: all_weights,

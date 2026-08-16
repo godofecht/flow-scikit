@@ -1,0 +1,58 @@
+# BLAS wrappers for Accelerate framework (macOS) and OpenBLAS (Linux/Android).
+# Uses cblas_sgemv for matrix-vector products: y = alpha * A * x + beta * y.
+# Row-major order matches Flow's Matrix layout.
+
+# CBLAS constants
+export const CBLAS_ROW_MAJOR: i32 = 101
+export const CBLAS_NO_TRANS: i32 = 111
+export const CBLAS_TRANS: i32 = 112
+
+extern {
+    function cblas_sgemv(order: i32, trans: i32, m: i32, n: i32, alpha: f32, a: ptr<f32>, lda: i32, x: ptr<f32>, incx: i32, beta: f32, y: ptr<f32>, incy: i32) -> void
+    function cblas_sdot(n: i32, x: ptr<f32>, incx: i32, y: ptr<f32>, incy: i32) -> f32
+    function cblas_saxpy(n: i32, alpha: f32, x: ptr<f32>, incx: i32, y: ptr<f32>, incy: i32) -> void
+    function cblas_sscal(n: i32, alpha: f32, x: ptr<f32>, incx: i32) -> void
+    function cblas_scopy(n: i32, x: ptr<f32>, incx: i32, y: ptr<f32>, incy: i32) -> void
+    function cblas_sgemm(order: i32, transa: i32, transb: i32, m: i32, n: i32, k: i32, alpha: f32, a: ptr<f32>, lda: i32, b: ptr<f32>, ldb: i32, beta: f32, c: ptr<f32>, ldc: i32) -> void
+    function cblas_dgemm(order: i32, transa: i32, transb: i32, m: i32, n: i32, k: i32, alpha: f64, a: ptr<f64>, lda: i32, b: ptr<f64>, ldb: i32, beta: f64, c: ptr<f64>, ldc: i32) -> void
+    function cblas_dgemv(order: i32, trans: i32, m: i32, n: i32, alpha: f64, a: ptr<f64>, lda: i32, x: ptr<f64>, incx: i32, beta: f64, y: ptr<f64>, incy: i32) -> void
+    function cblas_ddot(n: i32, x: ptr<f64>, incx: i32, y: ptr<f64>, incy: i32) -> f64
+}
+
+# Matrix-vector multiply: y = alpha * A * x + beta * y
+# A is row-major m x n, x is length n, y is length m.
+export function blas_matvec(A: ptr<f32>, m: i32, n: i32, x: ptr<f32>, y: ptr<f32>, alpha: f32, beta: f32) -> void {
+    cblas_sgemv(CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, m, n, alpha, A, n, x, 1, beta, y, 1)
+}
+
+# Transposed matrix-vector multiply: y = alpha * A^T * x + beta * y
+# A is row-major m x n, x is length m, y is length n.
+export function blas_matvec_trans(A: ptr<f32>, m: i32, n: i32, x: ptr<f32>, y: ptr<f32>, alpha: f32, beta: f32) -> void {
+    cblas_sgemv(CBLAS_ROW_MAJOR, CBLAS_TRANS, m, n, alpha, A, n, x, 1, beta, y, 1)
+}
+
+# Dot product of two vectors.
+export function blas_dot(n: i32, x: ptr<f32>, y: ptr<f32>) -> f32 {
+    return cblas_sdot(n, x, 1, y, 1)
+}
+
+# y = alpha * x + y
+export function blas_axpy(n: i32, alpha: f32, x: ptr<f32>, y: ptr<f32>) -> void {
+    cblas_saxpy(n, alpha, x, 1, y, 1)
+}
+
+# x = alpha * x
+export function blas_scal(n: i32, alpha: f32, x: ptr<f32>) -> void {
+    cblas_sscal(n, alpha, x, 1)
+}
+
+# y = x
+export function blas_copy(n: i32, x: ptr<f32>, y: ptr<f32>) -> void {
+    cblas_scopy(n, x, 1, y, 1)
+}
+
+# Matrix-matrix multiply: C = alpha * A * B + beta * C
+# A is m x k, B is k x n, C is m x n, all row-major.
+export function blas_matmat(A: ptr<f32>, B: ptr<f32>, C: ptr<f32>, m: i32, n: i32, k: i32, alpha: f32, beta: f32) -> void {
+    cblas_sgemm(CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, CBLAS_NO_TRANS, m, n, k, alpha, A, k, B, n, beta, C, n)
+}
