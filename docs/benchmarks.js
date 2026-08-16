@@ -349,7 +349,24 @@ function buildAccuracyTable() {
     const skPred = d.sk_pred != null ? d.sk_pred.toFixed(3) : "N/A";
     const flPred = d.fl_pred != null ? d.fl_pred.toFixed(3) : "N/A";
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${d.algo.replace(/_/g, " ")}</td><td>${d.dataset}</td><td>${d.metric}</td><td class="num">${d.sk_score.toFixed(4)}</td><td class="num">${d.fl_score.toFixed(4)}</td><td class="num ${cls}">${sign}${diff.toFixed(4)}</td><td class="num">${skFit}</td><td class="num">${flFit}</td><td class="num">${skPred}</td><td class="num">${flPred}</td>`;
+    const tds = [
+      { text: d.algo.replace(/_/g, " ") },
+      { text: d.dataset },
+      { text: d.metric },
+      { className: "num", text: d.sk_score.toFixed(4) },
+      { className: "num", text: d.fl_score.toFixed(4) },
+      { className: `num ${cls}`, text: `${sign}${diff.toFixed(4)}` },
+      { className: "num", text: skFit },
+      { className: "num", text: flFit },
+      { className: "num", text: skPred },
+      { className: "num", text: flPred }
+    ];
+    for (const cell of tds) {
+      const td = document.createElement("td");
+      if (cell.className) td.className = cell.className;
+      td.textContent = cell.text;
+      tr.appendChild(td);
+    }
     tbody.appendChild(tr);
   });
 }
@@ -369,7 +386,19 @@ function buildTimeTable() {
     const speedupStr = speedup > 100 ? speedup.toFixed(0) + "x" : speedup > 1 ? speedup.toFixed(1) + "x" : speedup.toFixed(2) + "x";
     const cls = speedup > 1 ? "pos" : "neg";
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${d.algo.replace(/_/g, " ")}</td><td>${d.dataset}</td><td class="num">${skTotal.toFixed(2)}</td><td class="num">${flTotal.toFixed(2)}</td><td class="num ${cls}">${speedupStr}</td>`;
+    const tds = [
+      { text: d.algo.replace(/_/g, " ") },
+      { text: d.dataset },
+      { className: "num", text: skTotal.toFixed(2) },
+      { className: "num", text: flTotal.toFixed(2) },
+      { className: `num ${cls}`, text: speedupStr }
+    ];
+    for (const cell of tds) {
+      const td = document.createElement("td");
+      if (cell.className) td.className = cell.className;
+      td.textContent = cell.text;
+      tr.appendChild(td);
+    }
     tbody.appendChild(tr);
   });
 }
@@ -472,7 +501,21 @@ function buildParityTable() {
     const speedupClass = d.speedup > 1 ? "pos" : "neg";
     const diffStr = d.maxDiff < 0.001 ? d.maxDiff.toFixed(6) : d.maxDiff.toFixed(2);
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${d.algo}</td><td>${d.match ? "EXACT" : "close"}</td><td class="${matchClass}">${matchText}</td><td class="num">${diffStr}</td><td class="num">${d.py_ms.toFixed(4)}</td><td class="num">${d.fl_ms.toFixed(4)}</td><td class="num ${speedupClass}">${speedupStr}</td>`;
+    const tds = [
+      { text: d.algo },
+      { text: d.match ? "EXACT" : "close" },
+      { className: matchClass, text: matchText },
+      { className: "num", text: diffStr },
+      { className: "num", text: d.py_ms.toFixed(4) },
+      { className: "num", text: d.fl_ms.toFixed(4) },
+      { className: `num ${speedupClass}`, text: speedupStr }
+    ];
+    for (const cell of tds) {
+      const td = document.createElement("td");
+      if (cell.className) td.className = cell.className;
+      td.textContent = cell.text;
+      tr.appendChild(td);
+    }
     tbody.appendChild(tr);
   });
 }
@@ -544,7 +587,20 @@ function buildAndroidTable() {
     else if (ratio > 1) { ratioStr = ratio.toFixed(2) + "x"; ratioCls = "neg"; }
     else { ratioStr = (1 / ratio).toFixed(2) + "x"; ratioCls = "pos"; }
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${d.algo.replace(/_/g, " ")}</td><td>${d.dataset}</td><td class="num">${d.score.toFixed(4)}</td><td class="num">${d.mac_ms != null ? d.mac_ms.toFixed(2) : "-"}</td><td class="num">${d.and_ms.toFixed(2)}</td><td class="num ${ratioCls}">${ratioStr}</td>`;
+    const tds = [
+      { text: d.algo.replace(/_/g, " ") },
+      { text: d.dataset },
+      { className: "num", text: d.score.toFixed(4) },
+      { className: "num", text: d.mac_ms != null ? d.mac_ms.toFixed(2) : "-" },
+      { className: "num", text: d.and_ms.toFixed(2) },
+      { className: `num ${ratioCls}`, text: ratioStr }
+    ];
+    for (const cell of tds) {
+      const td = document.createElement("td");
+      if (cell.className) td.className = cell.className;
+      td.textContent = cell.text;
+      tr.appendChild(td);
+    }
     tbody.appendChild(tr);
   });
 }
