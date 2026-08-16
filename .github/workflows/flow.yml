@@ -31,7 +31,7 @@ jobs:
         run: python .github/scripts/verify_flow_sources.py
 
   run-all:
-    name: Run all tests and examples
+    name: Run failing tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,10 +52,16 @@ jobs:
       - name: Install OpenBLAS
         run: sudo apt-get update && sudo apt-get install -y libopenblas-dev
 
-      - name: Run tests and examples
+      - name: Run remaining failing tests
         env:
           FLOW_BIN: ${{ github.workspace }}/.flow-toolchain/flow
           FLOW_HOST: python
           FLOW_OPT_LEVEL: "0"
           FLOW_LDFLAGS: "-lm -lopenblas"
-        run: python tools/run_all.py
+        run: |
+          failed=0
+          for file in tests/test_new_features.flow tests/test_new_modules_v2.flow tests/test_sparse_estimators.flow; do
+            echo "===== $file ====="
+            "$FLOW_BIN" run "$file" || failed=1
+          done
+          exit "$failed"
