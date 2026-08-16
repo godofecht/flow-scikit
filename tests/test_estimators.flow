@@ -76,6 +76,39 @@ function test_random_forest() -> i32 {
     return 0
 }
 
+function test_voting_classifier() -> i32 {
+    println("Test: VotingClassifier")
+    let data: Dataset = make_classification_data()
+
+    let n_estimators: i32 = 3
+    let estimators: ptr<DecisionTreeClassifier> = malloc((n_estimators as i64) * 128) as ptr<DecisionTreeClassifier>
+    estimators[0] = decision_tree_classifier_fit(data.X, data.y, 2, 3, CRITERION_GINI)
+    estimators[1] = decision_tree_classifier_fit(data.X, data.y, 2, 5, CRITERION_GINI)
+    estimators[2] = decision_tree_classifier_fit(data.X, data.y, 2, 7, CRITERION_GINI)
+
+    let classes: ptr<f32> = array_new_f32(2)
+    classes[0] = 0.0
+    classes[1] = 1.0
+
+    let vc: VotingClassifier = voting_classifier_fit(estimators, n_estimators, 2, classes, VOTING_HARD)
+    let preds: ptr<f32> = voting_classifier_predict(vc, data.X)
+
+    let acc: f32 = accuracy_score(data.y, preds, data.n_samples)
+    if acc < 0.7 {
+        println("  FAIL: accuracy should be > 0.7")
+        return 1
+    }
+
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+
+    voting_classifier_free(vc)
+    array_free_f32(preds)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+    return 0
+}
 function test_gaussian_nb() -> i32 {
     println("Test: GaussianNB")
     let data: Dataset = make_classification_data()
@@ -341,6 +374,8 @@ function main() -> i32 {
     if test_decision_tree() != 0 { failures = failures + 1 }
     println("")
     if test_random_forest() != 0 { failures = failures + 1 }
+    println("")
+    if test_voting_classifier() != 0 { failures = failures + 1 }
     println("")
     if test_gaussian_nb() != 0 { failures = failures + 1 }
     println("")
