@@ -25,14 +25,14 @@ export function multi_output_classifier_fit(
 ) -> MultiOutputClassifier {
     let models: ptr<LogisticRegression> = malloc((n_outputs as i64) * 128) as ptr<LogisticRegression>
 
+    let y_col: ptr<f32> = array_new_f32(X.rows)
     for o in 0 to n_outputs {
-        let y_col: ptr<f32> = array_new_f32(X.rows)
         for i in 0 to X.rows {
             y_col[i] = matrix_at(Y, i, o)
         }
         models[o] = logistic_regression_fit(X, y_col, 2, epochs, lr, penalty_none())
-        array_free_f32(y_col)
     }
+    array_free_f32(y_col)
 
     return MultiOutputClassifier {
         models: models,
@@ -77,14 +77,14 @@ export struct MultiOutputRegressor {
 export function multi_output_regressor_fit(X: Matrix, Y: Matrix, n_outputs: i32) -> MultiOutputRegressor {
     let models: ptr<LinearRegression> = malloc((n_outputs as i64) * 32) as ptr<LinearRegression>
 
+    let y_col: ptr<f32> = array_new_f32(X.rows)
     for o in 0 to n_outputs {
-        let y_col: ptr<f32> = array_new_f32(X.rows)
         for i in 0 to X.rows {
             y_col[i] = matrix_at(Y, i, o)
         }
         models[o] = linear_regression_fit(X, y_col, penalty_none())
-        array_free_f32(y_col)
     }
+    array_free_f32(y_col)
 
     return MultiOutputRegressor {
         models: models,
