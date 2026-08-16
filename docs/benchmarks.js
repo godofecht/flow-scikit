@@ -349,7 +349,54 @@ function buildAccuracyTable() {
     const skPred = d.sk_pred != null ? d.sk_pred.toFixed(3) : "N/A";
     const flPred = d.fl_pred != null ? d.fl_pred.toFixed(3) : "N/A";
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${d.algo.replace(/_/g, " ")}</td><td>${d.dataset}</td><td>${d.metric}</td><td class="num">${d.sk_score.toFixed(4)}</td><td class="num">${d.fl_score.toFixed(4)}</td><td class="num ${cls}">${sign}${diff.toFixed(4)}</td><td class="num">${skFit}</td><td class="num">${flFit}</td><td class="num">${skPred}</td><td class="num">${flPred}</td>`;
+
+    const td1 = document.createElement("td");
+    td1.textContent = d.algo.replace(/_/g, " ");
+    tr.appendChild(td1);
+
+    const td2 = document.createElement("td");
+    td2.textContent = d.dataset;
+    tr.appendChild(td2);
+
+    const td3 = document.createElement("td");
+    td3.textContent = d.metric;
+    tr.appendChild(td3);
+
+    const td4 = document.createElement("td");
+    td4.className = "num";
+    td4.textContent = d.sk_score.toFixed(4);
+    tr.appendChild(td4);
+
+    const td5 = document.createElement("td");
+    td5.className = "num";
+    td5.textContent = d.fl_score.toFixed(4);
+    tr.appendChild(td5);
+
+    const td6 = document.createElement("td");
+    td6.className = `num ${cls}`;
+    td6.textContent = `${sign}${diff.toFixed(4)}`;
+    tr.appendChild(td6);
+
+    const td7 = document.createElement("td");
+    td7.className = "num";
+    td7.textContent = skFit;
+    tr.appendChild(td7);
+
+    const td8 = document.createElement("td");
+    td8.className = "num";
+    td8.textContent = flFit;
+    tr.appendChild(td8);
+
+    const td9 = document.createElement("td");
+    td9.className = "num";
+    td9.textContent = skPred;
+    tr.appendChild(td9);
+
+    const td10 = document.createElement("td");
+    td10.className = "num";
+    td10.textContent = flPred;
+    tr.appendChild(td10);
+
     tbody.appendChild(tr);
   });
 }
@@ -369,7 +416,30 @@ function buildTimeTable() {
     const speedupStr = speedup > 100 ? speedup.toFixed(0) + "x" : speedup > 1 ? speedup.toFixed(1) + "x" : speedup.toFixed(2) + "x";
     const cls = speedup > 1 ? "pos" : "neg";
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${d.algo.replace(/_/g, " ")}</td><td>${d.dataset}</td><td class="num">${skTotal.toFixed(2)}</td><td class="num">${flTotal.toFixed(2)}</td><td class="num ${cls}">${speedupStr}</td>`;
+
+    const td1 = document.createElement("td");
+    td1.textContent = d.algo.replace(/_/g, " ");
+    tr.appendChild(td1);
+
+    const td2 = document.createElement("td");
+    td2.textContent = d.dataset;
+    tr.appendChild(td2);
+
+    const td3 = document.createElement("td");
+    td3.className = "num";
+    td3.textContent = skTotal.toFixed(2);
+    tr.appendChild(td3);
+
+    const td4 = document.createElement("td");
+    td4.className = "num";
+    td4.textContent = flTotal.toFixed(2);
+    tr.appendChild(td4);
+
+    const td5 = document.createElement("td");
+    td5.className = `num ${cls}`;
+    td5.textContent = speedupStr;
+    tr.appendChild(td5);
+
     tbody.appendChild(tr);
   });
 }
@@ -472,7 +542,40 @@ function buildParityTable() {
     const speedupClass = d.speedup > 1 ? "pos" : "neg";
     const diffStr = d.maxDiff < 0.001 ? d.maxDiff.toFixed(6) : d.maxDiff.toFixed(2);
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${d.algo}</td><td>${d.match ? "EXACT" : "close"}</td><td class="${matchClass}">${matchText}</td><td class="num">${diffStr}</td><td class="num">${d.py_ms.toFixed(4)}</td><td class="num">${d.fl_ms.toFixed(4)}</td><td class="num ${speedupClass}">${speedupStr}</td>`;
+
+    const td1 = document.createElement("td");
+    td1.textContent = d.algo;
+    tr.appendChild(td1);
+
+    const td2 = document.createElement("td");
+    td2.textContent = d.match ? "EXACT" : "close";
+    tr.appendChild(td2);
+
+    const td3 = document.createElement("td");
+    td3.className = matchClass;
+    td3.textContent = matchText;
+    tr.appendChild(td3);
+
+    const td4 = document.createElement("td");
+    td4.className = "num";
+    td4.textContent = diffStr;
+    tr.appendChild(td4);
+
+    const td5 = document.createElement("td");
+    td5.className = "num";
+    td5.textContent = d.py_ms.toFixed(4);
+    tr.appendChild(td5);
+
+    const td6 = document.createElement("td");
+    td6.className = "num";
+    td6.textContent = d.fl_ms.toFixed(4);
+    tr.appendChild(td6);
+
+    const td7 = document.createElement("td");
+    td7.className = `num ${speedupClass}`;
+    td7.textContent = speedupStr;
+    tr.appendChild(td7);
+
     tbody.appendChild(tr);
   });
 }
@@ -544,7 +647,35 @@ function buildAndroidTable() {
     else if (ratio > 1) { ratioStr = ratio.toFixed(2) + "x"; ratioCls = "neg"; }
     else { ratioStr = (1 / ratio).toFixed(2) + "x"; ratioCls = "pos"; }
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${d.algo.replace(/_/g, " ")}</td><td>${d.dataset}</td><td class="num">${d.score.toFixed(4)}</td><td class="num">${d.mac_ms != null ? d.mac_ms.toFixed(2) : "-"}</td><td class="num">${d.and_ms.toFixed(2)}</td><td class="num ${ratioCls}">${ratioStr}</td>`;
+
+    const td1 = document.createElement("td");
+    td1.textContent = d.algo.replace(/_/g, " ");
+    tr.appendChild(td1);
+
+    const td2 = document.createElement("td");
+    td2.textContent = d.dataset;
+    tr.appendChild(td2);
+
+    const td3 = document.createElement("td");
+    td3.className = "num";
+    td3.textContent = d.score.toFixed(4);
+    tr.appendChild(td3);
+
+    const td4 = document.createElement("td");
+    td4.className = "num";
+    td4.textContent = d.mac_ms != null ? d.mac_ms.toFixed(2) : "-";
+    tr.appendChild(td4);
+
+    const td5 = document.createElement("td");
+    td5.className = "num";
+    td5.textContent = d.and_ms.toFixed(2);
+    tr.appendChild(td5);
+
+    const td6 = document.createElement("td");
+    td6.className = `num ${ratioCls}`;
+    td6.textContent = ratioStr;
+    tr.appendChild(td6);
+
     tbody.appendChild(tr);
   });
 }
