@@ -6,6 +6,11 @@ import "lib/scikit/matrix.flow"
 import "lib/scikit/preprocessing.flow"
 import "lib/scikit/linear.flow"
 
+# Generic sizeof — Flow lowers this to C sizeof(T) after monomorphization.
+function sizeof<T>() -> i64 {
+    return 0
+}
+
 # ============================================================================
 # Step types
 # ============================================================================
@@ -120,7 +125,7 @@ export function step_logistic_regression(name: string, n_classes: i32, epochs: i
 # ============================================================================
 
 export function pipeline_new(steps: ptr<PipelineStep>, n_steps: i32) -> Pipeline {
-    let cloned_steps: ptr<PipelineStep> = malloc((n_steps as i64) * 256) as ptr<PipelineStep>
+    let cloned_steps: ptr<PipelineStep> = malloc((n_steps as i64) * sizeof<PipelineStep>()) as ptr<PipelineStep>
 
     for i in 0 to n_steps {
         cloned_steps[i].kind = steps[i].kind
