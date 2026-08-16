@@ -491,6 +491,78 @@ function test_gaussian_process() -> i32 {
     return 0
 }
 
+function test_regressor_chain() -> i32 {
+    println("Test: RegressorChain")
+    let n: i32 = 30
+    let n_features: i32 = 2
+    let n_outputs: i32 = 2
+    let X: Matrix = matrix_new(n, n_features)
+
+    let Y: ptr<ptr<f32> > = malloc((n_outputs as i64) * 8) as ptr<ptr<f32> >
+    for o in 0 to n_outputs {
+        Y[o] = array_new_f32(n)
+    }
+
+    srand(42)
+    for i in 0 to n {
+        let x0: f32 = ((rand() % 100) as f32) / 10.0
+        let x1: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 0, x0)
+        matrix_set(X, i, 1, x1)
+
+        # Simple linear relationship for target 0
+        Y[0][i] = 2.0 * x0 + 1.0 * x1 + _noise(i) * 0.1
+        # Target 1 depends on features and heavily on Target 0 (simulating chain advantage)
+        Y[1][i] = 0.5 * x0 + 3.0 * x1 + 0.5 * Y[0][i] + _noise(i + 100) * 0.1
+    }
+
+    let model: RegressorChain = regressor_chain_fit(X, Y, n, n_features, n_outputs)
+    let preds: ptr<ptr<f32> > = regressor_chain_predict(model, X)
+
+    let mut ss_res: f32 = 0.0
+    let mut ss_tot: f32 = 0.0
+    for o in 0 to n_outputs {
+        let mut sum: f32 = 0.0
+        for i in 0 to n {
+            sum = sum + Y[o][i]
+        }
+        let mean: f32 = sum / (n as f32)
+
+        for i in 0 to n {
+            let d: f32 = Y[o][i] - preds[i][o]
+            ss_res = ss_res + d * d
+            let dm: f32 = Y[o][i] - mean
+            ss_tot = ss_tot + dm * dm
+        }
+    }
+
+    let r2: f32 = 1.0 - ss_res / ss_tot
+
+    if r2 < 0.8 {
+        println("  FAIL: RegressorChain R2 should be >= 0.8")
+        return 1
+    }
+
+    print("  OK: R2 = ")
+    printf("%.4f", r2)
+    println("")
+
+    # Free resources
+    for i in 0 to n {
+        array_free_f32(preds[i])
+    }
+    free(preds as ptr<void>)
+
+    for o in 0 to n_outputs {
+        array_free_f32(Y[o])
+    }
+    free(Y as ptr<void>)
+
+    regressor_chain_free(model)
+    matrix_free(X)
+    return 0
+}
+
 function test_multi_output_regressor() -> i32 {
     println("Test: MultiOutputRegressor")
     let n: i32 = 30
@@ -921,6 +993,8 @@ function main() -> i32 {
     if test_gaussian_process() != 0 { failures = failures + 1 }
     println("")
     if test_multi_output_regressor() != 0 { failures = failures + 1 }
+    println("")
+    if test_regressor_chain() != 0 { failures = failures + 1 }
     println("")
     if test_extra_trees_classifier() != 0 { failures = failures + 1 }
     println("")
