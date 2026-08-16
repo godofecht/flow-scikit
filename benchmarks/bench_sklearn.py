@@ -96,10 +96,6 @@ bench("GaussianNB", "iris", X_iris, y_iris,
       lambda m, X: m.predict(X))
 
 from sklearn.cluster import KMeans
-def kmeans_fit(X, y):
-    return KMeans(n_clusters=3, n_init=10, random_state=42).fit(X)
-def kmeans_predict(m, X):
-    return m.predict(X)
 # KMeans: use best-match cluster labeling like Flow
 def kmeans_bench(name, ds, X, y, n_clusters):
     n = len(X)
@@ -132,10 +128,6 @@ def kmeans_bench(name, ds, X, y, n_clusters):
 kmeans_bench("KMeans", "iris", X_iris, y_iris, 3)
 
 from sklearn.decomposition import PCA
-def pca_fit(X, y):
-    return PCA(n_components=2).fit(X)
-def pca_transform(m, X):
-    return m.transform(X)
 # PCA is transform, not predict - measure explained variance ratio instead
 n_iris = len(X_iris)
 train_idx_i, test_idx_i = xorshift32_split(n_iris, n_iris // 5)
