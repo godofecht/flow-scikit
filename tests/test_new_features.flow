@@ -2010,6 +2010,37 @@ function test_dataset_loaders() -> i32 {
     return 0
 }
 
+function test_stacking_regressor() -> i32 {
+    println("Test: StackingRegressor")
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 2)
+    let y: ptr<f32> = array_new_f32(n)
+    srand(42)
+    let mut i: i32 = 0
+    while i < n {
+        let x0: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 0, x0)
+        matrix_set(X, i, 1, ((rand() % 100) as f32) / 10.0)
+        y[i] = x0 * 2.0 + 1.0
+        i = i + 1
+    }
+    let model: StackingRegressor = stacking_regressor_fit(X, y, 5, 3, 42)
+    let preds: ptr<f32> = stacking_regressor_predict(model, X)
+    let r2: f32 = r2_score(y, preds, n)
+    if r2 < 0.5 {
+        println("  FAIL: R2 should be > 0.5")
+        return 1
+    }
+    print("  OK: R2 = ")
+    printf("%.4f", r2)
+    println("")
+    array_free_f32(preds)
+    stacking_regressor_free(model)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
 function main() -> i32 {
     println("=== New Features Tests ===")
     println("")
@@ -2130,6 +2161,8 @@ function main() -> i32 {
     if test_missing_indicator() != 0 { failures = failures + 1 }
     println("")
     if test_dataset_loaders() != 0 { failures = failures + 1 }
+    println("")
+    if test_stacking_regressor() != 0 { failures = failures + 1 }
 
     println("")
     println("----------------------------------------")
