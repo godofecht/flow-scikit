@@ -455,6 +455,25 @@ export struct LLE {
     fitted: bool
 }
 
+function _shell_sort_indices(indices: ptr<i32>, dists: ptr<f32>, n: i32) -> void {
+    let mut gap: i32 = n / 2
+    while gap > 0 {
+        let mut i: i32 = gap
+        while i < n {
+            let key_i: i32 = indices[i]
+            let key_d: f32 = dists[key_i]
+            let mut j: i32 = i
+            while j >= gap && dists[indices[j - gap]] > key_d {
+                indices[j] = indices[j - gap]
+                j = j - gap
+            }
+            indices[j] = key_i
+            i = i + 1
+        }
+        gap = gap / 2
+    }
+}
+
 export function lle_fit(X: Matrix, n_components: i32, n_neighbors: i32) -> LLE {
     let n: i32 = X.rows
     let p: i32 = X.cols
@@ -475,15 +494,7 @@ export function lle_fit(X: Matrix, n_components: i32, n_neighbors: i32) -> LLE {
 
         let indices: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
         for j in 0 to n { indices[j] = j }
-        for a in 0 to n {
-            for b in 0 to n - 1 - a {
-                if dists[indices[b]] > dists[indices[b + 1]] {
-                    let t: i32 = indices[b]
-                    indices[b] = indices[b + 1]
-                    indices[b + 1] = t
-                }
-            }
-        }
+        _shell_sort_indices(indices, dists, n)
 
         let k: i32 = n_neighbors
         if k > n - 1 { k = n - 1 }
