@@ -19,6 +19,8 @@ Environment:
 from __future__ import annotations
 
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -39,10 +41,10 @@ def discover(group: str) -> list[Path]:
     return sorted(GROUPS[group].glob("*.flow"))
 
 
-def run_file(flow_bin: str, file: Path) -> tuple[bool, float, str]:
+def run_file(flow_cmd: list[str], file: Path) -> tuple[bool, float, str]:
     start = time.perf_counter()
     result = subprocess.run(
-        [flow_bin, "run", str(file)],
+        flow_cmd + ["run", str(file)],
         cwd=ROOT,
         env=os.environ.copy(),
         capture_output=True,
@@ -67,6 +69,25 @@ def main() -> int:
             selected.append(a)
 
     flow_bin = os.environ.get("FLOW_BIN", "flow")
+    flow_cmd = shlex.split(flow_bin)
+    if not flow_cmd:
+        print("Error: FLOW_BIN is empty or invalid", file=sys.stderr)
+        return 2
+
+    executable = shutil.which(flow_cmd[0])
+    if not executable:
+        print(f"Error: Executable '{flow_cmd[0]}' not found", file=sys.stderr)
+        return 2
+
+    if "flow" not in os.path.basename(executable).lower():
+        print(
+            f"Error: Executable '{executable}' does not appear to be a flow binary. "
+            "For security reasons, the executable name must contain 'flow'.",
+            file=sys.stderr,
+        )
+        return 2
+
+    flow_cmd[0] = executable
 
     files: list[tuple[str, Path]] = []
     for group in selected:
@@ -80,7 +101,7 @@ def main() -> int:
     total = len(files)
     width = max(len(str(f.relative_to(ROOT))) for _, f in files)
 
-    print(f"Running {total} file(s) with {flow_bin}")
+    print(f"Running {total} file(s) with {' '.join(flow_cmd)}")
     print("=" * (width + 18))
     print("")
 
@@ -90,7 +111,7 @@ def main() -> int:
 
     for index, (group, file) in enumerate(files, start=1):
         rel = str(file.relative_to(ROOT))
-        ok, elapsed, tail = run_file(flow_bin, file)
+        ok, elapsed, tail = run_file(flow_cmd, file)
         status = "PASS" if ok else "FAIL"
         if ok:
             passed += 1
