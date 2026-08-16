@@ -3,6 +3,25 @@
 
 import "lib/scikit/scikit.flow"
 
+function make_regression_data() -> Dataset {
+    let n: i32 = 50
+    let X: Matrix = matrix_new(n, 3)
+    let y: ptr<f32> = array_new_f32(n)
+
+    srand(42)
+    for i in 0 to n {
+        let x0: f32 = ((rand() % 100) as f32) / 10.0
+        let x1: f32 = ((rand() % 100) as f32) / 10.0
+        let x2: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 0, x0)
+        matrix_set(X, i, 1, x1)
+        matrix_set(X, i, 2, x2)
+        y[i] = 2.0 * x0 + 3.0 * x1 - x2 + 1.0
+    }
+
+    return Dataset { X: X, y: y, n_samples: n, n_features: 3, n_classes: 0, is_classification: false }
+}
+
 function make_classification_data() -> Dataset {
     let n: i32 = 40
     let X: Matrix = matrix_new(n, 2)
@@ -46,6 +65,33 @@ function test_decision_tree() -> i32 {
     println("")
 
     decision_tree_classifier_free(tree)
+    array_free_f32(preds)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+    return 0
+}
+
+function test_random_forest_regressor() -> i32 {
+    println("Test: RandomForestRegressor")
+    let data: Dataset = make_regression_data()
+
+    let rf: RandomForestRegressor = random_forest_regressor_fit(data.X, data.y, 10, 5, 42)
+    let preds: ptr<f32> = random_forest_regressor_predict(rf, data.X)
+
+    let r2: f32 = r2_score(data.y, preds, data.n_samples)
+    if r2 < 0.8 {
+        println("  FAIL: R2 should be > 0.8")
+        print("  R2 = ")
+        printf("%.4f", r2)
+        println("")
+        return 1
+    }
+
+    print("  OK: R2 = ")
+    printf("%.4f", r2)
+    println("")
+
+    random_forest_regressor_free(rf)
     array_free_f32(preds)
     matrix_free(data.X)
     array_free_f32(data.y)
@@ -339,6 +385,8 @@ function main() -> i32 {
     let mut failures: i32 = 0
 
     if test_decision_tree() != 0 { failures = failures + 1 }
+    println("")
+    if test_random_forest_regressor() != 0 { failures = failures + 1 }
     println("")
     if test_random_forest() != 0 { failures = failures + 1 }
     println("")
