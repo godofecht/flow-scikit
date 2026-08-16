@@ -83,6 +83,13 @@ const COLORS = {
   muted: "#687493"
 };
 
+function appendTd(tr, text, cls) {
+  const td = document.createElement("td");
+  if (cls) td.className = cls;
+  td.textContent = text;
+  tr.appendChild(td);
+}
+
 function el(tag, attrs, text) {
   const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
   if (attrs) for (const k in attrs) e.setAttribute(k, attrs[k]);
@@ -349,7 +356,16 @@ function buildAccuracyTable() {
     const skPred = d.sk_pred != null ? d.sk_pred.toFixed(3) : "N/A";
     const flPred = d.fl_pred != null ? d.fl_pred.toFixed(3) : "N/A";
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${d.algo.replace(/_/g, " ")}</td><td>${d.dataset}</td><td>${d.metric}</td><td class="num">${d.sk_score.toFixed(4)}</td><td class="num">${d.fl_score.toFixed(4)}</td><td class="num ${cls}">${sign}${diff.toFixed(4)}</td><td class="num">${skFit}</td><td class="num">${flFit}</td><td class="num">${skPred}</td><td class="num">${flPred}</td>`;
+    appendTd(tr, d.algo.replace(/_/g, " "));
+    appendTd(tr, d.dataset);
+    appendTd(tr, d.metric);
+    appendTd(tr, d.sk_score.toFixed(4), "num");
+    appendTd(tr, d.fl_score.toFixed(4), "num");
+    appendTd(tr, `${sign}${diff.toFixed(4)}`, `num ${cls}`);
+    appendTd(tr, skFit, "num");
+    appendTd(tr, flFit, "num");
+    appendTd(tr, skPred, "num");
+    appendTd(tr, flPred, "num");
     tbody.appendChild(tr);
   });
 }
@@ -369,7 +385,11 @@ function buildTimeTable() {
     const speedupStr = speedup > 100 ? speedup.toFixed(0) + "x" : speedup > 1 ? speedup.toFixed(1) + "x" : speedup.toFixed(2) + "x";
     const cls = speedup > 1 ? "pos" : "neg";
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${d.algo.replace(/_/g, " ")}</td><td>${d.dataset}</td><td class="num">${skTotal.toFixed(2)}</td><td class="num">${flTotal.toFixed(2)}</td><td class="num ${cls}">${speedupStr}</td>`;
+    appendTd(tr, d.algo.replace(/_/g, " "));
+    appendTd(tr, d.dataset);
+    appendTd(tr, skTotal.toFixed(2), "num");
+    appendTd(tr, flTotal.toFixed(2), "num");
+    appendTd(tr, speedupStr, `num ${cls}`);
     tbody.appendChild(tr);
   });
 }
@@ -472,7 +492,13 @@ function buildParityTable() {
     const speedupClass = d.speedup > 1 ? "pos" : "neg";
     const diffStr = d.maxDiff < 0.001 ? d.maxDiff.toFixed(6) : d.maxDiff.toFixed(2);
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${d.algo}</td><td>${d.match ? "EXACT" : "close"}</td><td class="${matchClass}">${matchText}</td><td class="num">${diffStr}</td><td class="num">${d.py_ms.toFixed(4)}</td><td class="num">${d.fl_ms.toFixed(4)}</td><td class="num ${speedupClass}">${speedupStr}</td>`;
+    appendTd(tr, d.algo);
+    appendTd(tr, d.match ? "EXACT" : "close");
+    appendTd(tr, matchText, matchClass);
+    appendTd(tr, diffStr, "num");
+    appendTd(tr, d.py_ms.toFixed(4), "num");
+    appendTd(tr, d.fl_ms.toFixed(4), "num");
+    appendTd(tr, speedupStr, `num ${speedupClass}`);
     tbody.appendChild(tr);
   });
 }
@@ -544,7 +570,12 @@ function buildAndroidTable() {
     else if (ratio > 1) { ratioStr = ratio.toFixed(2) + "x"; ratioCls = "neg"; }
     else { ratioStr = (1 / ratio).toFixed(2) + "x"; ratioCls = "pos"; }
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${d.algo.replace(/_/g, " ")}</td><td>${d.dataset}</td><td class="num">${d.score.toFixed(4)}</td><td class="num">${d.mac_ms != null ? d.mac_ms.toFixed(2) : "-"}</td><td class="num">${d.and_ms.toFixed(2)}</td><td class="num ${ratioCls}">${ratioStr}</td>`;
+    appendTd(tr, d.algo.replace(/_/g, " "));
+    appendTd(tr, d.dataset);
+    appendTd(tr, d.score.toFixed(4), "num");
+    appendTd(tr, d.mac_ms != null ? d.mac_ms.toFixed(2) : "-", "num");
+    appendTd(tr, d.and_ms.toFixed(2), "num");
+    appendTd(tr, ratioStr, `num ${ratioCls}`);
     tbody.appendChild(tr);
   });
 }

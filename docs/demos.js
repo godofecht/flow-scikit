@@ -197,7 +197,37 @@ function initialiseVisualLab() {
   ];
   experiments.forEach(([title, subtitle, kind], index) => {
     const card = document.createElement("article"); card.className = "visual-card";
-    card.innerHTML = `<header><div><small>${String(index + 1).padStart(2, "0")} / interactive</small><h3>${title}</h3></div><small>${subtitle}</small></header><canvas width="640" height="360" aria-label="${title} interactive graph"></canvas><footer><span>Click or drag in the chart</span><strong>Loading…</strong></footer>`;
+
+    const header = document.createElement("header");
+    const div = document.createElement("div");
+    const small1 = document.createElement("small");
+    small1.textContent = `${String(index + 1).padStart(2, "0")} / interactive`;
+    const h3 = document.createElement("h3");
+    h3.textContent = title;
+    div.appendChild(small1);
+    div.appendChild(h3);
+    const small2 = document.createElement("small");
+    small2.textContent = subtitle;
+    header.appendChild(div);
+    header.appendChild(small2);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 640;
+    canvas.height = 360;
+    canvas.setAttribute("aria-label", `${title} interactive graph`);
+
+    const footer = document.createElement("footer");
+    const span = document.createElement("span");
+    span.textContent = "Click or drag in the chart";
+    const strong = document.createElement("strong");
+    strong.textContent = "Loading…";
+    footer.appendChild(span);
+    footer.appendChild(strong);
+
+    card.appendChild(header);
+    card.appendChild(canvas);
+    card.appendChild(footer);
+
     lab.append(card);
     drawVisualExperiment(card, kind, index);
   });
