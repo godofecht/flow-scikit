@@ -351,6 +351,7 @@ export function linear_svc_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_classes: i
     }
 
     let w64: ptr<f64> = array_new_f64(n_features)
+    let mut bias64: f64 = 0.0
     let alpha: ptr<f64> = array_new_f64(n_samples)
     let C64: f64 = C as f64
 
@@ -359,8 +360,9 @@ export function linear_svc_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_classes: i
     while epoch < epochs {
         let mut max_pg: f64 = 0.0
         for i in 0 to n_samples {
-            # Q_ii = x_i^T x_i (only non-zero entries contribute)
-            let mut Q_ii: f64 = 0.0
+            # Augment sparse samples with the same constant bias feature
+            # used by the dense solver.
+            let mut Q_ii: f64 = 1.0
             let start: i32 = S.indptr[i]
             let end: i32 = S.indptr[i + 1]
             let mut k: i32 = start
@@ -373,7 +375,7 @@ export function linear_svc_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_classes: i
             if Q_ii < 0.0000000001 { continue }
 
             # w_dot_x = sum over non-zero entries of w[j] * x_ij
-            let mut w_dot_x: f64 = 0.0
+            let mut w_dot_x: f64 = bias64
             k = start
             while k < end {
                 w_dot_x = w_dot_x + w64[S.indices[k]] * (S.data[k]) as f64
@@ -404,6 +406,7 @@ export function linear_svc_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_classes: i
                     w64[S.indices[k]] = w64[S.indices[k]] + delta * (S.data[k]) as f64
                     k = k + 1
                 }
+                bias64 = bias64 + delta
 
                 alpha[i] = alpha_new
             }
@@ -412,26 +415,8 @@ export function linear_svc_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_classes: i
         epoch = epoch + 1
     }
 
-    # Compute bias from free support vectors
-    let mut bias_sum: f64 = 0.0
-    let mut n_sv: i32 = 0
-    for i in 0 to n_samples {
-        if alpha[i] > 0.0 and alpha[i] < C64 {
-            let mut w_dot_x: f64 = 0.0
-            let start2: i32 = S.indptr[i]
-            let end2: i32 = S.indptr[i + 1]
-            let mut k2: i32 = start2
-            while k2 < end2 {
-                w_dot_x = w_dot_x + w64[S.indices[k2]] * (S.data[k2]) as f64
-                k2 = k2 + 1
-            }
-            bias_sum = bias_sum + ((y_dual[i]) as f64 - w_dot_x)
-            n_sv = n_sv + 1
-        }
-    }
-    if n_sv > 0 {
-        bias = (bias_sum / (n_sv as f64)) as f32
-    }
+    # Bias is optimized jointly as the augmented constant feature.
+    bias = bias64 as f32
 
     for j in 0 to n_features {
         weights[j] = w64[j] as f32
