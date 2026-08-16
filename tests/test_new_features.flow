@@ -515,6 +515,52 @@ function test_hist_gradient_boosting_regressor() -> i32 {
     return 0
 }
 
+
+function test_stacking_classifier() -> i32 {
+    println("Test: StackingClassifier")
+    let n_samples: i32 = 40
+    let n_base: i32 = 2
+    let n_classes: i32 = 2
+
+    let base_preds: ptr<ptr<f32> > = malloc((n_samples as i64) * 8) as ptr<ptr<f32> >
+    let y: ptr<f32> = array_new_f32(n_samples)
+
+    for i in 0 to n_samples {
+        base_preds[i] = array_new_f32(n_base)
+        if i < 20 {
+            base_preds[i][0] = 0.9
+            base_preds[i][1] = 0.1
+            y[i] = 0.0
+        } else {
+            base_preds[i][0] = 0.1
+            base_preds[i][1] = 0.9
+            y[i] = 1.0
+        }
+    }
+
+    let model: StackingClassifier = stacking_classifier_fit(base_preds, y, n_samples, n_base, n_classes, 0.1, 100)
+
+    let preds: ptr<f32> = stacking_classifier_predict(model, base_preds, n_samples)
+    let acc: f32 = accuracy_score(y, preds, n_samples)
+
+    if acc < 0.8 {
+        println("  FAIL: StackingClassifier accuracy should be > 0.8")
+        return 1
+    }
+    print("  OK: accuracy = ")
+    printf("%.4f\n", acc)
+
+    stacking_classifier_free(model)
+    for i in 0 to n_samples {
+        array_free_f32(base_preds[i])
+    }
+    free(base_preds as ptr<void>)
+    array_free_f32(y)
+    array_free_f32(preds)
+
+    return 0
+}
+
 function test_target_encoder() -> i32 {
     println("Test: TargetEncoder")
     let n: i32 = 10
@@ -2048,6 +2094,8 @@ function main() -> i32 {
     if test_hist_gradient_boosting() != 0 { failures = failures + 1 }
     println("")
     if test_hist_gradient_boosting_regressor() != 0 { failures = failures + 1 }
+    println("")
+    if test_stacking_classifier() != 0 { failures = failures + 1 }
     println("")
     if test_target_encoder() != 0 { failures = failures + 1 }
     println("")
