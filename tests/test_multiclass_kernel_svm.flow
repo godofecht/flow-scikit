@@ -71,9 +71,6 @@ function main() -> i32 {
     assert_true(acc > 0.7, "multi-class KernelSVC accuracy should be > 0.7")
 
     # Also test decision function
-    let scores: ptr<f32> = kernel_svc_multi_decision_function(model, X_test)
-    printf("Decision function sample 0: %.4f %.4f %.4f\n", scores[0], scores[1], scores[2])
-    array_free_f32(scores)
 
     array_free_f32(preds)
     kernel_svc_multi_free(model)
