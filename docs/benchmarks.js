@@ -394,22 +394,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // Per-algorithm parity data.
 const PARITY = [
-  { algo: "StandardScaler",            match: true,  maxDiff: 0.000001, py_ms: 0.89,  fl_ms: 0.005, speedup: 178.4 },
-  { algo: "MinMaxScaler",              match: true,  maxDiff: 0.000001, py_ms: 0.24,  fl_ms: 0.004, speedup: 60.4 },
-  { algo: "MaxAbsScaler",              match: true,  maxDiff: 0.000000, py_ms: 0.18,  fl_ms: 0.003, speedup: 59.2 },
-  { algo: "GaussianNB",                match: true,  maxDiff: 0.000000, py_ms: 1.92,  fl_ms: 0.012, speedup: 160.1 },
-  { algo: "KNNClassifier_k5",          match: true,  maxDiff: 0.000000, py_ms: 2.85,  fl_ms: 0.062, speedup: 46.0 },
-  { algo: "NearestCentroid",           match: true,  maxDiff: 0.000000, py_ms: 23.35, fl_ms: 0.002, speedup: 11674.5 },
-  { algo: "DummyClassifier_mf",        match: true,  maxDiff: 0.000000, py_ms: 0.17,  fl_ms: 0.008, speedup: 20.9 },
-  { algo: "DummyRegressor_mean",       match: true,  maxDiff: 0.000008, py_ms: 0.12,  fl_ms: 0.005, speedup: 23.2 },
-  { algo: "PCA_2comp",                 match: true,  maxDiff: 0.000001, py_ms: 3.84,  fl_ms: 0.048, speedup: 80.1 },
-  { algo: "LDA",                       match: false, maxDiff: 1.000000, py_ms: 3.10,  fl_ms: 0.009, speedup: 344.8 },
-  { algo: "QDA",                       match: false, maxDiff: 1.000000, py_ms: 1.86,  fl_ms: 0.008, speedup: 232.7 },
-  { algo: "KMeans_k3",                 match: false, maxDiff: 1.000000, py_ms: 2.15,  fl_ms: 0.027, speedup: 79.6 },
-  { algo: "KNNRegressor_k3",           match: false, maxDiff: 106.33,  py_ms: 0.70,  fl_ms: 0.268, speedup: 2.6 },
-  { algo: "LinearRegression",          match: false, maxDiff: 82.87,   py_ms: 10.15, fl_ms: 0.030, speedup: 338.3 },
-  { algo: "Ridge_a1",                  match: false, maxDiff: 39.36,   py_ms: 5.47,  fl_ms: 0.028, speedup: 195.2 },
-  { algo: "Lasso_a0.1",                match: false, maxDiff: 72.27,   py_ms: 1.84,  fl_ms: 26.31, speedup: 0.07 }
+  { algo: "StandardScaler",            match: true,  maxDiff: 0.000001, py_ms: 1.59,  fl_ms: 0.004, speedup: 397.3 },
+  { algo: "MinMaxScaler",              match: true,  maxDiff: 0.000001, py_ms: 0.36,  fl_ms: 0.002, speedup: 177.9 },
+  { algo: "MaxAbsScaler",              match: true,  maxDiff: 0.000000, py_ms: 0.32,  fl_ms: 0.013, speedup: 25.0 },
+  { algo: "GaussianNB",                match: true,  maxDiff: 0.000000, py_ms: 3.81,  fl_ms: 0.020, speedup: 190.3 },
+  { algo: "KNNClassifier_k5",          match: true,  maxDiff: 0.000000, py_ms: 8.32,  fl_ms: 0.060, speedup: 138.6 },
+  { algo: "NearestCentroid",           match: true,  maxDiff: 0.000000, py_ms: 72.69, fl_ms: 0.002, speedup: 36343.0 },
+  { algo: "DummyClassifier_mf",        match: true,  maxDiff: 0.000000, py_ms: 0.29,  fl_ms: 0.013, speedup: 22.4 },
+  { algo: "DummyRegressor_mean",       match: true,  maxDiff: 0.000008, py_ms: 0.18,  fl_ms: 0.001, speedup: 178.4 },
+  { algo: "PCA_2comp",                 match: true,  maxDiff: 0.000001, py_ms: 5.23,  fl_ms: 0.024, speedup: 217.9 },
+  { algo: "LDA",                       match: true,  maxDiff: 0.000000, py_ms: 4.13,  fl_ms: 0.016, speedup: 258.0 },
+  { algo: "QDA",                       match: true,  maxDiff: 0.000000, py_ms: 9.63,  fl_ms: 0.008, speedup: 1203.4 },
+  { algo: "KMeans_k3",                 match: true,  maxDiff: 0.000000, py_ms: 15.96, fl_ms: 0.022, speedup: 725.4 },
+  { algo: "KNNRegressor_k3",           match: true,  maxDiff: 0.000011, py_ms: 1.83,  fl_ms: 0.230, speedup: 8.0 },
+  { algo: "LinearRegression",          match: true,  maxDiff: 0.000010, py_ms: 21.15, fl_ms: 0.058, speedup: 364.7 },
+  { algo: "Ridge_a1",                  match: true,  maxDiff: 0.000015, py_ms: 12.53, fl_ms: 0.034, speedup: 368.5 },
+  { algo: "Lasso_a0.1",                match: true,  maxDiff: 0.003916, py_ms: 5.55,  fl_ms: 0.435, speedup: 12.7 }
 ];
 
 // Parity speedup bar chart.
