@@ -1065,6 +1065,41 @@ function test_lasso_cv() -> i32 {
     return 0
 }
 
+function test_bagging_classifier() -> i32 {
+    println("Test: BaggingClassifier")
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 2)
+    let y: ptr<f32> = array_new_f32(n)
+    srand(42)
+    let mut i: i32 = 0
+    while i < n {
+        let x0: f32 = ((rand() % 100) as f32) / 10.0
+        matrix_set(X, i, 0, x0)
+        matrix_set(X, i, 1, ((rand() % 100) as f32) / 10.0)
+        if x0 > 5.0 {
+            y[i] = 1.0
+        } else {
+            y[i] = 0.0
+        }
+        i = i + 1
+    }
+    let model: BaggingClassifier = bagging_classifier_fit(X, y, 2, 5, 3, 42)
+    let preds: ptr<f32> = bagging_classifier_predict(model, X)
+    let acc: f32 = accuracy_score(y, preds, n)
+    if acc < 0.5 {
+        println("  FAIL: Accuracy should be > 0.5")
+        return 1
+    }
+    print("  OK: Accuracy = ")
+    printf("%.4f", acc)
+    println("")
+    array_free_f32(preds)
+    bagging_classifier_free(model)
+    matrix_free(X)
+    array_free_f32(y)
+    return 0
+}
+
 function test_bagging_regressor() -> i32 {
     println("Test: BaggingRegressor")
     let n: i32 = 30
@@ -2084,6 +2119,8 @@ function main() -> i32 {
     if test_ridge_cv() != 0 { failures = failures + 1 }
     println("")
     if test_lasso_cv() != 0 { failures = failures + 1 }
+    println("")
+    if test_bagging_classifier() != 0 { failures = failures + 1 }
     println("")
     if test_bagging_regressor() != 0 { failures = failures + 1 }
     println("")
