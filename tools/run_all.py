@@ -50,7 +50,7 @@ def run_file(flow_bin: str, file: Path) -> tuple[bool, float, str]:
     )
     elapsed = time.perf_counter() - start
     output = "\n".join(
-        part for part in (result.stdout.strip(), result.stderr.strip()) if part
+        part for part in (result.stderr.strip(), result.stdout.strip()) if part
     )
     return result.returncode == 0, elapsed, output
 
