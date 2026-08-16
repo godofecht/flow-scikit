@@ -5,6 +5,10 @@
 import "lib/scikit/matrix.flow"
 import "lib/scikit/validation.flow"
 
+extern {
+    function sqrt(x: f64) -> f64
+}
+
 function __pow_f32(base: f32, exp: i32) -> f32 {
     let mut result: f32 = 1.0
     for i in 0 to exp {
@@ -30,16 +34,26 @@ export function standard_scaler_fit(X: Matrix) -> StandardScaler {
     let std: ptr<f32> = array_new_f32(n)
 
     for j in 0 to n {
-        let col: ptr<f32> = array_new_f32(X.rows)
+        # Compute mean and std in f64 for precision
+        let mut sum: f64 = 0.0
         for i in 0 to X.rows {
-            col[i] = matrix_at(X, i, j)
+            sum = sum + (matrix_at(X, i, j) as f64)
         }
-        mean[j] = array_mean(col, X.rows)
-        std[j] = array_std(col, X.rows, mean[j])
+        let mean_d: f64 = sum / (X.rows as f64)
+
+        let mut sq_sum: f64 = 0.0
+        for i in 0 to X.rows {
+            let d: f64 = (matrix_at(X, i, j) as f64) - mean_d
+            sq_sum = sq_sum + d * d
+        }
+        let var_d: f64 = sq_sum / (X.rows as f64)
+        let std_d: f64 = sqrt(var_d)
+
+        mean[j] = mean_d as f32
+        std[j] = std_d as f32
         if std[j] < 0.0000000001 {
             std[j] = 1.0
         }
-        array_free_f32(col)
     }
 
     return StandardScaler { mean: mean, std: std, n_features: n, fitted: true }
@@ -49,8 +63,9 @@ export function standard_scaler_transform(scaler: StandardScaler, X: Matrix) -> 
     let result: Matrix = matrix_new(X.rows, X.cols)
     for i in 0 to X.rows {
         for j in 0 to X.cols {
-            let val: f32 = (matrix_at(X, i, j) - scaler.mean[j]) / scaler.std[j]
-            matrix_set(result, i, j, val)
+            # Use f64 for the division to match sklearn precision
+            let val: f64 = ((matrix_at(X, i, j) as f64) - (scaler.mean[j] as f64)) / (scaler.std[j] as f64)
+            matrix_set(result, i, j, val as f32)
         }
     }
     return result
