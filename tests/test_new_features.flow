@@ -1971,6 +1971,37 @@ function test_missing_indicator() -> i32 {
     return 0
 }
 
+function test_voting_regressor() -> i32 {
+    println("Test: VotingRegressor")
+    let data: Dataset = make_regression(50, 3, 3, 0.5, 1.0, 42)
+
+    let estimators: ptr<DecisionTreeRegressor> = malloc(2 * 128) as ptr<DecisionTreeRegressor>
+    estimators[0] = decision_tree_regressor_fit(data.X, data.y, 3, CRITERION_MSE)
+    estimators[1] = decision_tree_regressor_fit(data.X, data.y, 5, CRITERION_MSE)
+
+    let weights: ptr<f32> = array_new_f32(2)
+    weights[0] = 0.5
+    weights[1] = 0.5
+
+    let model: VotingRegressor = voting_regressor_fit(estimators, 2, weights)
+    let preds: ptr<f32> = voting_regressor_predict(model, data.X)
+
+    let r2: f32 = r2_score(data.y, preds, data.n_samples)
+    if r2 < 0.5 {
+        println("  FAIL: R2 should be > 0.5")
+        return 1
+    }
+    print("  OK: R2 = ")
+    printf("%.4f", r2)
+    println("")
+
+    array_free_f32(preds)
+    voting_regressor_free(model)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+    return 0
+}
+
 function test_dataset_loaders() -> i32 {
     println("Test: load_digits / load_wine / load_breast_cancer / load_diabetes")
 
@@ -2130,6 +2161,8 @@ function main() -> i32 {
     if test_missing_indicator() != 0 { failures = failures + 1 }
     println("")
     if test_dataset_loaders() != 0 { failures = failures + 1 }
+    println("")
+    if test_voting_regressor() != 0 { failures = failures + 1 }
 
     println("")
     println("----------------------------------------")
