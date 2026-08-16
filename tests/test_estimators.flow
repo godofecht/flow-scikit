@@ -302,6 +302,39 @@ function test_roc_curve() -> i32 {
     return 0
 }
 
+function test_voting_classifier() -> i32 {
+    println("Test: VotingClassifier")
+    let data: Dataset = make_classification_data()
+
+    let estimators: ptr<DecisionTreeClassifier> = malloc(3 * 64) as ptr<DecisionTreeClassifier>
+    estimators[0] = decision_tree_classifier_fit(data.X, data.y, 2, 5, CRITERION_GINI)
+    estimators[1] = decision_tree_classifier_fit(data.X, data.y, 2, 7, CRITERION_GINI)
+    estimators[2] = decision_tree_classifier_fit(data.X, data.y, 2, 3, CRITERION_GINI)
+
+    let classes: ptr<f32> = array_new_f32(2)
+    classes[0] = 0.0
+    classes[1] = 1.0
+
+    let voting: VotingClassifier = voting_classifier_fit(estimators, 3, 2, classes, VOTING_SOFT)
+    let preds: ptr<f32> = voting_classifier_predict(voting, data.X)
+
+    let acc: f32 = accuracy_score(data.y, preds, data.n_samples)
+    if acc < 0.7 {
+        println("  FAIL: accuracy should be > 0.7 for voting ensemble")
+        return 1
+    }
+
+    print("  OK: accuracy = ")
+    printf("%.4f", acc)
+    println("")
+
+    voting_classifier_free(voting)
+    array_free_f32(preds)
+    matrix_free(data.X)
+    array_free_f32(data.y)
+    return 0
+}
+
 function test_select_k_best() -> i32 {
     println("Test: SelectKBest")
     let X: Matrix = matrix_new(10, 3)
@@ -357,6 +390,8 @@ function main() -> i32 {
     if test_roc_curve() != 0 { failures = failures + 1 }
     println("")
     if test_select_k_best() != 0 { failures = failures + 1 }
+    println("")
+    if test_voting_classifier() != 0 { failures = failures + 1 }
 
     println("")
     if failures == 0 {
