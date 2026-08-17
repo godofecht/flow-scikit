@@ -1,0 +1,46 @@
+# Strict-valid allocation-free binary classification metric kernels.
+# Public metrics.flow delegates to these functions; the browser facade imports
+# the same kernels directly so direct wasm does not pull unrelated legacy code.
+
+export function binary_accuracy_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
+    let mut correct: i32 = 0
+    for i in 0 to n {
+        if y_true[i] == y_pred[i] {
+            correct = correct + 1
+        }
+    }
+    return (correct as f32) / (n as f32)
+}
+
+export function binary_precision_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, pos_label: f32) -> f32 {
+    let mut tp: i32 = 0
+    let mut fp: i32 = 0
+    for i in 0 to n {
+        let true_pos: bool = y_true[i] == pos_label
+        let pred_pos: bool = y_pred[i] == pos_label
+        if true_pos && pred_pos { tp = tp + 1 }
+        if not true_pos && pred_pos { fp = fp + 1 }
+    }
+    if tp + fp == 0 { return 0.0 }
+    return (tp as f32) / ((tp + fp) as f32)
+}
+
+export function binary_recall_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, pos_label: f32) -> f32 {
+    let mut tp: i32 = 0
+    let mut fn: i32 = 0
+    for i in 0 to n {
+        let true_pos: bool = y_true[i] == pos_label
+        let pred_pos: bool = y_pred[i] == pos_label
+        if true_pos && pred_pos { tp = tp + 1 }
+        if true_pos && not pred_pos { fn = fn + 1 }
+    }
+    if tp + fn == 0 { return 0.0 }
+    return (tp as f32) / ((tp + fn) as f32)
+}
+
+export function binary_f1_score(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, pos_label: f32) -> f32 {
+    let prec: f32 = binary_precision_score(y_true, y_pred, n, pos_label)
+    let rec: f32 = binary_recall_score(y_true, y_pred, n, pos_label)
+    if prec + rec == 0.0 { return 0.0 }
+    return 2.0 * prec * rec / (prec + rec)
+}

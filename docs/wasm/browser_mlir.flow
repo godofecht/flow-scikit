@@ -1,24 +1,23 @@
 # Browser ABI facade for the Flow -> MLIR -> WebAssembly path.
-# These entry points call the real flow-scikit metric implementations and do
-# not require allocation, making them suitable for the first freestanding
-# wasm32 milestone.
+# These entry points call the same strict binary metric kernels used by the
+# public flow-scikit metrics API and require no allocation.
 
-import "lib/scikit/metrics.flow"
+import lib.scikit.metrics_binary
 
 export function browser_accuracy(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32) -> f32 {
-    return accuracy_score(y_true, y_pred, n)
+    return binary_accuracy_score(y_true, y_pred, n)
 }
 
 export function browser_precision(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, pos_label: f32) -> f32 {
-    return precision_score(y_true, y_pred, n, pos_label)
+    return binary_precision_score(y_true, y_pred, n, pos_label)
 }
 
 export function browser_recall(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, pos_label: f32) -> f32 {
-    return recall_score(y_true, y_pred, n, pos_label)
+    return binary_recall_score(y_true, y_pred, n, pos_label)
 }
 
 export function browser_f1(y_true: ptr<f32>, y_pred: ptr<f32>, n: i32, pos_label: f32) -> f32 {
-    return f1_score(y_true, y_pred, n, pos_label)
+    return binary_f1_score(y_true, y_pred, n, pos_label)
 }
 
 function main() -> i32 {
