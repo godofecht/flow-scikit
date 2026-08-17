@@ -1,0 +1,123 @@
+import "lib/scikit/scikit.flow"
+
+extern {
+    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+}
+
+const TIME_UTC: i32 = 1
+
+function now_ns() -> i64 {
+    let ts: ptr<i64> = malloc(16) as ptr<i64>
+    timespec_get(ts, TIME_UTC)
+    let value: i64 = ts[0] * 1000000000 + ts[1]
+    free(ts as ptr<void>)
+    return value
+}
+
+function abs_f32(x: f32) -> f32 {
+    if x < 0.0 { return -x }
+    return x
+}
+
+function reference_transform(model: AdditiveChi2Sampler, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let n_out: i32 = p * model.sample_steps
+    let result: Matrix = matrix_new(n, n_out)
+    let pi_val: f32 = 3.14159265358979
+
+    for i in 0 to n {
+        let mut col: i32 = 0
+        for j in 0 to p {
+            let x: f32 = matrix_at(X, i, j)
+            if x <= 0.0 {
+                for k in 0 to model.sample_steps {
+                    matrix_set(result, i, col, 0.0)
+                    col = col + 1
+                }
+                continue
+            }
+            let log_x: f32 = log((x) as f64) as f32
+            let inv_sqrt_x: f32 = 1.0 / sqrt((x) as f64) as f32
+            for k in 0 to model.sample_steps {
+                let t: f32 = (4.0 * (k as f32) + 2.0) * pi_val / (4.0 * (model.sample_steps as f32))
+                matrix_set(result, i, col, cos((t * log_x) as f64) as f32 * inv_sqrt_x)
+                col = col + 1
+            }
+        }
+    }
+    return result
+}
+
+function main() -> i32 {
+    let X: Matrix = matrix_new(3, 3)
+    matrix_set(X, 0, 0, 1.0)
+    matrix_set(X, 0, 1, 4.0)
+    matrix_set(X, 0, 2, 0.0)
+    matrix_set(X, 1, 0, 0.25)
+    matrix_set(X, 1, 1, -1.0)
+    matrix_set(X, 1, 2, 9.0)
+    matrix_set(X, 2, 0, 2.0)
+    matrix_set(X, 2, 1, 0.0)
+    matrix_set(X, 2, 2, 16.0)
+
+    let model: AdditiveChi2Sampler = additive_chi2_sampler_fit(3, 3, 4)
+    let reference: Matrix = reference_transform(model, X)
+    let optimized: Matrix = additive_chi2_sampler_transform(model, X)
+
+    for i in 0 to reference.rows {
+        for j in 0 to reference.cols {
+            if abs_f32(matrix_at(reference, i, j) - matrix_at(optimized, i, j)) > 0.000001 {
+                println("FAIL: AdditiveChi2 optimized transform changed output")
+                return 1
+            }
+        }
+    }
+
+    matrix_free(reference)
+    matrix_free(optimized)
+    matrix_free(X)
+
+    # Non-gating A/B timing on a mixed sparse/non-negative workload.
+    let n: i32 = 512
+    let p: i32 = 32
+    let steps: i32 = 8
+    let repeats: i32 = 4
+    let bench_X: Matrix = matrix_new(n, p)
+    for i in 0 to n {
+        for j in 0 to p {
+            let raw: i32 = (i * 17 + j * 31) % 7
+            if raw < 3 {
+                matrix_set(bench_X, i, j, 0.0)
+            } else {
+                matrix_set(bench_X, i, j, (raw as f32) * 0.5)
+            }
+        }
+    }
+    let bench_model: AdditiveChi2Sampler = additive_chi2_sampler_fit(n, p, steps)
+
+    let start_ref: i64 = now_ns()
+    for r in 0 to repeats {
+        let out_ref: Matrix = reference_transform(bench_model, bench_X)
+        matrix_free(out_ref)
+    }
+    let end_ref: i64 = now_ns()
+
+    let start_opt: i64 = now_ns()
+    for r in 0 to repeats {
+        let out_opt: Matrix = additive_chi2_sampler_transform(bench_model, bench_X)
+        matrix_free(out_opt)
+    }
+    let end_opt: i64 = now_ns()
+
+    let ref_ms: f64 = ((end_ref - start_ref) as f64) / 1000000.0
+    let opt_ms: f64 = ((end_opt - start_opt) as f64) / 1000000.0
+    printf("AdditiveChi2 A/B: reference=%.6f ms optimized=%.6f ms speedup=%.3fx\n", ref_ms, opt_ms, ref_ms / opt_ms)
+
+    matrix_free(bench_X)
+    additive_chi2_sampler_free(model)
+    additive_chi2_sampler_free(bench_model)
+
+    println("OK: AdditiveChi2 optimized transform preserves reference output")
+    return 0
+}
