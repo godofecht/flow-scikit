@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and publish committed evidence artifacts into the static Pages tree.
-
-The public site renders the committed JSON directly.  This keeps benchmark and
-architecture presentation mechanically coupled to the repository source of
-truth instead of patching historical hard-coded HTML.
-"""
+"""Validate and publish committed evidence artifacts into the static Pages tree."""
 from __future__ import annotations
 
 import argparse
@@ -17,8 +12,10 @@ BENCH = ROOT / "benchmarks"
 DOCS = ROOT / "docs"
 RESULT = BENCH / "headline_result_v2.json"
 ARCH = BENCH / "architecture_performance_map.json"
+DISPARITY = BENCH / "disparity_report.json"
 DOC_RESULT = DOCS / "headline-result-v2.json"
 DOC_ARCH = DOCS / "architecture-performance-map.json"
+DOC_DISPARITY = DOCS / "disparity-report.json"
 
 
 def validate_headline(result: dict) -> None:
@@ -36,14 +33,20 @@ def validate_headline(result: dict) -> None:
 
 def validate_architecture(architecture: dict, total_rows: int) -> None:
     coverage = architecture["coverage"]
-    if coverage["headline_rows"] != total_rows:
-        raise SystemExit("architecture map headline coverage disagrees with canonical result")
-    if coverage["headline_rows_with_substrate"] != total_rows:
-        raise SystemExit("not every headline row has an execution-substrate classification")
-    if coverage["headline_rows_with_speedup"] != total_rows:
-        raise SystemExit("not every headline row joins to benchmark speedup evidence")
+    if coverage["headline_rows"] != total_rows or coverage["headline_rows_with_substrate"] != total_rows or coverage["headline_rows_with_speedup"] != total_rows:
+        raise SystemExit("architecture map does not cover every canonical row")
     if not architecture.get("speedup_by_execution_substrate"):
         raise SystemExit("architecture map has no substrate/speedup aggregation")
+
+
+def validate_disparity(disparity: dict, total_rows: int) -> None:
+    if disparity["counts"]["rows"] != total_rows:
+        raise SystemExit("disparity report does not cover every canonical row")
+    if disparity["counts"]["rows_with_tracked_disparity"] <= 0:
+        raise SystemExit("disparity report unexpectedly contains no tracked disparities")
+    keys = {(r["algorithm"], r["dataset"], r["metric"]) for r in disparity["rows"]}
+    if len(keys) != total_rows:
+        raise SystemExit("disparity report row keys are incomplete or duplicated")
 
 
 def main() -> int:
@@ -56,18 +59,20 @@ def main() -> int:
     validate_headline(result)
     validate_architecture(architecture, result["counts"]["total_rows"])
 
+    disparity = json.loads(DISPARITY.read_text()) if DISPARITY.exists() else None
+    if disparity is not None:
+        validate_disparity(disparity, result["counts"]["total_rows"])
+    elif not args.check:
+        raise SystemExit("disparity_report.json must be generated before Pages publication")
+
     if not args.check:
         shutil.copyfile(RESULT, DOC_RESULT)
         shutil.copyfile(ARCH, DOC_ARCH)
+        shutil.copyfile(DISPARITY, DOC_DISPARITY)
         counts = result["counts"]
-        print(
-            "published evidence: "
-            f"{counts['flow_wins']}/{counts['eligible_comparisons']} Flow wins; "
-            f"{counts['parity_unresolved']} parity unresolved; "
-            f"{architecture['coverage']['inventory_operations']} estimator-operation inventory rows"
-        )
+        print(f"published evidence: {counts['flow_wins']}/{counts['eligible_comparisons']} Flow wins; {disparity['counts']['rows_with_tracked_disparity']} rows with tracked disparities")
     else:
-        print("canonical benchmark and architecture evidence are internally consistent")
+        print("canonical benchmark, architecture, and available disparity evidence are internally consistent")
     return 0
 
 
