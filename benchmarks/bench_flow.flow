@@ -177,27 +177,37 @@ function main() -> i32 {
     let km_preds: ptr<i32> = kmeans_predict(km_model, X_test_iris)
     t2 = clock()
     # KMeans accuracy is not directly comparable (cluster labels don't match class labels)
-    # Report cluster assignment accuracy by best matching
-    let mut best_acc: f32 = 0.0
-    for perm in 0 to 6 {
-        let p0: f32 = (perm % 3) as f32
-        let p1: f32 = ((perm / 3) + (perm % 3) + 1) as f32
-        let p2: f32 = (3 - (perm % 3) - ((perm / 3) + (perm % 3) + 1) % 3) as f32
-        if p1 >= 3.0 { continue }
-        if p2 < 0.0 { continue }
-        if p2 >= 3.0 { continue }
-        let mut correct: i32 = 0
-        for i in 0 to split_iris.n_test {
-            let mapped: f32 = 0.0
-            if km_preds[i] == 0 { mapped = p0 }
-            elif km_preds[i] == 1 { mapped = p1 }
-            else { mapped = p2 }
-            if mapped == split_iris.y_test[i] { correct = correct + 1 }
+    # Report cluster assignment accuracy by best matching on train set
+    let km_train_preds: ptr<i32> = kmeans_predict(km_model, X_train_iris)
+    let cluster_labels_iris: ptr<i32> = malloc((3 as i64) * 4) as ptr<i32>
+    for c in 0 to 3 {
+        let counts: ptr<i32> = malloc((3 as i64) * 4) as ptr<i32>
+        for k in 0 to 3 { counts[k] = 0 }
+        for i in 0 to split_iris.n_train {
+            if km_train_preds[i] == c {
+                let label: i32 = split_iris.y_train[i] as i32
+                if label >= 0 && label < 3 { counts[label] = counts[label] + 1 }
+            }
         }
-        let acc: f32 = (correct as f32) / (split_iris.n_test as f32)
-        if acc > best_acc { best_acc = acc }
+        let mut best_label: i32 = 0
+        let mut best_count: i32 = 0
+        for k in 0 to 3 {
+            if counts[k] > best_count { best_count = counts[k]; best_label = k }
+        }
+        cluster_labels_iris[c] = best_label
+        free(counts as ptr<void>)
     }
-    printf("RESULT|KMeans|iris|accuracy|%.6f|%.6f|%.6f\n", best_acc, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    free(km_train_preds as ptr<void>)
+
+    let mut km_correct_iris: i32 = 0
+    for i in 0 to split_iris.n_test {
+        if cluster_labels_iris[km_preds[i]] == (split_iris.y_test[i] as i32) {
+            km_correct_iris = km_correct_iris + 1
+        }
+    }
+    let acc_iris: f32 = (km_correct_iris as f32) / (split_iris.n_test as f32)
+    printf("RESULT|KMeans|iris|accuracy|%.6f|%.6f|%.6f\n", acc_iris, elapsed_ms(t0, t1), elapsed_ms(t1, t2))
+    free(cluster_labels_iris as ptr<void>)
     free(km_preds as ptr<void>)
     kmeans_free(km_model)
 
@@ -307,14 +317,15 @@ function main() -> i32 {
     t2 = clock()
     # Best-match accuracy for KMeans
     let mut best_acc_dig: f32 = 0.0
-    # Simple greedy matching: for each cluster, find the most common true label
+    # Simple greedy matching: for each cluster, find the most common true label on train set
+    let km_train_preds_dig: ptr<i32> = kmeans_predict(km_dig, X_train_dig)
     let cluster_labels: ptr<i32> = malloc((10 as i64) * 4) as ptr<i32>
     for c in 0 to 10 {
         let counts: ptr<i32> = malloc((10 as i64) * 4) as ptr<i32>
         for k in 0 to 10 { counts[k] = 0 }
-        for i in 0 to split_dig.n_test {
-            if km_dig_preds[i] == c {
-                let label: i32 = split_dig.y_test[i] as i32
+        for i in 0 to split_dig.n_train {
+            if km_train_preds_dig[i] == c {
+                let label: i32 = split_dig.y_train[i] as i32
                 if label >= 0 && label < 10 { counts[label] = counts[label] + 1 }
             }
         }
@@ -326,6 +337,7 @@ function main() -> i32 {
         cluster_labels[c] = best_label
         free(counts as ptr<void>)
     }
+    free(km_train_preds_dig as ptr<void>)
     let mut km_correct: i32 = 0
     for i in 0 to split_dig.n_test {
         if cluster_labels[km_dig_preds[i]] == (split_dig.y_test[i] as i32) {
