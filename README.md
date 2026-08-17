@@ -14,6 +14,36 @@ The goal is not a line-for-line port. The project implements familiar estimators
 
 The repository currently covers classification, regression, clustering, decomposition, preprocessing, feature selection, model selection, ensembles, SVMs, Gaussian processes, mixture models, neural networks, covariance, imputation, manifold learning, kernel approximation, multi-output learning and related utilities.
 
+## Why traditional machine learning still matters
+
+flow-scikit is deliberately focused on the part of machine learning that can disappear from public discussion whenever attention moves to the newest generation of neural-network tooling. That is not because the older methods have stopped solving problems.
+
+A useful snapshot of practitioner sentiment appears in the r/datascience discussion [“Do people not use sci-kit learn / other traditional libraries anymore?”](https://www.reddit.com/r/datascience/comments/16lu9ni/do_people_not_use_scikit_learn_other_traditional/). The thread is anecdotal rather than a scientific survey, but its recurring themes are consistent enough to explain the motivation for this project.
+
+The dominant sentiment was not that scikit-learn had become obsolete. Practitioners repeatedly described linear and logistic regression, tree ensembles, boosted trees, SVMs, clustering and other conventional methods as routine production tools. Several argued that most ordinary business datasets are tabular, relatively small, or otherwise do not justify a large neural model. Others described cases where simple regressions or SVMs matched or beat more elaborate neural approaches. A recurring principle was to start with exploratory analysis and the simplest model capable of solving the problem, then add complexity only when the data and requirements justify it.
+
+The discussion also draws an important distinction between **visibility and utility**. PyTorch, Hugging Face, transformers and generative AI dominate much of the public ML conversation because they enable genuinely new applications and because novelty attracts attention. That does not make them substitutes for every statistical or tabular-learning workflow. Several commenters explicitly described a gap between what is fashionable on social media and what data scientists actually use at work.
+
+Another repeated point was that scikit-learn's value is larger than any individual estimator. Its common estimator interface makes preprocessing, fitting, model interchange, evaluation, tuning and composition unusually easy. Even practitioners whose primary models live in XGBoost, PyTorch or other libraries often retain scikit-learn-style tooling around splitting, metrics, validation, search and pipelines. The enduring idea is therefore not merely a catalogue of algorithms; it is a coherent way to compose conventional machine-learning work.
+
+That is the part flow-scikit is interested in preserving and testing.
+
+### Why rebuild this in Flow?
+
+If classical ML remains useful, the next question is not whether it should be discarded for newer models. It is whether its implementation environment is still the right one for every deployment target.
+
+Python and scikit-learn are exceptionally effective for analysis, experimentation and an enormous existing scientific ecosystem. flow-scikit is aimed at a different boundary: **what happens when the same class of practical algorithms is available as small compiled native code?**
+
+For workloads where a regression, tree, nearest-neighbour model, clustering algorithm or conventional preprocessing pipeline is already sufficient, requiring a Python interpreter and a larger runtime stack can be unnecessary deployment overhead. Flow gives us a way to explore the same problem-solving philosophy with static typing, native binaries, explicit memory/layout choices, cross-compilation and a C backend.
+
+The argument is therefore not “traditional ML instead of modern AI,” nor “Flow instead of Python everywhere.” It is simpler:
+
+**Use the least complicated model that solves the problem, and make that model available in the least complicated runtime that satisfies the deployment requirements.**
+
+That makes conventional ML particularly interesting for embedded systems, native applications, low-latency services, mobile deployment, constrained environments, command-line tools and applications where startup time, artifact size or runtime integration matters. It also gives us a controlled body of well-understood algorithms with which to test Flow itself against a mature and widely understood reference ecosystem.
+
+flow-scikit exists because mature algorithms are not obsolete algorithms. The interesting systems question is how much machinery we actually need to run them.
+
 ## Evidence first
 
 The benchmark site contains the complete measured results rather than only selected wins. It reports predictive parity separately from runtime performance and includes fit/predict timings, Iris, Digits and Diabetes workloads, deterministic parity tests, native footprint/startup measurements, and Android results.
