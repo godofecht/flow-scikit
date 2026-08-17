@@ -1,0 +1,127 @@
+import "lib/scikit/scikit.flow"
+
+extern {
+    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+}
+
+const TIME_UTC: i32 = 1
+
+function now_ns() -> i64 {
+    let ts: ptr<i64> = malloc(16) as ptr<i64>
+    timespec_get(ts, TIME_UTC)
+    let value: i64 = ts[0] * 1000000000 + ts[1]
+    free(ts as ptr<void>)
+    return value
+}
+
+function reference_transform(model: HashingVectorizer, tokens: ptr<ptr<i32> >, n_samples: i32, n_tokens_per_sample: ptr<i32>) -> Matrix {
+    let result: Matrix = matrix_new(n_samples, model.n_features)
+    for i in 0 to n_samples {
+        for j in 0 to model.n_features {
+            matrix_set(result, i, j, 0.0)
+        }
+        for k in 0 to n_tokens_per_sample[i] {
+            let token: i32 = tokens[i][k]
+            let col: i32 = (token % model.n_features + model.n_features) % model.n_features
+            let current: f32 = matrix_at(result, i, col)
+            matrix_set(result, i, col, current + 1.0)
+        }
+    }
+    return result
+}
+
+function main() -> i32 {
+    let n_samples: i32 = 2
+    let tokens: ptr<ptr<i32> > = malloc((n_samples as i64) * 8) as ptr<ptr<i32> >
+    let counts: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+
+    counts[0] = 3
+    counts[1] = 3
+    tokens[0] = malloc(12) as ptr<i32>
+    tokens[1] = malloc(12) as ptr<i32>
+
+    # 1, 9, and -7 all hash to column 1 for an 8-column hash space.
+    tokens[0][0] = 1
+    tokens[0][1] = 9
+    tokens[0][2] = -7
+
+    tokens[1][0] = 2
+    tokens[1][1] = 10
+    tokens[1][2] = 3
+
+    let model: HashingVectorizer = hashing_vectorizer_new(8)
+    let X: Matrix = hashing_vectorizer_transform(model, tokens, n_samples, counts)
+
+    if matrix_at(X, 0, 1) != 3.0 {
+        println("FAIL: HashingVectorizer collision count changed")
+        return 1
+    }
+    if matrix_at(X, 1, 2) != 2.0 || matrix_at(X, 1, 3) != 1.0 {
+        println("FAIL: HashingVectorizer token counts changed")
+        return 1
+    }
+
+    for j in 0 to 8 {
+        if j != 1 && matrix_at(X, 0, j) != 0.0 {
+            println("FAIL: calloc-backed zero columns were not preserved")
+            return 1
+        }
+        if j != 2 && j != 3 && matrix_at(X, 1, j) != 0.0 {
+            println("FAIL: untouched output columns changed")
+            return 1
+        }
+    }
+
+    matrix_free(X)
+    hashing_vectorizer_free(model)
+    free(tokens[0] as ptr<void>)
+    free(tokens[1] as ptr<void>)
+    free(tokens as ptr<void>)
+    free(counts as ptr<void>)
+
+    # Non-gating A/B microbenchmark: identical sparse token workload, with the
+    # previous dense zero pass retained only in reference_transform.
+    let bench_samples: i32 = 64
+    let bench_features: i32 = 8192
+    let bench_tokens_per_sample: i32 = 32
+    let repeats: i32 = 12
+    let bench_tokens: ptr<ptr<i32> > = malloc((bench_samples as i64) * 8) as ptr<ptr<i32> >
+    let bench_counts: ptr<i32> = malloc((bench_samples as i64) * 4) as ptr<i32>
+    for i in 0 to bench_samples {
+        bench_counts[i] = bench_tokens_per_sample
+        bench_tokens[i] = malloc((bench_tokens_per_sample as i64) * 4) as ptr<i32>
+        for k in 0 to bench_tokens_per_sample {
+            bench_tokens[i][k] = i * 131 + k * 17 - 3000
+        }
+    }
+
+    let bench_model: HashingVectorizer = hashing_vectorizer_new(bench_features)
+    let start_ref: i64 = now_ns()
+    for r in 0 to repeats {
+        let out_ref: Matrix = reference_transform(bench_model, bench_tokens, bench_samples, bench_counts)
+        matrix_free(out_ref)
+    }
+    let end_ref: i64 = now_ns()
+
+    let start_opt: i64 = now_ns()
+    for r in 0 to repeats {
+        let out_opt: Matrix = hashing_vectorizer_transform(bench_model, bench_tokens, bench_samples, bench_counts)
+        matrix_free(out_opt)
+    }
+    let end_opt: i64 = now_ns()
+
+    let ref_ms: f64 = ((end_ref - start_ref) as f64) / 1000000.0
+    let opt_ms: f64 = ((end_opt - start_opt) as f64) / 1000000.0
+    let speedup: f64 = ref_ms / opt_ms
+    printf("HashingVectorizer A/B: reference=%.6f ms optimized=%.6f ms speedup=%.3fx\n", ref_ms, opt_ms, speedup)
+
+    for i in 0 to bench_samples {
+        free(bench_tokens[i] as ptr<void>)
+    }
+    free(bench_tokens as ptr<void>)
+    free(bench_counts as ptr<void>)
+    hashing_vectorizer_free(bench_model)
+
+    println("OK: HashingVectorizer optimized transform preserves hashed counts")
+    return 0
+}

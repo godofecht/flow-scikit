@@ -139,16 +139,17 @@ export function hashing_vectorizer_new(n_features: i32) -> HashingVectorizer {
 }
 
 export function hashing_vectorizer_transform(model: HashingVectorizer, tokens: ptr<ptr<i32> >, n_samples: i32, n_tokens_per_sample: ptr<i32>) -> Matrix {
+    # matrix_new is calloc-backed, so the output is already zeroed.  Avoid the
+    # previous O(n_samples * n_features) clearing pass and make runtime scale
+    # with the number of observed tokens instead of the hash-space width.
     let result: Matrix = matrix_new(n_samples, model.n_features)
     for i in 0 to n_samples {
-        for j in 0 to model.n_features {
-            matrix_set(result, i, j, 0.0)
-        }
+        let row_base: i32 = i * model.n_features
         for k in 0 to n_tokens_per_sample[i] {
             let token: i32 = tokens[i][k]
             let col: i32 = (token % model.n_features + model.n_features) % model.n_features
-            let current: f32 = matrix_at(result, i, col)
-            matrix_set(result, i, col, current + 1.0)
+            let idx: i32 = row_base + col
+            result.data[idx] = result.data[idx] + 1.0
         }
     }
     return result
