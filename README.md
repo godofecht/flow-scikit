@@ -48,9 +48,11 @@ flow-scikit exists because mature algorithms are not obsolete algorithms. The in
 
 The benchmark site contains the complete measured results rather than only selected wins. It reports predictive parity separately from runtime performance and includes fit/predict timings, Iris, Digits and Diabetes workloads, deterministic parity tests, native footprint/startup measurements, and Android results.
 
-A timing-unit error in an earlier version of the benchmark presentation was also corrected: Python `time.perf_counter()` measurements are seconds, while the Flow benchmark reports milliseconds. Comparisons now normalize both sides to milliseconds before calculating speedup. The benchmark tooling was fixed as well as the presentation so regenerated results use the same units.
+An earlier presentation path mixed Python `perf_counter()` seconds with fields labelled as milliseconds. That legacy path is now isolated for historical audit. The canonical v2 benchmark emits explicit `TIMING_UNIT|ms` markers on both implementations, rejects mismatched units, consumes persisted identical train/test fixtures, and gates competitive timing claims on numerical parity rather than timing availability alone.
 
-Current headline evidence includes **16/16 deterministic parity checks passing**, **10/17 usable headline timing comparisons won by Flow**, a recorded **~1.4 MB native footprint**, and a recorded **~65× cold-start advantage** in the published startup comparison. These figures describe the benchmark suite in this repository; they are not a claim that Flow is universally faster than scikit-learn.
+The current canonical v2 result is generated from [`benchmarks/headline_result_v2.json`](benchmarks/headline_result_v2.json): **9 of 17 parity-eligible headline timing comparisons are won by Flow across 19 total rows**. Eight eligible rows are won by sklearn, there are no measurement-unresolved rows, and two rows — Digits GaussianNB and Digits KMeans — remain excluded from the competitive headline because parity is unresolved. The separate deterministic algorithm suite currently records **16/16 output-parity checks passing**. The repository also records a **~1.4 MB native footprint** and a **~65× cold-start advantage** in the historical startup comparison. These figures describe specific benchmark artifacts and environments; they are not a claim that Flow is universally faster than scikit-learn.
+
+The headline result is mechanically classified from explicit parity, measurement, unit and comparability fields. Changing a benchmark row changes the generated count; unresolved rows stay visible rather than silently disappearing from the denominator.
 
 See the [full benchmark report](https://godofecht.github.io/flow-scikit/benchmarks.html) for the individual results, methodology and reproduction details.
 
@@ -106,6 +108,8 @@ python tools/run_all.py
 ## Testing and reproducibility
 
 CI performs syntax/import validation and runs the complete Flow test/example suite. Benchmark claims should be treated as reproducible measurements rather than constants: compiler revisions, optimization settings, BLAS implementations, hardware and estimator implementations can all move the numbers.
+
+The canonical benchmark pipeline additionally verifies JSON/binary split-fixture identity, validates the 19-row estimator contract, runs Flow and sklearn through the same fixture definitions, classifies parity separately from timing, and emits machine-readable headline artifacts. The scaled benchmark matrix separates correctness and Flow self-regression gates from non-blocking Flow-vs-sklearn competitive reporting.
 
 For that reason, performance results live with their methodology and raw benchmark data in the repository. If a result looks surprising, reproduce it before generalizing from it.
 
