@@ -3,8 +3,8 @@
 | Estimator | Operation | Class | Owner | Disposition | Priority |
 |---|---|---|---|---|---:|
 | `LogisticRegression` | `fit` | mixed | external | retain-native | 71.8 |
-| `KMeans` | `fit` | mixed | sklearn | already-equivalent | 69.8 |
-| `LinearRegression` | `fit` | mixed | sklearn | already-equivalent | 68.5 |
+| `KMeans` | `fit` | mixed | sklearn | already-equivalent | 69.7 |
+| `LinearRegression` | `fit` | mixed | sklearn | already-equivalent | 68.6 |
 | `RandomForestClassifier` | `fit` | mixed | sklearn | already-equivalent | 48.0 |
 | `RandomForestClassifier` | `predict` | mixed | sklearn | already-equivalent | 48.0 |
 | `RandomForestClassifier` | `predict_proba` | mixed | sklearn | already-equivalent | 48.0 |

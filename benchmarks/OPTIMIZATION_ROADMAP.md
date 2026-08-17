@@ -5,15 +5,15 @@ Generated from committed inventory/profile/benchmark evidence.
 | Rank | Estimator | Operation | Substrate | Score | Disposition | Observed Flow speedup | Hypothesis |
 |---:|---|---|---|---:|---|---:|---|
 | 1 | `GaussianNB` | `fit` | python-bound | 75.4 | rewrite first | 11.39× | remove Python control/validation and specialize the complete operation |
-| 2 | `PCA` | `fit` | python-bound | 74.2 | rewrite first | 5.34× | remove Python control/validation and specialize the complete operation |
-| 3 | `LogisticRegression` | `predict` | python-bound | 73.5 | rewrite first | 8.29× | remove Python control/validation and specialize the complete operation |
-| 4 | `GaussianNB` | `predict` | python-bound | 73.4 | rewrite first | 11.39× | remove Python control/validation and specialize the complete operation |
-| 5 | `PCA` | `transform` | python-bound | 73.3 | rewrite first | 5.34× | remove Python control/validation and specialize the complete operation |
-| 6 | `LinearRegression` | `predict` | python-bound | 73.2 | rewrite first | 3.44× | remove Python control/validation and specialize the complete operation |
+| 2 | `PCA` | `fit` | python-bound | 74.5 | rewrite first | 5.34× | remove Python control/validation and specialize the complete operation |
+| 3 | `LogisticRegression` | `predict` | python-bound | 73.8 | rewrite first | 8.29× | remove Python control/validation and specialize the complete operation |
+| 4 | `GaussianNB` | `predict` | python-bound | 73.7 | rewrite first | 11.39× | remove Python control/validation and specialize the complete operation |
+| 5 | `PCA` | `transform` | python-bound | 73.4 | rewrite first | 5.34× | remove Python control/validation and specialize the complete operation |
+| 6 | `LinearRegression` | `predict` | python-bound | 73.4 | rewrite first | 3.44× | remove Python control/validation and specialize the complete operation |
 | 7 | `LogisticRegression` | `fit` | mixed | 71.8 | rewrite first | 8.29× | remove Python control/validation and specialize the complete operation |
-| 8 | `KMeans` | `fit` | mixed | 69.8 | rewrite first | 2.51× | remove Python control/validation and specialize the complete operation |
-| 9 | `LinearRegression` | `fit` | mixed | 68.5 | rewrite first | 3.44× | remove Python control/validation and specialize the complete operation |
-| 10 | `KMeans` | `predict` | numpy-bound | 57.9 | rewrite first | 2.51× | remove Python control/validation and specialize the complete operation |
+| 8 | `KMeans` | `fit` | mixed | 69.7 | rewrite first | 2.51× | remove Python control/validation and specialize the complete operation |
+| 9 | `LinearRegression` | `fit` | mixed | 68.6 | rewrite first | 3.44× | remove Python control/validation and specialize the complete operation |
+| 10 | `KMeans` | `predict` | numpy-bound | 57.8 | rewrite first | 2.51× | remove Python control/validation and specialize the complete operation |
 | 11 | `GaussianNB` | `predict_proba` | python-bound | 54.0 | rewrite first | 11.39× | remove Python control/validation and specialize the complete operation |
 | 12 | `LogisticRegression` | `predict_proba` | python-bound | 54.0 | rewrite first | 8.29× | remove Python control/validation and specialize the complete operation |
 | 13 | `LogisticRegression` | `decision_function` | python-bound | 54.0 | rewrite first | 8.29× | remove Python control/validation and specialize the complete operation |
