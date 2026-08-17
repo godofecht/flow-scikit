@@ -1,18 +1,33 @@
-// Timing-unit correction and presentation helpers for the benchmark page.
-// bench_sklearn.py records perf_counter durations in seconds.
-// bench_flow.flow records durations in milliseconds via elapsed_ms().
-// The historical BENCH table copied the Python second values into fields
-// named *_ms. Convert them exactly once before the page renders.
+// Timing-unit compatibility and presentation helpers for the benchmark page.
+//
+// The committed historical BENCH dataset stores sklearn perf_counter durations
+// in seconds even though the fields are named *_ms. Pages deployment runs
+// benchmarks/normalize_published_timings.py, which converts those literals to
+// milliseconds before publishing. When the docs are opened directly from a
+// checkout, however, the legacy second-valued literals are still present.
+//
+// Therefore this browser compatibility layer must be idempotent: normalize a
+// legacy checkout exactly once, but never multiply an already-normalized Pages
+// build by another 1000x.
 
-(function correctBenchmarkUnits() {
+(function ensureBenchmarkMilliseconds() {
   const datasets = [BENCH.iris, BENCH.digits, BENCH.diabetes];
+  const rows = datasets.flat();
 
-  for (const rows of datasets) {
-    for (const row of rows) {
-      row.sk_ms *= 1000.0;
-      row.sk_fit *= 1000.0;
-      row.sk_pred *= 1000.0;
-    }
+  // In the committed legacy dataset every sklearn total is < 1 because those
+  // values are seconds; after normalization the same dataset has values up to
+  // hundreds of milliseconds. This discriminator is deliberately scoped to
+  // the historical 19-row dataset and should disappear once generated
+  // benchmark artifacts replace the legacy literals (#175/#176).
+  const maxSkTotal = Math.max(...rows.map(row => row.sk_ms));
+  const legacySeconds = maxSkTotal > 0 && maxSkTotal < 1;
+
+  if (!legacySeconds) return;
+
+  for (const row of rows) {
+    row.sk_ms *= 1000.0;
+    row.sk_fit *= 1000.0;
+    row.sk_pred *= 1000.0;
   }
 })();
 
@@ -21,8 +36,6 @@ function formatPythonResolution(value) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  // The original renderer is registered first, so this executes after its
-  // tables/charts are populated with the corrected BENCH values.
   const accuracyRows = [
     ...BENCH.iris,
     ...BENCH.digits,
