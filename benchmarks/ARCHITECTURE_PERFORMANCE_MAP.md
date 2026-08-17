@@ -6,21 +6,21 @@ This report is generated from the committed inventory, mixed-stack profiles, par
 
 | Algorithm | sklearn estimator | Dataset | Substrate | Parity | Flow/sklearn speedup | Python self share |
 |---|---|---|---|---|---:|---:|
-| `LogisticRegression` | `LogisticRegression` | iris | mixed | approximately equivalent | 14.02× | 76.2% |
+| `LogisticRegression` | `LogisticRegression` | iris | mixed | approximately equivalent | 14.02× | 76.4% |
 | `LinearSVC` | `LinearSVC` | iris | external-native-bound | approximately equivalent | 0.70× |  |
-| `KernelSVC_RBF` | `SVC` | iris | external-native-bound | approximately equivalent | 0.16× | 86.7% |
+| `KernelSVC_RBF` | `SVC` | iris | external-native-bound | approximately equivalent | 0.16× | 88.5% |
 | `DecisionTree` | `DecisionTreeClassifier` | iris | mixed | approximately equivalent | 4.20× |  |
 | `RandomForest` | `RandomForestClassifier` | iris | mixed | approximately equivalent | 9.63× |  |
-| `GaussianNB` | `GaussianNB` | iris | python-bound | parity verified | 22.55× | 77.9% |
-| `KMeans` | `KMeans` | iris | mixed | approximately equivalent | 4.97× | 83.5% |
-| `PCA` | `PCA` | iris | python-bound | parity verified | 5.34× | 76.7% |
-| `LogisticRegression` | `LogisticRegression` | digits | mixed | approximately equivalent | 2.57× | 76.2% |
+| `GaussianNB` | `GaussianNB` | iris | python-bound | parity verified | 22.55× | 78.2% |
+| `KMeans` | `KMeans` | iris | mixed | approximately equivalent | 4.97× | 84.4% |
+| `PCA` | `PCA` | iris | python-bound | parity verified | 5.34× | 76.8% |
+| `LogisticRegression` | `LogisticRegression` | digits | mixed | approximately equivalent | 2.57× | 76.4% |
 | `LinearSVC` | `LinearSVC` | digits | external-native-bound | approximately equivalent | 0.22× |  |
-| `KernelSVC_RBF` | `SVC` | digits | external-native-bound | approximately equivalent | 0.07× | 86.7% |
+| `KernelSVC_RBF` | `SVC` | digits | external-native-bound | approximately equivalent | 0.07× | 88.5% |
 | `DecisionTree` | `DecisionTreeClassifier` | digits | mixed | approximately equivalent | 0.18× |  |
 | `RandomForest` | `RandomForestClassifier` | digits | mixed | approximately equivalent | 0.26× |  |
-| `GaussianNB` | `GaussianNB` | digits | python-bound | parity verified | 0.23× | 77.9% |
-| `KMeans` | `KMeans` | digits | mixed | approximately equivalent | 0.04× | 83.5% |
+| `GaussianNB` | `GaussianNB` | digits | python-bound | parity verified | 0.23× | 78.2% |
+| `KMeans` | `KMeans` | digits | mixed | approximately equivalent | 0.04× | 84.4% |
 | `Ridge` | `Ridge` | diabetes | python-bound | approximately equivalent | 2.85× |  |
 | `Lasso` | `Lasso` | diabetes | mixed | approximately equivalent | 0.02× |  |
 | `LinearRegression` | `LinearRegression` | diabetes | mixed | parity verified | 3.44× | 75.5% |
