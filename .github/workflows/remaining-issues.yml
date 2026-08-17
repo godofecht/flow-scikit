@@ -124,14 +124,12 @@ jobs:
             benchmarks/ARCHITECTURE_PERFORMANCE_MAP.md
 
   freeze-results:
-    name: Freeze validated evidence
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    name: Freeze validated evidence on main
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [kmeans-parity, architecture-map]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
       - uses: actions/download-artifact@v4
         with:
           name: canonical-19of19-${{ github.run_id }}
@@ -152,4 +150,4 @@ jobs:
             exit 0
           fi
           git commit -m "Freeze validated sklearn architecture and 19/19 benchmark evidence [skip ci]"
-          git push origin HEAD:${{ github.head_ref }}
+          git push origin HEAD:main
