@@ -17,10 +17,14 @@ a { color: #9db9ff; }
 header, main { width: min(1040px, calc(100% - 32px)); margin: 0 auto; }
 header { padding: 44px 0 28px; }
 h1 { margin: 0 0 10px; font-size: clamp(30px, 6vw, 54px); letter-spacing: -.045em; line-height: 1; }
-.sub { margin: 0; color: #9da3b4; font-size: 15px; max-width: 760px; }
+h2 { margin: 0; font-size: 20px; letter-spacing: -.02em; }
+.sub, .muted { color: #9da3b4; }
+.sub { margin: 0; font-size: 15px; max-width: 780px; }
 .pipeline { display: inline-flex; margin-top: 18px; padding: 7px 10px; border: 1px solid #303647; border-radius: 999px; background: #10131a; color: #a8c0ff; font: 12px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; }
 main { padding-bottom: 48px; display: grid; gap: 16px; }
-.panel { border: 1px solid #252a36; border-radius: 14px; background: rgba(16,18,24,.88); box-shadow: 0 18px 60px rgba(0,0,0,.22); }
+.panel { border: 1px solid #252a36; border-radius: 14px; background: rgba(16,18,24,.88); box-shadow: 0 18px 60px rgba(0,0,0,.22); overflow: hidden; }
+.section-head { padding: 18px 18px 0; display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.section-head p { margin: 0; font-size: 12px; }
 .inputs { padding: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 label { display: grid; gap: 7px; color: #b8bdca; font-size: 12px; }
 textarea, input { width: 100%; border: 1px solid #303647; border-radius: 8px; background: #090b10; color: #eef1f7; padding: 11px 12px; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; outline: none; }
@@ -30,61 +34,84 @@ textarea:focus, input:focus { border-color: #6d8ee8; }
 .controls label { width: 120px; }
 button { border: 0; border-radius: 8px; padding: 11px 18px; background: #8aabff; color: #0a0c11; font: inherit; font-weight: 700; cursor: pointer; }
 button:disabled { opacity: .5; cursor: progress; }
-#status { color: #8f96a8; font-size: 12px; }
-.results { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; overflow: hidden; }
-.metric { padding: 20px; background: #11141b; }
-.metric span { display: block; color: #858c9d; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.status { color: #8f96a8; font-size: 12px; }
+.results, .demo-grid { display: grid; gap: 1px; background: #252a36; }
+.results { grid-template-columns: repeat(4, 1fr); }
+.demo-grid { grid-template-columns: repeat(3, 1fr); }
+.metric, .demo-card { padding: 20px; background: #11141b; }
+.metric span, .demo-card span { display: block; color: #858c9d; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
 .metric strong { display: block; margin-top: 8px; font: 600 31px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: #c9d7ff; }
-.proof { padding: 18px; color: #979eae; font-size: 13px; display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+.demo-card strong { display: block; margin-top: 8px; font: 600 22px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: #c9d7ff; }
+.demo-card small { display: block; margin-top: 8px; color: #777f91; font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.proof { padding: 18px; color: #979eae; font-size: 13px; display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; border-top: 1px solid #252a36; }
 .proof code { color: #cbd5ed; }
 .error { color: #ff8e9d !important; }
 @media (max-width: 720px) {
   .inputs { grid-template-columns: 1fr; }
   .controls { grid-column: 1; }
   .results { grid-template-columns: 1fr 1fr; }
+  .demo-grid { grid-template-columns: 1fr 1fr; }
 }
+@media (max-width: 480px) { .demo-grid { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 <header>
   <h1>flow-scikit in the browser</h1>
-  <p class="sub">Strict flow-scikit metric kernels execute locally in WebAssembly. Edit the labels, run them again, and the results are computed by Flow inside your browser.</p>
+  <p class="sub">Flow metric and numerical kernels execute locally in WebAssembly. The modules below are rebuilt from the checked-in Flow source on every Pages deployment.</p>
   <div class="pipeline">Flow → MLIR → LLVM IR → wasm32 · no generated C · no Emscripten</div>
 </header>
 
 <main>
-  <section class="panel inputs">
-    <label>Ground truth<textarea id="truth">1, 1, 1, 0, 0, 0, 1, 0</textarea></label>
-    <label>Predictions<textarea id="pred">1, 1, 0, 0, 1, 0, 1, 0</textarea></label>
-    <div class="controls">
-      <label>Positive label<input id="pos" type="number" value="1" step="any"></label>
-      <button id="run" type="button" disabled>Run in Flow</button>
-      <span id="status">loading direct wasm…</span>
+  <section class="panel">
+    <div class="section-head"><h2>Classification metrics</h2><p class="muted">real flow-scikit binary metric kernels</p></div>
+    <div class="inputs">
+      <label>Ground truth<textarea id="truth">1, 1, 1, 0, 0, 0, 1, 0</textarea></label>
+      <label>Predictions<textarea id="pred">1, 1, 0, 0, 1, 0, 1, 0</textarea></label>
+      <div class="controls">
+        <label>Positive label<input id="pos" type="number" value="1" step="any"></label>
+        <button id="run-metrics" type="button" disabled>Run metrics</button>
+        <span id="metrics-status" class="status">loading direct wasm…</span>
+      </div>
     </div>
+    <div class="results" aria-live="polite">
+      <div class="metric"><span>Accuracy</span><strong id="accuracy">—</strong></div>
+      <div class="metric"><span>Precision</span><strong id="precision">—</strong></div>
+      <div class="metric"><span>Recall</span><strong id="recall">—</strong></div>
+      <div class="metric"><span>F1</span><strong id="f1">—</strong></div>
+    </div>
+    <div class="proof"><span>Source: <a href="browser_mlir.flow"><code>browser_mlir.flow</code></a></span><span><code>browser_mlir.wasm</code> · import-free</span></div>
   </section>
 
-  <section class="panel results" aria-live="polite">
-    <div class="metric"><span>Accuracy</span><strong id="accuracy">—</strong></div>
-    <div class="metric"><span>Precision</span><strong id="precision">—</strong></div>
-    <div class="metric"><span>Recall</span><strong id="recall">—</strong></div>
-    <div class="metric"><span>F1</span><strong id="f1">—</strong></div>
-  </section>
-
-  <section class="panel proof">
-    <span>Source: <a href="browser_mlir.flow"><code>browser_mlir.flow</code></a></span>
-    <span>Artifact: <code>browser_mlir.wasm</code>, rebuilt from source on every Pages deployment</span>
+  <section class="panel">
+    <div class="section-head"><h2>Numerical kernel lab</h2><p class="muted">a second direct Flow wasm module</p></div>
+    <div class="inputs">
+      <label>Input vector<textarea id="vector-a">1, 2, 3</textarea></label>
+      <label>Prototype vector<textarea id="vector-b">1, 0, 4</textarea></label>
+      <div class="controls">
+        <button id="run-distance" type="button" disabled>Run distance kernel</button>
+        <span id="demo-status" class="status">loading direct wasm…</span>
+      </div>
+    </div>
+    <div class="results"><div class="metric"><span>Squared distance</span><strong id="distance">—</strong></div></div>
+    <div class="demo-grid" aria-live="polite">
+      <div class="demo-card"><span>Home price</span><strong id="home-price">—</strong><small>100 m² · 3 rooms · 10 years</small></div>
+      <div class="demo-card"><span>Payment risk</span><strong id="payment-risk">—</strong><small>0.5 util · 2 late · 0.25 debt</small></div>
+      <div class="demo-card"><span>Standardise</span><strong id="standardise">—</strong><small>value 10 · mean 4 · σ 2</small></div>
+      <div class="demo-card"><span>|z| score</span><strong id="z-score">—</strong><small>value 2 · mean 4 · σ 1</small></div>
+      <div class="demo-card"><span>Point distance</span><strong id="point-distance">—</strong><small>(1,2) → (4,6)</small></div>
+      <div class="demo-card"><span>Delivery ETA</span><strong id="eta">—</strong><small>10 km · 2 stops · 50 congestion</small></div>
+      <div class="demo-card"><span>Message risk</span><strong id="message-risk">—</strong><small>1 link · 0.2 caps · unknown</small></div>
+      <div class="demo-card"><span>Stock cover</span><strong id="stock-cover">—</strong><small>100 units · 5/day</small></div>
+      <div class="demo-card"><span>Tolerance deviation</span><strong id="tolerance">—</strong><small>12 measured · 10 target · ±0.5</small></div>
+    </div>
+    <div class="proof"><span>Source: <a href="mnist_demo.flow"><code>mnist_demo.flow</code></a></span><span><code>mnist_demo.wasm</code> · import-free</span></div>
   </section>
 </main>
 
 <script type="module">
 import {loadFlowScikitWasm} from "./browser_mlir.mjs";
-
-const truth = document.getElementById("truth");
-const pred = document.getElementById("pred");
-const pos = document.getElementById("pos");
-const run = document.getElementById("run");
-const status = document.getElementById("status");
-const output = Object.fromEntries(["accuracy", "precision", "recall", "f1"].map(name => [name, document.getElementById(name)]));
+import {loadFlowScikitDemoWasm} from "./mnist_demo.mjs";
 
 function parseValues(text) {
   const values = text.trim().split(/[\s,]+/).filter(Boolean).map(Number);
@@ -94,37 +121,71 @@ function parseValues(text) {
   return values;
 }
 
-function show(name, value) {
-  output[name].textContent = Number(value).toFixed(6);
+function display(id, value, digits = 6) {
+  document.getElementById(id).textContent = Number(value).toFixed(digits);
 }
 
-try {
-  const api = await loadFlowScikitWasm();
-  run.disabled = false;
-  status.textContent = "wasm ready";
+const runMetrics = document.getElementById("run-metrics");
+const runDistance = document.getElementById("run-distance");
+const metricsStatus = document.getElementById("metrics-status");
+const demoStatus = document.getElementById("demo-status");
 
-  function execute() {
+try {
+  const [metrics, demo] = await Promise.all([loadFlowScikitWasm(), loadFlowScikitDemoWasm()]);
+  runMetrics.disabled = false;
+  runDistance.disabled = false;
+  metricsStatus.textContent = "wasm ready";
+  demoStatus.textContent = "wasm ready";
+
+  function executeMetrics() {
     try {
-      const yTrue = parseValues(truth.value);
-      const yPred = parseValues(pred.value);
-      const posLabel = Number(pos.value);
-      show("accuracy", api.accuracy(yTrue, yPred));
-      show("precision", api.precision(yTrue, yPred, posLabel));
-      show("recall", api.recall(yTrue, yPred, posLabel));
-      show("f1", api.f1(yTrue, yPred, posLabel));
-      status.classList.remove("error");
-      status.textContent = `${yTrue.length} samples · executed locally`;
+      const yTrue = parseValues(document.getElementById("truth").value);
+      const yPred = parseValues(document.getElementById("pred").value);
+      const posLabel = Number(document.getElementById("pos").value);
+      display("accuracy", metrics.accuracy(yTrue, yPred));
+      display("precision", metrics.precision(yTrue, yPred, posLabel));
+      display("recall", metrics.recall(yTrue, yPred, posLabel));
+      display("f1", metrics.f1(yTrue, yPred, posLabel));
+      metricsStatus.classList.remove("error");
+      metricsStatus.textContent = `${yTrue.length} samples · executed locally`;
     } catch (error) {
-      status.classList.add("error");
-      status.textContent = error.message;
+      metricsStatus.classList.add("error");
+      metricsStatus.textContent = error.message;
     }
   }
 
-  run.addEventListener("click", execute);
-  execute();
+  function executeDistance() {
+    try {
+      const a = parseValues(document.getElementById("vector-a").value);
+      const b = parseValues(document.getElementById("vector-b").value);
+      display("distance", demo.squaredDistance(a, b));
+      demoStatus.classList.remove("error");
+      demoStatus.textContent = `${a.length} dimensions · executed locally`;
+    } catch (error) {
+      demoStatus.classList.add("error");
+      demoStatus.textContent = error.message;
+    }
+  }
+
+  display("home-price", demo.homePriceEstimate(100, 3, 10), 0);
+  display("payment-risk", demo.paymentRisk(0.5, 2, 0.25), 3);
+  display("standardise", demo.standardiseValue(10, 4, 2), 3);
+  display("z-score", demo.absoluteZScore(2, 4, 1), 3);
+  display("point-distance", demo.pointDistance(1, 2, 4, 6), 3);
+  display("eta", demo.deliveryEtaMinutes(10, 2, 50), 3);
+  display("message-risk", demo.messageRisk(1, 0.2, 1), 3);
+  display("stock-cover", demo.stockCoverDays(100, 5), 3);
+  display("tolerance", demo.toleranceDeviation(12, 10, 0.5), 3);
+
+  runMetrics.addEventListener("click", executeMetrics);
+  runDistance.addEventListener("click", executeDistance);
+  executeMetrics();
+  executeDistance();
 } catch (error) {
-  status.classList.add("error");
-  status.textContent = `failed to load wasm: ${error.message}`;
+  metricsStatus.classList.add("error");
+  demoStatus.classList.add("error");
+  metricsStatus.textContent = `failed to load wasm: ${error.message}`;
+  demoStatus.textContent = metricsStatus.textContent;
 }
 </script>
 </body>
