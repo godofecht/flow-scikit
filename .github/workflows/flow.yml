@@ -30,6 +30,11 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/.flow-toolchain/src
         run: python .github/scripts/verify_flow_sources.py
 
+      - name: Audit published benchmark timing units
+        run: |
+          python benchmarks/normalize_published_timings.py
+          python benchmarks/validate_published_timings.py
+
   run-all:
     name: Run all tests and examples
     runs-on: ubuntu-latest
