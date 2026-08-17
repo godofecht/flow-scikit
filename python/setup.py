@@ -32,8 +32,8 @@ else:
 extension = Extension(
     "flow_scikit._flow_scikit_native",
     sources=[
-        str(HERE / "src" / "flow_scikit" / "_native.c"),
-        str(GENERATED),
+        "src/flow_scikit/_native.c",
+        "generated/flow_scikit_native.c",
     ],
     libraries=libraries,
     extra_compile_args=["-O3"],
