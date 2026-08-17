@@ -14,6 +14,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Preserve frozen disparity baseline
+        run: |
+          if [ -f benchmarks/disparity_report.json ]; then
+            cp benchmarks/disparity_report.json /tmp/disparity_report.baseline.json
+          fi
       - uses: actions/checkout@v4
         with:
           repository: flooooooooooow/flow
@@ -38,18 +43,35 @@ jobs:
         run: python benchmarks/run_headline.py --repeats 3
       - name: Apply evidence-backed KMeans equivalence gate
         run: python benchmarks/finalize_kmeans_parity.py
-      - name: Require all 19 rows parity eligible
+      - name: Generate persistent disparity report
+        run: |
+          cp benchmarks/headline_summary.json benchmarks/headline_result_v2.json
+          python benchmarks/generate_disparity_report.py
+      - name: Gate disparity regressions and append history
+        run: |
+          if [ -f /tmp/disparity_report.baseline.json ]; then
+            python benchmarks/check_disparity_regression.py --baseline /tmp/disparity_report.baseline.json
+          else
+            python benchmarks/check_disparity_regression.py --baseline /tmp/no-disparity-baseline.json
+          fi
+      - name: Require all 19 rows parity eligible and disparities retained
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
           result = json.loads(Path('benchmarks/headline_summary.json').read_text())
+          disparity = json.loads(Path('benchmarks/disparity_report.json').read_text())
+          history = json.loads(Path('benchmarks/disparity_history.json').read_text())
           c = result['counts']
           assert c['total_rows'] == 19, c
           assert c['eligible_comparisons'] == 19, c
           assert c['parity_unresolved'] == 0, c
           assert c['measurement_unresolved'] == 0, c
-          print(c)
+          assert disparity['counts']['rows'] == 19, disparity['counts']
+          assert disparity['counts']['rows_with_tracked_disparity'] > 0, disparity['counts']
+          assert disparity['counts']['strict_final_status_disagreements'] >= 1, disparity['counts']
+          assert history['snapshots'], history
+          print({'headline': c, 'disparity': disparity['counts'], 'history_snapshots': len(history['snapshots'])})
           PY
       - uses: actions/upload-artifact@v4
         with:
@@ -60,7 +82,10 @@ jobs:
             benchmarks/flow_results_v2.txt
             benchmarks/headline_rows.json
             benchmarks/headline_summary.json
+            benchmarks/headline_result_v2.json
             benchmarks/parity_diagnostics.json
+            benchmarks/disparity_report.json
+            benchmarks/disparity_history.json
             benchmarks/headline_environment.json
 
   architecture-map:
@@ -149,5 +174,5 @@ jobs:
             echo 'Generated evidence already current.'
             exit 0
           fi
-          git commit -m "Freeze validated sklearn architecture and 19/19 benchmark evidence [skip ci]"
+          git commit -m "Freeze validated benchmark, disparity history, and architecture evidence [skip ci]"
           git push origin HEAD:main

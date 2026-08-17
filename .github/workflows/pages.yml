@@ -47,7 +47,11 @@ jobs:
         run: python tools/build_browser_wasm.py --flow-repo .flow-toolchain
       - name: Smoke direct browser WebAssembly API
         run: node tools/smoke_browser_wasm.mjs docs/wasm/browser_mlir.wasm
-      - name: Generate canonical v2 benchmark headline
+      - name: Regenerate canonical disparity evidence
+        run: python benchmarks/generate_disparity_report.py
+      - name: Materialize disparity history for this Pages build
+        run: python benchmarks/check_disparity_regression.py --baseline /tmp/no-disparity-baseline.json --commit "${GITHUB_SHA}"
+      - name: Publish canonical benchmark, disparity, history and architecture evidence
         run: python benchmarks/publish_headline_v2.py
       - name: Normalize legacy sklearn timings to milliseconds
         run: python benchmarks/normalize_published_timings.py
