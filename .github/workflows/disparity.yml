@@ -21,6 +21,8 @@ jobs:
           python-version: "3.12"
       - name: Generate disparity evidence
         run: python benchmarks/generate_disparity_report.py
+      - name: Audit learned-state diagnostic coverage
+        run: python benchmarks/model_state_coverage.py
       - name: Validate persistent disparity accounting
         run: |
           python - <<'PY'
@@ -28,14 +30,21 @@ jobs:
           from pathlib import Path
 
           report = json.loads(Path("benchmarks/disparity_report.json").read_text())
+          coverage = json.loads(Path("benchmarks/model_state_coverage.json").read_text())
           counts = report["counts"]
           assert counts["rows"] == 19, counts
           assert len(report["rows"]) == 19, len(report["rows"])
           assert all("disparity_dimensions" in row for row in report["rows"])
           assert all("runtime_ratio_sklearn_over_flow" in row for row in report["rows"])
-          print(counts)
+          assert all("model_state_diagnostics" in row for row in report["rows"])
+          assert coverage["counts"]["canonical_rows"] == 19, coverage["counts"]
+          assert coverage["counts"]["covered_rows"] == counts["rows_with_model_state_diagnostics"], (coverage["counts"], counts)
+          assert coverage["counts"]["covered_rows"] > 0, coverage["counts"]
+          print({"disparity": counts, "model_state_coverage": coverage["counts"]})
           PY
       - uses: actions/upload-artifact@v4
         with:
           name: benchmark-disparity-${{ github.run_id }}
-          path: benchmarks/disparity_report.json
+          path: |
+            benchmarks/disparity_report.json
+            benchmarks/model_state_coverage.json
