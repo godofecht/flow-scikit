@@ -35,6 +35,30 @@ jobs:
           python benchmarks/normalize_published_timings.py
           python benchmarks/validate_published_timings.py
 
+      - name: Validate benchmark contracts and fixtures
+        run: |
+          python benchmarks/fixtures.py
+          python benchmarks/test_generate_headline_summary.py
+          python -m py_compile \
+            benchmarks/timing.py \
+            benchmarks/fixtures.py \
+            benchmarks/bench_sklearn_v2.py \
+            benchmarks/compare_v2.py \
+            benchmarks/run_headline.py \
+            benchmarks/bench_scaled_sklearn.py \
+            benchmarks/compare_scaled.py \
+            benchmarks/check_flow_regression.py
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          contract = json.loads(Path('benchmarks/parity_contract.json').read_text())
+          rows = contract['rows']
+          assert len(rows) == 19, len(rows)
+          assert len({(r['algorithm'], r['dataset'], r['metric']) for r in rows}) == 19
+          assert all(r['category'] in {'supervised', 'clustering', 'decomposition'} for r in rows)
+          print('benchmark contract: 19 unique rows OK')
+          PY
+
   run-all:
     name: Run all tests and examples
     runs-on: ubuntu-latest
@@ -64,3 +88,100 @@ jobs:
           FLOW_OPT_LEVEL: "0"
           FLOW_LDFLAGS: "-lm -lopenblas"
         run: python tools/run_all.py
+
+  benchmark-contract:
+    name: Canonical benchmark contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: flooooooooooow/flow
+          ref: 3f6031813912e8f77bcebe18c5b25dc35861216b
+          path: .flow-toolchain
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install benchmark dependencies
+        run: |
+          pip install -r .flow-toolchain/requirements.txt
+          pip install numpy scikit-learn
+          sudo apt-get update && sudo apt-get install -y libopenblas-dev
+
+      - name: Run canonical sklearn benchmark once
+        run: python benchmarks/bench_sklearn_v2.py > benchmarks/sklearn_results_v2.txt
+
+      - name: Run canonical Flow benchmark once
+        env:
+          FLOW_HOST: python
+          FLOW_OPT_LEVEL: "0"
+          FLOW_LDFLAGS: "-lm -lopenblas"
+        run: ${{ github.workspace }}/.flow-toolchain/flow run benchmarks/bench_flow_v2.flow > benchmarks/flow_results_v2.txt
+
+      - name: Compare under parity contract
+        run: python benchmarks/compare_v2.py --environment-id ci-${{ github.run_id }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: headline-benchmark-${{ github.run_id }}
+          path: |
+            benchmarks/sklearn_results_v2.txt
+            benchmarks/flow_results_v2.txt
+            benchmarks/headline_rows.json
+            benchmarks/headline_summary.json
+            benchmarks/parity_diagnostics.json
+
+  scaled-report:
+    name: Scaled benchmark report
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: flooooooooooow/flow
+          ref: 3f6031813912e8f77bcebe18c5b25dc35861216b
+          path: .flow-toolchain
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install benchmark dependencies
+        run: |
+          pip install -r .flow-toolchain/requirements.txt
+          pip install numpy scikit-learn
+          sudo apt-get update && sudo apt-get install -y libopenblas-dev
+
+      - name: Run scaled sklearn matrix through 10k rows
+        run: python benchmarks/bench_scaled_sklearn.py --max-rows 10000 --output benchmarks/scaled_sklearn.json
+
+      - name: Run scaled Flow matrix through 10k rows
+        env:
+          FLOW_HOST: python
+          FLOW_OPT_LEVEL: "0"
+          FLOW_LDFLAGS: "-lm -lopenblas"
+        run: ${{ github.workspace }}/.flow-toolchain/flow run benchmarks/bench_scaled.flow > benchmarks/scaled_flow.txt
+
+      - name: Generate non-blocking competitive report
+        run: python benchmarks/compare_scaled.py benchmarks/scaled_flow.txt benchmarks/scaled_sklearn.json --output benchmarks/scaled_comparison.json
+
+      - name: Gate Flow against committed self baseline when present
+        run: |
+          if [ -f benchmarks/scaled_flow_baseline.json ]; then
+            python benchmarks/check_flow_regression.py benchmarks/scaled_flow.json benchmarks/scaled_flow_baseline.json
+          else
+            echo 'No committed Flow self-performance baseline yet; report only.'
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scaled-benchmark-${{ github.run_id }}
+          path: |
+            benchmarks/scaled_sklearn.json
+            benchmarks/scaled_flow.txt
+            benchmarks/scaled_comparison.json
