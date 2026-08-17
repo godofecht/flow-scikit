@@ -1,0 +1,128 @@
+import "lib/scikit/scikit.flow"
+
+extern {
+    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+    function log(x: f64) -> f64
+    function exp(x: f64) -> f64
+    function printf(fmt: string, ...) -> i32
+}
+
+const TIME_UTC: i32 = 1
+
+function now_ns() -> i64 {
+    let ts: ptr<i64> = malloc(16) as ptr<i64>
+    timespec_get(ts, TIME_UTC)
+    let value: i64 = ts[0] * 1000000000 + ts[1]
+    free(ts as ptr<void>)
+    return value
+}
+
+# Pre-#317 reference implementation kept only for direct A/B timing.
+function reference_predict_proba(model: GaussianNB, X: Matrix) -> Matrix {
+    let probs: Matrix = matrix_new(X.rows, model.n_classes)
+
+    for i in 0 to X.rows {
+        let log_probs: ptr<f32> = array_new_f32(model.n_classes)
+        let mut max_lp: f32 = -9999999999.0
+
+        for c in 0 to model.n_classes {
+            let mut lp: f32 = log(model.priors[c] as f64) as f32
+            for j in 0 to model.n_features {
+                let value: f32 = matrix_at(X, i, j)
+                let mean: f32 = model.means[c][j]
+                let variance: f32 = model.variances[c][j]
+                let diff: f32 = value - mean
+                lp = lp - 0.5 * (log((2.0 * 3.14159265358979) as f64) as f32)
+                lp = lp - 0.5 * (log(variance as f64) as f32)
+                lp = lp - diff * diff / (2.0 * variance)
+            }
+            log_probs[c] = lp
+            if lp > max_lp { max_lp = lp }
+        }
+
+        let mut total: f32 = 0.0
+        for c in 0 to model.n_classes {
+            let probability: f32 = exp((log_probs[c] - max_lp) as f64) as f32
+            matrix_set(probs, i, c, probability)
+            total = total + probability
+        }
+        for c in 0 to model.n_classes {
+            matrix_set(probs, i, c, matrix_at(probs, i, c) / total)
+        }
+        array_free_f32(log_probs)
+    }
+    return probs
+}
+
+function abs_f32(x: f32) -> f32 {
+    if x < 0.0 { return -x }
+    return x
+}
+
+function main() -> i32 {
+    let n_train: i32 = 1000
+    let n_query: i32 = 1000
+    let p: i32 = 32
+    let repeats: i32 = 6
+
+    let train: Matrix = matrix_new(n_train, p)
+    let labels: ptr<f32> = array_new_f32(n_train)
+    for i in 0 to n_train {
+        let cls: i32 = i % 2
+        labels[i] = cls as f32
+        for j in 0 to p {
+            let noise: f32 = (((i * 37 + j * 19) % 101) as f32) / 101.0
+            matrix_set(train, i, j, (cls as f32) * 2.0 + noise + (j as f32) * 0.01)
+        }
+    }
+
+    let model: GaussianNB = gaussian_nb_fit(train, labels, 2, 0.000000001)
+    let query: Matrix = matrix_new(n_query, p)
+    for i in 0 to n_query {
+        let cls: i32 = (i + 1) % 2
+        for j in 0 to p {
+            let noise: f32 = (((i * 29 + j * 13) % 97) as f32) / 97.0
+            matrix_set(query, i, j, (cls as f32) * 2.0 + noise + (j as f32) * 0.01)
+        }
+    }
+
+    # First lock numerical parity on the same input.
+    let reference_once: Matrix = reference_predict_proba(model, query)
+    let optimized_once: Matrix = gaussian_nb_predict_proba(model, query)
+    for i in 0 to n_query {
+        for c in 0 to 2 {
+            if abs_f32(matrix_at(reference_once, i, c) - matrix_at(optimized_once, i, c)) > 0.00001 {
+                println("FAIL: optimized GaussianNB predict_proba changed probabilities")
+                return 1
+            }
+        }
+    }
+    matrix_free(reference_once)
+    matrix_free(optimized_once)
+
+    let start_reference: i64 = now_ns()
+    for r in 0 to repeats {
+        let output: Matrix = reference_predict_proba(model, query)
+        matrix_free(output)
+    }
+    let end_reference: i64 = now_ns()
+
+    let start_optimized: i64 = now_ns()
+    for r in 0 to repeats {
+        let output: Matrix = gaussian_nb_predict_proba(model, query)
+        matrix_free(output)
+    }
+    let end_optimized: i64 = now_ns()
+
+    let reference_ms: f64 = ((end_reference - start_reference) as f64) / 1000000.0
+    let optimized_ms: f64 = ((end_optimized - start_optimized) as f64) / 1000000.0
+    printf("GaussianNB predict_proba A/B: reference=%.6f ms optimized=%.6f ms speedup=%.3fx\n", reference_ms, optimized_ms, reference_ms / optimized_ms)
+
+    matrix_free(query)
+    gaussian_nb_free(model)
+    matrix_free(train)
+    array_free_f32(labels)
+
+    println("OK: GaussianNB predict_proba preserves reference probabilities")
+    return 0
+}
