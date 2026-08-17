@@ -4,7 +4,7 @@
 EXPECTED_TIMING_UNIT = "ms"
 
 
-def parse_results(path):
+def parse_results(path, require_unit=False):
     results = {}
     timing_unit = None
     with open(path) as f:
@@ -17,14 +17,18 @@ def parse_results(path):
                 key = (parts[1], parts[2], parts[3])
                 results[key] = (float(parts[4]), float(parts[5]), float(parts[6]))
 
-    if timing_unit != EXPECTED_TIMING_UNIT:
+    if timing_unit is not None and timing_unit != EXPECTED_TIMING_UNIT:
         raise ValueError(
             f"{path}: expected TIMING_UNIT|{EXPECTED_TIMING_UNIT}, got {timing_unit!r}"
         )
+    if require_unit and timing_unit is None:
+        raise ValueError(f"{path}: missing TIMING_UNIT|{EXPECTED_TIMING_UNIT}")
     return results
 
 
-sklearn_results = parse_results("benchmarks/sklearn_results.txt")
+# New sklearn output must declare milliseconds explicitly. Flow's current
+# benchmark already computes elapsed_ms() but predates the unit marker.
+sklearn_results = parse_results("benchmarks/sklearn_results.txt", require_unit=True)
 flow_results = parse_results("benchmarks/flow_results.txt")
 
 print("=" * 100)
@@ -50,7 +54,8 @@ for key in all_keys:
 
 print("=" * 100)
 print("\nNotes:")
-print("- All benchmark inputs must declare TIMING_UNIT|ms")
+print("- sklearn benchmark input must declare TIMING_UNIT|ms")
+print("- Flow output is already milliseconds via elapsed_ms(); an explicit marker is still pending")
 print("- Displayed times are milliseconds (fit + predict combined)")
 print("- No implicit unit conversion is performed")
 print("- Speedup > 1x means flow-scikit is faster")
