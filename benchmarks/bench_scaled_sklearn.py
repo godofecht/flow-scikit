@@ -22,12 +22,14 @@ FEATURE_COUNTS = [8, 32]
 
 
 def data(n: int, p: int):
-    rng = np.random.default_rng(42 + n * 17 + p)
-    X = rng.standard_normal((n, p), dtype=np.float32)
-    weights = np.linspace(0.25, 1.25, p, dtype=np.float32)
-    signal = X @ weights
-    y_class = (signal > np.median(signal)).astype(np.float32)
-    y_reg = (signal + rng.standard_normal(n, dtype=np.float32) * 0.05).astype(np.float32)
+    i = np.arange(n, dtype=np.int64)[:, None]
+    j = np.arange(p, dtype=np.int64)[None, :]
+    raw = (i * 131 + j * 17 + n * 3 + p * 11) % 1000
+    X = (raw.astype(np.float32) / 500.0 - 1.0).astype(np.float32)
+    weights = (0.25 + np.arange(p, dtype=np.float32) / float(p)).astype(np.float32)
+    signal = (X @ weights).astype(np.float32)
+    y_class = (signal > 0.0).astype(np.float32)
+    y_reg = signal
     return X, y_class, y_reg
 
 
@@ -61,7 +63,7 @@ def main() -> int:
             X, yc, yr = data(n, p)
             split = max(1, int(n * 0.8))
             Xtr, Xte = X[:split], X[split:]
-            yctr, ycte = yc[:split], yc[split:]
+            yctr = yc[:split]
             yrtr = yr[:split]
 
             fit_t = measure(lambda: LinearRegression().fit(Xtr, yrtr), min_window_ms=10.0, samples=5)
@@ -89,6 +91,7 @@ def main() -> int:
 
     payload = {
         "schema_version": 1,
+        "fixture": "deterministic formula shared with benchmarks/bench_scaled.flow",
         "environment": {"python": platform.python_version(), "platform": platform.platform(), "sklearn": sklearn.__version__, "numpy": np.__version__},
         "rows": rows,
     }
