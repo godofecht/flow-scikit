@@ -226,6 +226,45 @@ function test_validation_naming() -> i32 {
     return 0
 }
 
+function test_group_kfold() -> i32 {
+    println("Test: GroupKFold")
+
+    let n: i32 = 20
+    let groups: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        groups[i] = i / 4
+    }
+
+    let gkf: GroupKFold = group_kfold_init(3, n)
+    let result: GroupCVResult = group_kfold_split(gkf, groups, n)
+
+    if result.n_splits != 3 {
+        println("  FAIL: expected 3 splits")
+        group_cv_result_free(result)
+        free(groups as ptr<void>)
+        return 1
+    }
+
+    let mut all_ok: bool = true
+    for i in 0 to result.n_splits {
+        if result.n_train_arr[i] + result.n_test_arr[i] != n {
+            all_ok = false
+        }
+    }
+
+    if not all_ok {
+        println("  FAIL: GroupKFold splits should cover all samples")
+        group_cv_result_free(result)
+        free(groups as ptr<void>)
+        return 1
+    }
+
+    println("  OK")
+    group_cv_result_free(result)
+    free(groups as ptr<void>)
+    return 0
+}
+
 function main() -> i32 {
     println("Running model_selection and API tests...")
     println("========================================")
@@ -233,6 +272,8 @@ function main() -> i32 {
 
     let mut failures: i32 = 0
 
+    if test_group_kfold() != 0 { failures = failures + 1 }
+    println("")
     if test_train_test_split_stratify() != 0 { failures = failures + 1 }
     println("")
     if test_train_test_split_no_stratify() != 0 { failures = failures + 1 }
