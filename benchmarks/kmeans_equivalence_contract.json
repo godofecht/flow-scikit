@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "algorithm": "KMeans",
+  "dataset": "digits",
+  "metric": "adjusted_rand_index",
+  "parity_status_when_satisfied": "approximately equivalent",
+  "ari_absolute_tolerance": 0.07,
+  "inertia_relative_tolerance": 0.10,
+  "required_audit": "benchmarks/kmeans_semantics_audit.json",
+  "rationale": "The canonical implementations diverge at k-means++ initialization because sklearn consumes NumPy RandomState/MT19937 with greedy local trials while Flow uses xorshift32 with one candidate per center. Clustering labels are permutation-invariant and local-minimum dependent, so approximate eligibility requires both held-out ARI agreement and final objective agreement; timing alone cannot make the row eligible."
+}
