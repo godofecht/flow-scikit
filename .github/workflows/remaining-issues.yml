@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   kmeans-parity:
@@ -73,8 +73,20 @@ jobs:
           python-version: "3.12"
       - name: Install pinned architecture dependencies
         run: pip install -r benchmarks/requirements-architecture.txt
+      - name: Preserve committed inventory for drift detection
+        run: |
+          if [ -f benchmarks/sklearn_execution_inventory.json ]; then
+            cp benchmarks/sklearn_execution_inventory.json /tmp/sklearn_execution_inventory.baseline.json
+          fi
       - name: Generate execution, profiling and prioritization evidence
         run: python benchmarks/run_architecture_pipeline.py --profile-sizes 100,1000
+      - name: Check estimator surface drift
+        run: |
+          if [ -f /tmp/sklearn_execution_inventory.baseline.json ]; then
+            python benchmarks/check_architecture_drift.py /tmp/sklearn_execution_inventory.baseline.json benchmarks/sklearn_execution_inventory.json
+          else
+            echo 'No committed inventory baseline yet; this run establishes it.'
+          fi
       - name: Validate inventory coverage and dispositions
         run: |
           python - <<'PY'
@@ -83,10 +95,14 @@ jobs:
           inv = json.loads(Path('benchmarks/sklearn_execution_inventory.json').read_text())
           roadmap = json.loads(Path('benchmarks/optimization_roadmap.json').read_text())
           audit = json.loads(Path('benchmarks/native_hotspot_audit.json').read_text())
+          amap = json.loads(Path('benchmarks/architecture_performance_map.json').read_text())
           assert len(inv['rows']) > 100, len(inv['rows'])
           assert len(roadmap['rows']) == len(inv['rows'])
           allowed = {'replace-with-flow','already-equivalent','retain-native','blocked-by-flow-compiler/runtime','low-value'}
           assert all(r['disposition'] in allowed for r in audit['rows'])
+          assert amap['coverage']['headline_rows_with_substrate'] == 19, amap['coverage']
+          assert amap['coverage']['headline_rows_with_speedup'] == 19, amap['coverage']
+          assert amap['speedup_by_execution_substrate'], 'substrate/speedup grouping must not be empty'
           classes = {r['execution_class'] for r in inv['rows']}
           assert {'python-bound','mixed'} & classes
           print({'operations': len(inv['rows']), 'execution_classes': sorted(classes), 'native_hotspots': len(audit['rows'])})
@@ -106,3 +122,34 @@ jobs:
             benchmarks/NATIVE_HOTSPOT_AUDIT.md
             benchmarks/architecture_performance_map.json
             benchmarks/ARCHITECTURE_PERFORMANCE_MAP.md
+
+  freeze-results:
+    name: Freeze validated evidence
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: [kmeans-parity, architecture-map]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: canonical-19of19-${{ github.run_id }}
+          path: benchmarks
+      - uses: actions/download-artifact@v4
+        with:
+          name: architecture-map-${{ github.run_id }}
+          path: benchmarks
+      - name: Promote canonical summary to published source of truth
+        run: cp benchmarks/headline_summary.json benchmarks/headline_result_v2.json
+      - name: Commit generated evidence if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add benchmarks/
+          if git diff --cached --quiet; then
+            echo 'Generated evidence already current.'
+            exit 0
+          fi
+          git commit -m "Freeze validated sklearn architecture and 19/19 benchmark evidence [skip ci]"
+          git push origin HEAD:${{ github.head_ref }}
