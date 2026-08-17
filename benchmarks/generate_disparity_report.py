@@ -28,18 +28,66 @@ def config_diff(flow: dict, sklearn: dict) -> list[dict]:
 
 
 def model_state_diagnostics(diag: dict) -> dict:
-    """Return estimator-state deltas without hard-coding estimator names.
-
-    Canonical diagnostics use explicit ``*_diff`` fields for learned-state or
-    state-derived comparisons (inertia, singular values, components, etc.).
-    Keeping that convention generic lets new estimators become visible in the
-    disparity artifact without adding estimator-specific publishing code.
-    """
+    """Return learned-state deltas already produced by the parity comparison."""
     return {
         key: value
         for key, value in diag.items()
         if key not in BASE_DIAGNOSTIC_FIELDS and key.endswith("_diff")
     }
+
+
+def parse_details(path: Path) -> dict[tuple[str, str, str], float | list[float]]:
+    """Read DETAIL records directly so failed score gates cannot erase state."""
+    out: dict[tuple[str, str, str], float | list[float]] = {}
+    if not path.exists():
+        return out
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line.startswith("DETAIL|"):
+            continue
+        parts = line.split("|", 4)
+        if len(parts) != 5:
+            continue
+        value: float | list[float]
+        if "," in parts[4]:
+            value = [float(v) for v in parts[4].split(",") if v]
+        else:
+            value = float(parts[4])
+        out[(parts[1], parts[2], parts[3])] = value
+    return out
+
+
+def relative_diff(a: float, b: float) -> float:
+    return abs(a - b) / max(abs(a), abs(b), 1e-12)
+
+
+def enrich_state_from_raw_details(
+    key: tuple[str, str, str],
+    state: dict,
+    sklearn_details: dict,
+    flow_details: dict,
+) -> dict:
+    """Preserve state evidence even when strict score parity exits early.
+
+    KMeans already emits inertia and iteration count for every canonical row.
+    The strict Digits score gate currently fails before compare_v2 records those
+    fields, so derive their deltas here instead of losing evidence.
+    """
+    algorithm, dataset, _ = key
+    if algorithm != "KMeans":
+        return state
+
+    sk_inertia = sklearn_details.get((algorithm, dataset, "inertia"))
+    fl_inertia = flow_details.get((algorithm, dataset, "inertia"))
+    if isinstance(sk_inertia, float) and isinstance(fl_inertia, float):
+        state.setdefault("inertia_relative_diff", relative_diff(sk_inertia, fl_inertia))
+
+    sk_iter = sklearn_details.get((algorithm, dataset, "n_iter"))
+    fl_iter = flow_details.get((algorithm, dataset, "n_iter"))
+    if isinstance(sk_iter, float) and isinstance(fl_iter, float):
+        state["n_iter_abs_diff"] = abs(sk_iter - fl_iter)
+
+    return state
 
 
 def main() -> int:
@@ -48,6 +96,8 @@ def main() -> int:
     p.add_argument("--diagnostics", type=Path, default=ROOT / "parity_diagnostics.json")
     p.add_argument("--contract", type=Path, default=ROOT / "parity_contract.json")
     p.add_argument("--kmeans-audit", type=Path, default=ROOT / "kmeans_semantics_audit.json")
+    p.add_argument("--sklearn-raw", type=Path, default=ROOT / "sklearn_results_v2.txt")
+    p.add_argument("--flow-raw", type=Path, default=ROOT / "flow_results_v2.txt")
     p.add_argument("--output", type=Path, default=ROOT / "disparity_report.json")
     args = p.parse_args()
 
@@ -55,6 +105,8 @@ def main() -> int:
     diagnostics = json.loads(args.diagnostics.read_text())
     contract_doc = json.loads(args.contract.read_text())
     kmeans_audit = json.loads(args.kmeans_audit.read_text()) if args.kmeans_audit.exists() else None
+    sklearn_details = parse_details(args.sklearn_raw)
+    flow_details = parse_details(args.flow_raw)
 
     diag_by_key = {(r["algorithm"], r["dataset"], r["metric"]): r for r in diagnostics}
     contract_by_key = {(r["algorithm"], r["dataset"], r["metric"]): r for r in contract_doc["rows"]}
@@ -87,7 +139,12 @@ def main() -> int:
             ])
 
         config = config_diff(contract.get("flow", {}), contract.get("sklearn", {}))
-        state = model_state_diagnostics(diag)
+        state = enrich_state_from_raw_details(
+            key,
+            model_state_diagnostics(diag),
+            sklearn_details,
+            flow_details,
+        )
         runtime_ratio = row["sklearn_ms"] / row["flow_ms"] if row["flow_ms"] > 0 else None
         runtime_log2_ratio = math.log2(runtime_ratio) if runtime_ratio and runtime_ratio > 0 else None
         tolerance_fraction = score_diff / effective_score_tol if effective_score_tol > 0 else None
