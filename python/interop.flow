@@ -1,0 +1,83 @@
+# Python/native ABI bridge for flow-scikit.
+#
+# This surface is deliberately pointer-oriented and tiny. Python owns the
+# contiguous f32 buffers; Flow borrows them for the duration of each call.
+# Model state is copied back into Python-owned buffers so no Flow heap object
+# crosses the CPython extension boundary.
+
+import "lib/scikit/matrix.flow"
+import "lib/scikit/linear.flow"
+
+export function flow_scikit_linear_fit(
+    x_data: ptr<f32>,
+    y_data: ptr<f32>,
+    rows: i32,
+    cols: i32,
+    coef_out: ptr<f32>,
+    bias_out: ptr<f32>
+) -> i32 {
+    if rows <= 0 || cols <= 0 {
+        return -1
+    }
+
+    let X: Matrix = Matrix { data: x_data, rows: rows, cols: cols }
+    let penalty: Penalty = penalty_none()
+    let model: LinearRegression = linear_regression_fit(X, y_data, penalty)
+
+    for j in 0 to cols {
+        coef_out[j] = model.weights[j]
+    }
+    bias_out[0] = model.bias
+    linear_regression_free(model)
+
+    return 0
+}
+
+export function flow_scikit_ridge_fit(
+    x_data: ptr<f32>,
+    y_data: ptr<f32>,
+    rows: i32,
+    cols: i32,
+    alpha: f32,
+    coef_out: ptr<f32>,
+    bias_out: ptr<f32>
+) -> i32 {
+    if rows <= 0 || cols <= 0 || alpha < 0.0 {
+        return -1
+    }
+
+    let X: Matrix = Matrix { data: x_data, rows: rows, cols: cols }
+    let penalty: Penalty = penalty_l2(alpha)
+    let model: LinearRegression = linear_regression_fit(X, y_data, penalty)
+
+    for j in 0 to cols {
+        coef_out[j] = model.weights[j]
+    }
+    bias_out[0] = model.bias
+    linear_regression_free(model)
+
+    return 0
+}
+
+export function flow_scikit_linear_predict(
+    x_data: ptr<f32>,
+    rows: i32,
+    cols: i32,
+    coef: ptr<f32>,
+    bias: f32,
+    out: ptr<f32>
+) -> i32 {
+    if rows < 0 || cols <= 0 {
+        return -1
+    }
+
+    for i in 0 to rows {
+        let mut pred: f64 = bias as f64
+        for j in 0 to cols {
+            pred = pred + (coef[j] as f64) * (x_data[i * cols + j] as f64)
+        }
+        out[i] = pred as f32
+    }
+
+    return 0
+}
