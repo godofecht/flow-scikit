@@ -53,6 +53,7 @@ jobs:
             benchmarks/bench_scaled_sklearn.py \
             benchmarks/compare_scaled.py \
             benchmarks/scaled_flow_to_json.py \
+            benchmarks/aggregate_scaled_flow.py \
             benchmarks/check_flow_regression.py \
             benchmarks/publish_headline_v2.py \
             benchmarks/validate_execution_substrate.py
@@ -164,12 +165,17 @@ jobs:
       - name: Run scaled sklearn matrix through 10k rows
         run: python benchmarks/bench_scaled_sklearn.py --max-rows 10000 --output benchmarks/scaled_sklearn.json
 
-      - name: Run scaled Flow matrix through 10k rows
+      - name: Run repeated scaled Flow matrix through 10k rows
         env:
           FLOW_HOST: python
           FLOW_OPT_LEVEL: "0"
           FLOW_LDFLAGS: "-lm -lopenblas"
-        run: ${{ github.workspace }}/.flow-toolchain/flow run benchmarks/bench_scaled.flow > benchmarks/scaled_flow.txt
+        run: |
+          rm -f benchmarks/scaled_flow_samples.txt
+          for repeat in 1 2 3; do
+            ${{ github.workspace }}/.flow-toolchain/flow run benchmarks/bench_scaled.flow >> benchmarks/scaled_flow_samples.txt
+          done
+          python benchmarks/aggregate_scaled_flow.py benchmarks/scaled_flow_samples.txt benchmarks/scaled_flow.txt
 
       - name: Normalize Flow matrix
         run: python benchmarks/scaled_flow_to_json.py benchmarks/scaled_flow.txt benchmarks/scaled_flow.json
@@ -185,6 +191,7 @@ jobs:
           name: scaled-benchmark-${{ github.run_id }}
           path: |
             benchmarks/scaled_sklearn.json
+            benchmarks/scaled_flow_samples.txt
             benchmarks/scaled_flow.txt
             benchmarks/scaled_flow.json
             benchmarks/scaled_comparison.json
