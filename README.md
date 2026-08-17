@@ -1,100 +1,78 @@
 # flow-scikit
 
-A compiled machine-learning library for [Flow](https://github.com/flooooooooooow/flow), inspired by scikit-learn's estimator ecosystem while exploring a smaller native runtime, explicit APIs, and deployment beyond Python.
+A compiled classical machine-learning library for [Flow](https://github.com/flooooooooooow/flow), inspired by scikit-learn's estimator ecosystem while exploring native deployment, whole-estimator compilation and a smaller runtime.
 
 > **Status:** experimental, actively developed, and not affiliated with or endorsed by the scikit-learn project.
 
-[Documentation & benchmarks](https://godofecht.github.io/flow-scikit/) · [Flow language](https://github.com/flooooooooooow/flow) · [Examples](examples/) · [Tests](tests/)
+[Documentation & benchmarks](https://godofecht.github.io/flow-scikit/) · [Execution architecture](https://godofecht.github.io/flow-scikit/architecture.html) · [Flow language](https://github.com/flooooooooooow/flow) · [Examples](examples/) · [Tests](tests/)
 
 ## What this project is
 
-flow-scikit asks a fairly direct question: how much of the practical scikit-learn experience can be reproduced in a statically typed compiled language without carrying a Python runtime into deployment?
+flow-scikit asks a direct systems question: how much of the practical scikit-learn experience can be reproduced in a statically typed compiled language without carrying a Python runtime into deployment?
 
-The goal is not a line-for-line port. The project implements familiar estimators, preprocessing, metrics, model selection and composition in Flow, then uses the rewrite as an opportunity to test different API decisions and native deployment characteristics.
-
-The repository currently covers classification, regression, clustering, decomposition, preprocessing, feature selection, model selection, ensembles, SVMs, Gaussian processes, mixture models, neural networks, covariance, imputation, manifold learning, kernel approximation, multi-output learning and related utilities.
+The goal is not a line-for-line port. The project implements familiar estimators, preprocessing, metrics, model selection and composition in Flow, then uses that implementation to test native deployment, explicit memory/layout choices and whole-estimator optimization against a mature reference ecosystem.
 
 ## Why traditional machine learning still matters
 
-flow-scikit is deliberately focused on the part of machine learning that can disappear from public discussion whenever attention moves to the newest generation of neural-network tooling. That is not because the older methods have stopped solving problems.
+A useful practitioner snapshot appears in the r/datascience discussion [“Do people not use sci-kit learn / other traditional libraries anymore?”](https://www.reddit.com/r/datascience/comments/16lu9ni/do_people_not_use_scikit_learn_other_traditional/). It is anecdotal rather than a survey, but the recurring sentiment is clear: regression, trees, SVMs, clustering and other conventional methods remain routine production tools, especially for tabular and business workloads where larger neural models are unnecessary.
 
-A useful snapshot of practitioner sentiment appears in the r/datascience discussion [“Do people not use sci-kit learn / other traditional libraries anymore?”](https://www.reddit.com/r/datascience/comments/16lu9ni/do_people_not_use_scikit_learn_other_traditional/). The thread is anecdotal rather than a scientific survey, but its recurring themes are consistent enough to explain the motivation for this project.
+The other recurring point is that scikit-learn's value is larger than any individual estimator. Its common estimator interface makes preprocessing, fitting, evaluation, tuning and composition unusually coherent. flow-scikit is interested in preserving that practical model while testing a different runtime boundary.
 
-The dominant sentiment was not that scikit-learn had become obsolete. Practitioners repeatedly described linear and logistic regression, tree ensembles, boosted trees, SVMs, clustering and other conventional methods as routine production tools. Several argued that most ordinary business datasets are tabular, relatively small, or otherwise do not justify a large neural model. Others described cases where simple regressions or SVMs matched or beat more elaborate neural approaches. A recurring principle was to start with exploratory analysis and the simplest model capable of solving the problem, then add complexity only when the data and requirements justify it.
-
-The discussion also draws an important distinction between **visibility and utility**. PyTorch, Hugging Face, transformers and generative AI dominate much of the public ML conversation because they enable genuinely new applications and because novelty attracts attention. That does not make them substitutes for every statistical or tabular-learning workflow. Several commenters explicitly described a gap between what is fashionable on social media and what data scientists actually use at work.
-
-Another repeated point was that scikit-learn's value is larger than any individual estimator. Its common estimator interface makes preprocessing, fitting, model interchange, evaluation, tuning and composition unusually easy. Even practitioners whose primary models live in XGBoost, PyTorch or other libraries often retain scikit-learn-style tooling around splitting, metrics, validation, search and pipelines. The enduring idea is therefore not merely a catalogue of algorithms; it is a coherent way to compose conventional machine-learning work.
-
-That is the part flow-scikit is interested in preserving and testing.
-
-### Why rebuild this in Flow?
-
-If classical ML remains useful, the next question is not whether it should be discarded for newer models. It is whether its implementation environment is still the right one for every deployment target.
-
-Python and scikit-learn are exceptionally effective for analysis, experimentation and an enormous existing scientific ecosystem. flow-scikit is aimed at a different boundary: **what happens when the same class of practical algorithms is available as small compiled native code?**
-
-For workloads where a regression, tree, nearest-neighbour model, clustering algorithm or conventional preprocessing pipeline is already sufficient, requiring a Python interpreter and a larger runtime stack can be unnecessary deployment overhead. Flow gives us a way to explore the same problem-solving philosophy with static typing, native binaries, explicit memory/layout choices, cross-compilation and a C backend.
-
-The argument is therefore not “traditional ML instead of modern AI,” nor “Flow instead of Python everywhere.” It is simpler:
+The thesis is simple:
 
 **Use the least complicated model that solves the problem, and make that model available in the least complicated runtime that satisfies the deployment requirements.**
 
-That makes conventional ML particularly interesting for embedded systems, native applications, low-latency services, mobile deployment, constrained environments, command-line tools and applications where startup time, artifact size or runtime integration matters. It also gives us a controlled body of well-understood algorithms with which to test Flow itself against a mature and widely understood reference ecosystem.
-
-flow-scikit exists because mature algorithms are not obsolete algorithms. The interesting systems question is how much machinery we actually need to run them.
+That makes classical ML particularly interesting for native applications, embedded systems, mobile deployment, low-latency services, command-line tools and constrained environments.
 
 ## Evidence first
 
-The benchmark site contains the complete measured results rather than only selected wins. It reports predictive parity separately from runtime performance and includes fit/predict timings, Iris, Digits and Diabetes workloads, deterministic parity tests, native footprint/startup measurements, and Android results.
+Performance claims in this repository are generated from committed benchmark artifacts rather than selected examples.
 
-An earlier presentation path mixed Python `perf_counter()` seconds with fields labelled as milliseconds. That legacy path is now isolated for historical audit. The canonical v2 benchmark emits explicit `TIMING_UNIT|ms` markers on both implementations, rejects mismatched units, consumes persisted identical train/test fixtures, and gates competitive timing claims on numerical parity rather than timing availability alone.
+The current canonical v2 result is [`benchmarks/headline_result_v2.json`](benchmarks/headline_result_v2.json): **19 of 19 rows are parity-eligible and measurement-resolved**. In that committed run, **Flow wins 8 of 19 end-to-end fit + predict comparisons and scikit-learn wins 11 of 19**. There are no parity-unresolved or measurement-unresolved rows.
 
-The current canonical v2 result is generated from [`benchmarks/headline_result_v2.json`](benchmarks/headline_result_v2.json): **9 of 17 parity-eligible headline timing comparisons are won by Flow across 19 total rows**. Eight eligible rows are won by sklearn, there are no measurement-unresolved rows, and two rows — Digits GaussianNB and Digits KMeans — remain excluded from the competitive headline because parity is unresolved. The separate deterministic algorithm suite currently records **16/16 output-parity checks passing**. The repository also records a **~1.4 MB native footprint** and a **~65× cold-start advantage** in the historical startup comparison. These figures describe specific benchmark artifacts and environments; they are not a claim that Flow is universally faster than scikit-learn.
+Canonical v2 uses explicit `TIMING_UNIT|ms` markers, persisted identical train/test fixtures, repeated timing aggregation and estimator-specific numerical parity gates. Unsupervised rows are not forced into classifier-style metrics: KMeans uses adjusted Rand index and inertia, while PCA additionally checks explained variance, singular values, reconstruction error and sign-aligned components.
 
-The headline result is mechanically classified from explicit parity, measurement, unit and comparability fields. Changing a benchmark row changes the generated count; unresolved rows stay visible rather than silently disappearing from the denominator.
+Digits KMeans is deliberately classified as **approximately equivalent**, not bit-identical. The semantic audit identifies initialization as the first divergence between the Flow and sklearn trajectories; the final objective remains closely matched, so the row is admitted under an explicit clustering-equivalence contract rather than by hiding the difference.
 
-See the [full benchmark report](https://godofecht.github.io/flow-scikit/benchmarks.html) for the individual results, methodology and reproduction details.
+The separate deterministic algorithm suite currently records **16/16 output-parity checks passing**. The repository also records a historical **~1.4 MB native executable footprint** and **~65× cold-start advantage** in a separate deployment comparison. Those deployment figures are not mixed into the canonical estimator timing denominator.
+
+See the [full canonical benchmark report](https://godofecht.github.io/flow-scikit/benchmarks.html).
+
+## What sklearn actually executes
+
+“Python versus compiled” is too crude a performance model for scikit-learn. Its public API is Python, but estimator hot paths may execute in Python orchestration, NumPy/SciPy, BLAS/LAPACK, sklearn-owned Cython/native code or external native libraries such as liblinear and libsvm.
+
+flow-scikit now maintains a generated execution map rather than inferring opportunity from file extensions. The current committed evidence contains:
+
+- **491 estimator-operation inventory rows** across the pinned sklearn public estimator surface
+- **32 dynamic runtime-attribution rows**
+- **491 generated optimization-roadmap rows**
+- **146 compiled/mixed native-hotspot dispositions**
+- **8 whole-estimator experiments**
+- substrate and speedup joins for **all 19 canonical benchmark rows**
+
+The current grouped headline evidence is descriptive rather than causal: Flow wins **75% of Python-bound rows**, about **45% of mixed rows**, and **0% of external-native-bound rows** in the committed architecture map. That pattern is useful enough to guide engineering: optimize Python/boundary-heavy paths aggressively, treat sklearn-owned compiled code as a direct implementation contest, and retain mature BLAS/LAPACK/liblinear/libsvm kernels unless measurements justify replacement.
+
+Detailed artifacts:
+
+- [`benchmarks/SKLEARN_EXECUTION_INVENTORY.md`](benchmarks/SKLEARN_EXECUTION_INVENTORY.md)
+- [`benchmarks/ARCHITECTURE_PERFORMANCE_MAP.md`](benchmarks/ARCHITECTURE_PERFORMANCE_MAP.md)
+- [`benchmarks/OPTIMIZATION_ROADMAP.md`](benchmarks/OPTIMIZATION_ROADMAP.md)
+- [`benchmarks/NATIVE_HOTSPOT_AUDIT.md`](benchmarks/NATIVE_HOTSPOT_AUDIT.md)
 
 ## Why Flow?
 
-Flow is a statically typed compiled language with a C backend, algebraic effects and autodiff. For this project that makes it possible to investigate ML APIs in a setting with native binaries, explicit memory/layout decisions, small deployment artifacts and no mandatory Python interpreter.
+Flow is a statically typed compiled language with a C backend, algebraic effects and autodiff. For this project that enables native binaries, explicit memory/layout decisions, cross-compilation and no mandatory Python interpreter.
 
-That matters most where startup latency, binary size, embedding, cross-compilation or deployment constraints matter more than access to the enormous Python scientific-computing ecosystem.
-
-flow-scikit is therefore best understood as both a usable library experiment and a systems experiment: it tests which parts of the scikit-learn programming model are fundamental and which parts are consequences of Python, NumPy and historical compatibility constraints.
-
-## Design differences
-
-The project intentionally does not preserve every scikit-learn API decision. Several interfaces are experiments motivated by long-running usability discussions around the ecosystem.
-
-`OneHotEncoder` handles unknown categories without making an unseen category an automatic pipeline failure. Classification APIs distinguish probability-producing prediction from explicit class decisions. Validation follows a consistent `ensure_*` vocabulary. Structured report types avoid dictionary-key collisions. Table ingestion is normalized behind one internal interface. Progress reporting can use Flow's effect system instead of integer verbosity levels. Calibration utilities include minimum-bin support and confidence information. Linear-model APIs can represent terms and penalties explicitly.
-
-These are design choices in flow-scikit, not assertions that upstream scikit-learn must adopt the same solutions.
+flow-scikit is therefore both a library experiment and a systems experiment: it tests which parts of the scikit-learn programming model are fundamental and which parts are consequences of Python, NumPy, native-library boundaries and historical compatibility constraints.
 
 ## Scope
 
-The implementation is organized under `lib/scikit/` and currently includes the following major areas:
+The implementation under `lib/scikit/` includes preprocessing, linear models, neighbors, SVMs, trees and ensembles, clustering, decomposition, model selection, metrics, feature selection, Gaussian processes, mixture models, neural networks, covariance, imputation, manifold learning, kernel approximation, multi-output learning and related utilities.
 
-| Area | Representative support |
-| --- | --- |
-| Preprocessing | StandardScaler, MinMaxScaler, RobustScaler, encoders, imputers, polynomial features |
-| Linear models | LinearRegression, LogisticRegression, Ridge, Lasso, ElasticNet, SGD, Bayesian and robust models |
-| Neighbors | KNN classification/regression, nearest neighbors, radius neighbors, LOF |
-| SVM | LinearSVC/SVR, kernel SVC, NuSVC/NuSVR, OneClassSVM |
-| Trees & ensembles | Decision trees, random forests, extra trees, boosting, bagging, voting, stacking, isolation forest |
-| Clustering | KMeans, MiniBatchKMeans, DBSCAN, agglomerative, spectral, OPTICS, Birch and others |
-| Decomposition | PCA, SVD, NMF, ICA, SparsePCA, KernelPCA, factor analysis, dictionary learning |
-| Model selection | train/test split, CV, grid/random search, learning and validation curves |
-| Metrics | Classification, regression, clustering, ranking and pairwise metrics |
-| Feature selection | SelectKBest, variance threshold, RFE/RFECV, sequential selection |
-| Additional modules | Gaussian processes, mixture models, neural networks, covariance, manifold, kernels, multi-output, semi-supervised learning |
-
-The source tree is the authoritative inventory; coverage changes quickly while the project is under active development.
+The source tree is the authoritative API inventory; coverage changes quickly while the project is under active development.
 
 ## Quick start
-
-Clone Flow and flow-scikit, then point the Flow compiler at an example or test. The repository CI pins the Flow toolchain revision used for validation, which is the safest reference for a reproducible build.
 
 ```bash
 git clone https://github.com/flooooooooooow/flow.git
@@ -107,29 +85,21 @@ python tools/run_all.py
 
 ## Testing and reproducibility
 
-CI performs syntax/import validation and runs the complete Flow test/example suite. Benchmark claims should be treated as reproducible measurements rather than constants: compiler revisions, optimization settings, BLAS implementations, hardware and estimator implementations can all move the numbers.
+CI performs syntax/import validation and runs the Flow test/example suite. The benchmark pipeline additionally verifies JSON/binary split-fixture identity, validates the 19-row estimator contract, reruns repeated Flow/sklearn measurements, gates competitive timing on parity, detects sklearn estimator-surface drift and regenerates the architecture evidence and optimization roadmap.
 
-The canonical benchmark pipeline additionally verifies JSON/binary split-fixture identity, validates the 19-row estimator contract, runs Flow and sklearn through the same fixture definitions, classifies parity separately from timing, and emits machine-readable headline artifacts. The scaled benchmark matrix separates correctness and Flow self-regression gates from non-blocking Flow-vs-sklearn competitive reporting.
-
-For that reason, performance results live with their methodology and raw benchmark data in the repository. If a result looks surprising, reproduce it before generalizing from it.
+Benchmark claims should be treated as reproducible measurements rather than constants: compiler revisions, optimization settings, BLAS implementations, hardware and estimator implementations can all move the numbers.
 
 ## Relationship to scikit-learn
 
-flow-scikit is an independent project. It takes substantial inspiration from scikit-learn's estimator vocabulary and from public discussions about its API, but it is not an official port, fork or subproject.
+flow-scikit is an independent project. It takes substantial inspiration from scikit-learn's estimator vocabulary and public API discussions, but it is not an official port, fork or subproject.
 
-### Maintainer note on an upstream automation incident
+During development, an automated coding agent that was intended to submit work to the upstream Flow repository mis-targeted submissions to a scikit-related upstream repository. Those submissions were unintended automation output. The incident led to stronger repository allow-lists, publication checks, bounded automation and explicit human-visible CI/review gates in this project.
 
-During development, I had an automated coding agent configured to create pull requests. At one point the agent was instructed to submit work to the upstream **Flow language repository**, but it instead submitted pull requests to a **scikit-related upstream repository**. Those submissions were unintended automation output rather than a deliberate attempt to send a stream of changes to that project.
-
-The incident is relevant to this repository's history because it exposed a failure mode that agent-driven open-source development now has to handle: repository targeting can fail, and automated contribution systems need safeguards on both the submitting and receiving sides. I believe a mature contribution workflow should be able to identify a burst of obviously automated, mis-targeted submissions, stop or close them, and establish what happened before escalating an account-level response.
-
-In this case, the maintainers chose to ban my account. I disagree with that response, but this project is not intended as a vehicle for pursuing that disagreement. The practical lesson has been incorporated here: automated contributions need explicit repository allow-lists, validation before publication, bounded submission rates, and human-visible CI/review gates.
-
-That history should also make the relationship unambiguous: **flow-scikit is independent of scikit-learn and its maintainers.** Technical comparisons here should stand or fall on reproducible code and measurements, not on project politics.
+The technical comparisons here are intended to stand or fall on reproducible code and measurements rather than project politics.
 
 ## Contributing
 
-Contributions are welcome, particularly when they improve correctness, parity, benchmarks, tests, documentation or reproducibility. Performance changes should include a correctness check and, where performance is the motivation, measurements against an appropriate baseline.
+Contributions are welcome, particularly when they improve correctness, parity, benchmarks, tests, documentation or reproducibility. Performance changes should include a correctness check and measurements against an appropriate baseline.
 
 Automated contributions are welcome only when they have been reviewed for repository scope and can pass the same validation expected of human-authored changes.
 
