@@ -1,0 +1,61 @@
+import "lib/scikit/scikit.flow"
+
+function close_enough(a: f32, b: f32, tolerance: f32) -> bool {
+    let d: f32 = a - b
+    if d < 0.0 { d = -d }
+    return d <= tolerance
+}
+
+function main() -> i32 {
+    let X: Matrix = matrix_new(4, 1)
+    let y: ptr<f32> = array_new_f32(4)
+    matrix_set(X, 0, 0, -1.0); y[0] = 0.0
+    matrix_set(X, 1, 0,  1.0); y[1] = 0.0
+    matrix_set(X, 2, 0,  9.0); y[2] = 1.0
+    matrix_set(X, 3, 0, 11.0); y[3] = 1.0
+
+    let model: GaussianNB = gaussian_nb_fit(X, y, 2, 0.0)
+
+    let query: Matrix = matrix_new(3, 1)
+    matrix_set(query, 0, 0, 0.0)
+    matrix_set(query, 1, 0, 5.0)
+    matrix_set(query, 2, 0, 10.0)
+
+    let pred: ptr<f32> = gaussian_nb_predict(model, query)
+    let proba: Matrix = gaussian_nb_predict_proba(model, query)
+
+    if pred[0] != 0.0 || pred[1] != 0.0 || pred[2] != 1.0 {
+        println("FAIL: GaussianNB prediction ordering changed")
+        return 1
+    }
+
+    for i in 0 to 3 {
+        let total: f32 = matrix_at(proba, i, 0) + matrix_at(proba, i, 1)
+        if not close_enough(total, 1.0, 0.00001) {
+            println("FAIL: GaussianNB probabilities no longer normalize")
+            return 1
+        }
+    }
+
+    # At the midpoint the two classes have equal priors, equal variances and
+    # equal distance from their means, so each posterior must be one half.
+    if not close_enough(matrix_at(proba, 1, 0), 0.5, 0.00001) || not close_enough(matrix_at(proba, 1, 1), 0.5, 0.00001) {
+        println("FAIL: GaussianNB midpoint posterior changed")
+        return 1
+    }
+
+    if matrix_at(proba, 0, 0) <= matrix_at(proba, 0, 1) || matrix_at(proba, 2, 1) <= matrix_at(proba, 2, 0) {
+        println("FAIL: GaussianNB probability ranking changed")
+        return 1
+    }
+
+    array_free_f32(pred)
+    matrix_free(proba)
+    matrix_free(query)
+    gaussian_nb_free(model)
+    matrix_free(X)
+    array_free_f32(y)
+
+    println("OK: GaussianNB optimized predict and predict_proba preserve posterior behavior")
+    return 0
+}

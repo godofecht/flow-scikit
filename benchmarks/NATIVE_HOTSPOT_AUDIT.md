@@ -2,9 +2,9 @@
 
 | Estimator | Operation | Class | Owner | Disposition | Priority |
 |---|---|---|---|---|---:|
-| `LogisticRegression` | `fit` | mixed | external | retain-native | 72.0 |
-| `KMeans` | `fit` | mixed | sklearn | already-equivalent | 67.7 |
-| `LinearRegression` | `fit` | mixed | sklearn | already-equivalent | 66.1 |
+| `LogisticRegression` | `fit` | mixed | external | retain-native | 71.8 |
+| `KMeans` | `fit` | mixed | sklearn | already-equivalent | 67.6 |
+| `LinearRegression` | `fit` | mixed | sklearn | already-equivalent | 66.3 |
 | `RandomForestClassifier` | `fit` | mixed | sklearn | already-equivalent | 48.0 |
 | `RandomForestClassifier` | `predict` | mixed | sklearn | already-equivalent | 48.0 |
 | `RandomForestClassifier` | `predict_proba` | mixed | sklearn | already-equivalent | 48.0 |
@@ -137,9 +137,9 @@
 | `PoissonRegressor` | `predict` | cython-bound | sklearn | already-equivalent | 34.5 |
 | `TweedieRegressor` | `predict` | cython-bound | sklearn | already-equivalent | 34.5 |
 | `TfidfTransformer` | `fit` | mixed | sklearn | low-value | 34.0 |
-| `KernelRidge` | `fit` | mixed | sklearn | already-equivalent | 33.6 |
+| `KernelRidge` | `fit` | mixed | sklearn | already-equivalent | 33.8 |
 | `Lasso` | `fit` | mixed | sklearn | already-equivalent | 33.1 |
-| `SVC` | `fit` | external-native-bound | external | retain-native | 30.2 |
+| `SVC` | `fit` | external-native-bound | external | retain-native | 29.5 |
 | `MiniBatchSparsePCA` | `transform` | blas-lapack-bound | sklearn | retain-native | 17.0 |
 | `Nystroem` | `fit` | blas-lapack-bound | sklearn | retain-native | 17.0 |
 | `SparsePCA` | `transform` | blas-lapack-bound | sklearn | retain-native | 17.0 |
