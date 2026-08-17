@@ -26,6 +26,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Normalize legacy sklearn timings to milliseconds
+        run: python benchmarks/normalize_published_timings.py
       - name: Validate published benchmark timing units
         run: python benchmarks/validate_published_timings.py
       - uses: actions/configure-pages@v5
