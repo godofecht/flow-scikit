@@ -1,0 +1,157 @@
+# Deterministic scaled Flow benchmark matrix.
+# CI covers 100/1k/10k rows at 8 and 32 features. Larger sizes are generated
+# by the Python matrix and reserved for manual Flow runs once practical.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+}
+
+const TIME_UTC: i32 = 1
+
+function now_ns() -> i64 {
+    let ts: ptr<i64> = malloc(16) as ptr<i64>
+    if ts == null { return 0 }
+    timespec_get(ts, TIME_UTC)
+    let v: i64 = ts[0] * 1000000000 + ts[1]
+    free(ts as ptr<void>)
+    return v
+}
+
+function elapsed_ms(start: i64, finish: i64) -> f32 {
+    return ((((finish - start) as f64) / 1000000.0) as f32)
+}
+
+struct SyntheticData {
+    X: Matrix,
+    y_class: ptr<f32>,
+    y_reg: ptr<f32>
+}
+
+function make_data(n: i32, p: i32) -> SyntheticData {
+    let X: Matrix = matrix_new(n, p)
+    let yc: ptr<f32> = array_new_f32(n)
+    let yr: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let mut signal: f32 = 0.0
+        for j in 0 to p {
+            let raw: i32 = (i * 131 + j * 17 + n * 3 + p * 11) % 1000
+            let v: f32 = (raw as f32) / 500.0 - 1.0
+            matrix_set(X, i, j, v)
+            signal = signal + v * (0.25 + (j as f32) / (p as f32))
+        }
+        yr[i] = signal
+        if signal > 0.0 { yc[i] = 1.0 } else { yc[i] = 0.0 }
+    }
+    return SyntheticData { X: X, y_class: yc, y_reg: yr }
+}
+
+function free_data(d: SyntheticData) -> void {
+    matrix_free(d.X)
+    array_free_f32(d.y_class)
+    array_free_f32(d.y_reg)
+}
+
+struct SyntheticSplit {
+    X_train: Matrix,
+    X_test: Matrix,
+    yc_train: ptr<f32>,
+    yr_train: ptr<f32>,
+    n_train: i32,
+    n_test: i32
+}
+
+function split_data(d: SyntheticData) -> SyntheticSplit {
+    let n_train: i32 = (d.X.rows * 4) / 5
+    let n_test: i32 = d.X.rows - n_train
+    let Xtr: Matrix = matrix_new(n_train, d.X.cols)
+    let Xte: Matrix = matrix_new(n_test, d.X.cols)
+    let yc: ptr<f32> = array_new_f32(n_train)
+    let yr: ptr<f32> = array_new_f32(n_train)
+    for i in 0 to n_train {
+        yc[i] = d.y_class[i]
+        yr[i] = d.y_reg[i]
+        for j in 0 to d.X.cols { matrix_set(Xtr, i, j, matrix_at(d.X, i, j)) }
+    }
+    for i in 0 to n_test {
+        for j in 0 to d.X.cols { matrix_set(Xte, i, j, matrix_at(d.X, n_train + i, j)) }
+    }
+    return SyntheticSplit { X_train: Xtr, X_test: Xte, yc_train: yc, yr_train: yr, n_train: n_train, n_test: n_test }
+}
+
+function free_split(s: SyntheticSplit) -> void {
+    matrix_free(s.X_train)
+    matrix_free(s.X_test)
+    array_free_f32(s.yc_train)
+    array_free_f32(s.yr_train)
+}
+
+function run_case(n: i32, p: i32) -> void {
+    let d: SyntheticData = make_data(n, p)
+    let s: SyntheticSplit = split_data(d)
+    let no_penalty: Penalty = penalty_none()
+    let mut t0: i64 = 0
+    let mut t1: i64 = 0
+    let mut t2: i64 = 0
+
+    t0 = now_ns()
+    let lin: LinearRegression = linear_regression_fit(s.X_train, s.yr_train, no_penalty)
+    t1 = now_ns()
+    let lin_pred: ptr<f32> = linear_regression_predict(lin, s.X_test)
+    t2 = now_ns()
+    printf("SCALED|LinearRegression|%d|%d|%.9f|%.9f|ok\n", n, p, elapsed_ms(t0,t1), elapsed_ms(t1,t2))
+    array_free_f32(lin_pred); linear_regression_free(lin)
+
+    t0 = now_ns()
+    let rf: RandomForestClassifier = random_forest_classifier_fit(s.X_train, s.yc_train, 2, 10, 8, 42)
+    t1 = now_ns()
+    let rf_pred: ptr<f32> = random_forest_classifier_predict(rf, s.X_test)
+    t2 = now_ns()
+    printf("SCALED|RandomForest|%d|%d|%.9f|%.9f|ok\n", n, p, elapsed_ms(t0,t1), elapsed_ms(t1,t2))
+    array_free_f32(rf_pred); random_forest_classifier_free(rf)
+
+    t0 = now_ns()
+    let gnb: GaussianNB = gaussian_nb_fit(s.X_train, s.yc_train, 2, 0.000000001)
+    t1 = now_ns()
+    let gnb_pred: ptr<f32> = gaussian_nb_predict(gnb, s.X_test)
+    t2 = now_ns()
+    printf("SCALED|GaussianNB|%d|%d|%.9f|%.9f|ok\n", n, p, elapsed_ms(t0,t1), elapsed_ms(t1,t2))
+    array_free_f32(gnb_pred); gaussian_nb_free(gnb)
+
+    t0 = now_ns()
+    let km: KMeans = kmeans_fit_plus_plus(s.X_train, 2, 50, 0.001, 42, 1)
+    t1 = now_ns()
+    let km_pred: ptr<i32> = kmeans_predict(km, s.X_test)
+    t2 = now_ns()
+    printf("SCALED|KMeans|%d|%d|%.9f|%.9f|ok\n", n, p, elapsed_ms(t0,t1), elapsed_ms(t1,t2))
+    free(km_pred as ptr<void>); kmeans_free(km)
+
+    if n <= 1000 {
+        t0 = now_ns()
+        let svc: KernelSVCMulti = kernel_svc_multi_fit(s.X_train, s.yc_train, 2, 0.1, 1.0, 500)
+        t1 = now_ns()
+        let svc_pred: ptr<f32> = kernel_svc_multi_predict(svc, s.X_test)
+        t2 = now_ns()
+        printf("SCALED|KernelSVC_RBF|%d|%d|%.9f|%.9f|ok\n", n, p, elapsed_ms(t0,t1), elapsed_ms(t1,t2))
+        array_free_f32(svc_pred); kernel_svc_multi_free(svc)
+    } else {
+        printf("SCALED|KernelSVC_RBF|%d|%d|0|0|unavailable\n", n, p)
+    }
+
+    free_split(s)
+    free_data(d)
+}
+
+function main() -> i32 {
+    printf("TIMING_UNIT|ms\n")
+    printf("SCALED_COVERAGE|max_rows|10000\n")
+    run_case(100, 8)
+    run_case(100, 32)
+    run_case(1000, 8)
+    run_case(1000, 32)
+    run_case(10000, 8)
+    run_case(10000, 32)
+    return 0
+}
