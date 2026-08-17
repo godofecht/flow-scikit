@@ -1,0 +1,108 @@
+name: Remaining issue implementation
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kmeans-parity:
+    name: Canonical 19/19 KMeans parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: flooooooooooow/flow
+          ref: 3f6031813912e8f77bcebe18c5b25dc35861216b
+          path: .flow-toolchain
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install benchmark dependencies
+        run: |
+          pip install -r .flow-toolchain/requirements.txt
+          pip install -r benchmarks/requirements-architecture.txt
+          sudo apt-get update && sudo apt-get install -y libopenblas-dev
+      - name: Audit KMeans semantic divergence
+        run: python benchmarks/audit_kmeans_semantics.py
+      - name: Run repeated canonical benchmark
+        env:
+          FLOW_HEADLINE_COMMAND: ${{ github.workspace }}/.flow-toolchain/flow run benchmarks/bench_flow_v2.flow
+          FLOW_HOST: python
+          FLOW_OPT_LEVEL: "0"
+          FLOW_LDFLAGS: "-lm -lopenblas"
+        run: python benchmarks/run_headline.py --repeats 3
+      - name: Apply evidence-backed KMeans equivalence gate
+        run: python benchmarks/finalize_kmeans_parity.py
+      - name: Require all 19 rows parity eligible
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path('benchmarks/headline_summary.json').read_text())
+          c = result['counts']
+          assert c['total_rows'] == 19, c
+          assert c['eligible_comparisons'] == 19, c
+          assert c['parity_unresolved'] == 0, c
+          assert c['measurement_unresolved'] == 0, c
+          print(c)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: canonical-19of19-${{ github.run_id }}
+          path: |
+            benchmarks/kmeans_semantics_audit.json
+            benchmarks/sklearn_results_v2.txt
+            benchmarks/flow_results_v2.txt
+            benchmarks/headline_rows.json
+            benchmarks/headline_summary.json
+            benchmarks/parity_diagnostics.json
+            benchmarks/headline_environment.json
+
+  architecture-map:
+    name: sklearn execution architecture map
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned architecture dependencies
+        run: pip install -r benchmarks/requirements-architecture.txt
+      - name: Generate execution, profiling and prioritization evidence
+        run: python benchmarks/run_architecture_pipeline.py --profile-sizes 100,1000
+      - name: Validate inventory coverage and dispositions
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          inv = json.loads(Path('benchmarks/sklearn_execution_inventory.json').read_text())
+          roadmap = json.loads(Path('benchmarks/optimization_roadmap.json').read_text())
+          audit = json.loads(Path('benchmarks/native_hotspot_audit.json').read_text())
+          assert len(inv['rows']) > 100, len(inv['rows'])
+          assert len(roadmap['rows']) == len(inv['rows'])
+          allowed = {'replace-with-flow','already-equivalent','retain-native','blocked-by-flow-compiler/runtime','low-value'}
+          assert all(r['disposition'] in allowed for r in audit['rows'])
+          classes = {r['execution_class'] for r in inv['rows']}
+          assert {'python-bound','mixed'} & classes
+          print({'operations': len(inv['rows']), 'execution_classes': sorted(classes), 'native_hotspots': len(audit['rows'])})
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: architecture-map-${{ github.run_id }}
+          path: |
+            benchmarks/sklearn_execution_inventory.json
+            benchmarks/sklearn_execution_inventory.csv
+            benchmarks/SKLEARN_EXECUTION_INVENTORY.md
+            benchmarks/sklearn_runtime_attribution.json
+            benchmarks/optimization_roadmap.json
+            benchmarks/OPTIMIZATION_ROADMAP.md
+            benchmarks/whole_estimator_experiments.json
+            benchmarks/native_hotspot_audit.json
+            benchmarks/NATIVE_HOTSPOT_AUDIT.md
+            benchmarks/architecture_performance_map.json
+            benchmarks/ARCHITECTURE_PERFORMANCE_MAP.md
