@@ -1,0 +1,24 @@
+# Regression for GaussianNB/sklearn variance semantics.
+
+import "lib/scikit/matrix.flow"
+
+function main() -> i32 {
+    let values: ptr<f32> = array_new_f32(4)
+    values[0] = 0.0
+    values[1] = 0.0
+    values[2] = 2.0
+    values[3] = 2.0
+
+    let mean: f32 = array_mean(values, 4)
+    let std: f32 = array_std(values, 4, mean)
+    array_free_f32(values)
+
+    if std < 0.9999 || std > 1.0001 {
+        print("FAIL: expected population std 1.0, got ")
+        println(std)
+        return 1
+    }
+
+    println("PASS: array_std uses population variance (ddof=0)")
+    return 0
+}
