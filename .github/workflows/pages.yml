@@ -3,7 +3,7 @@ name: Deploy GitHub Pages
 on:
   push:
     branches: [main]
-    paths: [docs/**, .github/workflows/pages.yml]
+    paths: [docs/**, benchmarks/**, .github/workflows/pages.yml]
   workflow_dispatch:
 
 permissions:
@@ -23,6 +23,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Normalize legacy sklearn timings to milliseconds
+        run: python benchmarks/normalize_published_timings.py
+      - name: Validate published benchmark timing units
+        run: python benchmarks/validate_published_timings.py
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
