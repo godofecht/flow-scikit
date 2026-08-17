@@ -1,43 +1,74 @@
-# Performance Benchmarks: flow-scikit vs scikit-learn
+# Performance benchmarks: flow-scikit vs scikit-learn
 
-Comparison of numerical parity and runtime between flow-scikit and scikit-learn.
+This directory contains the canonical numerical-parity, timing and execution-architecture evidence used by the repository and Pages site.
+
+## Canonical result
+
+[`headline_result_v2.json`](headline_result_v2.json) is the current competitive source of truth.
+
+The committed result contains **19 total rows, 19 parity-eligible comparisons, 8 Flow wins, 11 scikit-learn wins, 0 ties, 0 parity-unresolved rows and 0 measurement-unresolved rows**.
+
+A competitive speed claim is only emitted when a row has resolved timing, a declared millisecond unit, comparable benchmark semantics and a passing estimator-specific parity contract.
 
 ## Timing contract
 
 The benchmark contract is **milliseconds end-to-end**.
 
-`benchmarks/bench_sklearn.py` converts `time.perf_counter()` deltas to milliseconds before emitting results and prints `TIMING_UNIT|ms`. `benchmarks/bench_flow.flow` converts `clock()` ticks to milliseconds with `elapsed_ms()`. Comparison tools do not apply any implicit seconds-to-milliseconds conversion.
+The Python v2 runner uses high-resolution `perf_counter_ns()`-backed adaptive measurement and emits explicit `TIMING_UNIT|ms`. Flow emits millisecond timings. [`run_headline.py`](run_headline.py) repeats complete runs and aggregates process-level measurements with medians and IQRs.
 
-A benchmark result file with an unexpected or missing timing unit is rejected rather than guessed.
+Comparison tools do not apply hidden seconds-to-milliseconds conversions. Missing or unexpected timing units are rejected.
 
-The published website still contains a historical 19-row dataset captured when sklearn durations were copied as second-valued literals into fields named `sk_ms`. `benchmarks/normalize_published_timings.py` exists only to normalize that legacy publication artifact during Pages deployment. It is not part of the current benchmark measurement contract.
+Older published data that stored second-valued Python literals in fields labelled `ms` is retained only as historical audit material. It is not part of canonical v2.
 
-`docs/benchmark-corrections.js` is idempotent: it converts the legacy checkout data only when it detects the old second-valued 19-row dataset, and leaves the already-normalized Pages build untouched. This prevents the former 1000x double-conversion failure mode.
+## Fixture and parity contract
 
-## Current methodology
+Canonical v2 consumes persisted train/test fixtures shared by Python and Flow. CI verifies that the JSON split indices and Flow binary split fixtures are byte-for-byte equivalent.
 
-The headline dataset benchmark uses Iris, Digits, and Diabetes with the deterministic xorshift32 Fisher-Yates split at seed 42 and an 80/20 train/test partition. Preprocessing occurs before estimator timing. Fit and prediction are reported separately and in milliseconds.
+[`parity_contract.json`](parity_contract.json) defines the semantic contract for all 19 rows. Supervised rows compare their declared predictive metric under explicit tolerances. KMeans uses adjusted Rand index plus inertia rather than label-mapped accuracy. PCA additionally checks explained-variance ratios, singular values, reconstruction error and sign-aligned components.
 
-The deterministic per-algorithm parity benchmark is a separate correctness suite. `benchmarks/run_parity.py` can repeat both implementations, verify deterministic outputs, aggregate timings with medians, and write canonical parity artifacts. `benchmarks/compare_parity.py` classifies numerical results as `parity verified`, `approximately equivalent`, `not parity verified`, or `missing` rather than treating all timing rows as automatically comparable.
+Digits KMeans is classified as `approximately equivalent`. [`audit_kmeans_semantics.py`](audit_kmeans_semantics.py) records that the first trajectory divergence occurs during initialization; the final objective remains closely matched. [`finalize_kmeans_parity.py`](finalize_kmeans_parity.py) applies the explicit clustering-equivalence gate before the row becomes headline-eligible.
 
-The historical published timing table should not be treated as the final competitive dataset. Two sklearn rows were stored as `0.000` at the old capture precision, so the historical `10/17` denominator reflects measurement resolution rather than a 17-row benchmark. The benchmark matrix actually contains 19 rows. Issues #168, #175, and #176 track replacement of that historical artifact with repeated, sub-millisecond-safe, parity-gated measurements and a mechanically generated headline.
-
-## Running the benchmarks
+## Running the canonical benchmark
 
 ```bash
-# sklearn dataset benchmark — emits milliseconds
-python3 benchmarks/bench_sklearn.py
-
-# Flow dataset benchmark — emits milliseconds
-FLOW_HOST=python flow run benchmarks/bench_flow.flow
-
-# unit-safe dataset comparison
-python3 benchmarks/compare.py
-
-# repeated deterministic parity benchmark
-python3 benchmarks/run_parity.py --repeats 7
+FLOW_HEADLINE_COMMAND="flow run benchmarks/bench_flow_v2.flow" \
+python benchmarks/run_headline.py --repeats 7
 ```
+
+The runner writes the raw Python/Flow result files, environment metadata, row-level comparison output and generated headline summary.
+
+## Execution architecture
+
+The benchmark result is joined to a separate sklearn execution-architecture pipeline so a Flow win or loss can be interpreted against what sklearn actually executes.
+
+The committed evidence currently contains:
+
+- 491 estimator-operation inventory rows
+- 32 runtime-attribution rows
+- 491 optimization-roadmap rows
+- 146 native/mixed hotspot dispositions
+- 8 whole-estimator experiments
+- substrate and speedup evidence for all 19 canonical rows
+
+[`run_architecture_pipeline.py`](run_architecture_pipeline.py) regenerates the inventory, profiles, optimization ranking, native-hotspot audit and architecture/performance map against the pinned sklearn dependency set in [`requirements-architecture.txt`](requirements-architecture.txt).
+
+CI detects estimator-surface drift: newly added or removed sklearn estimator operations must be reflected in the committed generated inventory rather than silently changing the analysis.
+
+The main generated views are:
+
+- [`SKLEARN_EXECUTION_INVENTORY.md`](SKLEARN_EXECUTION_INVENTORY.md)
+- [`ARCHITECTURE_PERFORMANCE_MAP.md`](ARCHITECTURE_PERFORMANCE_MAP.md)
+- [`OPTIMIZATION_ROADMAP.md`](OPTIMIZATION_ROADMAP.md)
+- [`NATIVE_HOTSPOT_AUDIT.md`](NATIVE_HOTSPOT_AUDIT.md)
 
 ## Interpretation
 
-A speedup is always `sklearn_ms / flow_ms`. Values above `1x` mean Flow is faster; values below `1x` mean sklearn is faster. A competitive speed claim should only be made for rows whose timing measurement is resolved and whose estimator semantics satisfy the parity contract.
+A speedup is `sklearn_ms / flow_ms`. Values above `1x` mean Flow is faster; values below `1x` mean scikit-learn is faster.
+
+The current architecture map shows a useful but non-causal pattern: Flow wins 75% of headline rows classified Python-bound, about 45% of mixed rows and 0% of external-native-bound rows. This is evidence for prioritization, not proof that execution substrate alone determines performance.
+
+Mature BLAS/LAPACK, liblinear, libsvm and other native backends are treated as native competitors. The optimization roadmap deliberately prefers retaining those kernels unless benchmark and parity evidence justify replacement.
+
+## Pages publication
+
+[`publish_headline_v2.py`](publish_headline_v2.py) validates the committed canonical benchmark and architecture map, then copies the JSON artifacts into `docs/` for the static site. The public benchmark and architecture pages render those artifacts directly instead of embedding hand-maintained timing claims.
