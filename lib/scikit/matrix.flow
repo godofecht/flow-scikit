@@ -174,8 +174,8 @@ export function array_std(a: ptr<f32>, n: i32, mean: f32) -> f32 {
         let d: f32 = a[i] - mean
         sum_sq = sum_sq + d * d
     }
-    # Use n-1 (sample std) to match sklearn StandardScaler default ddof=1
-    let denom: f32 = (n - 1) as f32
+    # Population standard deviation (ddof=0), matching NumPy/sklearn defaults.
+    let denom: f32 = n as f32
     if denom < 1.0 { denom = 1.0 }
     return sqrt((sum_sq / denom) as f64) as f32
 }
