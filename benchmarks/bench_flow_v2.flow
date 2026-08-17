@@ -1,0 +1,333 @@
+# Canonical 19-row Flow headline benchmark.
+# Consumes persisted split fixtures and uses C11 timespec_get for high-resolution timing.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+    function fopen(path: string, mode: string) -> ptr<void>
+    function fread(dst: ptr<void>, size: i64, count: i64, stream: ptr<void>) -> i64
+    function fclose(stream: ptr<void>) -> i32
+}
+
+const TIME_UTC: i32 = 1
+
+function now_ns() -> i64 {
+    let ts: ptr<i64> = malloc(16) as ptr<i64>
+    if ts == null { return 0 }
+    let ok: i32 = timespec_get(ts, TIME_UTC)
+    if ok == 0 {
+        free(ts as ptr<void>)
+        return 0
+    }
+    let value: i64 = ts[0] * 1000000000 + ts[1]
+    free(ts as ptr<void>)
+    return value
+}
+
+function elapsed_ms_ns(start: i64, finish: i64) -> f32 {
+    return (((finish - start) as f64) / 1000000.0) as f32
+}
+
+struct FixtureSplit {
+    X_train: Matrix,
+    y_train: ptr<f32>,
+    X_test: Matrix,
+    y_test: ptr<f32>,
+    n_train: i32,
+    n_test: i32
+}
+
+function load_fixture_split(X: Matrix, y: ptr<f32>, path: string) -> FixtureSplit {
+    let f: ptr<void> = fopen(path, "rb")
+    if f == null {
+        printf("failed to open fixture: %s\n", path)
+        exit(2)
+    }
+
+    let header: ptr<i32> = malloc(8) as ptr<i32>
+    if header == null { exit(2) }
+    if fread(header as ptr<void>, 4, 2, f) != 2 { exit(2) }
+    let n_train: i32 = header[0]
+    let n_test: i32 = header[1]
+    let n: i32 = n_train + n_test
+    free(header as ptr<void>)
+
+    if n != X.rows {
+        printf("fixture/sample mismatch for %s: %d != %d\n", path, n, X.rows)
+        exit(2)
+    }
+
+    let indices: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    if indices == null { exit(2) }
+    if fread(indices as ptr<void>, 4, n as i64, f) != (n as i64) { exit(2) }
+    fclose(f)
+
+    let X_train: Matrix = matrix_new(n_train, X.cols)
+    let X_test: Matrix = matrix_new(n_test, X.cols)
+    let y_train: ptr<f32> = array_new_f32(n_train)
+    let y_test: ptr<f32> = array_new_f32(n_test)
+
+    for i in 0 to n_train {
+        let src: i32 = indices[i]
+        y_train[i] = y[src]
+        for j in 0 to X.cols { matrix_set(X_train, i, j, matrix_at(X, src, j)) }
+    }
+    for i in 0 to n_test {
+        let src: i32 = indices[n_train + i]
+        y_test[i] = y[src]
+        for j in 0 to X.cols { matrix_set(X_test, i, j, matrix_at(X, src, j)) }
+    }
+    free(indices as ptr<void>)
+
+    return FixtureSplit {
+        X_train: X_train,
+        y_train: y_train,
+        X_test: X_test,
+        y_test: y_test,
+        n_train: n_train,
+        n_test: n_test
+    }
+}
+
+function free_fixture_split(s: FixtureSplit) -> void {
+    matrix_free(s.X_train)
+    matrix_free(s.X_test)
+    array_free_f32(s.y_train)
+    array_free_f32(s.y_test)
+}
+
+function choose2(n: i32) -> f64 {
+    if n < 2 { return 0.0 }
+    return ((n as f64) * ((n - 1) as f64)) / 2.0
+}
+
+function adjusted_rand_index(y_true: ptr<f32>, clusters: ptr<i32>, n: i32, n_classes: i32, n_clusters: i32) -> f32 {
+    let cells: ptr<i32> = malloc(((n_classes * n_clusters) as i64) * 4) as ptr<i32>
+    let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    let cluster_counts: ptr<i32> = malloc((n_clusters as i64) * 4) as ptr<i32>
+    for i in 0 to n_classes * n_clusters { cells[i] = 0 }
+    for i in 0 to n_classes { class_counts[i] = 0 }
+    for i in 0 to n_clusters { cluster_counts[i] = 0 }
+
+    for i in 0 to n {
+        let c: i32 = y_true[i] as i32
+        let k: i32 = clusters[i]
+        if c >= 0 && c < n_classes && k >= 0 && k < n_clusters {
+            cells[c * n_clusters + k] = cells[c * n_clusters + k] + 1
+            class_counts[c] = class_counts[c] + 1
+            cluster_counts[k] = cluster_counts[k] + 1
+        }
+    }
+
+    let mut sum_cells: f64 = 0.0
+    let mut sum_classes: f64 = 0.0
+    let mut sum_clusters: f64 = 0.0
+    for i in 0 to n_classes * n_clusters { sum_cells = sum_cells + choose2(cells[i]) }
+    for i in 0 to n_classes { sum_classes = sum_classes + choose2(class_counts[i]) }
+    for i in 0 to n_clusters { sum_clusters = sum_clusters + choose2(cluster_counts[i]) }
+
+    let total_pairs: f64 = choose2(n)
+    let mut result: f64 = 1.0
+    if total_pairs > 0.0 {
+        let expected: f64 = (sum_classes * sum_clusters) / total_pairs
+        let max_index: f64 = 0.5 * (sum_classes + sum_clusters)
+        let denom: f64 = max_index - expected
+        if denom > 0.000000000001 || denom < -0.000000000001 {
+            result = (sum_cells - expected) / denom
+        }
+    }
+
+    free(cells as ptr<void>)
+    free(class_counts as ptr<void>)
+    free(cluster_counts as ptr<void>)
+    return result as f32
+}
+
+function reconstruction_mse(original: Matrix, reconstructed: Matrix) -> f32 {
+    let mut total: f64 = 0.0
+    let n: i32 = original.rows * original.cols
+    for i in 0 to original.rows {
+        for j in 0 to original.cols {
+            let d: f64 = (matrix_at(original, i, j) - matrix_at(reconstructed, i, j)) as f64
+            total = total + d * d
+        }
+    }
+    if n == 0 { return 0.0 }
+    return (total / (n as f64)) as f32
+}
+
+function main() -> i32 {
+    printf("TIMING_UNIT|ms\n")
+    printf("BENCHMARK_MODE|end_to_end\n")
+    printf("FIXTURE_SOURCE|benchmarks/split_*.bin\n")
+    printf("BENCHMARK_ENV|{\"impl\":\"flow\",\"timer\":\"timespec_get\"}\n")
+
+    let no_penalty: Penalty = penalty_none()
+    let l2_penalty: Penalty = penalty_l2(0.001)
+    let mut t0: i64 = 0
+    let mut t1: i64 = 0
+    let mut t2: i64 = 0
+
+    # Iris
+    let iris: Dataset = load_iris()
+    let si: FixtureSplit = load_fixture_split(iris.X, iris.y, "benchmarks/split_iris.bin")
+    let sci: StandardScaler = standard_scaler_fit(si.X_train)
+    let Xi_tr: Matrix = standard_scaler_transform(sci, si.X_train)
+    let Xi_te: Matrix = standard_scaler_transform(sci, si.X_test)
+
+    t0 = now_ns()
+    let lr_i: LogisticRegression = logistic_regression_fit(Xi_tr, si.y_train, 3, 200, 0.1, l2_penalty)
+    t1 = now_ns()
+    let lr_i_probs: ptr<f32> = logistic_predict(lr_i, Xi_te)
+    let lr_i_pred: ptr<f32> = logistic_decide(lr_i, lr_i_probs, si.n_test, 0.5)
+    t2 = now_ns()
+    printf("RESULT|LogisticRegression|iris|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(si.y_test, lr_i_pred, si.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    array_free_f32(lr_i_probs); array_free_f32(lr_i_pred); logistic_regression_free(lr_i)
+
+    t0 = now_ns()
+    let lsvc_i: LinearSVCMulti = linear_svc_multi_fit(Xi_tr, si.y_train, 3, 1.0, 1000)
+    t1 = now_ns()
+    let lsvc_i_pred: ptr<f32> = linear_svc_multi_predict(lsvc_i, Xi_te)
+    t2 = now_ns()
+    printf("RESULT|LinearSVC|iris|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(si.y_test, lsvc_i_pred, si.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    array_free_f32(lsvc_i_pred); linear_svc_multi_free(lsvc_i)
+
+    t0 = now_ns()
+    let ksvc_i: KernelSVCMulti = kernel_svc_multi_fit(Xi_tr, si.y_train, 3, 0.25, 1.0, 200)
+    t1 = now_ns()
+    let ksvc_i_pred: ptr<f32> = kernel_svc_multi_predict(ksvc_i, Xi_te)
+    t2 = now_ns()
+    printf("RESULT|KernelSVC_RBF|iris|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(si.y_test, ksvc_i_pred, si.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    array_free_f32(ksvc_i_pred); kernel_svc_multi_free(ksvc_i)
+
+    t0 = now_ns()
+    let dt_i: DecisionTreeClassifier = decision_tree_classifier_fit(Xi_tr, si.y_train, 3, 5, 0)
+    t1 = now_ns()
+    let dt_i_pred: ptr<f32> = decision_tree_classifier_predict(dt_i, Xi_te)
+    t2 = now_ns()
+    printf("RESULT|DecisionTree|iris|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(si.y_test, dt_i_pred, si.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    array_free_f32(dt_i_pred); decision_tree_classifier_free(dt_i)
+
+    t0 = now_ns()
+    let rf_i: RandomForestClassifier = random_forest_classifier_fit(Xi_tr, si.y_train, 3, 10, 5, 42)
+    t1 = now_ns()
+    let rf_i_pred: ptr<f32> = random_forest_classifier_predict(rf_i, Xi_te)
+    t2 = now_ns()
+    printf("RESULT|RandomForest|iris|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(si.y_test, rf_i_pred, si.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    array_free_f32(rf_i_pred); random_forest_classifier_free(rf_i)
+
+    t0 = now_ns()
+    let gnb_i: GaussianNB = gaussian_nb_fit(Xi_tr, si.y_train, 3, 0.000000001)
+    t1 = now_ns()
+    let gnb_i_pred: ptr<f32> = gaussian_nb_predict(gnb_i, Xi_te)
+    t2 = now_ns()
+    printf("RESULT|GaussianNB|iris|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(si.y_test, gnb_i_pred, si.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    array_free_f32(gnb_i_pred); gaussian_nb_free(gnb_i)
+
+    t0 = now_ns()
+    let km_i: KMeans = kmeans_fit_plus_plus(Xi_tr, 3, 100, 0.001, 42, 10)
+    t1 = now_ns()
+    let km_i_pred: ptr<i32> = kmeans_predict(km_i, Xi_te)
+    t2 = now_ns()
+    let ari_i: f32 = adjusted_rand_index(si.y_test, km_i_pred, si.n_test, 3, 3)
+    printf("RESULT|KMeans|iris|adjusted_rand_index|%.9f|%.9f|%.9f\n", ari_i, elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    printf("DETAIL|KMeans|iris|inertia|%.9f\n", km_i.inertia)
+    printf("DETAIL|KMeans|iris|n_iter|%d\n", km_i.n_iter)
+    free(km_i_pred as ptr<void>); kmeans_free(km_i)
+
+    t0 = now_ns()
+    let pca_i: PCA = pca_fit(Xi_tr, 2)
+    t1 = now_ns()
+    let pca_i_t: Matrix = pca_transform(pca_i, Xi_te)
+    t2 = now_ns()
+    let pca_i_r: Matrix = pca_inverse_transform(pca_i, pca_i_t)
+    let evr_sum: f32 = pca_i.explained_variance_ratio[0] + pca_i.explained_variance_ratio[1]
+    let sv0: f32 = sqrt((pca_i.explained_variance[0] * ((si.n_train - 1) as f32)) as f64) as f32
+    let sv1: f32 = sqrt((pca_i.explained_variance[1] * ((si.n_train - 1) as f32)) as f64) as f32
+    printf("RESULT|PCA|iris|explained_var_ratio|%.9f|%.9f|%.9f\n", evr_sum, elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    printf("DETAIL|PCA|iris|explained_variance_ratio|%.9f,%.9f\n", pca_i.explained_variance_ratio[0], pca_i.explained_variance_ratio[1])
+    printf("DETAIL|PCA|iris|singular_values|%.9f,%.9f\n", sv0, sv1)
+    printf("DETAIL|PCA|iris|reconstruction_mse|%.9f\n", reconstruction_mse(Xi_te, pca_i_r))
+    printf("DETAIL|PCA|iris|component_0|%.9f,%.9f,%.9f,%.9f\n", pca_i.components[0][0], pca_i.components[0][1], pca_i.components[0][2], pca_i.components[0][3])
+    printf("DETAIL|PCA|iris|component_1|%.9f,%.9f,%.9f,%.9f\n", pca_i.components[1][0], pca_i.components[1][1], pca_i.components[1][2], pca_i.components[1][3])
+    matrix_free(pca_i_t); matrix_free(pca_i_r); pca_free(pca_i)
+
+    standard_scaler_free(sci); matrix_free(Xi_tr); matrix_free(Xi_te); free_fixture_split(si); dataset_free(iris)
+
+    # Digits
+    let digits: Dataset = load_digits()
+    let sd: FixtureSplit = load_fixture_split(digits.X, digits.y, "benchmarks/split_digits.bin")
+    let scd: StandardScaler = standard_scaler_fit(sd.X_train)
+    let Xd_tr: Matrix = standard_scaler_transform(scd, sd.X_train)
+    let Xd_te: Matrix = standard_scaler_transform(scd, sd.X_test)
+
+    t0 = now_ns(); let lr_d: LogisticRegression = logistic_regression_fit(Xd_tr, sd.y_train, 10, 200, 0.1, l2_penalty); t1 = now_ns()
+    let lr_d_probs: ptr<f32> = logistic_predict(lr_d, Xd_te); let lr_d_pred: ptr<f32> = logistic_decide(lr_d, lr_d_probs, sd.n_test, 0.5); t2 = now_ns()
+    printf("RESULT|LogisticRegression|digits|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(sd.y_test, lr_d_pred, sd.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    array_free_f32(lr_d_probs); array_free_f32(lr_d_pred); logistic_regression_free(lr_d)
+
+    t0 = now_ns(); let lsvc_d: LinearSVCMulti = linear_svc_multi_fit(Xd_tr, sd.y_train, 10, 1.0, 1000); t1 = now_ns()
+    let lsvc_d_pred: ptr<f32> = linear_svc_multi_predict(lsvc_d, Xd_te); t2 = now_ns()
+    printf("RESULT|LinearSVC|digits|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(sd.y_test, lsvc_d_pred, sd.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    array_free_f32(lsvc_d_pred); linear_svc_multi_free(lsvc_d)
+
+    t0 = now_ns(); let ksvc_d: KernelSVCMulti = kernel_svc_multi_fit(Xd_tr, sd.y_train, 10, 0.001, 1.0, 1000); t1 = now_ns()
+    let ksvc_d_pred: ptr<f32> = kernel_svc_multi_predict(ksvc_d, Xd_te); t2 = now_ns()
+    printf("RESULT|KernelSVC_RBF|digits|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(sd.y_test, ksvc_d_pred, sd.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    array_free_f32(ksvc_d_pred); kernel_svc_multi_free(ksvc_d)
+
+    t0 = now_ns(); let dt_d: DecisionTreeClassifier = decision_tree_classifier_fit(Xd_tr, sd.y_train, 10, 10, 0); t1 = now_ns()
+    let dt_d_pred: ptr<f32> = decision_tree_classifier_predict(dt_d, Xd_te); t2 = now_ns()
+    printf("RESULT|DecisionTree|digits|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(sd.y_test, dt_d_pred, sd.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    array_free_f32(dt_d_pred); decision_tree_classifier_free(dt_d)
+
+    t0 = now_ns(); let rf_d: RandomForestClassifier = random_forest_classifier_fit(Xd_tr, sd.y_train, 10, 10, 10, 42); t1 = now_ns()
+    let rf_d_pred: ptr<f32> = random_forest_classifier_predict(rf_d, Xd_te); t2 = now_ns()
+    printf("RESULT|RandomForest|digits|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(sd.y_test, rf_d_pred, sd.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    array_free_f32(rf_d_pred); random_forest_classifier_free(rf_d)
+
+    t0 = now_ns(); let gnb_d: GaussianNB = gaussian_nb_fit(Xd_tr, sd.y_train, 10, 0.000000001); t1 = now_ns()
+    let gnb_d_pred: ptr<f32> = gaussian_nb_predict(gnb_d, Xd_te); t2 = now_ns()
+    printf("RESULT|GaussianNB|digits|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(sd.y_test, gnb_d_pred, sd.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    array_free_f32(gnb_d_pred); gaussian_nb_free(gnb_d)
+
+    t0 = now_ns(); let km_d: KMeans = kmeans_fit_plus_plus(Xd_tr, 10, 100, 0.001, 42, 10); t1 = now_ns()
+    let km_d_pred: ptr<i32> = kmeans_predict(km_d, Xd_te); t2 = now_ns()
+    printf("RESULT|KMeans|digits|adjusted_rand_index|%.9f|%.9f|%.9f\n", adjusted_rand_index(sd.y_test, km_d_pred, sd.n_test, 10, 10), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    printf("DETAIL|KMeans|digits|inertia|%.9f\n", km_d.inertia); printf("DETAIL|KMeans|digits|n_iter|%d\n", km_d.n_iter)
+    free(km_d_pred as ptr<void>); kmeans_free(km_d)
+
+    standard_scaler_free(scd); matrix_free(Xd_tr); matrix_free(Xd_te); free_fixture_split(sd); dataset_free(digits)
+
+    # Diabetes
+    let diabetes: Dataset = load_diabetes()
+    let sr: FixtureSplit = load_fixture_split(diabetes.X, diabetes.y, "benchmarks/split_diabetes.bin")
+    let scr: StandardScaler = standard_scaler_fit(sr.X_train)
+    let Xr_tr: Matrix = standard_scaler_transform(scr, sr.X_train)
+    let Xr_te: Matrix = standard_scaler_transform(scr, sr.X_test)
+
+    t0 = now_ns(); let ridge: Ridge = ridge_fit(Xr_tr, sr.y_train, 1.0, 1000, 0.01); t1 = now_ns()
+    let ridge_pred: ptr<f32> = ridge_predict(ridge, Xr_te); t2 = now_ns()
+    printf("RESULT|Ridge|diabetes|r2|%.9f|%.9f|%.9f\n", r2_score(sr.y_test, ridge_pred, sr.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    array_free_f32(ridge_pred); ridge_free(ridge)
+
+    t0 = now_ns(); let lasso: Lasso = lasso_fit(Xr_tr, sr.y_train, 0.1, 1000, 0.01); t1 = now_ns()
+    let lasso_pred: ptr<f32> = lasso_predict(lasso, Xr_te); t2 = now_ns()
+    printf("RESULT|Lasso|diabetes|r2|%.9f|%.9f|%.9f\n", r2_score(sr.y_test, lasso_pred, sr.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    array_free_f32(lasso_pred); lasso_free(lasso)
+
+    t0 = now_ns(); let linreg: LinearRegression = linear_regression_fit(Xr_tr, sr.y_train, no_penalty); t1 = now_ns()
+    let linreg_pred: ptr<f32> = linear_regression_predict(linreg, Xr_te); t2 = now_ns()
+    printf("RESULT|LinearRegression|diabetes|r2|%.9f|%.9f|%.9f\n", r2_score(sr.y_test, linreg_pred, sr.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    array_free_f32(linreg_pred); linear_regression_free(linreg)
+
+    t0 = now_ns(); let kr: KernelRidge = kernel_ridge_fit(Xr_tr, sr.y_train, 1.0, KERNEL_TYPE_RBF, 0.1, 3, 0.0); t1 = now_ns()
+    let kr_pred: ptr<f32> = kernel_ridge_predict(kr, Xr_te); t2 = now_ns()
+    printf("RESULT|KernelRidge_RBF|diabetes|r2|%.9f|%.9f|%.9f\n", r2_score(sr.y_test, kr_pred, sr.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    array_free_f32(kr_pred); kernel_ridge_free(kr)
+
+    standard_scaler_free(scr); matrix_free(Xr_tr); matrix_free(Xr_te); free_fixture_split(sr); dataset_free(diabetes)
+    return 0
+}
