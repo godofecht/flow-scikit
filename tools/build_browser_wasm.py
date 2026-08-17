@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build flow-scikit's browser runtime through Flow's direct MLIR wasm32 target."""
+"""Build flow-scikit browser modules through Flow's direct MLIR wasm32 target."""
 
 from __future__ import annotations
 
@@ -16,6 +16,19 @@ BROWSER_EXPORTS = (
     "browser_f1",
 )
 
+MNIST_EXPORTS = (
+    "mnist_squared_distance",
+    "home_price_estimate",
+    "payment_risk",
+    "standardise_value",
+    "absolute_z_score",
+    "point_distance",
+    "delivery_eta_minutes",
+    "message_risk",
+    "stock_cover_days",
+    "tolerance_deviation",
+)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -25,6 +38,7 @@ def main() -> int:
         help="Path to a Flow checkout containing flow.wasm_compiler",
     )
     parser.add_argument("-o", "--output", default="docs/wasm/browser_mlir.wasm")
+    parser.add_argument("--mnist-output", default="docs/wasm/mnist_demo.wasm")
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
@@ -41,12 +55,25 @@ def main() -> int:
 
     from flow.wasm_compiler import flow_to_wasm
 
-    source = root / "docs" / "wasm" / "browser_mlir.flow"
-    output = (root / args.output).resolve()
+    targets = (
+        (
+            root / "docs" / "wasm" / "browser_mlir.flow",
+            (root / args.output).resolve(),
+            BROWSER_EXPORTS,
+        ),
+        (
+            root / "docs" / "wasm" / "mnist_demo.flow",
+            (root / args.mnist_output).resolve(),
+            MNIST_EXPORTS,
+        ),
+    )
+
     previous = Path.cwd()
     try:
         os.chdir(root)
-        flow_to_wasm(source, output, exports=BROWSER_EXPORTS, optimize="O2")
+        for source, output, exports in targets:
+            flow_to_wasm(source, output, exports=exports, optimize="O2")
+            print(output)
     finally:
         os.chdir(previous)
         if previous_pythonpath is None:
@@ -54,7 +81,6 @@ def main() -> int:
         else:
             os.environ["PYTHONPATH"] = previous_pythonpath
 
-    print(output)
     return 0
 
 
