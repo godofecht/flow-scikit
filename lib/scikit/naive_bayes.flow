@@ -15,71 +15,121 @@ export struct GaussianNB {
 }
 
 export function gaussian_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, var_smoothing: f32) -> GaussianNB {
-    let n_features: i32 = X.cols
+    let n: i32 = X.rows
+    let p: i32 = X.cols
     let classes: ptr<f32> = array_new_f32(n_classes)
+    let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    let class_indices: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
     let mut n_found: i32 = 0
 
-    for i in 0 to X.rows {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] {
-                found = true
+    for c in 0 to n_classes {
+        class_counts[c] = 0
+    }
+
+    # Discover classes once and cache each sample's class index.  The previous
+    # implementation rediscovered membership for every class/feature pair.
+    for i in 0 to n {
+        let mut class_id: i32 = -1
+        for c in 0 to n_found {
+            if classes[c] == y[i] {
+                class_id = c
+                break
             }
         }
-        if not found {
-            classes[n_found] = y[i]
+        if class_id < 0 {
+            class_id = n_found
+            classes[class_id] = y[i]
             n_found = n_found + 1
         }
+        class_indices[i] = class_id
+        class_counts[class_id] = class_counts[class_id] + 1
     }
 
     let means: ptr<ptr<f32> > = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
     let variances: ptr<ptr<f32> > = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
     let priors: ptr<f32> = array_new_f32(n_classes)
-
-    let global_var: ptr<f32> = array_new_f32(n_features)
-    for j in 0 to n_features {
-        let col: ptr<f32> = array_new_f32(X.rows)
-        for i in 0 to X.rows {
-            col[i] = matrix_at(X, i, j)
-        }
-        let mean: f32 = array_mean(col, X.rows)
-        global_var[j] = array_std(col, X.rows, mean)
-        global_var[j] = global_var[j] * global_var[j]
-        array_free_f32(col)
-    }
-
-    let max_var: f32 = array_max_val(global_var, n_features)
+    let global_mean: ptr<f32> = array_new_f32(p)
+    let global_var: ptr<f32> = array_new_f32(p)
+    let class_sums: ptr<f32> = array_new_f32(n_classes * p)
+    let class_var_sums: ptr<f32> = array_new_f32(n_classes * p)
 
     for c in 0 to n_classes {
-        means[c] = array_new_f32(n_features)
-        variances[c] = array_new_f32(n_features)
+        means[c] = array_new_f32(p)
+        variances[c] = array_new_f32(p)
+    }
 
-        let mut count: i32 = 0
-        for i in 0 to X.rows {
-            if y[i] == classes[c] {
-                count = count + 1
-            }
-        }
-
-        priors[c] = (count as f32) / (X.rows as f32)
-
-        for j in 0 to n_features {
-            let vals: ptr<f32> = array_new_f32(count)
-            let mut idx: i32 = 0
-            for i in 0 to X.rows {
-                if y[i] == classes[c] {
-                    vals[idx] = matrix_at(X, i, j)
-                    idx = idx + 1
-                }
-            }
-            means[c][j] = array_mean(vals, count)
-            let v: f32 = array_std(vals, count, means[c][j])
-            variances[c][j] = v * v + var_smoothing * max_var
-            array_free_f32(vals)
+    # First contiguous pass: global and per-class sufficient statistics.
+    for i in 0 to n {
+        let c: i32 = class_indices[i]
+        let row_base: i32 = i * p
+        let class_base: i32 = c * p
+        for j in 0 to p {
+            let value: f32 = X.data[row_base + j]
+            global_mean[j] = global_mean[j] + value
+            class_sums[class_base + j] = class_sums[class_base + j] + value
         }
     }
 
+    if n > 0 {
+        for j in 0 to p {
+            global_mean[j] = global_mean[j] / (n as f32)
+        }
+    }
+
+    for c in 0 to n_classes {
+        let count: i32 = class_counts[c]
+        priors[c] = 0.0
+        if n > 0 {
+            priors[c] = (count as f32) / (n as f32)
+        }
+        if count > 0 {
+            let base: i32 = c * p
+            for j in 0 to p {
+                means[c][j] = class_sums[base + j] / (count as f32)
+            }
+        }
+    }
+
+    # Second contiguous pass: squared deviations.  This preserves the existing
+    # ddof=0 population-variance semantics without temporary column/value arrays.
+    for i in 0 to n {
+        let c: i32 = class_indices[i]
+        let row_base: i32 = i * p
+        let class_base: i32 = c * p
+        for j in 0 to p {
+            let value: f32 = X.data[row_base + j]
+            let gd: f32 = value - global_mean[j]
+            let cd: f32 = value - means[c][j]
+            global_var[j] = global_var[j] + gd * gd
+            class_var_sums[class_base + j] = class_var_sums[class_base + j] + cd * cd
+        }
+    }
+
+    if n > 0 {
+        for j in 0 to p {
+            global_var[j] = global_var[j] / (n as f32)
+        }
+    }
+    let max_var: f32 = array_max_val(global_var, p)
+
+    for c in 0 to n_classes {
+        let count: i32 = class_counts[c]
+        let base: i32 = c * p
+        for j in 0 to p {
+            let class_var: f32 = 0.0
+            if count > 0 {
+                class_var = class_var_sums[base + j] / (count as f32)
+            }
+            variances[c][j] = class_var + var_smoothing * max_var
+        }
+    }
+
+    free(class_counts as ptr<void>)
+    free(class_indices as ptr<void>)
+    array_free_f32(global_mean)
     array_free_f32(global_var)
+    array_free_f32(class_sums)
+    array_free_f32(class_var_sums)
 
     return GaussianNB {
         classes: classes,
@@ -87,7 +137,7 @@ export function gaussian_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, var_smoo
         means: means,
         variances: variances,
         priors: priors,
-        n_features: n_features,
+        n_features: p,
         var_smoothing: var_smoothing,
         fitted: true
     }

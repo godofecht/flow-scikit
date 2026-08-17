@@ -1,0 +1,59 @@
+import "lib/scikit/scikit.flow"
+
+function close_enough(a: f32, b: f32, tolerance: f32) -> bool {
+    let d: f32 = a - b
+    if d < 0.0 { d = -d }
+    return d <= tolerance
+}
+
+function main() -> i32 {
+    let X: Matrix = matrix_new(4, 2)
+    let y: ptr<f32> = array_new_f32(4)
+
+    matrix_set(X, 0, 0, 1.0);  matrix_set(X, 0, 1, 2.0);  y[0] = 0.0
+    matrix_set(X, 1, 0, 3.0);  matrix_set(X, 1, 1, 4.0);  y[1] = 0.0
+    matrix_set(X, 2, 0, 10.0); matrix_set(X, 2, 1, 20.0); y[2] = 1.0
+    matrix_set(X, 3, 0, 14.0); matrix_set(X, 3, 1, 24.0); y[3] = 1.0
+
+    let model: GaussianNB = gaussian_nb_fit(X, y, 2, 0.0)
+
+    if not close_enough(model.priors[0], 0.5, 0.000001) || not close_enough(model.priors[1], 0.5, 0.000001) {
+        println("FAIL: GaussianNB priors changed")
+        return 1
+    }
+
+    if not close_enough(model.means[0][0], 2.0, 0.000001) || not close_enough(model.means[0][1], 3.0, 0.000001) {
+        println("FAIL: class 0 means changed")
+        return 1
+    }
+    if not close_enough(model.means[1][0], 12.0, 0.000001) || not close_enough(model.means[1][1], 22.0, 0.000001) {
+        println("FAIL: class 1 means changed")
+        return 1
+    }
+
+    # Population variance (ddof=0), matching sklearn and the previous implementation.
+    if not close_enough(model.variances[0][0], 1.0, 0.000001) || not close_enough(model.variances[0][1], 1.0, 0.000001) {
+        println("FAIL: class 0 variances changed")
+        return 1
+    }
+    if not close_enough(model.variances[1][0], 4.0, 0.000001) || not close_enough(model.variances[1][1], 4.0, 0.000001) {
+        println("FAIL: class 1 variances changed")
+        return 1
+    }
+
+    let predictions: ptr<f32> = gaussian_nb_predict(model, X)
+    for i in 0 to 4 {
+        if predictions[i] != y[i] {
+            println("FAIL: fitted model predictions changed")
+            return 1
+        }
+    }
+
+    array_free_f32(predictions)
+    gaussian_nb_free(model)
+    matrix_free(X)
+    array_free_f32(y)
+
+    println("OK: GaussianNB optimized fit preserves priors, means, variances and predictions")
+    return 0
+}
