@@ -1,13 +1,25 @@
 #!/usr/bin/env python3
-"""Compare per-algorithm parity between scikit-learn (Python) and scikit-learn (Flow).
+"""Compare deterministic parity between scikit-learn and flow-scikit.
 
-Checks if outputs match within a tolerance and reports timing.
-Outputs JSON for the benchmarks page.
+The generated JSON is the machine-readable parity gate consumed by benchmark
+reporting. Timing is reported for context, but parity classification is based
+only on output agreement.
 """
 import json
-import sys
 
-TOLERANCE = 0.01  # 0.01 absolute tolerance for float comparison
+VERIFIED_TOLERANCE = 0.01
+APPROX_TOLERANCE = 0.05
+
+
+def classify(max_diff, same_length):
+    if not same_length:
+        return "not parity verified"
+    if max_diff <= VERIFIED_TOLERANCE:
+        return "parity verified"
+    if max_diff <= APPROX_TOLERANCE:
+        return "approximately equivalent"
+    return "not parity verified"
+
 
 def main():
     with open("benchmarks/python_parity_results.json") as f:
@@ -15,69 +27,99 @@ def main():
     with open("benchmarks/flow_parity_results.json") as f:
         fl_results = {r["algorithm"]: r for r in json.load(f)}
 
-    all_algos = sorted(set(list(py_results.keys()) + list(fl_results.keys())))
+    all_algos = sorted(set(py_results) | set(fl_results))
 
-    print(f"{'Algorithm':<35} {'Values':<8} {'Match':<8} {'MaxDiff':<12} {'Python ms':<12} {'Flow ms':<12} {'Speedup':<10}")
-    print("=" * 100)
+    print(
+        f"{'Algorithm':<35} {'Values':<11} {'Status':<26} "
+        f"{'MaxDiff':<12} {'Python ms':<12} {'Flow ms':<12} {'Speedup':<10}"
+    )
+    print("=" * 125)
 
     parity_data = []
-    exact_matches = 0
-    total = 0
+    counts = {
+        "parity verified": 0,
+        "approximately equivalent": 0,
+        "not parity verified": 0,
+        "missing": 0,
+    }
 
     for algo in all_algos:
         py = py_results.get(algo)
         fl = fl_results.get(algo)
 
         if not py or not fl:
-            print(f"{algo:<35} {'MISSING':<8}")
+            status = "missing"
+            counts[status] += 1
+            parity_data.append({
+                "algorithm": algo,
+                "parity_status": status,
+                "eligible_for_competitive_timing": False,
+                "reason": "missing Python or Flow parity result",
+            })
+            print(f"{algo:<35} {'MISSING':<11} {status:<26}")
             continue
 
         py_out = py["output"]
         fl_out = fl["output"]
+        same_length = len(py_out) == len(fl_out)
         n = min(len(py_out), len(fl_out))
-
-        if len(py_out) != len(fl_out):
-            print(f"{algo:<35} {len(py_out)}/{len(fl_out)} {'LEN MISMATCH':<8}")
-            continue
-
-        max_diff = 0.0
-        all_match = True
-        for a, b in zip(py_out, fl_out):
-            diff = abs(a - b)
-            if diff > max_diff:
-                max_diff = diff
-            if diff > TOLERANCE:
-                all_match = False
+        max_diff = max((abs(a - b) for a, b in zip(py_out, fl_out)), default=0.0)
+        status = classify(max_diff, same_length)
+        counts[status] += 1
 
         py_ms = py["total_ms"]
         fl_ms = fl["total_ms"]
-        speedup = py_ms / fl_ms if fl_ms > 0 else 0
+        speedup = py_ms / fl_ms if fl_ms > 0 else 0.0
+        values = str(n) if same_length else f"{len(py_out)}/{len(fl_out)}"
+        speedup_str = f"{speedup:.2f}x" if fl_ms > 0 else "N/A"
 
-        match_str = "EXACT" if all_match else "DIFF"
-        if all_match:
-            exact_matches += 1
-        total += 1
+        print(
+            f"{algo:<35} {values:<11} {status:<26} {max_diff:<12.6f} "
+            f"{py_ms:<12.4f} {fl_ms:<12.4f} {speedup_str:<10}"
+        )
 
-        speedup_str = f"{speedup:.1f}x" if speedup > 1 else f"{speedup:.2f}x"
-        print(f"{algo:<35} {n:<8} {match_str:<8} {max_diff:<12.6f} {py_ms:<12.4f} {fl_ms:<12.4f} {speedup_str:<10}")
+        reason = None
+        if not same_length:
+            reason = "output length mismatch"
+        elif status == "approximately equivalent":
+            reason = (
+                f"max absolute difference exceeds verified tolerance "
+                f"({VERIFIED_TOLERANCE}) but is within approximate tolerance "
+                f"({APPROX_TOLERANCE})"
+            )
+        elif status == "not parity verified":
+            reason = f"max absolute difference exceeds {APPROX_TOLERANCE}"
 
         parity_data.append({
             "algorithm": algo,
             "n_values": n,
-            "match": all_match,
+            "python_n_values": len(py_out),
+            "flow_n_values": len(fl_out),
+            "parity_status": status,
+            "eligible_for_competitive_timing": status == "parity verified",
             "max_diff": round(max_diff, 6),
+            "verified_tolerance": VERIFIED_TOLERANCE,
+            "approximate_tolerance": APPROX_TOLERANCE,
             "python_ms": py_ms,
             "flow_ms": fl_ms,
-            "speedup": round(speedup, 2)
+            "speedup": round(speedup, 4) if fl_ms > 0 else None,
+            "reason": reason,
         })
 
-    print("=" * 100)
-    print(f"\n{exact_matches}/{total} algorithms produce identical output (tolerance={TOLERANCE})")
+    print("=" * 125)
+    print(
+        "\nParity summary: "
+        f"{counts['parity verified']} verified, "
+        f"{counts['approximately equivalent']} approximately equivalent, "
+        f"{counts['not parity verified']} not verified, "
+        f"{counts['missing']} missing"
+    )
 
     with open("benchmarks/parity_comparison.json", "w") as f:
         json.dump(parity_data, f, indent=2)
 
-    print(f"Results saved to benchmarks/parity_comparison.json")
+    print("Results saved to benchmarks/parity_comparison.json")
+
 
 if __name__ == "__main__":
     main()
