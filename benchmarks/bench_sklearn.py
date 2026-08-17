@@ -112,11 +112,12 @@ def kmeans_bench(name, ds, X, y, n_clusters):
     t0 = time.perf_counter()
     preds = km.predict(X_test)
     pred_time = time.perf_counter() - t0
-    # Best-match: for each cluster, find most common true label
+    # Best-match: for each cluster, find most common true label on train set
+    train_preds = km.predict(X_train)
     from collections import Counter
     cluster_map = {}
     for c in range(n_clusters):
-        labels = y_test[preds == c]
+        labels = y_train[train_preds == c]
         if len(labels) > 0:
             cluster_map[c] = Counter(labels.astype(int)).most_common(1)[0][0]
         else:

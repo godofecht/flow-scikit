@@ -1202,24 +1202,10 @@ export function kernel_svc_free(model: KernelSVC) -> void {
     array_free_f32(model.classes)
 }
 
-# Build full RBF kernel matrix. Uses BLAS for large n, scalar for small.
+# Build full RBF kernel matrix. Always use BLAS because cblas_sgemm is faster
+# than the scalar nested loop even for small arrays like 100-500.
 function _build_full_kernel(X: Matrix, n: i32, n_features: i32, gamma: f32) -> ptr<f64> {
-    if n > 500 {
-        return _rbf_kernel_blas_f64(X, X, gamma)
-    }
-    let gamma_d: f64 = gamma as f64
-    let kernel: ptr<f64> = malloc((n as i64) * (n as i64) * 8) as ptr<f64>
-    for i in 0 to n {
-        for j in 0 to n {
-            let mut sq_dist: f64 = 0.0
-            for f in 0 to n_features {
-                let d: f64 = (matrix_at(X, i, f) - matrix_at(X, j, f)) as f64
-                sq_dist = sq_dist + d * d
-            }
-            kernel[i * n + j] = _rbf_exp_f64(0.0 - gamma_d * sq_dist)
-        }
-    }
-    return kernel
+    return _rbf_kernel_blas_f64(X, X, gamma)
 }
 
 # ============================================================================
