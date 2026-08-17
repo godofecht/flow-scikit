@@ -1,0 +1,41 @@
+name: Benchmark disparity audit
+
+on:
+  push:
+    paths:
+      - "benchmarks/**"
+      - ".github/workflows/disparity.yml"
+  pull_request:
+    paths:
+      - "benchmarks/**"
+      - ".github/workflows/disparity.yml"
+  workflow_dispatch:
+
+jobs:
+  disparity-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Generate disparity evidence
+        run: python benchmarks/generate_disparity_report.py
+      - name: Validate persistent disparity accounting
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("benchmarks/disparity_report.json").read_text())
+          counts = report["counts"]
+          assert counts["rows"] == 19, counts
+          assert len(report["rows"]) == 19, len(report["rows"])
+          assert all("disparity_dimensions" in row for row in report["rows"])
+          assert all("runtime_ratio_sklearn_over_flow" in row for row in report["rows"])
+          print(counts)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-disparity-${{ github.run_id }}
+          path: benchmarks/disparity_report.json
