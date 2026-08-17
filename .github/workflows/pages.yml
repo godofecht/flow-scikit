@@ -3,7 +3,13 @@ name: Deploy GitHub Pages
 on:
   push:
     branches: [main]
-    paths: [docs/**, benchmarks/**, .github/workflows/pages.yml]
+    paths:
+      - 'docs/**'
+      - 'benchmarks/**'
+      - 'lib/scikit/metrics_binary.flow'
+      - 'tools/build_browser_wasm.py'
+      - 'tools/smoke_browser_wasm.mjs'
+      - '.github/workflows/pages.yml'
   workflow_dispatch:
 
 permissions:
@@ -23,9 +29,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: flooooooooooow/flow
+          ref: 3f8035873185c4a2cae0828b32ea9aeffaad3b38
+          path: .flow-toolchain
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install Flow compiler dependencies
+        run: pip install -r .flow-toolchain/requirements.lock
+      - name: Install direct wasm32 toolchain
+        uses: ./.flow-toolchain/.github/actions/install-toolchain
+        with:
+          mlir: 'true'
+      - name: Build direct MLIR WebAssembly browser runtime
+        run: python tools/build_browser_wasm.py --flow-repo .flow-toolchain
+      - name: Smoke direct browser WebAssembly API
+        run: node tools/smoke_browser_wasm.mjs docs/wasm/browser_mlir.wasm
       - name: Generate canonical v2 benchmark headline
         run: python benchmarks/publish_headline_v2.py
       - name: Normalize legacy sklearn timings to milliseconds
