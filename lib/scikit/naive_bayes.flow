@@ -143,23 +143,49 @@ export function gaussian_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, var_smoo
     }
 }
 
+# Precompute the terms that are constant for every sample in a prediction call.
+# Keeping them out of the sample/class/feature hot loop avoids repeated log()
+# evaluation while leaving fit latency and the public model layout unchanged.
+function _gaussian_nb_prepare_terms(
+    model: GaussianNB,
+    class_log_prior: ptr<f32>,
+    log_norm: ptr<f32>,
+    inv_two_var: ptr<f32>
+) -> void {
+    let log_two_pi: f32 = log((2.0 * 3.14159265358979) as f64) as f32
+    let p: i32 = model.n_features
+    for c in 0 to model.n_classes {
+        class_log_prior[c] = log(model.priors[c] as f64) as f32
+        let base: i32 = c * p
+        for j in 0 to p {
+            let var: f32 = model.variances[c][j]
+            log_norm[base + j] = -0.5 * log_two_pi - 0.5 * (log(var as f64) as f32)
+            inv_two_var[base + j] = 1.0 / (2.0 * var)
+        }
+    }
+}
+
 export function gaussian_nb_predict(model: GaussianNB, X: Matrix) -> ptr<f32> {
     let preds: ptr<f32> = array_new_f32(X.rows)
+    let p: i32 = model.n_features
+    let terms: i32 = model.n_classes * p
+    let class_log_prior: ptr<f32> = array_new_f32(model.n_classes)
+    let log_norm: ptr<f32> = array_new_f32(terms)
+    let inv_two_var: ptr<f32> = array_new_f32(terms)
+    _gaussian_nb_prepare_terms(model, class_log_prior, log_norm, inv_two_var)
 
     for i in 0 to X.rows {
         let mut best_class: i32 = 0
         let mut best_log_prob: f32 = -9999999999.0
+        let row_base: i32 = i * p
 
         for c in 0 to model.n_classes {
-            let mut log_prob: f32 = log(model.priors[c] as f64) as f32
-
-            for j in 0 to model.n_features {
-                let val: f32 = matrix_at(X, i, j)
-                let mean: f32 = model.means[c][j]
-                let var: f32 = model.variances[c][j]
-                let diff: f32 = val - mean
-                let log_lik: f32 = -0.5 * log((2.0 * 3.14159265358979) as f64) as f32 - 0.5 * log(var as f64) as f32 - diff * diff / (2.0 * var)
-                log_prob = log_prob + log_lik
+            let mut log_prob: f32 = class_log_prior[c]
+            let class_base: i32 = c * p
+            for j in 0 to p {
+                let diff: f32 = X.data[row_base + j] - model.means[c][j]
+                let term_idx: i32 = class_base + j
+                log_prob = log_prob + log_norm[term_idx] - diff * diff * inv_two_var[term_idx]
             }
 
             if log_prob > best_log_prob {
@@ -171,24 +197,34 @@ export function gaussian_nb_predict(model: GaussianNB, X: Matrix) -> ptr<f32> {
         preds[i] = model.classes[best_class]
     }
 
+    array_free_f32(class_log_prior)
+    array_free_f32(log_norm)
+    array_free_f32(inv_two_var)
     return preds
 }
 
 export function gaussian_nb_predict_proba(model: GaussianNB, X: Matrix) -> Matrix {
     let probs: Matrix = matrix_new(X.rows, model.n_classes)
+    let p: i32 = model.n_features
+    let terms: i32 = model.n_classes * p
+    let class_log_prior: ptr<f32> = array_new_f32(model.n_classes)
+    let log_norm: ptr<f32> = array_new_f32(terms)
+    let inv_two_var: ptr<f32> = array_new_f32(terms)
+    let log_probs: ptr<f32> = array_new_f32(model.n_classes)
+    _gaussian_nb_prepare_terms(model, class_log_prior, log_norm, inv_two_var)
 
     for i in 0 to X.rows {
-        let log_probs: ptr<f32> = array_new_f32(model.n_classes)
         let mut max_lp: f32 = -9999999999.0
+        let row_base: i32 = i * p
+        let prob_base: i32 = i * model.n_classes
 
         for c in 0 to model.n_classes {
-            let mut lp: f32 = log(model.priors[c] as f64) as f32
-            for j in 0 to model.n_features {
-                let val: f32 = matrix_at(X, i, j)
-                let mean: f32 = model.means[c][j]
-                let var: f32 = model.variances[c][j]
-                let diff: f32 = val - mean
-                lp = lp - 0.5 * log((2.0 * 3.14159265358979) as f64) as f32 - 0.5 * log(var as f64) as f32 - diff * diff / (2.0 * var)
+            let mut lp: f32 = class_log_prior[c]
+            let class_base: i32 = c * p
+            for j in 0 to p {
+                let diff: f32 = X.data[row_base + j] - model.means[c][j]
+                let term_idx: i32 = class_base + j
+                lp = lp + log_norm[term_idx] - diff * diff * inv_two_var[term_idx]
             }
             log_probs[c] = lp
             if lp > max_lp {
@@ -198,20 +234,20 @@ export function gaussian_nb_predict_proba(model: GaussianNB, X: Matrix) -> Matri
 
         let mut sum: f32 = 0.0
         for c in 0 to model.n_classes {
-            log_probs[c] = log_probs[c] - max_lp
-            let p: f32 = exp(log_probs[c] as f64) as f32
-            matrix_set(probs, i, c, p)
-            sum = sum + p
+            let probability: f32 = exp((log_probs[c] - max_lp) as f64) as f32
+            probs.data[prob_base + c] = probability
+            sum = sum + probability
         }
 
         for c in 0 to model.n_classes {
-            let p: f32 = matrix_at(probs, i, c) / sum
-            matrix_set(probs, i, c, p)
+            probs.data[prob_base + c] = probs.data[prob_base + c] / sum
         }
-
-        array_free_f32(log_probs)
     }
 
+    array_free_f32(class_log_prior)
+    array_free_f32(log_norm)
+    array_free_f32(inv_two_var)
+    array_free_f32(log_probs)
     return probs
 }
 
