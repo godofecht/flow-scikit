@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "dataset": "digits",
+  "random_state": 42,
+  "n_clusters": 10,
+  "first_divergence_stage": "initialization",
+  "first_divergent_center": 0,
+  "sklearn_initial_indices": [
+    538,
+    223,
+    1234,
+    1174,
+    267,
+    878,
+    549,
+    740,
+    112,
+    1363
+  ],
+  "sklearn_initial_indices_nearest_row_check": [
+    538,
+    223,
+    1234,
+    1174,
+    267,
+    878,
+    549,
+    740,
+    112,
+    1363
+  ],
+  "flow_initial_indices": [
+    258,
+    473,
+    325,
+    993,
+    1078,
+    949,
+    1043,
+    191,
+    646,
+    714
+  ],
+  "initializers": {
+    "sklearn": "NumPy RandomState/MT19937 + greedy k-means++ local trials",
+    "flow": "xorshift32 + one weighted candidate per center"
+  },
+  "convergence": {
+    "sklearn_parameter_tol": 0.001,
+    "sklearn_effective_tol": 0.0009531264659017324,
+    "sklearn_statistic": "sum of squared L2 center shifts",
+    "flow_parameter_tol": 0.001,
+    "flow_statistic": "maximum absolute coordinate shift"
+  },
+  "canonical_parity_policy": {
+    "status": "approximately equivalent",
+    "reason": "random-state and convergence trajectories are not bit-identical; compare permutation-invariant ARI and final inertia",
+    "ari_absolute_tolerance": 0.07,
+    "inertia_relative_tolerance": 0.1
+  }
+}
