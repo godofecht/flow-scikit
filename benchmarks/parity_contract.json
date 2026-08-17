@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "fixture_source": "benchmarks/split_indices.json",
+  "timing_unit": "ms",
+  "dtype": "float32",
+  "rows": [
+    {
+      "algorithm": "LogisticRegression",
+      "dataset": "iris",
+      "metric": "accuracy",
+      "category": "supervised",
+      "parity_level": "approximate",
+      "score_abs_tolerance": 0.02,
+      "timing_comparable": true,
+      "flow": {"optimizer": "gradient_descent", "max_iter": 200, "learning_rate": 0.1, "l2": 0.001, "multiclass": "native"},
+      "sklearn": {"optimizer": "lbfgs", "max_iter": 1000, "C": 1.0, "multiclass": "native"}
+    },
+    {
+      "algorithm": "LinearSVC",
+      "dataset": "iris",
+      "metric": "accuracy",
+      "category": "supervised",
+      "parity_level": "approximate",
+      "score_abs_tolerance": 0.02,
+      "timing_comparable": true,
+      "flow": {"C": 1.0, "max_iter": 1000, "multiclass": "ovr"},
+      "sklearn": {"C": 1.0, "max_iter": 1000, "dual": "auto", "multiclass": "ovr"}
+    },
+    {
+      "algorithm": "KernelSVC_RBF",
+      "dataset": "iris",
+      "metric": "accuracy",
+      "category": "supervised",
+      "parity_level": "approximate",
+      "score_abs_tolerance": 0.03,
+      "timing_comparable": true,
+      "flow": {"kernel": "rbf", "gamma": 0.25, "C": 1.0, "max_iter": 200, "multiclass": "ovo"},
+      "sklearn": {"kernel": "rbf", "gamma": 0.25, "C": 1.0, "max_iter": 1000, "multiclass": "ovo"}
+    },
+    {
+      "algorithm": "DecisionTree",
+      "dataset": "iris",
+      "metric": "accuracy",
+      "category": "supervised",
+      "parity_level": "approximate",
+      "score_abs_tolerance": 0.04,
+      "timing_comparable": true,
+      "flow": {"criterion": "gini", "max_depth": 5, "random_state": 42},
+      "sklearn": {"criterion": "gini", "max_depth": 5, "random_state": 42}
+    },
+    {
+      "algorithm": "RandomForest",
+      "dataset": "iris",
+      "metric": "accuracy",
+      "category": "supervised",
+      "parity_level": "approximate",
+      "score_abs_tolerance": 0.04,
+      "timing_comparable": true,
+      "flow": {"n_estimators": 10, "max_depth": 5, "random_state": 42},
+      "sklearn": {"n_estimators": 10, "max_depth": 5, "random_state": 42}
+    },
+    {
+      "algorithm": "GaussianNB",
+      "dataset": "iris",
+      "metric": "accuracy",
+      "category": "supervised",
+      "parity_level": "verified",
+      "score_abs_tolerance": 0.001,
+      "timing_comparable": true,
+      "flow": {"var_smoothing": 1e-9},
+      "sklearn": {"var_smoothing": 1e-9}
+    },
+    {
+      "algorithm": "KMeans",
+      "dataset": "iris",
+      "metric": "adjusted_rand_index",
+      "category": "clustering",
+      "parity_level": "approximate",
+      "score_abs_tolerance": 0.05,
+      "inertia_relative_tolerance": 0.10,
+      "timing_comparable": true,
+      "flow": {"n_clusters": 3, "init": "k-means++", "n_init": 10, "max_iter": 100, "tol": 0.001, "random_state": 42},
+      "sklearn": {"n_clusters": 3, "init": "k-means++", "n_init": 10, "max_iter": 100, "tol": 0.001, "random_state": 42}
+    },
+    {
+      "algorithm": "PCA",
+      "dataset": "iris",
+      "metric": "explained_var_ratio",
+      "category": "decomposition",
+      "parity_level": "verified",
+      "score_abs_tolerance": 0.005,
+      "singular_value_relative_tolerance": 0.02,
+      "reconstruction_mse_abs_tolerance": 0.01,
+      "component_abs_tolerance_after_sign_alignment": 0.02,
+      "timing_comparable": true,
+      "flow": {"n_components": 2, "solver": "power_iteration"},
+      "sklearn": {"n_components": 2, "solver": "auto"}
+    },
+    {
+      "algorithm": "LogisticRegression",
+      "dataset": "digits",
+      "metric": "accuracy",
+      "category": "supervised",
+      "parity_level": "approximate",
+      "score_abs_tolerance": 0.02,
+      "timing_comparable": true,
+      "flow": {"optimizer": "gradient_descent", "max_iter": 200, "learning_rate": 0.1, "l2": 0.001, "multiclass": "native"},
+      "sklearn": {"optimizer": "lbfgs", "max_iter": 1000, "C": 1.0, "multiclass": "native"}
+    },
+    {
+      "algorithm": "LinearSVC",
+      "dataset": "digits",
+      "metric": "accuracy",
+      "category": "supervised",
+      "parity_level": "approximate",
+      "score_abs_tolerance": 0.02,
+      "timing_comparable": true,
+      "flow": {"C": 1.0, "max_iter": 1000, "multiclass": "ovr"},
+      "sklearn": {"C": 1.0, "max_iter": 1000, "dual": "auto", "multiclass": "ovr"}
+    },
+    {
+      "algorithm": "KernelSVC_RBF",
+      "dataset": "digits",
+      "metric": "accuracy",
+      "category": "supervised",
+      "parity_level": "approximate",
+      "score_abs_tolerance": 0.03,
+      "timing_comparable": true,
+      "flow": {"kernel": "rbf", "gamma": 0.001, "C": 1.0, "max_iter": 1000, "multiclass": "ovo"},
+      "sklearn": {"kernel": "rbf", "gamma": 0.001, "C": 1.0, "max_iter": 1000, "multiclass": "ovo"}
+    },
+    {
+      "algorithm": "DecisionTree",
+      "dataset": "digits",
+      "metric": "accuracy",
+      "category": "supervised",
+      "parity_level": "approximate",
+      "score_abs_tolerance": 0.04,
+      "timing_comparable": true,
+      "flow": {"criterion": "gini", "max_depth": 10, "random_state": 42},
+      "sklearn": {"criterion": "gini", "max_depth": 10, "random_state": 42}
+    },
+    {
+      "algorithm": "RandomForest",
+      "dataset": "digits",
+      "metric": "accuracy",
+      "category": "supervised",
+      "parity_level": "approximate",
+      "score_abs_tolerance": 0.04,
+      "timing_comparable": true,
+      "flow": {"n_estimators": 10, "max_depth": 10, "random_state": 42},
+      "sklearn": {"n_estimators": 10, "max_depth": 10, "random_state": 42}
+    },
+    {
+      "algorithm": "GaussianNB",
+      "dataset": "digits",
+      "metric": "accuracy",
+      "category": "supervised",
+      "parity_level": "verified",
+      "score_abs_tolerance": 0.001,
+      "timing_comparable": true,
+      "flow": {"var_smoothing": 1e-9},
+      "sklearn": {"var_smoothing": 1e-9}
+    },
+    {
+      "algorithm": "KMeans",
+      "dataset": "digits",
+      "metric": "adjusted_rand_index",
+      "category": "clustering",
+      "parity_level": "approximate",
+      "score_abs_tolerance": 0.05,
+      "inertia_relative_tolerance": 0.10,
+      "timing_comparable": true,
+      "flow": {"n_clusters": 10, "init": "k-means++", "n_init": 10, "max_iter": 100, "tol": 0.001, "random_state": 42},
+      "sklearn": {"n_clusters": 10, "init": "k-means++", "n_init": 10, "max_iter": 100, "tol": 0.001, "random_state": 42}
+    },
+    {
+      "algorithm": "Ridge",
+      "dataset": "diabetes",
+      "metric": "r2",
+      "category": "supervised",
+      "parity_level": "approximate",
+      "score_abs_tolerance": 0.02,
+      "timing_comparable": true,
+      "flow": {"alpha": 1.0, "max_iter": 1000, "learning_rate": 0.01},
+      "sklearn": {"alpha": 1.0}
+    },
+    {
+      "algorithm": "Lasso",
+      "dataset": "diabetes",
+      "metric": "r2",
+      "category": "supervised",
+      "parity_level": "approximate",
+      "score_abs_tolerance": 0.02,
+      "timing_comparable": true,
+      "flow": {"alpha": 0.1, "max_iter": 1000, "learning_rate": 0.01},
+      "sklearn": {"alpha": 0.1, "max_iter": 1000}
+    },
+    {
+      "algorithm": "LinearRegression",
+      "dataset": "diabetes",
+      "metric": "r2",
+      "category": "supervised",
+      "parity_level": "verified",
+      "score_abs_tolerance": 0.005,
+      "timing_comparable": true,
+      "flow": {"fit_intercept": true, "penalty": "none"},
+      "sklearn": {"fit_intercept": true}
+    },
+    {
+      "algorithm": "KernelRidge_RBF",
+      "dataset": "diabetes",
+      "metric": "r2",
+      "category": "supervised",
+      "parity_level": "verified",
+      "score_abs_tolerance": 0.005,
+      "timing_comparable": true,
+      "flow": {"alpha": 1.0, "kernel": "rbf", "gamma": 0.1},
+      "sklearn": {"alpha": 1.0, "kernel": "rbf", "gamma": 0.1}
+    }
+  ]
+}
