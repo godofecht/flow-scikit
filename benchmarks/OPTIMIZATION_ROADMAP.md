@@ -4,26 +4,26 @@ Generated from committed inventory/profile/benchmark evidence.
 
 | Rank | Estimator | Operation | Substrate | Score | Disposition | Observed Flow speedup | Hypothesis |
 |---:|---|---|---|---:|---|---:|---|
-| 1 | `GaussianNB` | `fit` | python-bound | 75.3 | rewrite first | 17.03× | remove Python control/validation and specialize the complete operation |
-| 2 | `PCA` | `fit` | python-bound | 74.1 | rewrite first | 4.69× | remove Python control/validation and specialize the complete operation |
-| 3 | `GaussianNB` | `predict` | python-bound | 73.7 | rewrite first | 17.03× | remove Python control/validation and specialize the complete operation |
-| 4 | `LogisticRegression` | `predict` | python-bound | 73.5 | rewrite first | 6.37× | remove Python control/validation and specialize the complete operation |
-| 5 | `PCA` | `transform` | python-bound | 73.3 | rewrite first | 4.69× | remove Python control/validation and specialize the complete operation |
-| 6 | `KMeans` | `fit` | mixed | 72.0 | rewrite first | 4.20× | remove Python control/validation and specialize the complete operation |
-| 7 | `LogisticRegression` | `fit` | mixed | 71.9 | rewrite first | 6.37× | remove Python control/validation and specialize the complete operation |
-| 8 | `LinearRegression` | `predict` | python-bound | 71.4 | rewrite first | 2.62× | remove Python control/validation and specialize the complete operation |
-| 9 | `LinearRegression` | `fit` | mixed | 66.5 | rewrite first | 2.62× | remove Python control/validation and specialize the complete operation |
-| 10 | `KMeans` | `predict` | numpy-bound | 60.3 | rewrite first | 4.20× | remove Python control/validation and specialize the complete operation |
-| 11 | `GaussianNB` | `predict_proba` | python-bound | 54.0 | rewrite first | 17.03× | remove Python control/validation and specialize the complete operation |
-| 12 | `KMeans` | `transform` | python-bound | 54.0 | rewrite first | 4.20× | remove Python control/validation and specialize the complete operation |
-| 13 | `LogisticRegression` | `predict_proba` | python-bound | 54.0 | rewrite first | 6.37× | remove Python control/validation and specialize the complete operation |
-| 14 | `LogisticRegression` | `decision_function` | python-bound | 54.0 | rewrite first | 6.37× | remove Python control/validation and specialize the complete operation |
-| 15 | `SVC` | `predict` | numpy-bound | 49.2 | rewrite first | 0.10× | remove Python control/validation and specialize the complete operation |
-| 16 | `Ridge` | `fit` | python-bound | 48.6 | rewrite first | 1.91× | remove Python control/validation and specialize the complete operation |
-| 17 | `Ridge` | `predict` | python-bound | 48.6 | rewrite first | 1.91× | remove Python control/validation and specialize the complete operation |
-| 18 | `RandomForestClassifier` | `fit` | mixed | 48.0 | compile whole estimator | 4.56× | retain useful numerical kernels while fusing validation, allocation and orchestration |
-| 19 | `RandomForestClassifier` | `predict` | mixed | 48.0 | compile whole estimator | 4.56× | retain useful numerical kernels while fusing validation, allocation and orchestration |
-| 20 | `RandomForestClassifier` | `predict_proba` | mixed | 48.0 | compile whole estimator | 4.56× | retain useful numerical kernels while fusing validation, allocation and orchestration |
+| 1 | `GaussianNB` | `fit` | python-bound | 75.2 | rewrite first | 7.76× | remove Python control/validation and specialize the complete operation |
+| 2 | `PCA` | `fit` | python-bound | 74.3 | rewrite first | 4.87× | remove Python control/validation and specialize the complete operation |
+| 3 | `LogisticRegression` | `predict` | python-bound | 73.6 | rewrite first | 5.73× | remove Python control/validation and specialize the complete operation |
+| 4 | `PCA` | `transform` | python-bound | 73.5 | rewrite first | 4.87× | remove Python control/validation and specialize the complete operation |
+| 5 | `GaussianNB` | `predict` | python-bound | 73.2 | rewrite first | 7.76× | remove Python control/validation and specialize the complete operation |
+| 6 | `LogisticRegression` | `fit` | mixed | 71.8 | rewrite first | 5.73× | remove Python control/validation and specialize the complete operation |
+| 7 | `LinearRegression` | `predict` | python-bound | 70.6 | rewrite first | 2.47× | remove Python control/validation and specialize the complete operation |
+| 8 | `KMeans` | `fit` | mixed | 67.7 | rewrite first | 2.10× | remove Python control/validation and specialize the complete operation |
+| 9 | `LinearRegression` | `fit` | mixed | 65.9 | rewrite first | 2.47× | remove Python control/validation and specialize the complete operation |
+| 10 | `KMeans` | `predict` | numpy-bound | 55.7 | rewrite first | 2.10× | remove Python control/validation and specialize the complete operation |
+| 11 | `GaussianNB` | `predict_proba` | python-bound | 54.0 | rewrite first | 7.76× | remove Python control/validation and specialize the complete operation |
+| 12 | `LogisticRegression` | `predict_proba` | python-bound | 54.0 | rewrite first | 5.73× | remove Python control/validation and specialize the complete operation |
+| 13 | `LogisticRegression` | `decision_function` | python-bound | 54.0 | rewrite first | 5.73× | remove Python control/validation and specialize the complete operation |
+| 14 | `Ridge` | `fit` | python-bound | 49.6 | rewrite first | 2.13× | remove Python control/validation and specialize the complete operation |
+| 15 | `Ridge` | `predict` | python-bound | 49.6 | rewrite first | 2.13× | remove Python control/validation and specialize the complete operation |
+| 16 | `KMeans` | `transform` | python-bound | 49.5 | rewrite first | 2.10× | remove Python control/validation and specialize the complete operation |
+| 17 | `SVC` | `predict` | numpy-bound | 49.3 | rewrite first | 0.10× | remove Python control/validation and specialize the complete operation |
+| 18 | `RandomForestClassifier` | `fit` | mixed | 48.0 | compile whole estimator | 4.76× | retain useful numerical kernels while fusing validation, allocation and orchestration |
+| 19 | `RandomForestClassifier` | `predict` | mixed | 48.0 | compile whole estimator | 4.76× | retain useful numerical kernels while fusing validation, allocation and orchestration |
+| 20 | `RandomForestClassifier` | `predict_proba` | mixed | 48.0 | compile whole estimator | 4.76× | retain useful numerical kernels while fusing validation, allocation and orchestration |
 | 21 | `AdaBoostRegressor` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
 | 22 | `AdditiveChi2Sampler` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
 | 23 | `AdditiveChi2Sampler` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
