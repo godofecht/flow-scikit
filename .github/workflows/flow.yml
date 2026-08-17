@@ -37,6 +37,7 @@ jobs:
 
       - name: Validate benchmark contracts and fixtures
         run: |
+          python -m pip install numpy
           python benchmarks/fixtures.py
           python benchmarks/verify_fixtures.py
           python benchmarks/test_generate_headline_summary.py
