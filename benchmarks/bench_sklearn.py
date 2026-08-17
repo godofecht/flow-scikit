@@ -1,13 +1,24 @@
 #!/usr/bin/env python3
 """Benchmark real scikit-learn on iris, digits, diabetes.
-Outputs results in parseable format for comparison with flow-scikit.
+
+Outputs parseable results for comparison with flow-scikit.
 Uses the same xorshift32 PRNG split as the Flow benchmark for exact parity.
+All reported timing values are milliseconds.
 """
 import time
+from collections import Counter
+
 import numpy as np
 from sklearn.datasets import load_iris, load_digits, load_diabetes
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, r2_score
+
+TIMING_UNIT = "ms"
+
+
+def elapsed_ms(start, end):
+    return (end - start) * 1000.0
+
 
 def xorshift32_split(n, n_test, seed=42):
     """Replicate Flow's split_data: Fisher-Yates shuffle with xorshift32 PRNG."""
@@ -26,7 +37,9 @@ def xorshift32_split(n, n_test, seed=42):
     n_train = n - n_test
     return np.array(indices[:n_train]), np.array(indices[n_train:])
 
+
 results = []
+
 
 def bench(name, dataset_name, X, y, fit_fn, predict_fn, is_classification=True):
     n = len(X)
@@ -40,11 +53,11 @@ def bench(name, dataset_name, X, y, fit_fn, predict_fn, is_classification=True):
 
     t0 = time.perf_counter()
     model = fit_fn(X_train, y_train)
-    fit_time = time.perf_counter() - t0
+    fit_time_ms = elapsed_ms(t0, time.perf_counter())
 
     t0 = time.perf_counter()
     preds = predict_fn(model, X_test)
-    pred_time = time.perf_counter() - t0
+    pred_time_ms = elapsed_ms(t0, time.perf_counter())
 
     if is_classification:
         score = accuracy_score(y_test, preds)
@@ -53,15 +66,16 @@ def bench(name, dataset_name, X, y, fit_fn, predict_fn, is_classification=True):
         score = r2_score(y_test, preds)
         metric = "r2"
 
-    results.append((name, dataset_name, metric, score, fit_time, pred_time))
-    print(f"RESULT|{name}|{dataset_name}|{metric}|{score:.6f}|{fit_time:.6f}|{pred_time:.6f}")
+    results.append((name, dataset_name, metric, score, fit_time_ms, pred_time_ms))
+    print(f"RESULT|{name}|{dataset_name}|{metric}|{score:.6f}|{fit_time_ms:.6f}|{pred_time_ms:.6f}")
 
-# Load datasets
+
+print(f"TIMING_UNIT|{TIMING_UNIT}")
+
 iris = load_iris()
 digits = load_digits()
 diabetes = load_diabetes()
 
-# ---- Iris (classification) ----
 X_iris = iris.data.astype(np.float32)
 y_iris = iris.target.astype(np.float32)
 
@@ -96,7 +110,7 @@ bench("GaussianNB", "iris", X_iris, y_iris,
       lambda m, X: m.predict(X))
 
 from sklearn.cluster import KMeans
-# KMeans: use best-match cluster labeling like Flow
+
 def kmeans_bench(name, ds, X, y, n_clusters):
     n = len(X)
     n_test = n // 5
@@ -106,15 +120,16 @@ def kmeans_bench(name, ds, X, y, n_clusters):
     scaler = StandardScaler()
     X_train = scaler.fit_transform(X_train)
     X_test = scaler.transform(X_test)
+
     t0 = time.perf_counter()
     km = KMeans(n_clusters=n_clusters, n_init=10, random_state=42).fit(X_train)
-    fit_time = time.perf_counter() - t0
+    fit_time_ms = elapsed_ms(t0, time.perf_counter())
+
     t0 = time.perf_counter()
     preds = km.predict(X_test)
-    pred_time = time.perf_counter() - t0
-    # Best-match: for each cluster, find most common true label on train set
+    pred_time_ms = elapsed_ms(t0, time.perf_counter())
+
     train_preds = km.predict(X_train)
-    from collections import Counter
     cluster_map = {}
     for c in range(n_clusters):
         labels = y_train[train_preds == c]
@@ -124,28 +139,28 @@ def kmeans_bench(name, ds, X, y, n_clusters):
             cluster_map[c] = 0
     mapped = np.array([cluster_map[p] for p in preds])
     score = accuracy_score(y_test, mapped.astype(float))
-    results.append((name, ds, "accuracy", score, fit_time, pred_time))
-    print(f"RESULT|{name}|{ds}|accuracy|{score:.6f}|{fit_time:.6f}|{pred_time:.6f}")
+    results.append((name, ds, "accuracy", score, fit_time_ms, pred_time_ms))
+    print(f"RESULT|{name}|{ds}|accuracy|{score:.6f}|{fit_time_ms:.6f}|{pred_time_ms:.6f}")
+
+
 kmeans_bench("KMeans", "iris", X_iris, y_iris, 3)
 
 from sklearn.decomposition import PCA
-# PCA is transform, not predict - measure explained variance ratio instead
 n_iris = len(X_iris)
 train_idx_i, test_idx_i = xorshift32_split(n_iris, n_iris // 5)
-X_train_i = scaler_fit_i = StandardScaler().fit(X_iris[train_idx_i])
+scaler_fit_i = StandardScaler().fit(X_iris[train_idx_i])
 X_train_i_s = scaler_fit_i.transform(X_iris[train_idx_i])
 X_test_i_s = scaler_fit_i.transform(X_iris[test_idx_i])
 t0 = time.perf_counter()
 pca = PCA(n_components=2).fit(X_train_i_s)
-fit_time = time.perf_counter() - t0
+fit_time_ms = elapsed_ms(t0, time.perf_counter())
 t0 = time.perf_counter()
 _ = pca.transform(X_test_i_s)
-pred_time = time.perf_counter() - t0
+pred_time_ms = elapsed_ms(t0, time.perf_counter())
 evr = pca.explained_variance_ratio_[0]
-results.append(("PCA", "iris", "explained_var_ratio", evr, fit_time, pred_time))
-print(f"RESULT|PCA|iris|explained_var_ratio|{evr:.6f}|{fit_time:.6f}|{pred_time:.6f}")
+results.append(("PCA", "iris", "explained_var_ratio", evr, fit_time_ms, pred_time_ms))
+print(f"RESULT|PCA|iris|explained_var_ratio|{evr:.6f}|{fit_time_ms:.6f}|{pred_time_ms:.6f}")
 
-# ---- Digits (classification, larger) ----
 X_dig = digits.data.astype(np.float32)
 y_dig = digits.target.astype(np.float32)
 
@@ -175,7 +190,6 @@ bench("GaussianNB", "digits", X_dig, y_dig,
 
 kmeans_bench("KMeans", "digits", X_dig, y_dig, 10)
 
-# ---- Diabetes (regression) ----
 X_dia = diabetes.data.astype(np.float32)
 y_dia = diabetes.target.astype(np.float32)
 
@@ -198,6 +212,6 @@ bench("KernelRidge_RBF", "diabetes", X_dia, y_dia,
       lambda m, X: m.predict(X), is_classification=False)
 
 print("\n--- Summary ---")
-print(f"{'Algorithm':<25} {'Dataset':<12} {'Metric':<20} {'Score':<12} {'FitTime':<12} {'PredTime':<12}")
+print(f"{'Algorithm':<25} {'Dataset':<12} {'Metric':<20} {'Score':<12} {'FitTime(ms)':<14} {'PredTime(ms)':<14}")
 for name, ds, metric, score, ft, pt in results:
-    print(f"{name:<25} {ds:<12} {metric:<20} {score:<12.6f} {ft:<12.6f} {pt:<12.6f}")
+    print(f"{name:<25} {ds:<12} {metric:<20} {score:<12.6f} {ft:<14.6f} {pt:<14.6f}")
