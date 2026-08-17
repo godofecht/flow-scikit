@@ -1643,11 +1643,10 @@ export function group_kfold_init(n_splits: i32, n: i32) -> GroupKFold {
     return result
 }
 
-export function group_kfold_get_fold(splitter: GroupKFold, fold_idx: i32, groups: ptr<i32>, n_groups: i32) -> TrainTestSplit {
-    let n: i32 = splitter.n
+export function group_kfold_split(splitter: GroupKFold, groups: ptr<i32>, n: i32) -> GroupCVResult {
     let n_splits: i32 = splitter.n_splits
 
-    let unique_groups: ptr<i32> = malloc((n_groups as i64) * 4) as ptr<i32>
+    let unique_groups: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
     let mut n_found: i32 = 0
     for i in 0 to n {
         let mut found: bool = false
@@ -1667,58 +1666,67 @@ export function group_kfold_get_fold(splitter: GroupKFold, fold_idx: i32, groups
         group_fold[g] = g % n_splits
     }
 
-    let is_test: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
-    for i in 0 to n {
-        is_test[i] = 0
-    }
+    let train_ptrs: ptr<ptr<i32> > = malloc((n_splits as i64) * 8) as ptr<ptr<i32> >
+    let test_ptrs: ptr<ptr<i32> > = malloc((n_splits as i64) * 8) as ptr<ptr<i32> >
+    let n_train_arr: ptr<i32> = malloc((n_splits as i64) * 4) as ptr<i32>
+    let n_test_arr: ptr<i32> = malloc((n_splits as i64) * 4) as ptr<i32>
 
-    let mut n_test: i32 = 0
-    for i in 0 to n {
-        let mut g_idx: i32 = 0
-        let mut found: bool = false
-        while g_idx < n_found && not found {
-            if unique_groups[g_idx] == groups[i] {
-                found = true
-            } else {
-                g_idx = g_idx + 1
+    for split_idx in 0 to n_splits {
+        let is_test: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+        for i in 0 to n {
+            is_test[i] = 0
+        }
+
+        let mut n_test: i32 = 0
+        for i in 0 to n {
+            let mut g_idx: i32 = 0
+            let mut found: bool = false
+            while g_idx < n_found && not found {
+                if unique_groups[g_idx] == groups[i] {
+                    found = true
+                } else {
+                    g_idx = g_idx + 1
+                }
+            }
+            if group_fold[g_idx] == split_idx {
+                is_test[i] = 1
+                n_test = n_test + 1
             }
         }
-        if group_fold[g_idx] == fold_idx {
-            is_test[i] = 1
-            n_test = n_test + 1
+
+        let n_train: i32 = n - n_test
+        let train_idx: ptr<i32> = malloc((n_train as i64) * 4) as ptr<i32>
+        let test_idx: ptr<i32> = malloc((n_test as i64) * 4) as ptr<i32>
+
+        let mut ti: i32 = 0
+        let mut tei: i32 = 0
+        for i in 0 to n {
+            if is_test[i] == 1 {
+                test_idx[tei] = i
+                tei = tei + 1
+            } else {
+                train_idx[ti] = i
+                ti = ti + 1
+            }
         }
-    }
 
-    let n_train: i32 = n - n_test
+        train_ptrs[split_idx] = train_idx
+        test_ptrs[split_idx] = test_idx
+        n_train_arr[split_idx] = n_train
+        n_test_arr[split_idx] = n_test
 
-    let X_train: Matrix = matrix_new(n_train, 0)
-    let X_test: Matrix = matrix_new(n_test, 0)
-    let y_train: ptr<f32> = array_new_f32(n_train)
-    let y_test: ptr<f32> = array_new_f32(n_test)
-
-    let mut train_pos: i32 = 0
-    let mut test_pos: i32 = 0
-    for i in 0 to n {
-        if is_test[i] == 1 {
-            y_test[test_pos] = 0.0
-            test_pos = test_pos + 1
-        } else {
-            y_train[train_pos] = 0.0
-            train_pos = train_pos + 1
-        }
+        free(is_test as ptr<void>)
     }
 
     free(unique_groups as ptr<void>)
     free(group_fold as ptr<void>)
-    free(is_test as ptr<void>)
 
-    let result: TrainTestSplit = TrainTestSplit {
-        X_train: X_train,
-        X_test: X_test,
-        y_train: y_train,
-        y_test: y_test,
-        n_train: n_train,
-        n_test: n_test
+    let result: GroupCVResult = GroupCVResult {
+        train_ptrs: train_ptrs,
+        test_ptrs: test_ptrs,
+        n_train_arr: n_train_arr,
+        n_test_arr: n_test_arr,
+        n_splits: n_splits
     }
     return result
 }
