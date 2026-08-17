@@ -323,37 +323,37 @@ export function additive_chi2_sampler_fit(n_samples: i32, n_features: i32, sampl
 export function additive_chi2_sampler_transform(model: AdditiveChi2Sampler, X: Matrix) -> Matrix {
     let n: i32 = X.rows
     let p: i32 = X.cols
-    let n_out: i32 = p * model.sample_steps
+    let steps: i32 = model.sample_steps
+    let n_out: i32 = p * steps
     let result: Matrix = matrix_new(n, n_out)
 
-    # Deterministic Fourier feature map for the additive chi-squared kernel.
-    # For each non-negative feature x and sample step k:
-    #   t_k = (4k + 2) * pi / (4 * sample_steps)
-    #   output = cos(t_k * log(x)) / sqrt(x)
-    # This approximates the kernel K(x,y) = -sum (x-y)^2 / (x+y).
+    # Frequencies depend only on the sample step, so compute them once instead
+    # of for every row/feature. matrix_new is calloc-backed, so non-positive
+    # inputs can simply leave their output span untouched at zero.
+    let frequencies: ptr<f32> = array_new_f32(steps)
     let pi_val: f32 = 3.14159265358979
+    let denom: f32 = 4.0 * (steps as f32)
+    for k in 0 to steps {
+        frequencies[k] = (4.0 * (k as f32) + 2.0) * pi_val / denom
+    }
 
     for i in 0 to n {
-        let mut col: i32 = 0
+        let input_base: i32 = i * p
+        let output_base: i32 = i * n_out
         for j in 0 to p {
-            let x: f32 = matrix_at(X, i, j)
-            if x <= 0.0 {
-                for k in 0 to model.sample_steps {
-                    matrix_set(result, i, col, 0.0)
-                    col = col + 1
-                }
-                continue
-            }
+            let x: f32 = X.data[input_base + j]
+            if x <= 0.0 { continue }
+
             let log_x: f32 = log((x) as f64) as f32
             let inv_sqrt_x: f32 = 1.0 / sqrt((x) as f64) as f32
-            for k in 0 to model.sample_steps {
-                let t: f32 = (4.0 * (k as f32) + 2.0) * pi_val / (4.0 * (model.sample_steps as f32))
-                matrix_set(result, i, col, cos((t * log_x) as f64) as f32 * inv_sqrt_x)
-                col = col + 1
+            let feature_base: i32 = output_base + j * steps
+            for k in 0 to steps {
+                result.data[feature_base + k] = cos((frequencies[k] * log_x) as f64) as f32 * inv_sqrt_x
             }
         }
     }
 
+    array_free_f32(frequencies)
     return result
 }
 
