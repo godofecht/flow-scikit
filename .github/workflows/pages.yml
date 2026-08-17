@@ -26,7 +26,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Generate canonical v2 benchmark headline
+      - name: Regenerate canonical disparity evidence
+        run: python benchmarks/generate_disparity_report.py
+      - name: Publish canonical benchmark, disparity and architecture evidence
         run: python benchmarks/publish_headline_v2.py
       - name: Normalize legacy sklearn timings to milliseconds
         run: python benchmarks/normalize_published_timings.py
