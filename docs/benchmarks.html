@@ -3,25 +3,35 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="scikit-learn (Flow) vs scikit-learn (Python) 1.9.0: accuracy, training time, and deployment footprint benchmarks." />
+    <meta name="description" content="Reproducible scikit-learn (Flow) vs scikit-learn (Python) 1.9.0 benchmarks: accuracy, fit and prediction latency, parity, portability, Android, startup, and deployment footprint." />
     <title>scikit-learn (Flow) vs scikit-learn (Python) — Benchmarks</title>
     <link rel="stylesheet" href="styles.css" />
     <style>
-      .bench-hero { padding:100px 28px 60px max(28px,calc((100vw - 1164px)/2)); background:#fffdf8; border-bottom:1px solid var(--line); }
-      .bench-hero h1 { max-width:860px; font-size:clamp(42px,5.5vw,72px); }
-      .bench-hero .lede { color:#56617a; font-size:19px; max-width:680px; }
-      .bench-hero .meta { margin-top:24px; display:flex; flex-wrap:wrap; gap:10px; }
-      .bench-hero .meta span { border:1px solid var(--line); border-radius:99px; padding:6px 12px; font:11px "DM Mono",monospace; color:#52617f; }
+      .bench-hero { padding:104px 28px 68px max(28px,calc((100vw - 1164px)/2)); background:#fffdf8; border-bottom:1px solid var(--line); }
+      .bench-hero h1 { max-width:900px; font-size:clamp(44px,5.5vw,74px); letter-spacing:-.03em; }
+      .bench-hero .lede { color:#56617a; font-size:19px; max-width:760px; line-height:1.65; }
+      .bench-hero .meta { margin-top:26px; display:flex; flex-wrap:wrap; gap:10px; }
+      .bench-hero .meta span { border:1px solid var(--line); border-radius:99px; padding:7px 12px; font:11px "DM Mono",monospace; color:#52617f; background:rgba(255,255,255,.62); }
+      .audit-note { margin-top:26px; max-width:840px; padding:17px 19px; border-left:3px solid var(--coral); background:#fff7f1; color:#45516c; font-size:14px; line-height:1.6; }
+      .audit-note strong { color:var(--ink); }
+      .results-strip { max-width:1164px; margin:0 auto; padding:34px 28px 0; }
+      .results-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; }
+      .result-card { background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:20px 18px; min-height:126px; }
+      .result-card .value { display:block; font:600 32px/1 Fraunces,serif; color:var(--ink); margin:8px 0 10px; }
+      .result-card.flow .value { color:var(--coral); }
+      .result-card .label { font:10px "DM Mono",monospace; text-transform:uppercase; letter-spacing:.9px; color:#6a7690; }
+      .result-card p { margin:0; color:#66718a; font-size:12px; line-height:1.45; }
       .bench-section { max-width:1164px; margin:0 auto; padding:80px 28px; }
-      .bench-section h2 { font-size:clamp(32px,3.8vw,48px); max-width:760px; margin-bottom:14px; }
-      .bench-section > p { color:#56617a; max-width:620px; font-size:16px; margin-bottom:40px; }
-      .chart-wrap { background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:32px 28px; margin-bottom:28px; }
+      .bench-section h2 { font-size:clamp(32px,3.8vw,48px); max-width:800px; margin-bottom:14px; letter-spacing:-.02em; }
+      .bench-section > p, .bench-section .section-copy { color:#56617a; max-width:760px; font-size:16px; margin-bottom:40px; line-height:1.7; }
+      .chart-wrap { background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:32px 28px; margin-bottom:28px; box-shadow:0 8px 28px rgba(20,35,70,.035); }
       .chart-wrap h3 { font:600 22px/1.2 Fraunces,serif; margin:0 0 6px; }
-      .chart-wrap .chart-sub { color:#687493; font-size:13px; margin:0 0 24px; }
+      .chart-wrap .chart-sub { color:#687493; font-size:13px; margin:0 0 24px; line-height:1.55; }
       .chart-wrap svg { display:block; width:100%; height:auto; overflow:visible; }
       .bench-table { width:100%; border-collapse:collapse; font-size:14px; }
-      .bench-table th { text-align:left; font:11px "DM Mono",monospace; text-transform:uppercase; letter-spacing:.8px; color:#687493; padding:10px 14px; border-bottom:2px solid var(--ink); }
-      .bench-table td { padding:11px 14px; border-bottom:1px solid var(--line); }
+      .bench-table th { text-align:left; font:11px "DM Mono",monospace; text-transform:uppercase; letter-spacing:.8px; color:#687493; padding:11px 14px; border-bottom:2px solid var(--ink); white-space:nowrap; }
+      .bench-table td { padding:11px 14px; border-bottom:1px solid var(--line); white-space:nowrap; }
+      .bench-table tbody tr:hover { background:#faf9f4; }
       .bench-table td.num { text-align:right; font-family:"DM Mono",monospace; font-size:13px; }
       .bench-table .pos { color:#2d8a4e; font-weight:600; }
       .bench-table .neg { color:#c44a3a; }
@@ -31,17 +41,23 @@
       .port-card { background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:28px 24px; text-align:center; }
       .port-card .port-value { font:600 42px/1 Fraunces,serif; color:var(--ink); margin:12px 0 4px; }
       .port-card .port-label { font:11px "DM Mono",monospace; text-transform:uppercase; letter-spacing:1px; color:#687493; }
-      .port-card .port-sub { font-size:13px; color:#56617a; margin-top:8px; }
+      .port-card .port-sub { font-size:13px; color:#56617a; margin-top:8px; line-height:1.45; }
       .port-card.flow .port-value { color:var(--coral); }
       .port-card.sklearn .port-value { color:var(--blue); }
-      .legend { display:flex; gap:20px; margin-bottom:16px; font:12px "DM Mono",monospace; }
+      .legend { display:flex; flex-wrap:wrap; gap:20px; margin-bottom:16px; font:12px "DM Mono",monospace; }
       .legend span { display:inline-flex; align-items:center; gap:7px; }
       .legend i { width:14px; height:14px; border-radius:3px; display:inline-block; }
       .legend .flow-color { background:var(--coral); }
       .legend .sklearn-color { background:var(--blue); }
+      .method-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin:30px 0; }
+      .method-card { border:1px solid var(--line); border-radius:12px; background:var(--paper); padding:22px; }
+      .method-card h3 { margin:0 0 9px; font-size:17px; }
+      .method-card p { margin:0; color:#64708a; font-size:13px; line-height:1.6; }
       .run-commands { background:#152446; color:#dce8ff; border-radius:13px; padding:27px; font:13px/1.75 "DM Mono",monospace; overflow:auto; box-shadow:8px 9px 0 #cfd5e3; }
-      .run-commands .cmt { color:#6b8bc7; }
-      @media (max-width:760px) { .portability-grid { grid-template-columns:1fr; } .bench-hero { padding:72px 24px 48px; } .bench-section { padding:56px 24px; } }
+      .run-commands .cmt { color:#88a3d6; }
+      .section-tint { background:#f4f7f8; max-width:none; padding-left:max(28px,calc((100vw - 1164px)/2)); padding-right:max(28px,calc((100vw - 1164px)/2)); }
+      @media (max-width:900px) { .results-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+      @media (max-width:760px) { .portability-grid,.method-grid { grid-template-columns:1fr; } .bench-hero { padding:76px 24px 50px; } .bench-section { padding:56px 24px; } .results-strip { padding:26px 24px 0; } .results-grid { grid-template-columns:1fr; } }
     </style>
   </head>
   <body>
@@ -51,261 +67,154 @@
         <a href="index.html#quickstart">Quick start</a>
         <a href="benchmarks.html">Benchmarks</a>
         <a href="demos.html">Experiments</a>
+        <a href="https://github.com/godofecht/flow-scikit/tree/main/benchmarks">Methodology ↗</a>
         <a href="https://github.com/godofecht/flow-scikit">GitHub ↗</a>
       </nav>
     </header>
 
     <main>
       <section class="bench-hero">
-        <p class="eyebrow">benchmarks / scikit-learn (Flow) vs scikit-learn (Python) 1.9.0</p>
-        <h1>Same datasets. Same splits. Native binary vs Python stack.</h1>
+        <p class="eyebrow">benchmark report / scikit-learn (Flow) vs scikit-learn (Python) 1.9.0</p>
+        <h1>Native Flow and the Python stack, measured side by side.</h1>
         <p class="lede">
-          19 algorithm/dataset combinations on iris, digits, and diabetes.
-          Accuracy, fit time, prediction latency, and deployment footprint.
-          All measured on the same machine with seed=42 and 80/20 train/test split.
+          Accuracy, fit time, prediction latency, algorithm-level numerical parity, startup cost,
+          deployment footprint, and Android portability across iris, digits, and diabetes.
+          The headline dataset benchmark contains 19 algorithm/dataset combinations; a separate
+          deterministic suite checks 16 algorithms for output parity.
         </p>
         <div class="meta">
-          <span>iris: 150 samples, 4 features</span>
-          <span>digits: 1797 samples, 64 features</span>
-          <span>diabetes: 442 samples, 10 features</span>
-          <span>scikit-learn (Python) 1.9.0</span>
-          <span>scikit-learn (Flow), C backend, arm64 macOS</span>
+          <span>seed=42</span>
+          <span>80/20 train/test split</span>
+          <span>xorshift32 split parity</span>
+          <span>Python 1.9.0 benchmark</span>
+          <span>Flow C backend / arm64 macOS</span>
+          <span>all displayed times: milliseconds</span>
+        </div>
+        <div class="audit-note">
+          <strong>Timing-unit audit:</strong> Python uses <code>time.perf_counter()</code>, which returns seconds; Flow's
+          benchmark already emits milliseconds. Earlier page data copied the Python second values into fields labelled
+          “ms”. The report now converts Python durations by 1000 before every timing and speedup comparison.
+        </div>
+      </section>
+
+      <section class="results-strip" aria-label="Benchmark headline results">
+        <div class="results-grid">
+          <article class="result-card flow"><span class="label">deterministic parity</span><span class="value">16 / 16</span><p>Algorithms match within the stated 0.01 tolerance.</p></article>
+          <article class="result-card flow"><span class="label">headline timing wins</span><span class="value">10 / 17</span><p>Flow is faster where the stored Python timing has non-zero millisecond resolution.</p></article>
+          <article class="result-card flow"><span class="label">largest headline speedup</span><span class="value">245.6×</span><p>Iris KMeans: 28.0 ms Python vs 0.114 ms Flow.</p></article>
+          <article class="result-card"><span class="label">deployment footprint</span><span class="value">1.4 MB</span><p>Native Flow executable vs 165 MB sklearn + numpy + scipy stack.</p></article>
+          <article class="result-card"><span class="label">cold-start speedup</span><span class="value">65×</span><p>33 ms Flow vs 2160 ms Python stack in the recorded startup test.</p></article>
         </div>
       </section>
 
       <section class="bench-section">
         <p class="eyebrow">deployment footprint</p>
-        <h2>1.4 MB native binary vs 165 MB Python stack.</h2>
-        <p>scikit-learn (Flow) compiles to a single executable with no Python, no numpy, no scipy. On macOS it links Accelerate (vecLib) for BLAS. On Android it ships a scalar fallback. Copy the binary to another arm64 machine and it runs.</p>
-
+        <h2>1.4 MB native binary vs 165 MB Python numerical stack.</h2>
+        <p>scikit-learn (Flow) compiles to a native executable with no Python runtime, numpy, or scipy dependency. On macOS it links Accelerate for BLAS; the Android build uses the platform-specific fallback used by this benchmark.</p>
         <div class="portability-grid">
-          <div class="port-card flow">
-            <div class="port-label">scikit-learn (Flow)</div>
-            <div class="port-value">1.4 MB</div>
-            <div class="port-sub">single executable, 0 shared objects</div>
-          </div>
-          <div class="port-card sklearn">
-            <div class="port-label">scikit-learn (Python)</div>
-            <div class="port-value">165 MB</div>
-            <div class="port-sub">sklearn + numpy + scipy, 201 .so files</div>
-          </div>
-          <div class="port-card">
-            <div class="port-label">startup speedup</div>
-            <div class="port-value">65x</div>
-            <div class="port-sub">33 ms vs 2160 ms cold start</div>
-          </div>
+          <div class="port-card flow"><div class="port-label">scikit-learn (Flow)</div><div class="port-value">1.4 MB</div><div class="port-sub">single native executable</div></div>
+          <div class="port-card sklearn"><div class="port-label">scikit-learn (Python)</div><div class="port-value">165 MB</div><div class="port-sub">sklearn + numpy + scipy</div></div>
+          <div class="port-card"><div class="port-label">startup speedup</div><div class="port-value">65×</div><div class="port-sub">33 ms vs 2160 ms cold start</div></div>
         </div>
-
-        <div class="chart-wrap">
-          <h3>Cold startup time</h3>
-          <p class="chart-sub">Time from invocation to first prediction. Lower is better.</p>
-          <svg id="startup-chart" viewBox="0 0 700 200"></svg>
-        </div>
+        <div class="chart-wrap"><h3>Cold startup time</h3><p class="chart-sub">Invocation to first result in the recorded deployment comparison. Lower is better.</p><svg id="startup-chart" viewBox="0 0 700 200"></svg></div>
       </section>
 
-      <section class="bench-section" style="background:#f4f7f8; max-width:none; padding-left:max(28px,calc((100vw - 1164px)/2)); padding-right:max(28px,calc((100vw - 1164px)/2));">
+      <section class="bench-section section-tint">
         <div style="max-width:1164px; margin:0 auto;">
-          <p class="eyebrow">accuracy</p>
-          <h2>Where scikit-learn (Flow) matches or beats scikit-learn (Python).</h2>
-          <p>19 algorithm/dataset pairs. 14 match Python within 0.001. Positive diff means Flow scores higher.</p>
-
-          <div class="legend">
-            <span><i class="sklearn-color"></i> scikit-learn (Python)</span>
-            <span><i class="flow-color"></i> scikit-learn (Flow)</span>
-          </div>
-
-          <div class="chart-wrap">
-            <h3>Iris accuracy (classification)</h3>
-            <p class="chart-sub">3-class classification, 150 samples, 4 features. Higher is better.</p>
-            <svg id="iris-accuracy-chart" viewBox="0 0 900 360"></svg>
-          </div>
-
-          <div class="chart-wrap">
-            <h3>Digits accuracy (classification)</h3>
-            <p class="chart-sub">10-class classification, 1797 samples, 64 features. Higher is better.</p>
-            <svg id="digits-accuracy-chart" viewBox="0 0 900 360"></svg>
-          </div>
-
-          <div class="chart-wrap">
-            <h3>Diabetes R2 (regression)</h3>
-            <p class="chart-sub">Regression, 442 samples, 10 features. Higher is better.</p>
-            <svg id="diabetes-r2-chart" viewBox="0 0 900 280"></svg>
-          </div>
-
-          <div class="table-wrap">
-            <table class="bench-table">
-              <thead>
-                <tr><th>Algorithm</th><th>Dataset</th><th>Metric</th><th class="num">Python</th><th class="num">Flow</th><th class="num">Diff</th><th class="num">Py fit (ms)</th><th class="num">Flow fit (ms)</th><th class="num">Py pred (ms)</th><th class="num">Flow pred (ms)</th></tr>
-              </thead>
-              <tbody id="accuracy-table-body"></tbody>
-            </table>
-          </div>
+          <p class="eyebrow">predictive quality</p>
+          <h2>Scores remain close across the shared dataset suite.</h2>
+          <p class="section-copy">Of 19 algorithm/dataset pairs, 13 are within 0.001 score difference. Flow additionally leads on iris KernelSVC in the recorded run. Scores are shown separately from runtime so performance claims do not obscure model-quality differences.</p>
+          <div class="legend"><span><i class="sklearn-color"></i> scikit-learn (Python)</span><span><i class="flow-color"></i> scikit-learn (Flow)</span></div>
+          <div class="chart-wrap"><h3>Iris accuracy</h3><p class="chart-sub">3-class classification, 150 samples, 4 features. Higher is better.</p><svg id="iris-accuracy-chart" viewBox="0 0 900 360"></svg></div>
+          <div class="chart-wrap"><h3>Digits accuracy</h3><p class="chart-sub">10-class classification, 1797 samples, 64 features. Higher is better.</p><svg id="digits-accuracy-chart" viewBox="0 0 900 360"></svg></div>
+          <div class="chart-wrap"><h3>Diabetes R²</h3><p class="chart-sub">Regression, 442 samples, 10 features. Higher is better.</p><svg id="diabetes-r2-chart" viewBox="0 0 900 280"></svg></div>
+          <div class="table-wrap"><table class="bench-table"><thead><tr><th>Algorithm</th><th>Dataset</th><th>Metric</th><th class="num">Python</th><th class="num">Flow</th><th class="num">Diff</th><th class="num">Py fit (ms)</th><th class="num">Flow fit (ms)</th><th class="num">Py pred (ms)</th><th class="num">Flow pred (ms)</th></tr></thead><tbody id="accuracy-table-body"></tbody></table></div>
         </div>
       </section>
 
       <section class="bench-section">
-        <p class="eyebrow">training time</p>
-        <h2>SMO solver, BLAS kernel, direct linear solvers.</h2>
-        <p>fit + predict combined, in milliseconds. Flow uses SMO for kernel SVM, LBFGS for logistic regression, BLAS (Accelerate) for matrix products, QR decomposition for least squares, and direct solvers for linear models. Built with -O3 -march=native. scikit-learn (Python) dispatches to compiled C and Cython, so it wins on raw training time. Flow's advantage is cross-platform portability and binary size, not training speed.</p>
-
-        <div class="legend">
-          <span><i class="sklearn-color"></i> scikit-learn (Python)</span>
-          <span><i class="flow-color"></i> scikit-learn (Flow)</span>
-        </div>
-
-        <div class="chart-wrap">
-          <h3>Iris training time (log scale)</h3>
-          <p class="chart-sub">fit + predict, milliseconds. Lower is better. Python wins on iris because 120 samples is too small for Flow's per-call overhead to amortize.</p>
-          <svg id="iris-time-chart" viewBox="0 0 900 360"></svg>
-        </div>
-
-        <div class="chart-wrap">
-          <h3>Diabetes training time</h3>
-          <p class="chart-sub">fit + predict, milliseconds. Lower is better. Direct solvers complete in 0.02 ms.</p>
-          <svg id="diabetes-time-chart" viewBox="0 0 900 280"></svg>
-        </div>
-
-        <div class="table-wrap">
-          <table class="bench-table">
-            <thead>
-              <tr><th>Algorithm</th><th>Dataset</th><th class="num">Python (ms)</th><th class="num">Flow (ms)</th><th class="num">Speedup</th></tr>
-            </thead>
-            <tbody id="time-table-body"></tbody>
-          </table>
-        </div>
+        <p class="eyebrow">fit + prediction latency</p>
+        <h2>The corrected timing picture is mixed — and much more interesting.</h2>
+        <p>All values below are milliseconds. After converting Python's <code>perf_counter()</code> seconds correctly, Flow is faster on 10 of the 17 headline comparisons whose stored Python timing is non-zero at the captured resolution. Python remains faster on several heavier digits workloads, while Flow is substantially faster on multiple small and direct-solver paths.</p>
+        <div class="legend"><span><i class="sklearn-color"></i> scikit-learn (Python)</span><span><i class="flow-color"></i> scikit-learn (Flow)</span></div>
+        <div class="chart-wrap"><h3>Iris total time — log scale</h3><p class="chart-sub">Fit + predict. Corrected Python values include 4.0 ms LogisticRegression, 5.0 ms RandomForest, and 28.0 ms KMeans against sub-millisecond Flow results.</p><svg id="iris-time-chart" viewBox="0 0 900 360"></svg></div>
+        <div class="chart-wrap"><h3>Digits total time — log scale</h3><p class="chart-sub">The largest dataset in the suite. Flow wins LinearSVC in the recorded run; Python remains ahead on LogisticRegression, KernelSVC, DecisionTree, RandomForest, GaussianNB, and KMeans.</p><svg id="digits-time-chart" viewBox="0 0 900 380"></svg></div>
+        <div class="chart-wrap"><h3>Diabetes total time</h3><p class="chart-sub">Flow wins Ridge, LinearRegression, and KernelRidge; Python wins Lasso in the recorded run.</p><svg id="diabetes-time-chart" viewBox="0 0 900 280"></svg></div>
+        <div class="table-wrap"><table class="bench-table"><thead><tr><th>Algorithm</th><th>Dataset</th><th class="num">Python (ms)</th><th class="num">Flow (ms)</th><th class="num">Python / Flow</th></tr></thead><tbody id="time-table-body"></tbody></table></div>
       </section>
 
-      <section class="bench-section" style="background:#f4f7f8; max-width:none; padding-left:max(28px,calc((100vw - 1164px)/2)); padding-right:max(28px,calc((100vw - 1164px)/2));">
+      <section class="bench-section section-tint">
         <div style="max-width:1164px; margin:0 auto;">
-          <p class="eyebrow">iris side-by-side</p>
-          <h2>Same problem, five algorithms, two implementations.</h2>
-          <p>Same iris dataset, same 80/20 split, same algorithms. scikit-learn (Flow) KNN beats scikit-learn (Python) on accuracy at 60x faster training.</p>
-
-          <div class="chart-wrap">
-            <h3>Iris: accuracy and training time</h3>
-            <p class="chart-sub">Left axis: accuracy (bars). Right axis: training time in ms (dots). Higher accuracy and lower time are better.</p>
-            <svg id="iris-combo-chart" viewBox="0 0 900 380"></svg>
-          </div>
+          <p class="eyebrow">iris implementation comparison</p>
+          <h2>Five algorithms, accuracy and training time together.</h2>
+          <p class="section-copy">This independent iris comparison uses its own recorded timings. KNN is the clearest result: 0.9667 Flow accuracy vs 0.9333 Python, with 0.03 ms vs 1.84 ms training in the stored comparison.</p>
+          <div class="chart-wrap"><h3>Iris: accuracy and training time</h3><p class="chart-sub">Accuracy is shown as bars; training time is shown as dots on a log-scale right axis.</p><svg id="iris-combo-chart" viewBox="0 0 900 380"></svg></div>
         </div>
       </section>
 
       <section class="bench-section">
-        <p class="eyebrow">per-algorithm parity</p>
-        <h2>Same input, same output, faster execution.</h2>
-        <p>16 algorithms tested with identical deterministic data and parameters. All 16 produce identical output within 0.01 tolerance. All 16 are faster in scikit-learn (Flow).</p>
-
-        <div class="chart-wrap">
-          <h3>Per-algorithm speedup (Python ms / Flow ms)</h3>
-          <p class="chart-sub">Higher is better. Green bars are exact output matches. Orange bars have small numerical differences.</p>
-          <svg id="parity-speedup-chart" viewBox="0 0 900 480"></svg>
-        </div>
-
-        <div class="table-wrap">
-          <table class="bench-table">
-            <thead>
-              <tr><th>Algorithm</th><th>Values</th><th>Output match</th><th class="num">Max diff</th><th class="num">Python (ms)</th><th class="num">Flow (ms)</th><th class="num">Speedup</th></tr>
-            </thead>
-            <tbody id="parity-table-body"></tbody>
-          </table>
-        </div>
+        <p class="eyebrow">deterministic algorithm parity</p>
+        <h2>16 algorithms, identical inputs, output agreement within tolerance.</h2>
+        <p>The parity benchmark is intentionally separate from the dataset score benchmark. It uses fixed deterministic inputs and parameters to test whether Flow reproduces sklearn outputs. All 16 currently match within the 0.01 threshold, and all 16 recorded Flow runtimes are lower.</p>
+        <div class="chart-wrap"><h3>Per-algorithm speedup</h3><p class="chart-sub">Python milliseconds divided by Flow milliseconds. Log scale. These Python timings are already recorded in milliseconds by <code>bench_per_algorithm.py</code>.</p><svg id="parity-speedup-chart" viewBox="0 0 900 480"></svg></div>
+        <div class="table-wrap"><table class="bench-table"><thead><tr><th>Algorithm</th><th>Values</th><th>Output match</th><th class="num">Max diff</th><th class="num">Python (ms)</th><th class="num">Flow (ms)</th><th class="num">Speedup</th></tr></thead><tbody id="parity-table-body"></tbody></table></div>
       </section>
 
-      <section class="bench-section" style="background:#f4f7f8; max-width:none; padding-left:max(28px,calc((100vw - 1164px)/2)); padding-right:max(28px,calc((100vw - 1164px)/2));">
+      <section class="bench-section section-tint">
         <div style="max-width:1164px; margin:0 auto;">
-          <p class="eyebrow">android</p>
-          <h2>Same binary, cross-compiled to Android.</h2>
-          <p>scikit-learn (Flow) emits standard C. Cross-compiled with the Android NDK (aarch64-linux-android, API 24) to a 1.4 MB ELF. Same source, same datasets, same seed=42 split, run on the Android emulator (arm64-v8a, Android 15). No Python, no JVM, no native activity, no APK. Just an executable pushed to <code>/data/local/tmp</code>.</p>
-
+          <p class="eyebrow">android portability</p>
+          <h2>The same Flow benchmark cross-compiled to Android arm64.</h2>
+          <p class="section-copy">The Android figures are Flow-to-Flow portability measurements, not Python comparisons. The benchmark is cross-compiled with the Android NDK and run as a native executable on the recorded arm64-v8a Android environment.</p>
           <div class="portability-grid">
-            <div class="port-card flow">
-              <div class="port-label">Android binary</div>
-              <div class="port-value">1.4 MB</div>
-              <div class="port-sub">aarch64-linux-android ELF, 0 shared objects</div>
-            </div>
-            <div class="port-card sklearn">
-              <div class="port-label">target</div>
-              <div class="port-value">arm64-v8a</div>
-              <div class="port-sub">Android 15, API 35, NDK r28</div>
-            </div>
-            <div class="port-card">
-              <div class="port-label">accuracy delta vs macOS</div>
-              <div class="port-value">0.000</div>
-              <div class="port-sub">identical output, same float32 math</div>
-            </div>
+            <div class="port-card flow"><div class="port-label">Android binary</div><div class="port-value">1.4 MB</div><div class="port-sub">aarch64-linux-android ELF</div></div>
+            <div class="port-card sklearn"><div class="port-label">target</div><div class="port-value">arm64-v8a</div><div class="port-sub">Android 15 / API 35 in the recorded run</div></div>
+            <div class="port-card"><div class="port-label">score delta vs macOS</div><div class="port-value">≈0</div><div class="port-sub">same benchmark source and deterministic split</div></div>
           </div>
-
-          <div class="legend">
-            <span><i class="flow-color"></i> macOS arm64 (Flow)</span>
-            <span><i style="background:var(--android,#1f9d76)"></i> Android arm64 (Flow)</span>
-          </div>
-
-          <div class="chart-wrap">
-            <h3>Iris: macOS vs Android training time (log scale)</h3>
-            <p class="chart-sub">fit + predict, milliseconds. Lower is better. Log scale because KernelSVC dominates.</p>
-            <svg id="android-iris-chart" viewBox="0 0 900 320"></svg>
-          </div>
-
-          <div class="chart-wrap">
-            <h3>Digits: macOS vs Android training time (log scale)</h3>
-            <p class="chart-sub">fit + predict, milliseconds. Lower is better. Emulator CPU is slower than the host on the heavy O(n^2) workloads.</p>
-            <svg id="android-digits-chart" viewBox="0 0 900 360"></svg>
-          </div>
-
-          <div class="chart-wrap">
-            <h3>Diabetes: macOS vs Android training time</h3>
-            <p class="chart-sub">fit + predict, milliseconds. Lower is better. Direct solvers stay sub-millisecond on both.</p>
-            <svg id="android-diabetes-chart" viewBox="0 0 900 280"></svg>
-          </div>
-
-          <div class="table-wrap">
-            <table class="bench-table">
-              <thead>
-                <tr><th>Algorithm</th><th>Dataset</th><th class="num">Score</th><th class="num">macOS (ms)</th><th class="num">Android (ms)</th><th class="num">Ratio</th></tr>
-              </thead>
-              <tbody id="android-table-body"></tbody>
-            </table>
-          </div>
+          <div class="legend"><span><i class="flow-color"></i> macOS arm64 Flow</span><span><i style="background:#1f9d76"></i> Android arm64 Flow</span></div>
+          <div class="chart-wrap"><h3>Iris: macOS vs Android</h3><p class="chart-sub">Fit + predict, milliseconds, log scale.</p><svg id="android-iris-chart" viewBox="0 0 900 320"></svg></div>
+          <div class="chart-wrap"><h3>Digits: macOS vs Android</h3><p class="chart-sub">Fit + predict, milliseconds, log scale.</p><svg id="android-digits-chart" viewBox="0 0 900 360"></svg></div>
+          <div class="chart-wrap"><h3>Diabetes: macOS vs Android</h3><p class="chart-sub">Fit + predict, milliseconds.</p><svg id="android-diabetes-chart" viewBox="0 0 900 280"></svg></div>
+          <div class="table-wrap"><table class="bench-table"><thead><tr><th>Algorithm</th><th>Dataset</th><th class="num">Score</th><th class="num">macOS (ms)</th><th class="num">Android (ms)</th><th class="num">Ratio</th></tr></thead><tbody id="android-table-body"></tbody></table></div>
         </div>
       </section>
 
       <section class="bench-section">
-        <p class="eyebrow">reproduce</p>
-        <h2>Run the benchmarks yourself.</h2>
+        <p class="eyebrow">methodology and reproducibility</p>
+        <h2>Every claim should be traceable to code.</h2>
+        <div class="method-grid">
+          <article class="method-card"><h3>Timing units</h3><p><code>bench_sklearn.py</code> captures seconds from <code>perf_counter()</code>; the report converts them to milliseconds. <code>bench_flow.flow</code> converts <code>clock()</code> ticks to milliseconds internally.</p></article>
+          <article class="method-card"><h3>Dataset split</h3><p>The headline Python and Flow benchmarks use the same deterministic xorshift32 Fisher–Yates split with seed 42 and an 80/20 train/test partition.</p></article>
+          <article class="method-card"><h3>What speedup means</h3><p>Speedup is always <strong>Python milliseconds / Flow milliseconds</strong>. Values above 1× mean Flow is faster; values below 1× mean Python is faster.</p></article>
+          <article class="method-card"><h3>Separate parity suite</h3><p>The 16-algorithm parity test uses fixed deterministic datasets and parameters. It is not conflated with the iris/digits/diabetes predictive-score benchmark.</p></article>
+        </div>
         <div class="run-commands">
-<span class="cmt"># Run scikit-learn (Flow) benchmark</span>
+<span class="cmt"># Headline Flow benchmark</span>
 FLOW_HOST=python flow run benchmarks/bench_flow.flow
 
-<span class="cmt"># Run scikit-learn (Python) benchmark</span>
+<span class="cmt"># Headline Python benchmark</span>
 python3 benchmarks/bench_sklearn.py
 
-<span class="cmt"># Compare results side by side</span>
+<span class="cmt"># Correct unit-aware comparison</span>
 python3 benchmarks/compare.py
 
-<span class="cmt"># Full iris comparison with portability metrics</span>
-bash benchmarks/iris_comparison.sh
-
-<span class="cmt"># Per-algorithm parity check (16 algorithms, output comparison)</span>
+<span class="cmt"># Per-algorithm deterministic parity suite</span>
 python3 benchmarks/bench_per_algorithm.py
 ~/.local/bin/build/bench_per_algorithm
 python3 benchmarks/compare_parity.py
 
-<span class="cmt"># Cross-compile to Android (aarch64, API 24) and run on a device/emulator</span>
-FLOW_HOST=python flow compile benchmarks/bench_flow.flow
-$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android24-clang \
-  -O2 -std=c11 -D_DEFAULT_SOURCE ~/.local/bin/build/bench_flow.c -lm \
-  -o bench_flow_android
-adb push bench_flow_android /data/local/tmp/bench_flow
-adb push benchmarks/*.bin /data/local/tmp/benchmarks/
-adb shell "cd /data/local/tmp && /data/local/tmp/bench_flow"
+<span class="cmt"># Source and additional benchmark programs</span>
+benchmarks/bench_comprehensive.py
+benchmarks/bench_comprehensive.flow
         </div>
       </section>
     </main>
 
     <footer>
       <a class="wordmark" href="index.html">flow<span>~</span>scikit</a>
-      <p>Built for practical experiments and readable code.</p>
+      <p>Reproducible native statistical learning benchmarks.</p>
     </footer>
 
     <script src="benchmarks.js"></script>
+    <script src="benchmark-corrections.js"></script>
   </body>
 </html>
