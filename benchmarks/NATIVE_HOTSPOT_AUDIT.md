@@ -3,13 +3,13 @@
 | Estimator | Operation | Class | Owner | Disposition | Priority |
 |---|---|---|---|---|---:|
 | `LogisticRegression` | `fit` | mixed | external | retain-native | 71.8 |
-| `KMeans` | `fit` | mixed | sklearn | already-equivalent | 69.7 |
-| `LinearRegression` | `fit` | mixed | sklearn | already-equivalent | 68.6 |
+| `KMeans` | `fit` | mixed | sklearn | already-equivalent | 69.5 |
+| `LinearRegression` | `fit` | mixed | sklearn | already-equivalent | 68.5 |
 | `RandomForestClassifier` | `fit` | mixed | sklearn | already-equivalent | 48.0 |
 | `RandomForestClassifier` | `predict` | mixed | sklearn | already-equivalent | 48.0 |
 | `RandomForestClassifier` | `predict_proba` | mixed | sklearn | already-equivalent | 48.0 |
-| `DecisionTreeClassifier` | `fit` | mixed | sklearn | already-equivalent | 44.0 |
-| `DecisionTreeClassifier` | `predict` | mixed | sklearn | already-equivalent | 44.0 |
+| `DecisionTreeClassifier` | `fit` | mixed | sklearn | already-equivalent | 44.1 |
+| `DecisionTreeClassifier` | `predict` | mixed | sklearn | already-equivalent | 44.1 |
 | `ARDRegression` | `fit` | mixed | sklearn | already-equivalent | 40.5 |
 | `AdaBoostClassifier` | `fit` | mixed | sklearn | already-equivalent | 40.5 |
 | `AdaBoostRegressor` | `fit` | mixed | sklearn | already-equivalent | 40.5 |
@@ -139,7 +139,7 @@
 | `TfidfTransformer` | `fit` | mixed | sklearn | low-value | 34.0 |
 | `KernelRidge` | `fit` | mixed | sklearn | already-equivalent | 33.7 |
 | `Lasso` | `fit` | mixed | sklearn | already-equivalent | 33.1 |
-| `SVC` | `fit` | external-native-bound | external | retain-native | 30.3 |
+| `SVC` | `fit` | external-native-bound | external | retain-native | 30.4 |
 | `MiniBatchSparsePCA` | `transform` | blas-lapack-bound | sklearn | retain-native | 17.0 |
 | `Nystroem` | `fit` | blas-lapack-bound | sklearn | retain-native | 17.0 |
 | `SparsePCA` | `transform` | blas-lapack-bound | sklearn | retain-native | 17.0 |
