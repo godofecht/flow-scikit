@@ -3,7 +3,8 @@
 
 Parity eligibility is intentionally not treated as identity. This report keeps
 raw numerical differences, contract tolerances, configuration differences,
-semantic exceptions and runtime ratios visible after a row becomes eligible.
+semantic exceptions, learned-state diagnostics and runtime ratios visible after
+a row becomes eligible.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import math
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+BASE_DIAGNOSTIC_FIELDS = {"algorithm", "dataset", "metric", "parity_status", "score_abs_diff"}
 
 
 def config_diff(flow: dict, sklearn: dict) -> list[dict]:
@@ -23,6 +25,21 @@ def config_diff(flow: dict, sklearn: dict) -> list[dict]:
         if fv != sv:
             out.append({"parameter": key, "flow": fv, "sklearn": sv})
     return out
+
+
+def model_state_diagnostics(diag: dict) -> dict:
+    """Return estimator-state deltas without hard-coding estimator names.
+
+    Canonical diagnostics use explicit ``*_diff`` fields for learned-state or
+    state-derived comparisons (inertia, singular values, components, etc.).
+    Keeping that convention generic lets new estimators become visible in the
+    disparity artifact without adding estimator-specific publishing code.
+    """
+    return {
+        key: value
+        for key, value in diag.items()
+        if key not in BASE_DIAGNOSTIC_FIELDS and key.endswith("_diff")
+    }
 
 
 def main() -> int:
@@ -70,6 +87,7 @@ def main() -> int:
             ])
 
         config = config_diff(contract.get("flow", {}), contract.get("sklearn", {}))
+        state = model_state_diagnostics(diag)
         runtime_ratio = row["sklearn_ms"] / row["flow_ms"] if row["flow_ms"] > 0 else None
         runtime_log2_ratio = math.log2(runtime_ratio) if runtime_ratio and runtime_ratio > 0 else None
         tolerance_fraction = score_diff / effective_score_tol if effective_score_tol > 0 else None
@@ -81,6 +99,8 @@ def main() -> int:
             dimensions.append("configuration")
         if semantic:
             dimensions.append("semantic")
+        if state:
+            dimensions.append("model-state")
         if diag.get("parity_status") != row.get("parity_status"):
             dimensions.append("strict-vs-final-parity-decision")
         if runtime_ratio is not None and abs(runtime_ratio - 1.0) > headline.get("tie_relative_threshold", 0.02):
@@ -101,20 +121,22 @@ def main() -> int:
             "runtime_log2_ratio": runtime_log2_ratio,
             "configuration_differences": config,
             "semantic_differences": semantic,
-            "diagnostics": {k: v for k, v in diag.items() if k not in {"algorithm", "dataset", "metric", "parity_status", "score_abs_diff"}},
+            "model_state_diagnostics": state,
+            "diagnostics": {k: v for k, v in diag.items() if k not in BASE_DIAGNOSTIC_FIELDS},
             "disparity_dimensions": dimensions,
             "has_tracked_disparity": bool(dimensions),
         })
 
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "environment_id": headline.get("environment_id"),
-        "policy": "headline eligibility never erases disparity evidence; strict diagnostics and final eligibility decisions are both retained",
+        "policy": "headline eligibility never erases disparity evidence; strict diagnostics, learned-state diagnostics and final eligibility decisions are retained separately",
         "counts": {
             "rows": len(rows),
             "rows_with_tracked_disparity": sum(r["has_tracked_disparity"] for r in rows),
             "rows_with_configuration_difference": sum(bool(r["configuration_differences"]) for r in rows),
             "rows_with_semantic_difference": sum(bool(r["semantic_differences"]) for r in rows),
+            "rows_with_model_state_diagnostics": sum(bool(r["model_state_diagnostics"]) for r in rows),
             "strict_final_status_disagreements": sum(r["strict_diagnostic_status"] != r["final_parity_status"] for r in rows),
         },
         "rows": rows,
