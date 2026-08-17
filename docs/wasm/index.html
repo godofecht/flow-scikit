@@ -3,124 +3,129 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>flow-scikit browser experiments — Flow on WebAssembly</title>
+<title>flow-scikit · direct WebAssembly</title>
 <style>
-:root { color-scheme: dark; }
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #090a0d;
+  color: #e8eaf0;
+}
 * { box-sizing: border-box; }
-body {
-  margin: 0; padding: 0;
-  background: #0c0d11; color: #d8dae4;
-  font: 14px/1.55 ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
-  display: flex; flex-direction: column; min-height: 100vh;
+body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top, #151925 0, #090a0d 42rem); }
+a { color: #9db9ff; }
+header, main { width: min(1040px, calc(100% - 32px)); margin: 0 auto; }
+header { padding: 44px 0 28px; }
+h1 { margin: 0 0 10px; font-size: clamp(30px, 6vw, 54px); letter-spacing: -.045em; line-height: 1; }
+.sub { margin: 0; color: #9da3b4; font-size: 15px; max-width: 760px; }
+.pipeline { display: inline-flex; margin-top: 18px; padding: 7px 10px; border: 1px solid #303647; border-radius: 999px; background: #10131a; color: #a8c0ff; font: 12px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; }
+main { padding-bottom: 48px; display: grid; gap: 16px; }
+.panel { border: 1px solid #252a36; border-radius: 14px; background: rgba(16,18,24,.88); box-shadow: 0 18px 60px rgba(0,0,0,.22); }
+.inputs { padding: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+label { display: grid; gap: 7px; color: #b8bdca; font-size: 12px; }
+textarea, input { width: 100%; border: 1px solid #303647; border-radius: 8px; background: #090b10; color: #eef1f7; padding: 11px 12px; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; outline: none; }
+textarea { resize: vertical; min-height: 84px; }
+textarea:focus, input:focus { border-color: #6d8ee8; }
+.controls { grid-column: 1 / -1; display: flex; align-items: end; gap: 10px; flex-wrap: wrap; }
+.controls label { width: 120px; }
+button { border: 0; border-radius: 8px; padding: 11px 18px; background: #8aabff; color: #0a0c11; font: inherit; font-weight: 700; cursor: pointer; }
+button:disabled { opacity: .5; cursor: progress; }
+#status { color: #8f96a8; font-size: 12px; }
+.results { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; overflow: hidden; }
+.metric { padding: 20px; background: #11141b; }
+.metric span { display: block; color: #858c9d; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.metric strong { display: block; margin-top: 8px; font: 600 31px/1 ui-monospace, SFMono-Regular, Menlo, monospace; color: #c9d7ff; }
+.proof { padding: 18px; color: #979eae; font-size: 13px; display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+.proof code { color: #cbd5ed; }
+.error { color: #ff8e9d !important; }
+@media (max-width: 720px) {
+  .inputs { grid-template-columns: 1fr; }
+  .controls { grid-column: 1; }
+  .results { grid-template-columns: 1fr 1fr; }
 }
-header {
-  padding: 10px 16px; border-bottom: 1px solid #1e2029;
-  display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap;
-}
-header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .01em; }
-header .meta { color: #6d7183; font-size: 12px; }
-header a { color: #7aa2f7; text-decoration: none; }
-header a:hover { text-decoration: underline; }
-main { flex: 1; display: flex; flex-direction: column; align-items: center;
-       justify-content: center; padding: 16px; gap: 12px; }
-.stage { position: relative; line-height: 0; max-width: 100%; }
-canvas { display: block; background: #000; border: 1px solid #22252f;
-         border-radius: 4px; image-rendering: pixelated;
-         width: auto; height: auto;
-         max-width: 100%; max-height: calc(100vh - 190px); }
-.overlay {
-  position: absolute; inset: 0; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; gap: 10px; cursor: pointer;
-  background: rgba(9,10,14,.86); border-radius: 4px; line-height: 1.5;
-}
-.overlay strong { font-size: 16px; font-weight: 600; }
-.overlay span { color: #8a8fa3; font-size: 12px; max-width: 30ch;
-                text-align: center; }
-.overlay.hidden { display: none; }
-button {
-  font: inherit; background: #7aa2f7; color: #0c0d11; border: 0;
-  border-radius: 5px; padding: 7px 18px; cursor: pointer; font-weight: 600;
-}
-button:hover { background: #93b5ff; }
-button:disabled { background: #2a2d38; color: #6d7183; cursor: default; }
-.bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-       color: #6d7183; font-size: 12px; }
-pre#out {
-  width: min(880px, 100%); margin: 0; padding: 10px 12px; min-height: 3em;
-  max-height: 40vh; overflow: auto; background: #08090c;
-  border: 1px solid #1e2029; border-radius: 4px; color: #9ece6a;
-  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-  white-space: pre-wrap; word-break: break-word;
-}
-pre#out:empty { display: none; }
-.keys { color: #6d7183; font-size: 12px; text-align: center;
-        max-width: 60ch; }
-.err { color: #f7768e; }
 </style>
 </head>
 <body>
 <header>
-  <h1>flow-scikit browser experiments</h1>
-  <span class="meta">Flow &rarr; C &rarr; WebAssembly &middot; console</span>
-  <span class="meta"><a href="/Users/abhishekshivakumar/flow-scikit/docs/wasm/mnist_demo.flow">source</a></span>
+  <h1>flow-scikit in the browser</h1>
+  <p class="sub">The same strict flow-scikit metric kernels used by the public API execute locally in WebAssembly. Edit the labels, run them again, and the results are computed by Flow inside your browser.</p>
+  <div class="pipeline">Flow → MLIR → LLVM IR → wasm32 · no generated C · no Emscripten</div>
 </header>
 
 <main>
-  <div class="bar">
-    <button id="start">Run</button>
-    <button id="clear">Clear</button>
-    <span id="status">idle</span>
-  </div>
-  <pre id="out"></pre>
+  <section class="panel inputs">
+    <label>Ground truth<textarea id="truth">1, 1, 1, 0, 0, 0, 1, 0</textarea></label>
+    <label>Predictions<textarea id="pred">1, 1, 0, 0, 1, 0, 1, 0</textarea></label>
+    <div class="controls">
+      <label>Positive label<input id="pos" type="number" value="1" step="any"></label>
+      <button id="run" type="button" disabled>Run in Flow</button>
+      <span id="status">loading direct wasm…</span>
+    </div>
+  </section>
+
+  <section class="panel results" aria-live="polite">
+    <div class="metric"><span>Accuracy</span><strong id="accuracy">—</strong></div>
+    <div class="metric"><span>Precision</span><strong id="precision">—</strong></div>
+    <div class="metric"><span>Recall</span><strong id="recall">—</strong></div>
+    <div class="metric"><span>F1</span><strong id="f1">—</strong></div>
+  </section>
+
+  <section class="panel proof">
+    <span>Source: <a href="browser_mlir.flow"><code>browser_mlir.flow</code></a></span>
+    <span>Artifact: <code>browser_mlir.wasm</code>, rebuilt from source on every Pages deployment</span>
+  </section>
 </main>
 
+<script type="module">
+import {loadFlowScikitWasm} from "./browser_mlir.mjs";
 
-<script src="mnist_demo.js"></script>
-<script>
-(function () {
-  var startBtn = document.getElementById('start');
-  var clearBtn = document.getElementById('clear');
-  var status = document.getElementById('status');
-  var out = document.getElementById('out');
+const truth = document.getElementById("truth");
+const pred = document.getElementById("pred");
+const pos = document.getElementById("pos");
+const run = document.getElementById("run");
+const status = document.getElementById("status");
+const output = Object.fromEntries(["accuracy", "precision", "recall", "f1"].map(name => [name, document.getElementById(name)]));
 
-  function log(text, isErr) {
-    var line = document.createElement('span');
-    if (isErr) { line.className = 'err'; }
-    line.textContent = text + '\n';
-    out.appendChild(line);
-    out.scrollTop = out.scrollHeight;
+function parseValues(text) {
+  const values = text.trim().split(/[\s,]+/).filter(Boolean).map(Number);
+  if (!values.length || values.some(value => !Number.isFinite(value))) {
+    throw new Error("inputs must be comma- or space-separated numbers");
+  }
+  return values;
+}
+
+function show(name, value) {
+  output[name].textContent = Number(value).toFixed(6);
+}
+
+try {
+  const api = await loadFlowScikitWasm();
+  run.disabled = false;
+  status.textContent = "wasm ready";
+
+  function execute() {
+    try {
+      const yTrue = parseValues(truth.value);
+      const yPred = parseValues(pred.value);
+      const posLabel = Number(pos.value);
+      show("accuracy", api.accuracy(yTrue, yPred));
+      show("precision", api.precision(yTrue, yPred, posLabel));
+      show("recall", api.recall(yTrue, yPred, posLabel));
+      show("f1", api.f1(yTrue, yPred, posLabel));
+      status.classList.remove("error");
+      status.textContent = `${yTrue.length} samples · executed locally`;
+    } catch (error) {
+      status.classList.add("error");
+      status.textContent = error.message;
+    }
   }
 
-  function run() {
-    startBtn.disabled = true;
-    status.textContent = 'running...';
-    createFlowModule({
-      print: function (t) { log(t, false); },
-      printErr: function (t) { log(t, true); }
-    }).then(function (mod) {
-      var code = 0;
-      try { code = mod.callMain([]); } catch (e) {
-        if (e && e.name === 'ExitStatus') { code = e.status; }
-        else { log('' + e, true); code = -1; }
-      }
-      if (code === undefined) { code = 0; }
-      // Plenty of Flow examples answer with a return value rather than
-      // printing, so always show it.
-      log((out.textContent ? '\n' : '') + 'main returned ' + code, false);
-      status.textContent = 'exit ' + code;
-      startBtn.disabled = false;
-    }).catch(function (e) {
-      log('' + e, true);
-      status.textContent = 'failed to load';
-      startBtn.disabled = false;
-    });
-  }
-
-  startBtn.addEventListener('click', run);
-  clearBtn.addEventListener('click', function () { out.textContent = ''; });
-  if (location.search.indexOf('autostart=1') >= 0) { run(); }
-})();
+  run.addEventListener("click", execute);
+  execute();
+} catch (error) {
+  status.classList.add("error");
+  status.textContent = `failed to load wasm: ${error.message}`;
+}
 </script>
-
 </body>
 </html>
