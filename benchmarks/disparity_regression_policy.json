@@ -1,15 +1,23 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "documentation": {
+    "direction": "Every rule is one-sided. Only movement away from parity or away from Flow's runtime advantage fails the gate.",
+    "runtime_log2_ratio": "log2(sklearn_ms / flow_ms). Higher is better for Flow. A row fails when the value drops by more than the applicable threshold, never when it rises.",
+    "thresholds": "Each threshold sits above the measured run-to-run spread of the metric it guards. See benchmarks/test_disparity_regression_policy.py for the fixtures that pin the behaviour."
+  },
   "score_tolerance_fraction": {
     "max_absolute_increase": 0.1
   },
   "score_abs_diff": {
     "max_relative_increase": 0.5,
-    "absolute_noise_floor": 1e-7
+    "absolute_noise_floor": 1e-6,
+    "tolerance_fraction_floor": 0.01
   },
   "runtime_log2_ratio": {
     "same_environment_only": true,
-    "max_absolute_change": 1.0
+    "max_slowdown_log2": 1.0,
+    "cross_environment_max_slowdown_log2": 4.0,
+    "improvement_notice_log2": 1.0
   },
   "configuration_difference_count": {
     "max_increase": 0
