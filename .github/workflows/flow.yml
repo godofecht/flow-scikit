@@ -41,6 +41,7 @@ jobs:
           python benchmarks/fixtures.py
           python benchmarks/verify_fixtures.py
           python benchmarks/test_generate_headline_summary.py
+          python benchmarks/test_disparity_regression_policy.py
           python benchmarks/publish_headline_v2.py --check
           python benchmarks/validate_execution_substrate.py
           python -m py_compile \
@@ -55,6 +56,9 @@ jobs:
             benchmarks/scaled_flow_to_json.py \
             benchmarks/aggregate_scaled_flow.py \
             benchmarks/check_flow_regression.py \
+            benchmarks/check_disparity_regression.py \
+            benchmarks/generate_disparity_report.py \
+            benchmarks/test_disparity_regression_policy.py \
             benchmarks/publish_headline_v2.py \
             benchmarks/validate_execution_substrate.py
           python - <<'PY'

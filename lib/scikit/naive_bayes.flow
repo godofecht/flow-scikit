@@ -275,9 +275,16 @@ export function multinomial_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, alpha
     let n: i32 = X.rows
     let p: i32 = X.cols
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
-    for c in 0 to n_classes {
+    # Issue #398: classes and class_counts held exactly n_classes entries while
+    # the loop below appended one entry per distinct label, so labels carrying
+    # more distinct values than the caller declared wrote past both
+    # allocations. Both are now sized to hold every distinct label, never fewer
+    # than n_classes entries.
+    let found_classes: DistinctF32 = distinct_f32(y, n, n_classes)
+    let class_cap: i32 = found_classes.capacity
+    let classes: ptr<f32> = found_classes.values
+    let class_counts: ptr<i32> = malloc((class_cap as i64) * 4) as ptr<i32>
+    for c in 0 to class_cap {
         class_counts[c] = 0
     }
 
@@ -419,9 +426,16 @@ export function bernoulli_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, alpha: 
     let n: i32 = X.rows
     let p: i32 = X.cols
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
-    for c in 0 to n_classes {
+    # Issue #398: classes and class_counts held exactly n_classes entries while
+    # the loop below appended one entry per distinct label, so labels carrying
+    # more distinct values than the caller declared wrote past both
+    # allocations. Both are now sized to hold every distinct label, never fewer
+    # than n_classes entries.
+    let found_classes: DistinctF32 = distinct_f32(y, n, n_classes)
+    let class_cap: i32 = found_classes.capacity
+    let classes: ptr<f32> = found_classes.values
+    let class_counts: ptr<i32> = malloc((class_cap as i64) * 4) as ptr<i32>
+    for c in 0 to class_cap {
         class_counts[c] = 0
     }
 
@@ -484,21 +498,47 @@ export function bernoulli_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, alpha: 
     }
 }
 
+# log(1 - p) for an absent feature, expressed exactly as the original inline
+# formulation so the accumulated float32 score is unchanged.
+function _bernoulli_nb_absent_term(present_log_prob: f32) -> f32 {
+    return log((1.0 - exp(present_log_prob as f64) as f32) as f64) as f32
+}
+
+# The absent-feature contribution depends only on fitted state, so it is the
+# same for every sample.  Building the table once per predict call replaces
+# n_samples * n_classes * n_features exp()/log() pairs with n_classes *
+# n_features of them.
+function _bernoulli_nb_prepare_absent(model: BernoulliNB, absent_log_prob: ptr<f32>) -> void {
+    let p: i32 = model.n_features
+    for c in 0 to model.n_classes {
+        let base: i32 = c * p
+        let present: ptr<f32> = model.feature_log_prob[c]
+        for j in 0 to p {
+            absent_log_prob[base + j] = _bernoulli_nb_absent_term(present[j])
+        }
+    }
+}
+
 export function bernoulli_nb_predict(model: BernoulliNB, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
+    let p: i32 = model.n_features
     let result: ptr<f32> = array_new_f32(n)
+    let absent_log_prob: ptr<f32> = array_new_f32(model.n_classes * p)
+    _bernoulli_nb_prepare_absent(model, absent_log_prob)
 
     for i in 0 to n {
         let mut best_c: i32 = 0
         let mut best_score: f32 = -10000000000.0
+        let row_base: i32 = i * p
         for c in 0 to model.n_classes {
             let mut score: f32 = model.class_log_prior[c]
-            for j in 0 to model.n_features {
-                let x_ij: f32 = matrix_at(X, i, j)
-                if x_ij > 0.5 {
-                    score = score + model.feature_log_prob[c][j]
+            let present: ptr<f32> = model.feature_log_prob[c]
+            let class_base: i32 = c * p
+            for j in 0 to p {
+                if X.data[row_base + j] > 0.5 {
+                    score = score + present[j]
                 } else {
-                    score = score + log((1.0 - exp(model.feature_log_prob[c][j] as f64) as f32) as f64) as f32
+                    score = score + absent_log_prob[class_base + j]
                 }
             }
             if score > best_score {
@@ -509,6 +549,7 @@ export function bernoulli_nb_predict(model: BernoulliNB, X: Matrix) -> ptr<f32> 
         result[i] = model.classes[best_c]
     }
 
+    array_free_f32(absent_log_prob)
     return result
 }
 
@@ -611,15 +652,21 @@ export function complement_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, alpha:
 
 export function complement_nb_predict(model: ComplementNB, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
+    let p: i32 = model.n_features
+    let n_classes: i32 = model.n_classes
     let result: ptr<f32> = array_new_f32(n)
 
     for i in 0 to n {
         let mut best_c: i32 = 0
         let mut best_score: f32 = -9999999999.0
-        for c in 0 to model.n_classes {
+        let row_base: i32 = i * p
+        for c in 0 to n_classes {
             let mut score: f32 = model.class_log_prior[c]
-            for j in 0 to model.n_features {
-                score = score + matrix_at(X, i, j) * model.feature_log_prob[c][j]
+            # Hoisting the class weight row out of the feature loop turns a
+            # double pointer dereference per element into one per class.
+            let weights: ptr<f32> = model.feature_log_prob[c]
+            for j in 0 to p {
+                score = score + X.data[row_base + j] * weights[j]
             }
             if score > best_score {
                 best_score = score
@@ -655,55 +702,105 @@ export struct CategoricalNB {
     fitted: bool
 }
 
+# One smoothed category cell.  Extracted so the normalisation pass keeps log()
+# out of a triply nested loop body.
+function _categorical_nb_log_ratio(smoothed: f32, denom: f32) -> f32 {
+    if denom > 0 {
+        return log((smoothed / denom) as f64) as f32
+    }
+    return 0.0
+}
+
 export function categorical_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_categories: ptr<i32>, alpha: f32) -> CategoricalNB {
     let n: i32 = X.rows
     let p: i32 = X.cols
 
     let classes: ptr<f32> = array_new_f32(n_classes)
     let class_log_prior: ptr<f32> = array_new_f32(n_classes)
+    let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
     for c in 0 to n_classes {
         classes[c] = c as f32
-        let mut count: i32 = 0
-        for i in 0 to n {
-            if y[i] as i32 == c { count = count + 1 }
+        class_counts[c] = 0
+    }
+
+    # Resolve each sample's class once.  The previous implementation rescanned
+    # the whole label vector for every (feature, class) pair, so the count pass
+    # cost n_features * n_classes * n_samples instead of n_samples * n_features.
+    let sample_class: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        let c: i32 = y[i] as i32
+        sample_class[i] = c
+        if c >= 0 && c < n_classes {
+            class_counts[c] = class_counts[c] + 1
         }
-        if count > 0 {
-            class_log_prior[c] = log((count as f64) as f32 as f64) as f32
+    }
+
+    for c in 0 to n_classes {
+        if class_counts[c] > 0 {
+            class_log_prior[c] = log((class_counts[c] as f64) as f32 as f64) as f32
         } else {
             class_log_prior[c] = -10000000000.0
         }
     }
 
-    let category_log_prob: ptr<ptr<ptr<f32> > > = malloc((p as i64) * 8) as ptr<ptr<ptr<f32> > >
+    # Flat count table addressed as feature_offset[j] + c * n_categories[j] + cat,
+    # so the gather pass walks X row-major instead of striding down a column
+    # once per class.
+    let feature_offset: ptr<i32> = malloc((p as i64) * 4) as ptr<i32>
+    let mut slot_count: i32 = 0
     for j in 0 to p {
-        category_log_prob[j] = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
-        for c in 0 to n_classes {
-            let nc: i32 = n_categories[j]
-            category_log_prob[j][c] = array_new_f32(nc)
-            let counts: ptr<i32> = malloc((nc as i64) * 4) as ptr<i32>
-            for cat in 0 to nc { counts[cat] = 0 }
-            let mut total: i32 = 0
-            for i in 0 to n {
-                if y[i] as i32 == c {
-                    let cat: i32 = matrix_at(X, i, j) as i32
-                    if cat >= 0 && cat < nc {
-                        counts[cat] = counts[cat] + 1
-                        total = total + 1
-                    }
+        feature_offset[j] = slot_count
+        slot_count = slot_count + n_categories[j] * n_classes
+    }
+
+    let category_counts: ptr<i32> = malloc((slot_count as i64) * 4) as ptr<i32>
+    for s in 0 to slot_count {
+        category_counts[s] = 0
+    }
+    let cell_totals: ptr<i32> = malloc(((p * n_classes) as i64) * 4) as ptr<i32>
+    for s in 0 to p * n_classes {
+        cell_totals[s] = 0
+    }
+
+    for i in 0 to n {
+        let c: i32 = sample_class[i]
+        if c >= 0 && c < n_classes {
+            let row_base: i32 = i * p
+            for j in 0 to p {
+                let nc: i32 = n_categories[j]
+                let cat: i32 = X.data[row_base + j] as i32
+                if cat >= 0 && cat < nc {
+                    let slot: i32 = feature_offset[j] + c * nc + cat
+                    category_counts[slot] = category_counts[slot] + 1
+                    let cell: i32 = j * n_classes + c
+                    cell_totals[cell] = cell_totals[cell] + 1
                 }
             }
-            for cat in 0 to nc {
-                let smoothed: f32 = (counts[cat] as f32) + alpha
-                let denom: f32 = (total as f32) + alpha * (nc as f32)
-                if denom > 0 {
-                    category_log_prob[j][c][cat] = log((smoothed / denom) as f64) as f32
-                } else {
-                    category_log_prob[j][c][cat] = 0.0
-                }
-            }
-            free(counts as ptr<void>)
         }
     }
+
+    let category_log_prob: ptr<ptr<ptr<f32> > > = malloc((p as i64) * 8) as ptr<ptr<ptr<f32> > >
+    for j in 0 to p {
+        let nc: i32 = n_categories[j]
+        category_log_prob[j] = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
+        for c in 0 to n_classes {
+            let probs: ptr<f32> = array_new_f32(nc)
+            category_log_prob[j][c] = probs
+            let base: i32 = feature_offset[j] + c * nc
+            let total: i32 = cell_totals[j * n_classes + c]
+            let denom: f32 = (total as f32) + alpha * (nc as f32)
+            for cat in 0 to nc {
+                let smoothed: f32 = (category_counts[base + cat] as f32) + alpha
+                probs[cat] = _categorical_nb_log_ratio(smoothed, denom)
+            }
+        }
+    }
+
+    free(class_counts as ptr<void>)
+    free(sample_class as ptr<void>)
+    free(feature_offset as ptr<void>)
+    free(category_counts as ptr<void>)
+    free(cell_totals as ptr<void>)
 
     return CategoricalNB {
         category_log_prob: category_log_prob,
@@ -719,26 +816,57 @@ export function categorical_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_cat
 
 export function categorical_nb_predict(model: CategoricalNB, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
+    let p: i32 = model.n_features
+    let n_classes: i32 = model.n_classes
     let result: ptr<f32> = array_new_f32(n)
+    # One score buffer and one code buffer for the whole call, not per sample.
+    let scores: ptr<f32> = array_new_f32(n_classes)
+    let codes: ptr<i32> = malloc((p as i64) * 4) as ptr<i32>
 
     for i in 0 to n {
-        let mut best_c: i32 = 0
-        let mut best_score: f32 = -9999999999.0
-        for c in 0 to model.n_classes {
-            let mut score: f32 = model.class_log_prior[c]
-            for j in 0 to model.n_features {
-                let cat: i32 = matrix_at(X, i, j) as i32
-                if cat >= 0 && cat < model.n_categories[j] {
-                    score = score + model.category_log_prob[j][c][cat]
+        # Decode and range-check the row's category codes once instead of once
+        # per class.  Out of range stays -1 and contributes nothing, as before.
+        let row_base: i32 = i * p
+        for j in 0 to p {
+            let cat: i32 = X.data[row_base + j] as i32
+            if cat >= 0 && cat < model.n_categories[j] {
+                codes[j] = cat
+            } else {
+                codes[j] = -1
+            }
+        }
+
+        for c in 0 to n_classes {
+            scores[c] = model.class_log_prior[c]
+        }
+
+        # Feature-outer accumulation keeps one feature's category table hot for
+        # every class instead of walking p separate allocations once per class.
+        # Each class still sums its terms in ascending feature order, so the
+        # accumulated float32 score is unchanged.
+        for j in 0 to p {
+            let cat: i32 = codes[j]
+            if cat >= 0 {
+                let feature_table: ptr<ptr<f32> > = model.category_log_prob[j]
+                for c in 0 to n_classes {
+                    scores[c] = scores[c] + feature_table[c][cat]
                 }
             }
-            if score > best_score {
-                best_score = score
+        }
+
+        let mut best_c: i32 = 0
+        let mut best_score: f32 = -9999999999.0
+        for c in 0 to n_classes {
+            if scores[c] > best_score {
+                best_score = scores[c]
                 best_c = c
             }
         }
         result[i] = best_c as f32
     }
+
+    array_free_f32(scores)
+    free(codes as ptr<void>)
     return result
 }
 

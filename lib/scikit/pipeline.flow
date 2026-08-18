@@ -156,7 +156,7 @@ export function pipeline_new(steps: ptr<PipelineStep>, n_steps: i32) -> Pipeline
 # Pipeline fit / transform / predict
 # ============================================================================
 
-export function pipeline_fit(pipeline: Pipeline, X: Matrix, y: ptr<f32>) -> void {
+export function pipeline_fit(pipeline: Pipeline, X: Matrix, y: ptr<f32>) -> Pipeline {
     let mut current_X: Matrix = matrix_copy(X)
 
     for i in 0 to pipeline.n_steps {
@@ -192,6 +192,7 @@ export function pipeline_fit(pipeline: Pipeline, X: Matrix, y: ptr<f32>) -> void
     }
 
     matrix_free(current_X)
+    return pipeline
 }
 
 export function pipeline_predict_proba(pipeline: Pipeline, X: Matrix) -> ptr<f32> {

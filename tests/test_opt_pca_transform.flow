@@ -1,0 +1,202 @@
+# Regression test for the optimized PCA.transform (issue #213).
+# Checks exact hand-computed projections, edge cases, and element-wise parity
+# against the original naive triple-loop formulation on a realistic workload.
+
+import "lib/scikit/scikit.flow"
+
+function opt_pca_tf_close(a: f32, b: f32, tolerance: f32) -> bool {
+    let mut d: f32 = a - b
+    if d < 0.0 { d = -d }
+    return d <= tolerance
+}
+
+# The pre-optimization implementation, kept here as the parity reference.
+function opt_pca_tf_reference(model: PCA, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, model.n_components)
+    for i in 0 to X.rows {
+        for c in 0 to model.n_components {
+            let mut sum: f32 = 0.0
+            for j in 0 to model.n_features {
+                sum = sum + (matrix_at(X, i, j) - model.mean[j]) * model.components[c][j]
+            }
+            matrix_set(result, i, c, sum)
+        }
+    }
+    return result
+}
+
+function opt_pca_tf_make_model(n_features: i32, n_components: i32) -> PCA {
+    let components: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+    for c in 0 to n_components {
+        components[c] = array_new_f32(n_features)
+    }
+    let mean: ptr<f32> = array_new_f32(n_features)
+    let ev: ptr<f32> = array_new_f32(n_components)
+    let evr: ptr<f32> = array_new_f32(n_components)
+    let model: PCA = PCA {
+        components: components,
+        n_components: n_components,
+        n_features: n_features,
+        mean: mean,
+        explained_variance: ev,
+        explained_variance_ratio: evr,
+        total_variance: 1.0,
+        fitted: true
+    }
+    return model
+}
+
+function main() -> i32 {
+    # --- 1. Exact hand-computed projection ---------------------------------
+    # mean = (1, 2, 3), components = [(1,0,0), (0.6,0.8,0)]
+    let m1: PCA = opt_pca_tf_make_model(3, 2)
+    m1.mean[0] = 1.0; m1.mean[1] = 2.0; m1.mean[2] = 3.0
+    m1.components[0][0] = 1.0; m1.components[0][1] = 0.0; m1.components[0][2] = 0.0
+    m1.components[1][0] = 0.6; m1.components[1][1] = 0.8; m1.components[1][2] = 0.0
+
+    let X1: Matrix = matrix_new(2, 3)
+    matrix_set(X1, 0, 0, 4.0); matrix_set(X1, 0, 1, 6.0); matrix_set(X1, 0, 2, 9.0)
+    matrix_set(X1, 1, 0, 1.0); matrix_set(X1, 1, 1, 2.0); matrix_set(X1, 1, 2, 3.0)
+
+    let T1: Matrix = pca_transform(m1, X1)
+    if T1.rows != 2 || T1.cols != 2 {
+        println("FAIL: transform output shape changed")
+        return 1
+    }
+    # row 0 centered = (3, 4, 6): PC0 = 3.0, PC1 = 0.6*3 + 0.8*4 = 5.0
+    if not opt_pca_tf_close(matrix_at(T1, 0, 0), 3.0, 0.000001) {
+        println("FAIL: exact projection PC0 row 0")
+        return 1
+    }
+    if not opt_pca_tf_close(matrix_at(T1, 0, 1), 5.0, 0.000001) {
+        println("FAIL: exact projection PC1 row 0")
+        return 1
+    }
+    # row 1 is the mean itself: both projections must be exactly zero
+    if not opt_pca_tf_close(matrix_at(T1, 1, 0), 0.0, 0.000001) {
+        println("FAIL: mean row must project to zero on PC0")
+        return 1
+    }
+    if not opt_pca_tf_close(matrix_at(T1, 1, 1), 0.0, 0.000001) {
+        println("FAIL: mean row must project to zero on PC1")
+        return 1
+    }
+    matrix_free(T1); matrix_free(X1); pca_free(m1)
+
+    # --- 2. Edge case: single row, single component ------------------------
+    let m2: PCA = opt_pca_tf_make_model(2, 1)
+    m2.mean[0] = 0.5; m2.mean[1] = -0.5
+    m2.components[0][0] = 0.0; m2.components[0][1] = 1.0
+    let X2: Matrix = matrix_new(1, 2)
+    matrix_set(X2, 0, 0, 10.0); matrix_set(X2, 0, 1, 2.5)
+    let T2: Matrix = pca_transform(m2, X2)
+    if T2.rows != 1 || T2.cols != 1 {
+        println("FAIL: single row transform shape")
+        return 1
+    }
+    if not opt_pca_tf_close(matrix_at(T2, 0, 0), 3.0, 0.000001) {
+        println("FAIL: single row projection")
+        return 1
+    }
+    matrix_free(T2); matrix_free(X2); pca_free(m2)
+
+    # --- 3. Edge case: n_components == n_features, fitted model ------------
+    # Perfectly collinear points: PC0 is (1/sqrt(2), 1/sqrt(2)).
+    let X3: Matrix = matrix_new(4, 2)
+    matrix_set(X3, 0, 0, 1.0); matrix_set(X3, 0, 1, 1.0)
+    matrix_set(X3, 1, 0, 2.0); matrix_set(X3, 1, 1, 2.0)
+    matrix_set(X3, 2, 0, 3.0); matrix_set(X3, 2, 1, 3.0)
+    matrix_set(X3, 3, 0, 4.0); matrix_set(X3, 3, 1, 4.0)
+    let m3: PCA = pca_fit(X3, 1)
+    let T3: Matrix = pca_transform(m3, X3)
+    # centered = (-1.5,-1.5), (-0.5,-0.5), (0.5,0.5), (1.5,1.5)
+    # projections = -2.121320, -0.707107, 0.707107, 2.121320
+    if not opt_pca_tf_close(matrix_at(T3, 0, 0), -2.1213203, 0.0001) {
+        println("FAIL: collinear projection row 0")
+        return 1
+    }
+    if not opt_pca_tf_close(matrix_at(T3, 1, 0), -0.7071068, 0.0001) {
+        println("FAIL: collinear projection row 1")
+        return 1
+    }
+    if not opt_pca_tf_close(matrix_at(T3, 2, 0), 0.7071068, 0.0001) {
+        println("FAIL: collinear projection row 2")
+        return 1
+    }
+    if not opt_pca_tf_close(matrix_at(T3, 3, 0), 2.1213203, 0.0001) {
+        println("FAIL: collinear projection row 3")
+        return 1
+    }
+    matrix_free(T3); pca_free(m3); matrix_free(X3)
+
+    # --- 4. Realistic workload: element-wise parity with the naive loop ----
+    let n: i32 = 300
+    let d: i32 = 12
+    let k: i32 = 4
+    let X4: Matrix = matrix_new(n, d)
+    let mut state: i32 = 20250213
+    for i in 0 to n {
+        for j in 0 to d {
+            state = (state * 1103515 + 12345) % 2147483
+            if state < 0 { state = -state }
+            let r: f32 = ((state % 10000) as f32) / 10000.0
+            let scale: f32 = 1.0 + ((d - j) as f32) * 2.0
+            matrix_set(X4, i, j, (r * 2.0 - 1.0) * scale + ((j % 5) as f32))
+        }
+    }
+    let m4: PCA = pca_fit(X4, k)
+    let fast: Matrix = pca_transform(m4, X4)
+    let slow: Matrix = opt_pca_tf_reference(m4, X4)
+    if fast.rows != slow.rows || fast.cols != slow.cols {
+        println("FAIL: workload transform shape mismatch")
+        return 1
+    }
+    let mut max_abs: f32 = 0.0
+    for i in 0 to n {
+        for c in 0 to k {
+            let mut diff: f32 = matrix_at(fast, i, c) - matrix_at(slow, i, c)
+            if diff < 0.0 { diff = -diff }
+            if diff > max_abs { max_abs = diff }
+        }
+    }
+    if max_abs > 0.001 {
+        print("FAIL: optimized transform diverges from reference, max abs diff = ")
+        printf("%.9f", max_abs)
+        println("")
+        return 1
+    }
+
+    # Reconstruction must still round-trip through inverse_transform.
+    let rec: Matrix = pca_inverse_transform(m4, fast)
+    if rec.rows != n || rec.cols != d {
+        println("FAIL: inverse transform shape")
+        return 1
+    }
+    let mut sq: f32 = 0.0
+    let mut sq_mean_only: f32 = 0.0
+    for i in 0 to n {
+        for j in 0 to d {
+            let e: f32 = matrix_at(rec, i, j) - matrix_at(X4, i, j)
+            sq = sq + e * e
+            let e0: f32 = m4.mean[j] - matrix_at(X4, i, j)
+            sq_mean_only = sq_mean_only + e0 * e0
+        }
+    }
+    let mse: f32 = sq / ((n * d) as f32)
+    let mse_mean_only: f32 = sq_mean_only / ((n * d) as f32)
+    # 4 of 12 components must explain the bulk of the variance on this workload.
+    if mse > mse_mean_only * 0.4 {
+        print("FAIL: reconstruction error too large: ")
+        printf("%.9f", mse)
+        print(" vs mean-only ")
+        printf("%.9f", mse_mean_only)
+        println("")
+        return 1
+    }
+
+    matrix_free(rec); matrix_free(slow); matrix_free(fast)
+    pca_free(m4); matrix_free(X4)
+
+    println("OK: optimized PCA.transform matches exact projections and the reference loop")
+    return 0
+}

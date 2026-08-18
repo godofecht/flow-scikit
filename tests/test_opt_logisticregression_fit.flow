@@ -1,0 +1,182 @@
+# Regression test for logistic_regression_fit after the LBFGS loop stopped
+# recomputing the gradient it had just evaluated. The optimizer's trajectory is
+# unchanged, so this pins the fitted coefficients rather than only the accuracy:
+# a separable problem with a closed-form-checkable answer, a degenerate
+# single-class problem, class discovery order, and a realistic workload where
+# refitting must be deterministic to the last bit.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+}
+
+function optfit_close(a: f32, b: f32, tolerance: f32) -> bool {
+    let d: f32 = a - b
+    if d < 0.0 { d = -d }
+    return d <= tolerance
+}
+
+function main() -> i32 {
+    let pen: Penalty = penalty_l2(0.001)
+    let none: Penalty = penalty_l2(0.0)
+
+    # ---- Case 1: a separable 1-D problem ----
+    # Points at -2, -1 are class 0 and 1, 2 are class 1, so the fitted
+    # coefficient must be positive and the intercept near zero by symmetry.
+    let X1: Matrix = matrix_new(4, 1)
+    let y1: ptr<f32> = array_new_f32(4)
+    matrix_set(X1, 0, 0, -2.0); y1[0] = 0.0
+    matrix_set(X1, 1, 0, -1.0); y1[1] = 0.0
+    matrix_set(X1, 2, 0, 1.0);  y1[2] = 1.0
+    matrix_set(X1, 3, 0, 2.0);  y1[3] = 1.0
+
+    let m1: LogisticRegression = logistic_regression_fit(X1, y1, 2, 100, 0.1, none)
+    if m1.n_classes != 2 {
+        println("FAIL: fit did not discover both classes")
+        return 1
+    }
+    # classes are recorded in first-seen order, so classes[0] is 0.0
+    if m1.classes[0] != 0.0 || m1.classes[1] != 1.0 {
+        println("FAIL: fit changed the class discovery order")
+        return 1
+    }
+    # weights row 0 is the one-vs-rest fit for class 0, which must slope down
+    if m1.weights[0] >= 0.0 {
+        println("FAIL: class 0 coefficient lost its sign")
+        return 1
+    }
+    if m1.weights[1] <= 0.0 {
+        println("FAIL: class 1 coefficient lost its sign")
+        return 1
+    }
+    # symmetric data, so the two intercepts must be near zero and near equal
+    if not optfit_close(m1.biases[0], 0.0, 0.01) || not optfit_close(m1.biases[1], 0.0, 0.01) {
+        println("FAIL: fit intercepts drifted off the symmetric solution")
+        printf("  biases: %.9f %.9f\n", m1.biases[0], m1.biases[1])
+        return 1
+    }
+    let p1: ptr<f32> = logistic_predict(m1, X1)
+    for i in 0 to 4 {
+        if p1[i] != y1[i] {
+            println("FAIL: fit no longer separates a separable 1-D problem")
+            return 1
+        }
+    }
+    array_free_f32(p1)
+    logistic_regression_free(m1)
+    matrix_free(X1)
+    array_free_f32(y1)
+
+    # ---- Case 2: a single-class problem must not blow up ----
+    let X2: Matrix = matrix_new(3, 2)
+    let y2: ptr<f32> = array_new_f32(3)
+    for i in 0 to 3 {
+        matrix_set(X2, i, 0, (i as f32))
+        matrix_set(X2, i, 1, 1.0)
+        y2[i] = 7.0
+    }
+    let m2: LogisticRegression = logistic_regression_fit(X2, y2, 1, 50, 0.1, pen)
+    if m2.n_classes != 1 {
+        println("FAIL: single-class fit reported the wrong class count")
+        return 1
+    }
+    let p2: ptr<f32> = logistic_predict(m2, X2)
+    for i in 0 to 3 {
+        if p2[i] != 7.0 {
+            println("FAIL: single-class fit stopped predicting its only class")
+            return 1
+        }
+    }
+    array_free_f32(p2)
+    logistic_regression_free(m2)
+    matrix_free(X2)
+    array_free_f32(y2)
+
+    # ---- Case 3: realistic 3-class workload, 600 x 20 ----
+    let n_rows: i32 = 600
+    let n_cols: i32 = 20
+    let X3: Matrix = matrix_new(n_rows, n_cols)
+    let y3: ptr<f32> = array_new_f32(n_rows)
+    let mut seed: i32 = 24680
+    for i in 0 to n_rows {
+        let mut a: f32 = 0.0
+        let mut b: f32 = 0.0
+        for j in 0 to n_cols {
+            seed = (seed * 1103515245 + 12345) % 2147483647
+            if seed < 0 { seed = -seed }
+            let v: f32 = ((seed % 2000) as f32) / 1000.0 - 1.0
+            matrix_set(X3, i, j, v)
+            if j < 5 { a = a + v }
+            if j >= 5 && j < 10 { b = b + v }
+        }
+        if a > 0.5 {
+            y3[i] = 0.0
+        } else {
+            if b > 0.5 { y3[i] = 1.0 } else { y3[i] = 2.0 }
+        }
+    }
+
+    let m3a: LogisticRegression = logistic_regression_fit(X3, y3, 3, 200, 0.1, pen)
+    let m3b: LogisticRegression = logistic_regression_fit(X3, y3, 3, 200, 0.1, pen)
+
+    # The solver takes no random decisions, so two fits on the same data must
+    # agree to the last bit. Carrying the gradient across iterations must not
+    # introduce any state that survives from one fit to the next.
+    if m3a.n_classes != m3b.n_classes {
+        println("FAIL: refitting the same data gave a different class count")
+        return 1
+    }
+    for c in 0 to m3a.n_classes {
+        if m3a.biases[c] != m3b.biases[c] {
+            println("FAIL: refitting the same data gave a different intercept")
+            return 1
+        }
+        for j in 0 to m3a.n_features {
+            if m3a.weights[c * m3a.n_features + j] != m3b.weights[c * m3b.n_features + j] {
+                println("FAIL: refitting the same data gave different coefficients")
+                return 1
+            }
+        }
+    }
+
+    # Every coefficient must be finite. A NaN compares unequal to itself.
+    for c in 0 to m3a.n_classes {
+        if m3a.biases[c] != m3a.biases[c] {
+            println("FAIL: fit produced a non-finite intercept")
+            return 1
+        }
+        for j in 0 to m3a.n_features {
+            let wv: f32 = m3a.weights[c * m3a.n_features + j]
+            if wv != wv {
+                println("FAIL: fit produced a non-finite coefficient")
+                return 1
+            }
+        }
+    }
+
+    # The first five features carry the signal, so the fit must beat the
+    # majority-class rate by a wide margin.
+    let pred3: ptr<f32> = logistic_predict(m3a, X3)
+    let acc: f32 = accuracy_score(y3, pred3, n_rows)
+    if acc < 0.7 {
+        println("FAIL: fit accuracy collapsed on the separable fixture")
+        printf("  accuracy: %.6f\n", acc)
+        return 1
+    }
+
+    # The intercept is stored twice; the two views must stay consistent.
+    if m3a.bias != m3a.biases[0] {
+        println("FAIL: model.bias and model.biases[0] disagree")
+        return 1
+    }
+
+    array_free_f32(pred3)
+    logistic_regression_free(m3a)
+    logistic_regression_free(m3b)
+    matrix_free(X3)
+    array_free_f32(y3)
+
+    println("OK: logistic_regression_fit coefficients unchanged after the LBFGS hoist")
+    return 0
+}

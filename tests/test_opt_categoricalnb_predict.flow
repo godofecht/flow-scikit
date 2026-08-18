@@ -1,0 +1,309 @@
+import "lib/scikit/scikit.flow"
+
+extern {
+    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+    function printf(fmt: string, ...) -> i32
+}
+
+const TIME_UTC: i32 = 1
+
+function catpred_now_ns() -> i64 {
+    let ts: ptr<i64> = malloc(16) as ptr<i64>
+    timespec_get(ts, TIME_UTC)
+    let value: i64 = ts[0] * 1000000000 + ts[1]
+    free(ts as ptr<void>)
+    return value
+}
+
+# Verbatim copy of the pre-optimization categorical_nb_predict from origin/main.
+# Kept so the A/B timing and the parity check run against real reference output.
+function catpred_reference_predict(model: CategoricalNB, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best_score: f32 = -9999999999.0
+        for c in 0 to model.n_classes {
+            let mut score: f32 = model.class_log_prior[c]
+            for j in 0 to model.n_features {
+                let cat: i32 = matrix_at(X, i, j) as i32
+                if cat >= 0 && cat < model.n_categories[j] {
+                    score = score + model.category_log_prob[j][c][cat]
+                }
+            }
+            if score > best_score {
+                best_score = score
+                best_c = c
+            }
+        }
+        result[i] = best_c as f32
+    }
+    return result
+}
+
+# argmax hides small drift, so compare the accumulated scores directly.  The
+# optimized loop nests feature outside class, but each class still sums its
+# terms in ascending feature order, so the float32 results must be identical.
+function catpred_check_score_parity(model: CategoricalNB, X: Matrix) -> i32 {
+    let p: i32 = model.n_features
+    let n_classes: i32 = model.n_classes
+    let scores: ptr<f32> = array_new_f32(n_classes)
+    let mut status: i32 = 0
+
+    for i in 0 to X.rows {
+        let row_base: i32 = i * p
+        for c in 0 to n_classes {
+            scores[c] = model.class_log_prior[c]
+        }
+        for j in 0 to p {
+            let cat: i32 = X.data[row_base + j] as i32
+            if cat >= 0 && cat < model.n_categories[j] {
+                for c in 0 to n_classes {
+                    scores[c] = scores[c] + model.category_log_prob[j][c][cat]
+                }
+            }
+        }
+        for c in 0 to n_classes {
+            let mut class_first: f32 = model.class_log_prior[c]
+            for j in 0 to p {
+                let cat: i32 = matrix_at(X, i, j) as i32
+                if cat >= 0 && cat < model.n_categories[j] {
+                    class_first = class_first + model.category_log_prob[j][c][cat]
+                }
+            }
+            if class_first != scores[c] {
+                status = 1
+            }
+        }
+    }
+
+    array_free_f32(scores)
+    if status != 0 {
+        println("FAIL: CategoricalNB predict scores are not bit-identical")
+    }
+    return status
+}
+
+function catpred_build_model() -> CategoricalNB {
+    let train: Matrix = matrix_new(6, 3)
+    matrix_set(train, 0, 0, 0.0)
+    matrix_set(train, 0, 1, 1.0)
+    matrix_set(train, 0, 2, 2.0)
+    matrix_set(train, 1, 0, 0.0)
+    matrix_set(train, 1, 1, 2.0)
+    matrix_set(train, 1, 2, 1.0)
+    matrix_set(train, 2, 0, 1.0)
+    matrix_set(train, 2, 1, 0.0)
+    matrix_set(train, 2, 2, 0.0)
+    matrix_set(train, 3, 0, 2.0)
+    matrix_set(train, 3, 1, 0.0)
+    matrix_set(train, 3, 2, 1.0)
+    matrix_set(train, 4, 0, 0.0)
+    matrix_set(train, 4, 1, 1.0)
+    matrix_set(train, 4, 2, 2.0)
+    matrix_set(train, 5, 0, 1.0)
+    matrix_set(train, 5, 1, 2.0)
+    matrix_set(train, 5, 2, 0.0)
+
+    let labels: ptr<f32> = array_new_f32(6)
+    labels[0] = 0.0
+    labels[1] = 0.0
+    labels[2] = 1.0
+    labels[3] = 1.0
+    labels[4] = 0.0
+    labels[5] = 1.0
+
+    let n_categories: ptr<i32> = malloc(3 * 4) as ptr<i32>
+    n_categories[0] = 3
+    n_categories[1] = 3
+    n_categories[2] = 3
+
+    let model: CategoricalNB = categorical_nb_fit(train, labels, 2, n_categories, 1.0)
+    matrix_free(train)
+    array_free_f32(labels)
+    return model
+}
+
+function catpred_check_known_values() -> i32 {
+    # Six samples, three ternary features, two classes, alpha = 1.  Expected
+    # labels were derived independently from the CategoricalNB definition.
+    let model: CategoricalNB = catpred_build_model()
+
+    let query: Matrix = matrix_new(4, 3)
+    matrix_set(query, 0, 0, 0.0)
+    matrix_set(query, 0, 1, 1.0)
+    matrix_set(query, 0, 2, 2.0)
+    matrix_set(query, 1, 0, 1.0)
+    matrix_set(query, 1, 1, 0.0)
+    matrix_set(query, 1, 2, 0.0)
+    matrix_set(query, 2, 0, 2.0)
+    matrix_set(query, 2, 1, 2.0)
+    matrix_set(query, 2, 2, 2.0)
+    matrix_set(query, 3, 0, 0.0)
+    matrix_set(query, 3, 1, 0.0)
+    matrix_set(query, 3, 2, 0.0)
+
+    let expected: ptr<f32> = array_new_f32(4)
+    expected[0] = 0.0
+    expected[1] = 1.0
+    expected[2] = 0.0
+    expected[3] = 1.0
+
+    let preds: ptr<f32> = categorical_nb_predict(model, query)
+    let mut status: i32 = 0
+    for i in 0 to 4 {
+        if preds[i] != expected[i] {
+            println("FAIL: CategoricalNB predict known-value case")
+            status = 1
+        }
+    }
+    if catpred_check_score_parity(model, query) != 0 {
+        status = 1
+    }
+
+    array_free_f32(preds)
+    array_free_f32(expected)
+    matrix_free(query)
+    categorical_nb_free(model)
+    free(model.n_categories as ptr<void>)
+    return status
+}
+
+function catpred_check_out_of_range() -> i32 {
+    # Category codes outside [0, n_categories) must contribute nothing, exactly
+    # as before.  Row 0 has a code above the range, row 1 a negative code.
+    let model: CategoricalNB = catpred_build_model()
+
+    let query: Matrix = matrix_new(2, 3)
+    matrix_set(query, 0, 0, 5.0)
+    matrix_set(query, 0, 1, 1.0)
+    matrix_set(query, 0, 2, 2.0)
+    matrix_set(query, 1, 0, 0.0)
+    matrix_set(query, 1, 1, -1.0)
+    matrix_set(query, 1, 2, 2.0)
+
+    let preds: ptr<f32> = categorical_nb_predict(model, query)
+    let reference: ptr<f32> = catpred_reference_predict(model, query)
+    let mut status: i32 = 0
+    if preds[0] != 0.0 {
+        println("FAIL: CategoricalNB predict out-of-range row 0")
+        status = 1
+    }
+    if preds[1] != 0.0 {
+        println("FAIL: CategoricalNB predict out-of-range row 1")
+        status = 1
+    }
+    for i in 0 to 2 {
+        if preds[i] != reference[i] {
+            println("FAIL: CategoricalNB predict out-of-range diverged from reference")
+            status = 1
+        }
+    }
+    if catpred_check_score_parity(model, query) != 0 {
+        status = 1
+    }
+
+    array_free_f32(preds)
+    array_free_f32(reference)
+    matrix_free(query)
+    categorical_nb_free(model)
+    free(model.n_categories as ptr<void>)
+    return status
+}
+
+function main() -> i32 {
+    let mut status: i32 = 0
+    status = status + catpred_check_known_values()
+    status = status + catpred_check_out_of_range()
+    if status != 0 {
+        return 1
+    }
+
+    let n_train: i32 = 1200
+    let n_query: i32 = 1200
+    let p: i32 = 32
+    let n_classes: i32 = 8
+    let levels: i32 = 6
+    let repeats: i32 = 10
+
+    let train: Matrix = matrix_new(n_train, p)
+    let labels: ptr<f32> = array_new_f32(n_train)
+    for i in 0 to n_train {
+        labels[i] = (i % n_classes) as f32
+        for j in 0 to p {
+            let level: i32 = (i * 37 + j * 19) % levels
+            matrix_set(train, i, j, level as f32)
+        }
+    }
+
+    let n_categories: ptr<i32> = malloc((p as i64) * 4) as ptr<i32>
+    for j in 0 to p {
+        n_categories[j] = levels
+    }
+
+    let model: CategoricalNB = categorical_nb_fit(train, labels, n_classes, n_categories, 1.0)
+
+    let query: Matrix = matrix_new(n_query, p)
+    for i in 0 to n_query {
+        for j in 0 to p {
+            let level: i32 = (i * 29 + j * 13) % levels
+            matrix_set(query, i, j, level as f32)
+        }
+    }
+
+    # Element-wise parity on the realistic workload before any timing.
+    let reference_once: ptr<f32> = catpred_reference_predict(model, query)
+    let optimized_once: ptr<f32> = categorical_nb_predict(model, query)
+    for i in 0 to n_query {
+        if reference_once[i] != optimized_once[i] {
+            println("FAIL: optimized CategoricalNB predict changed a label")
+            return 1
+        }
+    }
+    array_free_f32(reference_once)
+    array_free_f32(optimized_once)
+
+    if catpred_check_score_parity(model, query) != 0 {
+        return 1
+    }
+
+    # Warm both paths so the timed loops measure steady state, not first touch.
+    for r in 0 to 2 {
+        let warm_reference: ptr<f32> = catpred_reference_predict(model, query)
+        array_free_f32(warm_reference)
+        let warm_optimized: ptr<f32> = categorical_nb_predict(model, query)
+        array_free_f32(warm_optimized)
+    }
+
+    # Interleave the two paths so scheduler drift over the run hits both equally.
+    let mut reference_ns: i64 = 0
+    let mut optimized_ns: i64 = 0
+    for r in 0 to repeats {
+        let t0: i64 = catpred_now_ns()
+        let reference_output: ptr<f32> = catpred_reference_predict(model, query)
+        let t1: i64 = catpred_now_ns()
+        array_free_f32(reference_output)
+
+        let t2: i64 = catpred_now_ns()
+        let optimized_output: ptr<f32> = categorical_nb_predict(model, query)
+        let t3: i64 = catpred_now_ns()
+        array_free_f32(optimized_output)
+
+        reference_ns = reference_ns + (t1 - t0)
+        optimized_ns = optimized_ns + (t3 - t2)
+    }
+
+    let reference_ms: f64 = (reference_ns as f64) / 1000000.0
+    let optimized_ms: f64 = (optimized_ns as f64) / 1000000.0
+    printf("CategoricalNB predict A/B: reference=%.6f ms optimized=%.6f ms speedup=%.3fx\n", reference_ms, optimized_ms, reference_ms / optimized_ms)
+
+    matrix_free(query)
+    categorical_nb_free(model)
+    matrix_free(train)
+    array_free_f32(labels)
+    free(n_categories as ptr<void>)
+
+    println("OK: CategoricalNB predict matches reference labels")
+    return 0
+}

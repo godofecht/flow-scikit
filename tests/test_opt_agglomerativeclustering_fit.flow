@@ -1,0 +1,311 @@
+# Regression test for the optimized agglomerative_clustering_fit.
+# Checks hand-computed groupings, the degenerate cluster counts, and several
+# tie-heavy inputs where the merge order is decided entirely by the
+# lexicographic tie-break: identical rows, a duplicated dataset, and an
+# integer grid whose pairwise distances collide constantly. Every case is
+# compared label-for-label against the previous O(n^3) implementation.
+# Run: FLOW_HOST=python flow run tests/test_opt_agglomerativeclustering_fit.flow
+
+import "lib/scikit/scikit.flow"
+
+# The pre-optimization kernel, kept here as the parity reference.
+function opt_ac_reference(X: Matrix, n_clusters: i32) -> AgglomerativeClustering {
+    let n: i32 = X.rows
+
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        labels[i] = i
+    }
+
+    let mut active_clusters: i32 = n
+
+    let dist: ptr<f32> = malloc((n * n) as i64 * 4) as ptr<f32>
+    for i in 0 to n {
+        for j in 0 to n {
+            if i == j {
+                dist[i * n + j] = 0.0
+            } else {
+                let mut d: f32 = 0.0
+                for k in 0 to X.cols {
+                    let diff: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                    d = d + diff * diff
+                }
+                dist[i * n + j] = d
+            }
+        }
+    }
+
+    while active_clusters > n_clusters {
+        let mut min_dist: f32 = 9999999999.0
+        let mut min_i: i32 = -1
+        let mut min_j: i32 = -1
+
+        for i in 0 to n {
+            if labels[i] != i {
+                continue
+            }
+            for j in i + 1 to n {
+                if labels[j] != j {
+                    continue
+                }
+                if dist[i * n + j] < min_dist {
+                    min_dist = dist[i * n + j]
+                    min_i = i
+                    min_j = j
+                }
+            }
+        }
+
+        if min_i < 0 {
+            break
+        }
+
+        for k in 0 to n {
+            if labels[k] == min_j {
+                labels[k] = min_i
+            }
+        }
+
+        for k in 0 to n {
+            if k == min_i {
+                continue
+            }
+            let d_ik: f32 = dist[min_i * n + k]
+            let d_jk: f32 = dist[min_j * n + k]
+            let new_dist: f32 = d_ik
+            if d_jk < new_dist {
+                new_dist = d_jk
+            }
+            dist[min_i * n + k] = new_dist
+            dist[k * n + min_i] = new_dist
+        }
+
+        active_clusters = active_clusters - 1
+    }
+
+    let unique_labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let mut n_unique: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to n_unique {
+            if unique_labels[k] == labels[i] {
+                found = true
+            }
+        }
+        if not found {
+            unique_labels[n_unique] = labels[i]
+            n_unique = n_unique + 1
+        }
+    }
+
+    let final_labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        for k in 0 to n_unique {
+            if labels[i] == unique_labels[k] {
+                final_labels[i] = k
+            }
+        }
+    }
+
+    free(dist as ptr<void>)
+    free(labels as ptr<void>)
+    free(unique_labels as ptr<void>)
+
+    return AgglomerativeClustering {
+        labels: final_labels,
+        n_clusters: n_unique,
+        n_samples: n,
+        fitted: true
+    }
+}
+
+function opt_ac_compare(X: Matrix, k: i32, name: string) -> i32 {
+    let m: AgglomerativeClustering = agglomerative_clustering_fit(X, k)
+    let r: AgglomerativeClustering = opt_ac_reference(X, k)
+
+    let mut failed: i32 = 0
+    if m.n_clusters != r.n_clusters {
+        failed = 1
+        printf("FAIL: %s produced %d clusters, expected %d\n", name, m.n_clusters, r.n_clusters)
+    } else {
+        let mut diffs: i32 = 0
+        for i in 0 to X.rows {
+            if m.labels[i] != r.labels[i] { diffs = diffs + 1 }
+        }
+        if diffs != 0 {
+            failed = 1
+            printf("FAIL: %s differs from the flat scan in %d of %d labels\n", name, diffs, X.rows)
+        }
+    }
+
+    agglomerative_clustering_free(r)
+    agglomerative_clustering_free(m)
+    return failed
+}
+
+function opt_ac_known_values() -> i32 {
+    let X: Matrix = matrix_new(6, 2)
+    matrix_set(X, 0, 0, 0.0);  matrix_set(X, 0, 1, 0.0)
+    matrix_set(X, 1, 0, 0.0);  matrix_set(X, 1, 1, 1.0)
+    matrix_set(X, 2, 0, 5.0);  matrix_set(X, 2, 1, 5.0)
+    matrix_set(X, 3, 0, 5.0);  matrix_set(X, 3, 1, 6.0)
+    matrix_set(X, 4, 0, 10.0); matrix_set(X, 4, 1, 0.0)
+    matrix_set(X, 5, 0, 10.0); matrix_set(X, 5, 1, 1.0)
+
+    let m: AgglomerativeClustering = agglomerative_clustering_fit(X, 3)
+    let mut failed: i32 = 0
+    if m.n_clusters != 3 { failed = 1 }
+    if m.labels[0] != 0 { failed = 1 }
+    if m.labels[1] != 0 { failed = 1 }
+    if m.labels[2] != 1 { failed = 1 }
+    if m.labels[3] != 1 { failed = 1 }
+    if m.labels[4] != 2 { failed = 1 }
+    if m.labels[5] != 2 { failed = 1 }
+    if failed != 0 {
+        println("FAIL: agglomerative known grouping changed")
+        printf("  n_clusters %d labels %d %d %d %d %d %d\n", m.n_clusters,
+            m.labels[0], m.labels[1], m.labels[2], m.labels[3], m.labels[4], m.labels[5])
+    }
+    agglomerative_clustering_free(m)
+    matrix_free(X)
+    return failed
+}
+
+function opt_ac_degenerate_counts() -> i32 {
+    let n: i32 = 12
+    let X: Matrix = matrix_new(n, 3)
+    let mut state: i64 = 5150
+    for i in 0 to n {
+        for j in 0 to 3 {
+            state = (state * 1103515245 + 12345) % 2147483648
+            X.data[i * 3 + j] = ((state % 400) as f32) / 100.0
+        }
+    }
+
+    let mut failed: i32 = 0
+
+    # No merges at all.
+    let none: AgglomerativeClustering = agglomerative_clustering_fit(X, n)
+    if none.n_clusters != n {
+        failed = 1
+        printf("FAIL: n_clusters=n gave %d clusters\n", none.n_clusters)
+    }
+    for i in 0 to n {
+        if none.labels[i] != i { failed = 1 }
+    }
+    agglomerative_clustering_free(none)
+
+    # More clusters requested than there are samples.
+    failed = failed + opt_ac_compare(X, n + 5, "n_clusters above n")
+    # Everything merged into one.
+    let one: AgglomerativeClustering = agglomerative_clustering_fit(X, 1)
+    if one.n_clusters != 1 {
+        failed = 1
+        printf("FAIL: n_clusters=1 gave %d clusters\n", one.n_clusters)
+    }
+    for i in 0 to n {
+        if one.labels[i] != 0 { failed = 1 }
+    }
+    agglomerative_clustering_free(one)
+
+    failed = failed + opt_ac_compare(X, 2, "small random, k=2")
+    failed = failed + opt_ac_compare(X, 4, "small random, k=4")
+
+    matrix_free(X)
+    return failed
+}
+
+# Every distance equal to every other: the merge order is decided purely by
+# the lexicographic tie-break, so any drift in it shows up immediately.
+function opt_ac_all_identical() -> i32 {
+    let n: i32 = 30
+    let X: Matrix = matrix_new(n, 3)
+    for i in 0 to n {
+        X.data[i * 3] = 2.0
+        X.data[i * 3 + 1] = -1.0
+        X.data[i * 3 + 2] = 0.5
+    }
+    let mut failed: i32 = opt_ac_compare(X, 3, "identical rows, k=3")
+    failed = failed + opt_ac_compare(X, 7, "identical rows, k=7")
+    matrix_free(X)
+    return failed
+}
+
+# An integer grid: pairwise squared distances take few distinct values, so
+# ties are everywhere and cached rows are invalidated constantly.
+function opt_ac_integer_grid() -> i32 {
+    let side: i32 = 8
+    let n: i32 = side * side
+    let X: Matrix = matrix_new(n, 2)
+    for a in 0 to side {
+        for b in 0 to side {
+            let i: i32 = a * side + b
+            X.data[i * 2] = (a as f32)
+            X.data[i * 2 + 1] = (b as f32)
+        }
+    }
+    let mut failed: i32 = opt_ac_compare(X, 4, "integer grid, k=4")
+    failed = failed + opt_ac_compare(X, 9, "integer grid, k=9")
+    failed = failed + opt_ac_compare(X, 20, "integer grid, k=20")
+    matrix_free(X)
+    return failed
+}
+
+# Each row appears twice, so the first merges all sit at distance zero.
+function opt_ac_duplicated_rows() -> i32 {
+    let half: i32 = 40
+    let n: i32 = half * 2
+    let d: i32 = 4
+    let X: Matrix = matrix_new(n, d)
+    let mut state: i64 = 24680
+    for i in 0 to half {
+        for j in 0 to d {
+            state = (state * 1103515245 + 12345) % 2147483648
+            let v: f32 = ((i % 5) as f32) * 2.0 + ((state % 300) as f32) / 150.0
+            X.data[i * d + j] = v
+            X.data[(i + half) * d + j] = v
+        }
+    }
+    let mut failed: i32 = opt_ac_compare(X, 5, "duplicated rows, k=5")
+    failed = failed + opt_ac_compare(X, 12, "duplicated rows, k=12")
+    matrix_free(X)
+    return failed
+}
+
+function opt_ac_workload() -> i32 {
+    let n: i32 = 400
+    let d: i32 = 8
+    let k: i32 = 5
+    let X: Matrix = matrix_new(n, d)
+    let mut state: i64 = 991
+    for i in 0 to n {
+        for j in 0 to d {
+            state = (state * 1103515245 + 12345) % 2147483648
+            X.data[i * d + j] = ((i % k) as f32) * 3.0 + ((state % 1000) as f32) / 400.0
+        }
+    }
+    let mut failed: i32 = opt_ac_compare(X, k, "400x8 workload")
+    failed = failed + opt_ac_compare(X, 40, "400x8 workload, k=40")
+    if failed == 0 {
+        println("  OK: 400x8 realistic workload, labels identical to the flat scan")
+    }
+    matrix_free(X)
+    return failed
+}
+
+function main() -> i32 {
+    println("Test: optimized AgglomerativeClustering.fit")
+    let mut failed: i32 = 0
+    failed = failed + opt_ac_known_values()
+    failed = failed + opt_ac_degenerate_counts()
+    failed = failed + opt_ac_all_identical()
+    failed = failed + opt_ac_integer_grid()
+    failed = failed + opt_ac_duplicated_rows()
+    failed = failed + opt_ac_workload()
+    if failed != 0 {
+        println("FAILED")
+        return 1
+    }
+    println("OK: AgglomerativeClustering.fit optimization preserves every merge")
+    return 0
+}
