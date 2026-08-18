@@ -470,11 +470,15 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
     # LBFGS avoids the O(m*d^2) Hessian, needing only O(m*d) per iteration.
     let d: i32 = n + 1
     let X_aug: ptr<f32> = malloc((m as i64) * (d as i64) * 4) as ptr<f32>
+    let x_data: ptr<f32> = X.data
+    let x_stride: i32 = X.cols
     for i in 0 to m {
+        let src: i32 = i * x_stride
+        let dst: i32 = i * d
         for j in 0 to n {
-            X_aug[i * d + j] = matrix_at(X, i, j)
+            X_aug[dst + j] = x_data[src + j]
         }
-        X_aug[i * d + n] = 1.0
+        X_aug[dst + n] = 1.0
     }
 
     let theta: ptr<f32> = array_new_f32(d)
@@ -482,6 +486,10 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
     let p_arr: ptr<f32> = array_new_f32(m)
     let z_arr: ptr<f32> = array_new_f32(m)
     let err_arr: ptr<f32> = array_new_f32(m)
+    # One-vs-rest target for the class currently being fitted. The comparison
+    # against classes[c] is loop-invariant across LBFGS iterations, so it is
+    # built once per class instead of m times per iteration.
+    let label_arr: ptr<f32> = array_new_f32(m)
 
     # LBFGS history buffers (memory = 10)
     let mem: i32 = 10
@@ -504,33 +512,37 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
     if max_iter > 100 { max_iter = 100 }
     if max_iter < 10 { max_iter = 10 }
 
+    let inv_m: f32 = 1.0 / (m as f32)
+
     for c in 0 to nc {
         for j in 0 to d { theta[j] = 0.0 }
+
+        let target: f32 = classes[c]
+        for i in 0 to m {
+            label_arr[i] = 0.0
+            if y[i] == target { label_arr[i] = 1.0 }
+        }
 
         let mut iter: i32 = 0
         let mut converged: bool = false
         let mut hist_size: i32 = 0
         let mut hist_idx: i32 = 0
 
+        # Gradient at the starting point. Every later iteration ends by
+        # evaluating the gradient at the theta it just stepped to, which is the
+        # same value this block used to recompute at the top of the loop, so
+        # the loop now carries it forward instead of redoing both sgemv calls.
+        blas_matvec(X_aug, m, d, theta, z_arr, 1.0, 0.0)
+        for i in 0 to m {
+            p_arr[i] = sigmoid(z_arr[i])
+            err_arr[i] = p_arr[i] - label_arr[i]
+        }
+        blas_matvec_trans(X_aug, m, d, err_arr, grad, inv_m, 0.0)
+        for j in 0 to n {
+            grad[j] = grad[j] + l2_coeff * theta[j]
+        }
+
         while iter < max_iter && not converged {
-            # Forward pass: z = X_aug * theta (BLAS sgemv)
-            blas_matvec(X_aug, m, d, theta, z_arr, 1.0, 0.0)
-
-            # Sigmoid and error
-            for i in 0 to m {
-                p_arr[i] = sigmoid(z_arr[i])
-                let label: f32 = 0.0
-                if y[i] == classes[c] { label = 1.0 }
-                err_arr[i] = p_arr[i] - label
-            }
-
-            # Gradient: grad = X_aug^T * err / m + l2 * theta (BLAS sgemv)
-            let inv_m: f32 = 1.0 / (m as f32)
-            blas_matvec_trans(X_aug, m, d, err_arr, grad, inv_m, 0.0)
-            for j in 0 to n {
-                grad[j] = grad[j] + l2_coeff * theta[j]
-            }
-
             # Check convergence
             let mut gnorm: f32 = 0.0
             for j in 0 to d {
@@ -618,13 +630,12 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
             # theta = theta + step * direction
             for j in 0 to d { theta[j] = theta_prev[j] + step * direction[j] }
 
-            # Recompute gradient at new theta for LBFGS history
+            # Gradient at the new theta, for the LBFGS history and for the next
+            # iteration's convergence check and direction.
             blas_matvec(X_aug, m, d, theta, z_arr, 1.0, 0.0)
             for i in 0 to m {
                 p_arr[i] = sigmoid(z_arr[i])
-                let label: f32 = 0.0
-                if y[i] == classes[c] { label = 1.0 }
-                err_arr[i] = p_arr[i] - label
+                err_arr[i] = p_arr[i] - label_arr[i]
             }
             blas_matvec_trans(X_aug, m, d, err_arr, grad, inv_m, 0.0)
             for j in 0 to n {
@@ -660,6 +671,7 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
     array_free_f32(p_arr)
     array_free_f32(z_arr)
     array_free_f32(err_arr)
+    array_free_f32(label_arr)
     free(s_hist as ptr<void>)
     free(y_hist as ptr<void>)
     array_free_f32(rho_hist)
