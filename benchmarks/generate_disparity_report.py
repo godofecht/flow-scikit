@@ -98,6 +98,7 @@ def main() -> int:
     p.add_argument("--kmeans-audit", type=Path, default=ROOT / "kmeans_semantics_audit.json")
     p.add_argument("--sklearn-raw", type=Path, default=ROOT / "sklearn_results_v2.txt")
     p.add_argument("--flow-raw", type=Path, default=ROOT / "flow_results_v2.txt")
+    p.add_argument("--host-environment", type=Path, default=ROOT / "headline_environment.json")
     p.add_argument("--output", type=Path, default=ROOT / "disparity_report.json")
     args = p.parse_args()
 
@@ -107,6 +108,7 @@ def main() -> int:
     kmeans_audit = json.loads(args.kmeans_audit.read_text()) if args.kmeans_audit.exists() else None
     sklearn_details = parse_details(args.sklearn_raw)
     flow_details = parse_details(args.flow_raw)
+    host_env = json.loads(args.host_environment.read_text()) if args.host_environment.exists() else {}
 
     diag_by_key = {(r["algorithm"], r["dataset"], r["metric"]): r for r in diagnostics}
     contract_by_key = {(r["algorithm"], r["dataset"], r["metric"]): r for r in contract_doc["rows"]}
@@ -185,8 +187,13 @@ def main() -> int:
         })
 
     payload = {
-        "schema_version": 2,
+        "schema_version": 3,
         "environment_id": headline.get("environment_id"),
+        # Hardware plus BLAS thread configuration. environment_id only covers the
+        # software stack, so it cannot tell two runner machines apart; wall-clock
+        # comparisons are only meaningful within one runtime_environment_id.
+        "runtime_environment_id": host_env.get("runtime_environment_id"),
+        "host": host_env.get("host"),
         "policy": "headline eligibility never erases disparity evidence; strict diagnostics, learned-state diagnostics and final eligibility decisions are retained separately",
         "counts": {
             "rows": len(rows),
