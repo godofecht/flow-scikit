@@ -561,6 +561,48 @@ export struct AgglomerativeClustering {
     fitted: bool
 }
 
+# Lowest-index active partner j > i minimising dist[i][j], or -1 when row i
+# has none. The 9999999999.0 seed is the same ceiling the original global scan
+# used, so a pair at or beyond it is passed over here exactly as it was there.
+function _agglo_nearest_above(dist: ptr<f32>, labels: ptr<i32>, n: i32, i: i32) -> i32 {
+    let mut best_j: i32 = -1
+    let mut best: f32 = 9999999999.0
+    let base: i32 = i * n
+    for j in i + 1 to n {
+        if labels[j] != j {
+            continue
+        }
+        let d: f32 = dist[base + j]
+        if d < best {
+            best = d
+            best_j = j
+        }
+    }
+    return best_j
+}
+
+# Single-linkage agglomerative clustering.
+#
+# The merge step already used the Lance-Williams update for single linkage,
+# so distances were never recomputed from the data. The cost was in finding
+# the closest pair: every merge rescanned the whole upper triangle, which is
+# O(n^2) per merge and O(n^3) over a full run down to a handful of clusters.
+#
+# Each active row now caches its own closest partner above it, so the closest
+# pair is an O(n) scan of those cached values. A merge only invalidates rows
+# whose cached partner was the absorbed cluster, plus the absorbing row
+# itself; every other row either sees no change or sees its distance to the
+# absorbing cluster fall, which is a single comparison. Single linkage takes
+# a minimum, so cached distances never rise and nothing else can go stale.
+#
+# Tie-breaking is preserved exactly. A row caches the lowest-index partner
+# among its minima, and the global scan takes the first row that strictly
+# beats the running best, so the merged pair is the same lexicographically
+# first pair the flat double loop produced, including on exact ties.
+#
+# The initial matrix is symmetric, so only the upper triangle is computed and
+# the result is mirrored. Squaring makes the sign irrelevant, so the mirrored
+# entry is bit-identical to the one the second pass used to compute.
 export function agglomerative_clustering_fit(X: Matrix, n_clusters: i32) -> AgglomerativeClustering {
     let n: i32 = X.rows
 
@@ -572,18 +614,33 @@ export function agglomerative_clustering_fit(X: Matrix, n_clusters: i32) -> Aggl
     let mut active_clusters: i32 = n
 
     let dist: ptr<f32> = malloc((n * n) as i64 * 4) as ptr<f32>
+    let x_data: ptr<f32> = X.data
+    let n_features: i32 = X.cols
     for i in 0 to n {
-        for j in 0 to n {
-            if i == j {
-                dist[i * n + j] = 0.0
-            } else {
-                let mut d: f32 = 0.0
-                for k in 0 to X.cols {
-                    let diff: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
-                    d = d + diff * diff
-                }
-                dist[i * n + j] = d
+        dist[i * n + i] = 0.0
+        let ibase: i32 = i * n_features
+        for j in i + 1 to n {
+            let jbase: i32 = j * n_features
+            let mut d: f32 = 0.0
+            for k in 0 to n_features {
+                let diff: f32 = x_data[ibase + k] - x_data[jbase + k]
+                d = d + diff * diff
             }
+            dist[i * n + j] = d
+            dist[j * n + i] = d
+        }
+    }
+
+    # nn[i] is the lowest-index active partner above i, nnd[i] its distance.
+    let nn: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let nnd: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let j: i32 = _agglo_nearest_above(dist, labels, n, i)
+        nn[i] = j
+        if j < 0 {
+            nnd[i] = 9999999999.0
+        } else {
+            nnd[i] = dist[i * n + j]
         }
     }
 
@@ -596,15 +653,10 @@ export function agglomerative_clustering_fit(X: Matrix, n_clusters: i32) -> Aggl
             if labels[i] != i {
                 continue
             }
-            for j in i + 1 to n {
-                if labels[j] != j {
-                    continue
-                }
-                if dist[i * n + j] < min_dist {
-                    min_dist = dist[i * n + j]
-                    min_i = i
-                    min_j = j
-                }
+            if nnd[i] < min_dist {
+                min_dist = nnd[i]
+                min_i = i
+                min_j = nn[i]
             }
         }
 
@@ -630,6 +682,51 @@ export function agglomerative_clustering_fit(X: Matrix, n_clusters: i32) -> Aggl
             }
             dist[min_i * n + k] = new_dist
             dist[k * n + min_i] = new_dist
+        }
+
+        # The absorbed row is gone, and the absorbing row's distances all
+        # changed, so it is rebuilt from scratch.
+        nn[min_j] = -1
+        nnd[min_j] = 9999999999.0
+        let nj: i32 = _agglo_nearest_above(dist, labels, n, min_i)
+        nn[min_i] = nj
+        if nj < 0 {
+            nnd[min_i] = 9999999999.0
+        } else {
+            nnd[min_i] = dist[min_i * n + nj]
+        }
+
+        for i in 0 to n {
+            if labels[i] != i {
+                continue
+            }
+            if i == min_i {
+                continue
+            }
+            if nn[i] == min_j {
+                # Its cached partner was just absorbed, so rebuild the row.
+                let jj: i32 = _agglo_nearest_above(dist, labels, n, i)
+                nn[i] = jj
+                if jj < 0 {
+                    nnd[i] = 9999999999.0
+                } else {
+                    nnd[i] = dist[i * n + jj]
+                }
+                continue
+            }
+            if i < min_i {
+                # Only the distance to the absorbing cluster can have moved,
+                # and single linkage can only have lowered it.
+                let d_new: f32 = dist[i * n + min_i]
+                if d_new < nnd[i] {
+                    nnd[i] = d_new
+                    nn[i] = min_i
+                } else {
+                    if d_new == nnd[i] && min_i < nn[i] {
+                        nn[i] = min_i
+                    }
+                }
+            }
         }
 
         active_clusters = active_clusters - 1
@@ -660,6 +757,8 @@ export function agglomerative_clustering_fit(X: Matrix, n_clusters: i32) -> Aggl
     }
 
     free(dist as ptr<void>)
+    free(nn as ptr<void>)
+    array_free_f32(nnd)
     free(labels as ptr<void>)
     free(unique_labels as ptr<void>)
 
