@@ -4395,15 +4395,37 @@ export function lasso_lars_fit(X: Matrix, y: ptr<f32>, alpha: f32, max_iter: i32
     return result
 }
 
+# Same y = X * w + b batch as elastic_net_predict: one cblas_sgemv with the row
+# stride passed as lda above the 65536 rows * features work threshold, and the
+# scalar kernel with matrix_at folded into a direct row-major index below it.
 export function lasso_lars_predict(model: LassoLars, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
     let result: ptr<f32> = array_new_f32(n)
+    if n <= 0 { return result }
+
+    let nf: i32 = model.n_features
+    let bias: f32 = model.bias
+    let w: ptr<f32> = model.weights
+    let data: ptr<f32> = X.data
+    let stride: i32 = X.cols
+
+    if nf > 0 && nf <= stride && n * nf >= 65536 {
+        blas_matvec_ld(data, n, nf, stride, w, result, 1.0, 0.0)
+        let mut k: i32 = 0
+        while k < n {
+            result[k] = result[k] + bias
+            k = k + 1
+        }
+        return result
+    }
+
     let mut i: i32 = 0
     while i < n {
-        let mut pred: f32 = model.bias
+        let base: i32 = i * stride
+        let mut pred: f32 = bias
         let mut j: i32 = 0
-        while j < model.n_features {
-            pred = pred + model.weights[j] * matrix_at(X, i, j)
+        while j < nf {
+            pred = pred + w[j] * data[base + j]
             j = j + 1
         }
         result[i] = pred
