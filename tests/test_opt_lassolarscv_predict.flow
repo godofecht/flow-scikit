@@ -1,0 +1,230 @@
+# Regression test for the BLAS-backed lasso_lars_cv_predict.
+# Covers hand-computed predictions, a wide feature matrix where
+# model.n_features is smaller than X.cols (the leading-dimension path), a
+# single-row matrix, a zero-weight model, the small-batch scalar path, and a
+# large batch above the BLAS work threshold checked against an independent
+# scalar reference.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+}
+
+function optlcp_close(a: f32, b: f32, tolerance: f32) -> bool {
+    let mut d: f32 = a - b
+    if d < 0.0 { d = -d }
+    return d <= tolerance
+}
+
+# Independent scalar reference for y = X * w + b, written with matrix_at on
+# purpose so it does not share code with the implementation under test.
+function optlcp_reference(w: ptr<f32>, bias: f32, nf: i32, X: Matrix, out: ptr<f32>) -> void {
+    for i in 0 to X.rows {
+        let mut acc: f32 = bias
+        for j in 0 to nf {
+            acc = acc + w[j] * matrix_at(X, i, j)
+        }
+        out[i] = acc
+    }
+}
+
+function main() -> i32 {
+    # ---- Case 1: hand-computed predictions on a 3x3 problem ----
+    let w1: ptr<f32> = array_new_f32(3)
+    w1[0] = 2.0
+    w1[1] = -1.0
+    w1[2] = 0.5
+
+    let m1: LassoLarsCV = LassoLarsCV {
+        alpha: 0.1,
+        weights: w1,
+        bias: 0.25,
+        n_features: 3,
+        fitted: true
+    }
+
+    let X1: Matrix = matrix_new(3, 3)
+    matrix_set(X1, 0, 0, 1.0)
+    matrix_set(X1, 0, 1, 2.0)
+    matrix_set(X1, 0, 2, 4.0)
+    matrix_set(X1, 1, 0, 0.0)
+    matrix_set(X1, 1, 1, 0.0)
+    matrix_set(X1, 1, 2, 0.0)
+    matrix_set(X1, 2, 0, -3.0)
+    matrix_set(X1, 2, 1, 1.0)
+    matrix_set(X1, 2, 2, 2.0)
+
+    # row 0: 2*1 + (-1)*2 + 0.5*4 + 0.25 = 2.25
+    # row 1: 0 + 0.25 = 0.25
+    # row 2: 2*(-3) + (-1)*1 + 0.5*2 + 0.25 = -5.75
+    let p1: ptr<f32> = lasso_lars_cv_predict(m1, X1)
+    if not optlcp_close(p1[0], 2.25, 0.000001) {
+        println("FAIL: lasso_lars_cv_predict row 0 changed")
+        return 1
+    }
+    if not optlcp_close(p1[1], 0.25, 0.000001) {
+        println("FAIL: lasso_lars_cv_predict zero row must return the bias")
+        return 1
+    }
+    if not optlcp_close(p1[2], -5.75, 0.000001) {
+        println("FAIL: lasso_lars_cv_predict row 2 changed")
+        return 1
+    }
+    array_free_f32(p1)
+    matrix_free(X1)
+
+    # ---- Case 2: X wider than the model, exercising the row-stride path ----
+    # Only the first 3 columns must be consumed; column 3 is poisoned.
+    let X2: Matrix = matrix_new(2, 4)
+    matrix_set(X2, 0, 0, 1.0)
+    matrix_set(X2, 0, 1, 2.0)
+    matrix_set(X2, 0, 2, 4.0)
+    matrix_set(X2, 0, 3, 1000.0)
+    matrix_set(X2, 1, 0, -3.0)
+    matrix_set(X2, 1, 1, 1.0)
+    matrix_set(X2, 1, 2, 2.0)
+    matrix_set(X2, 1, 3, -1000.0)
+
+    let p2: ptr<f32> = lasso_lars_cv_predict(m1, X2)
+    if not optlcp_close(p2[0], 2.25, 0.000001) {
+        println("FAIL: lasso_lars_cv_predict read past the model feature count")
+        return 1
+    }
+    if not optlcp_close(p2[1], -5.75, 0.000001) {
+        println("FAIL: lasso_lars_cv_predict read past the model feature count")
+        return 1
+    }
+    array_free_f32(p2)
+    matrix_free(X2)
+
+    # ---- Case 3: single row ----
+    let X3: Matrix = matrix_new(1, 3)
+    matrix_set(X3, 0, 0, 1.0)
+    matrix_set(X3, 0, 1, 2.0)
+    matrix_set(X3, 0, 2, 4.0)
+    let p3: ptr<f32> = lasso_lars_cv_predict(m1, X3)
+    if not optlcp_close(p3[0], 2.25, 0.000001) {
+        println("FAIL: lasso_lars_cv_predict single-row case changed")
+        return 1
+    }
+    array_free_f32(p3)
+    matrix_free(X3)
+    array_free_f32(w1)
+
+    # ---- Case 4: all-zero weights must return the bias for every row ----
+    let w4: ptr<f32> = array_new_f32(3)
+    let m4: LassoLarsCV = LassoLarsCV {
+        alpha: 0.1,
+        weights: w4,
+        bias: -1.5,
+        n_features: 3,
+        fitted: true
+    }
+    let X4: Matrix = matrix_new(4, 3)
+    for i in 0 to 4 {
+        for j in 0 to 3 {
+            matrix_set(X4, i, j, ((i * 3 + j) as f32) - 5.0)
+        }
+    }
+    let p4: ptr<f32> = lasso_lars_cv_predict(m4, X4)
+    for i in 0 to 4 {
+        if not optlcp_close(p4[i], -1.5, 0.000001) {
+            println("FAIL: zero-weight model no longer returns the bias")
+            return 1
+        }
+    }
+    array_free_f32(p4)
+    matrix_free(X4)
+    array_free_f32(w4)
+
+    # ---- Case 5: realistic fitted workload, 600 x 16 (scalar path) ----
+    let n_rows: i32 = 600
+    let n_cols: i32 = 16
+    let X5: Matrix = matrix_new(n_rows, n_cols)
+    let y5: ptr<f32> = array_new_f32(n_rows)
+    let mut seed: i32 = 20250818
+    for i in 0 to n_rows {
+        let mut acc: f32 = 0.0
+        for j in 0 to n_cols {
+            seed = (seed * 1103515245 + 12345) % 2147483647
+            if seed < 0 { seed = -seed }
+            let v: f32 = ((seed % 4000) as f32) / 1000.0 - 2.0
+            matrix_set(X5, i, j, v)
+            acc = acc + v * (((j % 5) + 1) as f32)
+        }
+        y5[i] = acc * 0.5 + 3.25
+    }
+
+    let model5: LassoLarsCV = lasso_lars_cv_fit(X5, y5, 4)
+    let preds5: ptr<f32> = lasso_lars_cv_predict(model5, X5)
+    let expect5: ptr<f32> = array_new_f32(n_rows)
+    optlcp_reference(model5.weights, model5.bias, model5.n_features, X5, expect5)
+
+    # 600 * 16 = 9600 is below the BLAS threshold, so this path must be
+    # bit-identical to the scalar reference.
+    for i in 0 to n_rows {
+        if preds5[i] != expect5[i] {
+            println("FAIL: lasso_lars_cv_predict small-batch path is no longer bit-identical")
+            printf("  row %d: %.9f vs %.9f\n", i, preds5[i], expect5[i])
+            return 1
+        }
+    }
+    array_free_f32(expect5)
+    array_free_f32(preds5)
+    array_free_f32(y5)
+    matrix_free(X5)
+    lasso_lars_cv_free(model5)
+
+    # ---- Case 6: batch above the BLAS work threshold, 4096 x 24 ----
+    let n6: i32 = 4096
+    let c6: i32 = 24
+    let X6: Matrix = matrix_new(n6, c6)
+    for i in 0 to n6 {
+        for j in 0 to c6 {
+            seed = (seed * 1103515245 + 12345) % 2147483647
+            if seed < 0 { seed = -seed }
+            matrix_set(X6, i, j, ((seed % 4000) as f32) / 1000.0 - 2.0)
+        }
+    }
+    let w6: ptr<f32> = array_new_f32(c6)
+    for j in 0 to c6 {
+        seed = (seed * 1103515245 + 12345) % 2147483647
+        if seed < 0 { seed = -seed }
+        w6[j] = ((seed % 2000) as f32) / 1000.0 - 1.0
+    }
+    let m6: LassoLarsCV = LassoLarsCV {
+        alpha: 0.1,
+        weights: w6,
+        bias: 0.375,
+        n_features: c6,
+        fitted: true
+    }
+    let p6: ptr<f32> = lasso_lars_cv_predict(m6, X6)
+    let e6: ptr<f32> = array_new_f32(n6)
+    optlcp_reference(w6, 0.375, c6, X6, e6)
+    let mut worst: f32 = 0.0
+    for i in 0 to n6 {
+        let mut d: f32 = p6[i] - e6[i]
+        if d < 0.0 { d = -d }
+        let mut scale: f32 = e6[i]
+        if scale < 0.0 { scale = -scale }
+        if scale < 1.0 { scale = 1.0 }
+        let rel: f32 = d / scale
+        if rel > worst { worst = rel }
+    }
+    # Single-precision reductions with different association order agree to a
+    # few ulps; past 1e-4 relative means the predictions really moved.
+    if worst > 0.0001 {
+        println("FAIL: lasso_lars_cv_predict diverged from the scalar reference")
+        printf("  worst relative deviation: %.9f\n", worst)
+        return 1
+    }
+    array_free_f32(e6)
+    array_free_f32(p6)
+    array_free_f32(w6)
+    matrix_free(X6)
+
+    println("OK: lasso_lars_cv_predict unchanged after the BLAS rewrite")
+    return 0
+}
