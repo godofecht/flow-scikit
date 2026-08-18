@@ -770,14 +770,14 @@ export function logistic_regression_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_c
     }
 }
 
+# Positive-class probabilities. This is exactly sigmoid(decision_function), so
+# it reuses the BLAS-backed score path and maps the result in place rather than
+# repeating the dot product with per-element matrix_at calls.
 export function logistic_predict_proba(model: LogisticRegression, X: Matrix) -> ptr<f32> {
-    let probs: ptr<f32> = array_new_f32(X.rows)
-    for i in 0 to X.rows {
-        let mut z: f32 = model.bias
-        for j in 0 to model.n_features {
-            z = z + model.weights[j] * matrix_at(X, i, j)
-        }
-        probs[i] = sigmoid(z)
+    let probs: ptr<f32> = logistic_decision_function(model, X)
+    let rows: i32 = X.rows
+    for i in 0 to rows {
+        probs[i] = sigmoid(probs[i])
     }
     return probs
 }
