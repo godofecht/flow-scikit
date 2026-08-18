@@ -2320,27 +2320,34 @@ export function bagging_regressor_fit(X: Matrix, y: ptr<f32>, n_estimators: i32,
     let trees: ptr<DecisionTreeRegressor> = malloc((n_estimators as i64) * 128) as ptr<DecisionTreeRegressor>
     srand(seed)
 
-    let mut i: i32 = 0
-    while i < n_estimators {
-        # Bootstrap sample
-        let X_boot: Matrix = matrix_new(n, n_features)
-        let y_boot: ptr<f32> = array_new_f32(n)
-        let mut j: i32 = 0
-        while j < n {
+    # Bootstrap scratch, allocated once and reused by every estimator. The old
+    # loop built a fresh design matrix and target vector per estimator and
+    # filled the matrix with n * n_features matrix_set/matrix_at call pairs.
+    # Each estimator overwrites both buffers in full before reading them, so
+    # reuse is safe.
+    #
+    # The draw order is deliberately untouched: rand() is still called once per
+    # bootstrap row, in row order, inside the estimator loop, after the same
+    # srand(seed). Issue #205 owns the sampling scheme itself.
+    let row_bytes: i64 = (n_features as i64) * 4
+    let X_boot: Matrix = matrix_new(n, n_features)
+    let y_boot: ptr<f32> = array_new_f32(n)
+    let x_data: ptr<f32> = X.data
+    let boot_data: ptr<f32> = X_boot.data
+
+    for t in 0 to n_estimators {
+        let mut dst: i32 = 0
+        for j in 0 to n {
             let idx: i32 = rand() % n
-            let mut k: i32 = 0
-            while k < n_features {
-                matrix_set(X_boot, j, k, matrix_at(X, idx, k))
-                k = k + 1
-            }
+            memcpy((boot_data + dst) as ptr<void>, (x_data + idx * n_features) as ptr<void>, row_bytes)
             y_boot[j] = y[idx]
-            j = j + 1
+            dst = dst + n_features
         }
-        trees[i] = decision_tree_regressor_fit(X_boot, y_boot, max_depth, 2)
-        matrix_free(X_boot)
-        array_free_f32(y_boot)
-        i = i + 1
+        trees[t] = decision_tree_regressor_fit(X_boot, y_boot, max_depth, 2)
     }
+
+    matrix_free(X_boot)
+    array_free_f32(y_boot)
 
     let result: BaggingRegressor = BaggingRegressor {
         trees: trees,
