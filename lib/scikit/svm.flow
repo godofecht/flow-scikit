@@ -28,20 +28,12 @@ export function linear_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, e
     let weights: ptr<f32> = array_new_f32(n_features)
     let bias: f32 = 0.0
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to n_samples {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] {
-                found = true
-            }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # the classes allocation, which wrote past it whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, n_samples, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     # Ensure classes[1] is the positive class (larger value).
     if n_found == 2 {
@@ -319,18 +311,12 @@ export function linear_svc_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_classes: i
     let weights: ptr<f32> = array_new_f32(n_features)
     let bias: f32 = 0.0
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to n_samples {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] { found = true }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # the classes allocation, which wrote past it whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, n_samples, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     # Ensure classes[1] is the positive class (larger value).
     if n_found == 2 {
@@ -489,18 +475,12 @@ export function linear_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: 
     let n: i32 = X.rows
     let n_features: i32 = X.cols
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to n {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] { found = true }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # the classes allocation, which wrote past it whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, n, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     let weights: ptr<ptr<f32> > = malloc((n_found as i64) * 8) as ptr<ptr<f32> >
     let biases: ptr<f32> = array_new_f32(n_found)
@@ -693,24 +673,13 @@ export function kernel_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, g
     let n: i32 = X.rows
     let n_features: i32 = X.cols
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # the classes allocation, which wrote past it whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, n, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
     let mut i: i32 = 0
-    while i < n {
-        let mut found: bool = false
-        let mut k: i32 = 0
-        while k < n_found {
-            if classes[k] == y[i] {
-                found = true
-            }
-            k = k + 1
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-        i = i + 1
-    }
 
     let y_dual: ptr<f32> = array_new_f32(n)
     i = 0
@@ -1231,18 +1200,12 @@ export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gam
     let n: i32 = X.rows
     let n_features: i32 = X.cols
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to n {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] { found = true }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # the classes allocation, which wrote past it whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, n, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     # Build the full kernel matrix once in f64.
     # Use BLAS for large datasets, scalar for small (BLAS call overhead dominates below ~500 samples).
@@ -1398,20 +1361,13 @@ export function nu_svc_fit(X: Matrix, y: ptr<f32>, nu: f32, gamma: f32, max_iter
     let p: i32 = X.cols
 
     # Detect classes from data
-    let classes: ptr<f32> = array_new_f32(2)
-    let mut n_found: i32 = 0
+    # Issue #398: classes held exactly 2 entries here and the loop appended one
+    # entry per distinct label with no check, so three or more distinct labels
+    # wrote past it.
+    let found_classes: DistinctF32 = distinct_f32(y, n, 2)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
     let mut i: i32 = 0
-    while i < n {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] { found = true }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-        i = i + 1
-    }
 
     let y_dual: ptr<f32> = array_new_f32(n)
     i = 0
@@ -2109,20 +2065,12 @@ export function svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, kernel: 
     let n: i32 = X.rows
     let n_features: i32 = X.cols
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to n {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] {
-                found = true
-            }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # the classes allocation, which wrote past it whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, n, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     let K: Matrix = _svm_kernel_matrix(X, kernel, gamma, degree, coef0)
 
@@ -2353,18 +2301,12 @@ export function lssvm_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gam
     let n: i32 = X.rows
     let n_features: i32 = X.cols
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to n {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] { found = true }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # the classes allocation, which wrote past it whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, n, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     let models: ptr<KernelRidge> = malloc((n_found as i64) * 256) as ptr<KernelRidge>
 
