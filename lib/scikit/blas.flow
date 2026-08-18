@@ -73,3 +73,28 @@ export function blas_matvec_ld(A: ptr<f32>, m: i32, n: i32, lda: i32, x: ptr<f32
 export function blas_matmat_nt(A: ptr<f32>, B: ptr<f32>, C: ptr<f32>, m: i32, n: i32, k: i32, lda: i32, ldb: i32, alpha: f32, beta: f32) -> void {
     cblas_sgemm(CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, CBLAS_TRANS, m, n, k, alpha, A, lda, B, ldb, beta, C, n)
 }
+
+# Double-precision transposed matrix-vector multiply: y = alpha * A^T * x + beta * y.
+# A is row-major m x n with lda elements per row, x is length m with stride
+# incx, y is length n and unit stride. The explicit lda and incx let callers
+# work on a sub-block of a wider matrix and on a column of one.
+export function blas_matvec_trans_ld_f64(A: ptr<f64>, m: i32, n: i32, lda: i32, x: ptr<f64>, incx: i32, y: ptr<f64>, alpha: f64, beta: f64) -> void {
+    cblas_dgemv(CBLAS_ROW_MAJOR, CBLAS_TRANS, m, n, alpha, A, lda, x, incx, beta, y, 1)
+}
+
+# Double-precision rank-1 update: A = alpha * x * y^T + A.
+# A is row-major m x n with lda elements per row, x is length m with stride
+# incx, y is length n and unit stride.
+export function blas_ger_ld_f64(A: ptr<f64>, m: i32, n: i32, lda: i32, x: ptr<f64>, incx: i32, y: ptr<f64>, alpha: f64) -> void {
+    cblas_dger(CBLAS_ROW_MAJOR, m, n, alpha, x, incx, y, 1, A, lda)
+}
+
+# Double-precision dot product with explicit strides.
+export function blas_dot_strided_f64(n: i32, x: ptr<f64>, incx: i32, y: ptr<f64>, incy: i32) -> f64 {
+    return cblas_ddot(n, x, incx, y, incy)
+}
+
+# Double-precision y = alpha * x + y with explicit strides.
+export function blas_axpy_strided_f64(n: i32, alpha: f64, x: ptr<f64>, incx: i32, y: ptr<f64>, incy: i32) -> void {
+    cblas_daxpy(n, alpha, x, incx, y, incy)
+}
