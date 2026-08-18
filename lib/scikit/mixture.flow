@@ -40,6 +40,48 @@ function _log_gaussian(x: ptr<f32>, mean: ptr<f32>, var: ptr<f32>, n_features: i
     return log_prob
 }
 
+# Per-component normalisation constant for one feature.
+# Kept in a helper so log() never appears inside a nested loop body
+# (Flow compiler bug #421). Returns f64 so the value carries the same
+# precision the inline expression had before it was rounded into the
+# f32 accumulator, which keeps the sum bit-identical.
+function _gm_log_norm_term(v: f32) -> f64 {
+    let lg32: f32 = log((2.0 * 3.14159265 * v) as f64) as f32
+    return 0.0 - 0.5 * (lg32 as f64)
+}
+
+# Builds the per-component constants that the old code recomputed for
+# every sample: the clamped variance, the log normaliser and log(weight).
+# Cost is n_components * n_features instead of n_samples * that.
+function _gm_prepare_terms_arrays(variances: ptr<ptr<f32> >, weights: ptr<f32>, n_components: i32, n_features: i32, out_const: ptr<f64>, out_var: ptr<f32>, out_logw: ptr<f32>) -> void {
+    for k in 0 to n_components {
+        out_logw[k] = log((weights[k] as f64)) as f32
+        let base: i32 = k * n_features
+        for j in 0 to n_features {
+            let mut v: f32 = variances[k][j]
+            if v < 0.0000000001 { v = 0.0000000001 }
+            out_var[base + j] = v
+            out_const[base + j] = _gm_log_norm_term(v)
+        }
+    }
+}
+
+function _gm_prepare_terms(model: GaussianMixture, out_const: ptr<f64>, out_var: ptr<f32>, out_logw: ptr<f32>) -> void {
+    _gm_prepare_terms_arrays(model.variances, model.weights, model.n_components, model.n_features, out_const, out_var, out_logw)
+}
+
+# Diagonal Gaussian log density using the precomputed tables.
+# Same accumulation order and same rounding points as _log_gaussian.
+function _gm_log_gaussian_pre(x: ptr<f32>, xoff: i32, mean: ptr<f32>, cterm: ptr<f64>, vclamp: ptr<f32>, base: i32, n_features: i32) -> f32 {
+    let mut log_prob: f32 = 0.0
+    for j in 0 to n_features {
+        let d: f32 = x[xoff + j] - mean[j]
+        log_prob = ((log_prob as f64) + cterm[base + j]) as f32
+        log_prob = log_prob - 0.5 * d * d / vclamp[base + j]
+    }
+    return log_prob
+}
+
 export function gaussian_mixture_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f32, seed: i32) -> GaussianMixture {
     let n: i32 = X.rows
     let n_features: i32 = X.cols
@@ -141,35 +183,46 @@ export function gaussian_mixture_fit(X: Matrix, n_components: i32, max_iter: i32
     let mut n_iter: i32 = 0
     let mut converged: bool = false
 
+    # Scratch reused across every EM iteration. The per-component constants
+    # are rebuilt once per iteration rather than once per sample; the M-step
+    # accumulators replace the per-feature rescan of X.
+    let cterm: ptr<f64> = array_new_f64(n_components * n_features)
+    let vclamp: ptr<f32> = array_new_f32(n_components * n_features)
+    let logw: ptr<f32> = array_new_f32(n_components)
+    let acc_mean: ptr<f32> = array_new_f32(n_features)
+    let acc_var: ptr<f32> = array_new_f32(n_features)
+
+    let xd: ptr<f32> = X.data
+    let xc: i32 = X.cols
+
     for iter in 0 to max_iter {
         n_iter = iter + 1
 
         # E-step
+        _gm_prepare_terms_arrays(variances, weights, n_components, n_features, cterm, vclamp, logw)
+
         let mut total_ll: f32 = 0.0
         for i in 0 to n {
-            let x_row: ptr<f32> = array_new_f32(n_features)
-            for j in 0 to n_features {
-                x_row[j] = matrix_at(X, i, j)
-            }
+            let ri: ptr<f32> = resp[i]
+            let xbase: i32 = i * xc
 
             let mut max_log: f32 = -10000000000.0
             for k in 0 to n_components {
-                let lg: f32 = log((weights[k] as f64)) as f32 + _log_gaussian(x_row, means[k], variances[k], n_features)
-                resp[i][k] = lg
+                let lg: f32 = logw[k] + _gm_log_gaussian_pre(xd, xbase, means[k], cterm, vclamp, k * n_features, n_features)
+                ri[k] = lg
                 if lg > max_log { max_log = lg }
             }
 
             let mut sum_exp: f32 = 0.0
             for k in 0 to n_components {
-                resp[i][k] = exp((resp[i][k] - max_log) as f64) as f32
-                sum_exp = sum_exp + resp[i][k]
+                ri[k] = exp((ri[k] - max_log) as f64) as f32
+                sum_exp = sum_exp + ri[k]
             }
             for k in 0 to n_components {
-                resp[i][k] = resp[i][k] / sum_exp
+                ri[k] = ri[k] / sum_exp
             }
 
             total_ll = total_ll + max_log + log((sum_exp as f64)) as f32
-            array_free_f32(x_row)
         }
 
         total_ll = total_ll / (n as f32)
@@ -181,7 +234,9 @@ export function gaussian_mixture_fit(X: Matrix, n_components: i32, max_iter: i32
         }
         prev_ll = total_ll
 
-        # M-step
+        # M-step. Same accumulation order per feature as before, but the
+        # sample loop is outermost so X is walked row-major once for the
+        # means and once for the variances instead of n_features times each.
         for k in 0 to n_components {
             let mut nk: f32 = 0.0
             for i in 0 to n {
@@ -191,28 +246,50 @@ export function gaussian_mixture_fit(X: Matrix, n_components: i32, max_iter: i32
             weights[k] = nk / (n as f32)
 
             for j in 0 to n_features {
-                let mut mean_j: f32 = 0.0
-                for i in 0 to n {
-                    mean_j = mean_j + resp[i][k] * matrix_at(X, i, j)
+                acc_mean[j] = 0.0
+            }
+            for i in 0 to n {
+                let r: f32 = resp[i][k]
+                let xbase: i32 = i * xc
+                for j in 0 to n_features {
+                    acc_mean[j] = acc_mean[j] + r * xd[xbase + j]
                 }
-                if nk > 0.0000000001 {
-                    means[k][j] = mean_j / nk
+            }
+            if nk > 0.0000000001 {
+                for j in 0 to n_features {
+                    means[k][j] = acc_mean[j] / nk
                 }
+            }
 
-                let mut var_j: f32 = 0.0
-                for i in 0 to n {
-                    let d: f32 = matrix_at(X, i, j) - means[k][j]
-                    var_j = var_j + resp[i][k] * d * d
+            for j in 0 to n_features {
+                acc_var[j] = 0.0
+            }
+            for i in 0 to n {
+                let r: f32 = resp[i][k]
+                let xbase: i32 = i * xc
+                for j in 0 to n_features {
+                    let d: f32 = xd[xbase + j] - means[k][j]
+                    acc_var[j] = acc_var[j] + r * d * d
                 }
-                if nk > 0.0000000001 {
-                    variances[k][j] = var_j / nk
+            }
+            if nk > 0.0000000001 {
+                for j in 0 to n_features {
+                    variances[k][j] = acc_var[j] / nk
                 }
+            }
+            for j in 0 to n_features {
                 if variances[k][j] < 0.000001 {
                     variances[k][j] = 0.000001
                 }
             }
         }
     }
+
+    array_free_f64(cterm)
+    array_free_f32(vclamp)
+    array_free_f32(logw)
+    array_free_f32(acc_mean)
+    array_free_f32(acc_var)
 
     for i in 0 to n {
         array_free_f32(resp[i])
@@ -229,19 +306,25 @@ export function gaussian_mixture_fit(X: Matrix, n_components: i32, max_iter: i32
 
 export function gaussian_mixture_predict(model: GaussianMixture, X: Matrix) -> ptr<i32> {
     let n: i32 = X.rows
+    let kc: i32 = model.n_components
+    let nf: i32 = model.n_features
     let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
 
-    let x_row: ptr<f32> = array_new_f32(model.n_features)
+    let cterm: ptr<f64> = array_new_f64(kc * nf)
+    let vclamp: ptr<f32> = array_new_f32(kc * nf)
+    let logw: ptr<f32> = array_new_f32(kc)
+    _gm_prepare_terms(model, cterm, vclamp, logw)
+
+    let xd: ptr<f32> = X.data
+    let xc: i32 = X.cols
 
     for i in 0 to n {
-        for j in 0 to model.n_features {
-            x_row[j] = matrix_at(X, i, j)
-        }
+        let xbase: i32 = i * xc
 
         let mut best_k: i32 = 0
         let mut best_log: f32 = -10000000000.0
-        for k in 0 to model.n_components {
-            let lg: f32 = log((model.weights[k] as f64)) as f32 + _log_gaussian(x_row, model.means[k], model.variances[k], model.n_features)
+        for k in 0 to kc {
+            let lg: f32 = logw[k] + _gm_log_gaussian_pre(xd, xbase, model.means[k], cterm, vclamp, k * nf, nf)
             if lg > best_log {
                 best_log = lg
                 best_k = k
@@ -250,40 +333,52 @@ export function gaussian_mixture_predict(model: GaussianMixture, X: Matrix) -> p
         labels[i] = best_k
     }
 
-    array_free_f32(x_row)
+    array_free_f64(cterm)
+    array_free_f32(vclamp)
+    array_free_f32(logw)
     return labels
 }
 
 export function gaussian_mixture_predict_proba(model: GaussianMixture, X: Matrix) -> Matrix {
     let n: i32 = X.rows
-    let result: Matrix = matrix_new(n, model.n_components)
+    let kc: i32 = model.n_components
+    let nf: i32 = model.n_features
+    let result: Matrix = matrix_new(n, kc)
 
-    let x_row: ptr<f32> = array_new_f32(model.n_features)
+    let cterm: ptr<f64> = array_new_f64(kc * nf)
+    let vclamp: ptr<f32> = array_new_f32(kc * nf)
+    let logw: ptr<f32> = array_new_f32(kc)
+    _gm_prepare_terms(model, cterm, vclamp, logw)
+
+    let xd: ptr<f32> = X.data
+    let rd: ptr<f32> = result.data
+    let xc: i32 = X.cols
 
     for i in 0 to n {
-        for j in 0 to model.n_features {
-            x_row[j] = matrix_at(X, i, j)
-        }
+        let xbase: i32 = i * xc
+        let rbase: i32 = i * kc
 
         let mut max_log: f32 = -10000000000.0
-        for k in 0 to model.n_components {
-            let lg: f32 = log((model.weights[k] as f64)) as f32 + _log_gaussian(x_row, model.means[k], model.variances[k], model.n_features)
-            matrix_set(result, i, k, lg)
+        for k in 0 to kc {
+            let lg: f32 = logw[k] + _gm_log_gaussian_pre(xd, xbase, model.means[k], cterm, vclamp, k * nf, nf)
+            rd[rbase + k] = lg
             if lg > max_log { max_log = lg }
         }
 
         let mut sum_exp: f32 = 0.0
-        for k in 0 to model.n_components {
-            let val: f32 = exp((matrix_at(result, i, k) - max_log) as f64) as f32
-            matrix_set(result, i, k, val)
+        for k in 0 to kc {
+            let val: f32 = exp((rd[rbase + k] - max_log) as f64) as f32
+            rd[rbase + k] = val
             sum_exp = sum_exp + val
         }
-        for k in 0 to model.n_components {
-            matrix_set(result, i, k, matrix_at(result, i, k) / sum_exp)
+        for k in 0 to kc {
+            rd[rbase + k] = rd[rbase + k] / sum_exp
         }
     }
 
-    array_free_f32(x_row)
+    array_free_f64(cterm)
+    array_free_f32(vclamp)
+    array_free_f32(logw)
     return result
 }
 

@@ -32,9 +32,16 @@ export function dummy_classifier_fit(
     y: ptr<f32>, n: i32, n_classes: i32,
     strategy: i32, constant_label: f32, seed: i32
 ) -> DummyClassifier {
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
-    for c in 0 to n_classes {
+    # Issue #398: classes and class_counts held exactly n_classes entries while
+    # the loop below appended one entry per distinct label, so labels carrying
+    # more distinct values than the caller declared wrote past both
+    # allocations. Both are now sized to hold every distinct label, never fewer
+    # than n_classes entries.
+    let found_classes: DistinctF32 = distinct_f32(y, n, n_classes)
+    let class_cap: i32 = found_classes.capacity
+    let classes: ptr<f32> = found_classes.values
+    let class_counts: ptr<i32> = malloc((class_cap as i64) * 4) as ptr<i32>
+    for c in 0 to class_cap {
         class_counts[c] = 0
     }
 

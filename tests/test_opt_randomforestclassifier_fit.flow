@@ -1,0 +1,618 @@
+# Regression test for the RandomForestClassifier.fit optimization
+# (roadmap rank 18, issue #227).
+#
+# fit must produce a bit-identical forest. The only way to assert that is to
+# keep the whole pre-#227 fit path and compare the two forests node by node,
+# so this file carries a verbatim copy of it under rfft_ names: the bootstrap
+# loop from ensemble.flow and the RF tree builder, shell sort, gini and leaf
+# helpers from tree.flow, exactly as they stood before the change.
+#
+# The same copy doubles as the A/B timing reference, measured in the same
+# process so machine load cannot skew the ratio.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+    function printf(fmt: string, ...) -> i32
+}
+
+const RFFT_TIME_UTC: i32 = 1
+
+function rfft_now_ns() -> i64 {
+    let ts: ptr<i64> = malloc(16) as ptr<i64>
+    timespec_get(ts, RFFT_TIME_UTC)
+    let value: i64 = ts[0] * 1000000000 + ts[1]
+    free(ts as ptr<void>)
+    return value
+}
+
+function rfft_abs(x: f32) -> f32 {
+    if x < 0.0 { return -x }
+    return x
+}
+
+function rfft_gini(y: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32) -> f32 {
+    let counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    for c in 0 to n_classes {
+        counts[c] = 0
+    }
+    for i in 0 to n {
+        for c in 0 to n_classes {
+            if y[i] == classes[c] {
+                counts[c] = counts[c] + 1
+            }
+        }
+    }
+    let mut impurity: f32 = 1.0
+    for c in 0 to n_classes {
+        let p: f32 = (counts[c] as f32) / (n as f32)
+        impurity = impurity - p * p
+    }
+    free(counts as ptr<void>)
+    return impurity
+}
+
+function rfft_majority_class(y: ptr<f32>, n: i32, classes: ptr<f32>, n_classes: i32) -> f32 {
+    let counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    for c in 0 to n_classes {
+        counts[c] = 0
+    }
+    for i in 0 to n {
+        for c in 0 to n_classes {
+            if y[i] == classes[c] {
+                counts[c] = counts[c] + 1
+            }
+        }
+    }
+    let mut best_c: i32 = 0
+    let mut best_count: i32 = 0
+    for c in 0 to n_classes {
+        if counts[c] > best_count {
+            best_count = counts[c]
+            best_c = c
+        }
+    }
+    free(counts as ptr<void>)
+    return classes[best_c]
+}
+
+function rfft_sort_pairs(values: ptr<f32>, companions: ptr<i32>, n: i32) -> void {
+    let mut gap: i32 = n / 2
+    while gap > 0 {
+        let mut i: i32 = gap
+        while i < n {
+            let key_v: f32 = values[i]
+            let key_c: i32 = companions[i]
+            let mut j: i32 = i
+            while j >= gap && values[j - gap] > key_v {
+                values[j] = values[j - gap]
+                companions[j] = companions[j - gap]
+                j = j - gap
+            }
+            values[j] = key_v
+            companions[j] = key_c
+            i = i + 1
+        }
+        gap = gap / 2
+    }
+}
+
+function rfft_gini_from_counts(counts: ptr<i32>, n_classes: i32, n: i32) -> f32 {
+    if n <= 0 { return 0.0 }
+    let mut sum_sq: f32 = 0.0
+    let nf: f32 = n as f32
+    for c in 0 to n_classes {
+        let p: f32 = (counts[c] as f32) / nf
+        sum_sq = sum_sq + p * p
+    }
+    return 1.0 - sum_sq
+}
+
+function rfft_build_tree(
+    nodes: ptr<TreeNode>,
+    n_nodes: ptr<i32>,
+    X: Matrix,
+    y: ptr<f32>,
+    indices: ptr<i32>,
+    n_indices: i32,
+    depth: i32,
+    max_depth: i32,
+    criterion: i32,
+    classes: ptr<f32>,
+    n_classes: i32,
+    max_features: i32,
+    prng_state: ptr<u32>
+) -> i32 {
+    let node_idx: i32 = n_nodes[0]
+    n_nodes[0] = n_nodes[0] + 1
+
+    let should_stop: bool = depth >= max_depth || n_indices < 2
+
+    if should_stop {
+        let y_subset: ptr<f32> = array_new_f32(n_indices)
+        for i in 0 to n_indices {
+            y_subset[i] = y[indices[i]]
+        }
+        nodes[node_idx].is_leaf = true
+        nodes[node_idx].value = rfft_majority_class(y_subset, n_indices, classes, n_classes)
+        nodes[node_idx].n_samples = n_indices
+        nodes[node_idx].left = -1
+        nodes[node_idx].right = -1
+        nodes[node_idx].impurity = rfft_gini(y_subset, n_indices, classes, n_classes)
+        array_free_f32(y_subset)
+        return node_idx
+    }
+
+    let mut best_feature: i32 = -1
+    let mut best_threshold: f32 = 0.0
+    let mut best_impurity: f32 = 9999999999.0
+
+    let class_idx: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
+    for i in 0 to n_indices {
+        let mut ci: i32 = 0
+        for c in 0 to n_classes {
+            if y[indices[i]] == classes[c] { ci = c }
+        }
+        class_idx[i] = ci
+    }
+
+    let total_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    for c in 0 to n_classes { total_counts[c] = 0 }
+    for i in 0 to n_indices { total_counts[class_idx[i]] = total_counts[class_idx[i]] + 1 }
+    let parent_impurity: f32 = rfft_gini_from_counts(total_counts, n_classes, n_indices)
+    free(total_counts as ptr<void>)
+
+    let sort_values: ptr<f32> = array_new_f32(n_indices)
+    let sort_classes: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
+    let left_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    let right_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+
+    # Determine which features to try at this node
+    let n_features: i32 = X.cols
+    let feature_mask: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    for f in 0 to n_features { feature_mask[f] = 0 }
+
+    if max_features >= n_features {
+        for f in 0 to n_features { feature_mask[f] = 1 }
+    } else {
+        # Randomly select max_features features without replacement
+        let n_selected: i32 = 0
+        while n_selected < max_features {
+            let prng: PRNG = PRNG { state: prng_state[0] }
+            let res: PRNGResult = prng_int(prng, n_features)
+            prng_state[0] = res.state
+            if feature_mask[res.value] == 0 {
+                feature_mask[res.value] = 1
+                n_selected = n_selected + 1
+            }
+        }
+    }
+
+    for f in 0 to n_features {
+        if feature_mask[f] == 0 { continue }
+
+        for i in 0 to n_indices {
+            sort_values[i] = matrix_at(X, indices[i], f)
+            sort_classes[i] = class_idx[i]
+        }
+        rfft_sort_pairs(sort_values, sort_classes, n_indices)
+
+        for c in 0 to n_classes {
+            left_counts[c] = 0
+            right_counts[c] = 0
+        }
+        for i in 0 to n_indices {
+            right_counts[sort_classes[i]] = right_counts[sort_classes[i]] + 1
+        }
+
+        for i in 0 to n_indices - 1 {
+            left_counts[sort_classes[i]] = left_counts[sort_classes[i]] + 1
+            right_counts[sort_classes[i]] = right_counts[sort_classes[i]] - 1
+
+            if sort_values[i] == sort_values[i + 1] { continue }
+
+            let n_left: i32 = i + 1
+            let n_right: i32 = n_indices - n_left
+            if n_left < 1 || n_right < 1 { continue }
+
+            let gini_left: f32 = rfft_gini_from_counts(left_counts, n_classes, n_left)
+            let gini_right: f32 = rfft_gini_from_counts(right_counts, n_classes, n_right)
+            let nf: f32 = n_indices as f32
+            let weighted: f32 = (n_left as f32) / nf * gini_left + (n_right as f32) / nf * gini_right
+
+            if weighted < best_impurity {
+                best_impurity = weighted
+                best_feature = f
+                best_threshold = (sort_values[i] + sort_values[i + 1]) / 2.0
+            }
+        }
+    }
+
+    free(feature_mask as ptr<void>)
+    array_free_f32(sort_values)
+    free(sort_classes as ptr<void>)
+    free(left_counts as ptr<void>)
+    free(right_counts as ptr<void>)
+    free(class_idx as ptr<void>)
+
+    if best_feature < 0 || best_impurity >= parent_impurity - 0.0000000001 {
+        let y_sub: ptr<f32> = array_new_f32(n_indices)
+        for i in 0 to n_indices {
+            y_sub[i] = y[indices[i]]
+        }
+        nodes[node_idx].is_leaf = true
+        nodes[node_idx].value = rfft_majority_class(y_sub, n_indices, classes, n_classes)
+        nodes[node_idx].n_samples = n_indices
+        nodes[node_idx].left = -1
+        nodes[node_idx].right = -1
+        nodes[node_idx].impurity = parent_impurity
+        array_free_f32(y_sub)
+        return node_idx
+    }
+
+    let left_indices: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
+    let right_indices: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
+    let mut left_n: i32 = 0
+    let mut right_n: i32 = 0
+
+    for i in 0 to n_indices {
+        if matrix_at(X, indices[i], best_feature) <= best_threshold {
+            left_indices[left_n] = indices[i]
+            left_n = left_n + 1
+        } else {
+            right_indices[right_n] = indices[i]
+            right_n = right_n + 1
+        }
+    }
+
+    nodes[node_idx].is_leaf = false
+    nodes[node_idx].feature = best_feature
+    nodes[node_idx].threshold = best_threshold
+    nodes[node_idx].n_samples = n_indices
+    nodes[node_idx].impurity = parent_impurity
+
+    let left_idx: i32 = rfft_build_tree(nodes, n_nodes, X, y, left_indices, left_n, depth + 1, max_depth, criterion, classes, n_classes, max_features, prng_state)
+    let right_idx: i32 = rfft_build_tree(nodes, n_nodes, X, y, right_indices, right_n, depth + 1, max_depth, criterion, classes, n_classes, max_features, prng_state)
+
+    nodes[node_idx].left = left_idx
+    nodes[node_idx].right = right_idx
+
+    free(left_indices as ptr<void>)
+    free(right_indices as ptr<void>)
+
+    return node_idx
+}
+
+function rfft_tree_fit(X: Matrix, y: ptr<f32>, n_classes: i32, max_depth: i32, criterion: i32, max_features: i32, prng_state: ptr<u32>) -> DecisionTreeClassifier {
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to X.rows {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] { found = true }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let max_nodes: i32 = 2 * X.rows + 1
+    let nodes: ptr<TreeNode> = malloc((max_nodes as i64) * 36) as ptr<TreeNode>
+    let n_nodes_ptr: ptr<i32> = malloc(4) as ptr<i32>
+    n_nodes_ptr[0] = 0
+
+    let indices: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
+    for i in 0 to X.rows { indices[i] = i }
+
+    let _final: i32 = rfft_build_tree(nodes, n_nodes_ptr, X, y, indices, X.rows, 0, max_depth, criterion, classes, n_classes, max_features, prng_state)
+
+    free(indices as ptr<void>)
+    let n_nodes: i32 = n_nodes_ptr[0]
+    free(n_nodes_ptr as ptr<void>)
+
+    return DecisionTreeClassifier {
+        nodes: nodes,
+        n_nodes: n_nodes,
+        max_depth: max_depth,
+        criterion: criterion,
+        n_classes: n_classes,
+        classes: classes,
+        fitted: true
+    }
+}
+
+function rfft_forest_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_trees: i32, max_depth: i32, seed: i32) -> RandomForestClassifier {
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to X.rows {
+        let mut found: bool = false
+        for k in 0 to n_found {
+            if classes[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            classes[n_found] = y[i]
+            n_found = n_found + 1
+        }
+    }
+
+    let trees: ptr<DecisionTreeClassifier> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeClassifier>
+    let mut prng: PRNG = prng_seed(seed)
+
+    # max_features = sqrt(n_features) for classification (sklearn default)
+    let max_features_f64: f64 = sqrt((X.cols as f64))
+    let max_features: i32 = (max_features_f64 as i32)
+    if max_features < 1 { max_features = 1 }
+
+    # Shared PRNG state pointer for the RF tree builder
+    let prng_state: ptr<u32> = malloc(4) as ptr<u32>
+
+    for t in 0 to n_trees {
+        let n_samples: i32 = X.rows
+        let bootstrap_indices: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+        for i in 0 to n_samples {
+            let res: PRNGResult = prng_int(prng, n_samples)
+            prng = PRNG { state: res.state }
+            bootstrap_indices[i] = res.value
+        }
+
+        let X_boot: Matrix = matrix_new(n_samples, X.cols)
+        let y_boot: ptr<f32> = array_new_f32(n_samples)
+        for i in 0 to n_samples {
+            y_boot[i] = y[bootstrap_indices[i]]
+            for j in 0 to X.cols {
+                matrix_set(X_boot, i, j, matrix_at(X, bootstrap_indices[i], j))
+            }
+        }
+
+        # Set PRNG state for this tree's feature subsampling
+        let res: PRNGResult = prng_int(prng, 2147483647)
+        prng = PRNG { state: res.state }
+        prng_state[0] = res.state
+
+        trees[t] = rfft_tree_fit(X_boot, y_boot, n_classes, max_depth, 0, max_features, prng_state)
+
+        free(bootstrap_indices as ptr<void>)
+        matrix_free(X_boot)
+        array_free_f32(y_boot)
+    }
+
+    free(prng_state as ptr<void>)
+
+    return RandomForestClassifier {
+        trees: trees,
+        n_trees: n_trees,
+        n_classes: n_classes,
+        classes: classes,
+        max_depth: max_depth,
+        n_features_per_split: 0,
+        fitted: true
+    }
+}
+
+
+# Compare two fitted forests field by field. Fields the builder never writes
+# for a given node kind are skipped: `value` is only set on leaves, and
+# `feature` / `threshold` are only set on internal nodes, so the untouched
+# slots hold whatever malloc returned and differ run to run on any build.
+function rfft_forests_match(a: RandomForestClassifier, b: RandomForestClassifier) -> bool {
+    if a.n_trees != b.n_trees { return false }
+    if a.n_classes != b.n_classes { return false }
+    for c in 0 to a.n_classes {
+        if a.classes[c] != b.classes[c] { return false }
+    }
+    for t in 0 to a.n_trees {
+        let ta: DecisionTreeClassifier = a.trees[t]
+        let tb: DecisionTreeClassifier = b.trees[t]
+        if ta.n_nodes != tb.n_nodes { return false }
+        if ta.n_classes != tb.n_classes { return false }
+        for c in 0 to ta.n_classes {
+            if ta.classes[c] != tb.classes[c] { return false }
+        }
+        for n in 0 to ta.n_nodes {
+            let na: ptr<TreeNode> = ta.nodes + n
+            let nb: ptr<TreeNode> = tb.nodes + n
+            if na.is_leaf != nb.is_leaf { return false }
+            if na.left != nb.left { return false }
+            if na.right != nb.right { return false }
+            if na.n_samples != nb.n_samples { return false }
+            if na.impurity != nb.impurity { return false }
+            if na.is_leaf {
+                if na.value != nb.value { return false }
+            } else {
+                if na.feature != nb.feature { return false }
+                if na.threshold != nb.threshold { return false }
+            }
+        }
+    }
+    return true
+}
+
+function rfft_total_nodes(m: RandomForestClassifier) -> i32 {
+    let mut total: i32 = 0
+    for t in 0 to m.n_trees {
+        total = total + m.trees[t].n_nodes
+    }
+    return total
+}
+
+function main() -> i32 {
+    # ---------------------------------------------------------------
+    # 1. Realistic workload: digits, 10 trees, depth 10, seed 42.
+    # ---------------------------------------------------------------
+    let digits: Dataset = load_digits()
+    let n_train: i32 = 1437
+    let n_test: i32 = digits.X.rows - n_train
+
+    let X_train: Matrix = matrix_new(n_train, digits.X.cols)
+    let y_train: ptr<f32> = array_new_f32(n_train)
+    for i in 0 to n_train {
+        y_train[i] = digits.y[i]
+        for j in 0 to digits.X.cols { matrix_set(X_train, i, j, matrix_at(digits.X, i, j)) }
+    }
+    let X_test: Matrix = matrix_new(n_test, digits.X.cols)
+    let y_test: ptr<f32> = array_new_f32(n_test)
+    for i in 0 to n_test {
+        y_test[i] = digits.y[n_train + i]
+        for j in 0 to digits.X.cols { matrix_set(X_test, i, j, matrix_at(digits.X, n_train + i, j)) }
+    }
+
+    let reference: RandomForestClassifier = rfft_forest_fit(X_train, y_train, 10, 10, 10, 42)
+    let optimized: RandomForestClassifier = random_forest_classifier_fit(X_train, y_train, 10, 10, 10, 42)
+
+    if not rfft_forests_match(reference, optimized) {
+        println("FAIL: optimized RandomForestClassifier fit produced a different forest on digits")
+        return 1
+    }
+
+    # The workload must be big enough to be worth calling a regression test.
+    let node_total: i32 = rfft_total_nodes(optimized)
+    if node_total < 500 {
+        println("FAIL: digits forest is too small to exercise the split scan")
+        return 1
+    }
+    printf("digits forest: %d trees, %d nodes compared field by field\n", optimized.n_trees, node_total)
+
+    # Predictions from the two forests must agree label for label.
+    let ref_pred: ptr<f32> = random_forest_classifier_predict(reference, X_test)
+    let opt_pred: ptr<f32> = random_forest_classifier_predict(optimized, X_test)
+    for i in 0 to n_test {
+        if ref_pred[i] != opt_pred[i] {
+            println("FAIL: forests fitted by the two paths disagree on a prediction")
+            return 1
+        }
+    }
+    let accuracy: f32 = accuracy_score(y_test, opt_pred, n_test)
+    printf("digits holdout accuracy: %.9f\n", accuracy)
+    array_free_f32(ref_pred)
+    array_free_f32(opt_pred)
+
+    # ---------------------------------------------------------------
+    # 2. Iris, a different shape: 4 features, 3 classes, depth 5.
+    # ---------------------------------------------------------------
+    let iris: Dataset = load_iris()
+    let iris_ref: RandomForestClassifier = rfft_forest_fit(iris.X, iris.y, 3, 10, 5, 42)
+    let iris_opt: RandomForestClassifier = random_forest_classifier_fit(iris.X, iris.y, 3, 10, 5, 42)
+    if not rfft_forests_match(iris_ref, iris_opt) {
+        println("FAIL: optimized fit produced a different forest on iris")
+        return 1
+    }
+    random_forest_classifier_free(iris_ref)
+    random_forest_classifier_free(iris_opt)
+
+    # ---------------------------------------------------------------
+    # 3. Edge case: constant feature columns.
+    #
+    # The optimized scan skips a column whose values are all equal at a node.
+    # A dataset built mostly from constant columns forces that path, including
+    # the case where every candidate column is constant and the node has to
+    # fall back to a leaf.
+    # ---------------------------------------------------------------
+    let const_X: Matrix = matrix_new(40, 9)
+    let const_y: ptr<f32> = array_new_f32(40)
+    for i in 0 to 40 {
+        let cls: i32 = i % 3
+        const_y[i] = cls as f32
+        for j in 0 to 9 {
+            if j == 4 {
+                matrix_set(const_X, i, j, (cls as f32) + (i as f32) * 0.01)
+            } else {
+                matrix_set(const_X, i, j, 2.5)
+            }
+        }
+    }
+    let const_ref: RandomForestClassifier = rfft_forest_fit(const_X, const_y, 3, 6, 4, 3)
+    let const_opt: RandomForestClassifier = random_forest_classifier_fit(const_X, const_y, 3, 6, 4, 3)
+    if not rfft_forests_match(const_ref, const_opt) {
+        println("FAIL: optimized fit diverged on a dataset of mostly constant columns")
+        return 1
+    }
+    random_forest_classifier_free(const_ref)
+    random_forest_classifier_free(const_opt)
+
+    # Every column constant: no split is ever possible, so every tree is a stump.
+    let flat_X: Matrix = matrix_new(20, 5)
+    let flat_y: ptr<f32> = array_new_f32(20)
+    for i in 0 to 20 {
+        flat_y[i] = (i % 2) as f32
+        for j in 0 to 5 { matrix_set(flat_X, i, j, 1.0) }
+    }
+    let flat_ref: RandomForestClassifier = rfft_forest_fit(flat_X, flat_y, 2, 4, 4, 9)
+    let flat_opt: RandomForestClassifier = random_forest_classifier_fit(flat_X, flat_y, 2, 4, 4, 9)
+    if not rfft_forests_match(flat_ref, flat_opt) {
+        println("FAIL: optimized fit diverged when every column is constant")
+        return 1
+    }
+    for t in 0 to flat_opt.n_trees {
+        if flat_opt.trees[t].n_nodes != 1 {
+            println("FAIL: a fully constant dataset should produce single-node trees")
+            return 1
+        }
+    }
+    random_forest_classifier_free(flat_ref)
+    random_forest_classifier_free(flat_opt)
+    matrix_free(flat_X)
+    array_free_f32(flat_y)
+
+    # ---------------------------------------------------------------
+    # 4. Edge case: one tree, and a degenerate single-class target.
+    # ---------------------------------------------------------------
+    let one_ref: RandomForestClassifier = rfft_forest_fit(const_X, const_y, 3, 1, 4, 17)
+    let one_opt: RandomForestClassifier = random_forest_classifier_fit(const_X, const_y, 3, 1, 4, 17)
+    if not rfft_forests_match(one_ref, one_opt) {
+        println("FAIL: optimized fit diverged for a single-tree forest")
+        return 1
+    }
+    random_forest_classifier_free(one_ref)
+    random_forest_classifier_free(one_opt)
+
+    let same_y: ptr<f32> = array_new_f32(40)
+    for i in 0 to 40 { same_y[i] = 7.0 }
+    let same_ref: RandomForestClassifier = rfft_forest_fit(const_X, same_y, 1, 5, 4, 23)
+    let same_opt: RandomForestClassifier = random_forest_classifier_fit(const_X, same_y, 1, 5, 4, 23)
+    if not rfft_forests_match(same_ref, same_opt) {
+        println("FAIL: optimized fit diverged for a single-class target")
+        return 1
+    }
+    random_forest_classifier_free(same_ref)
+    random_forest_classifier_free(same_opt)
+    array_free_f32(same_y)
+    matrix_free(const_X)
+    array_free_f32(const_y)
+
+    # ---------------------------------------------------------------
+    # 5. A/B timing on the digits workload.
+    # ---------------------------------------------------------------
+    let repeats: i32 = 10
+    let mut reference_best: f64 = 999999.0
+    let mut optimized_best: f64 = 999999.0
+    for r in 0 to repeats {
+        let a0: i64 = rfft_now_ns()
+        let m_ref: RandomForestClassifier = rfft_forest_fit(X_train, y_train, 10, 10, 10, 42)
+        let a1: i64 = rfft_now_ns()
+        let m_opt: RandomForestClassifier = random_forest_classifier_fit(X_train, y_train, 10, 10, 10, 42)
+        let a2: i64 = rfft_now_ns()
+        let t_ref: f64 = ((a1 - a0) as f64) / 1000000.0
+        let t_opt: f64 = ((a2 - a1) as f64) / 1000000.0
+        if t_ref < reference_best { reference_best = t_ref }
+        if t_opt < optimized_best { optimized_best = t_opt }
+        random_forest_classifier_free(m_ref)
+        random_forest_classifier_free(m_opt)
+    }
+    printf("RandomForestClassifier fit A/B: reference=%.3f ms optimized=%.3f ms speedup=%.3fx\n", reference_best, optimized_best, reference_best / optimized_best)
+
+    random_forest_classifier_free(reference)
+    random_forest_classifier_free(optimized)
+    matrix_free(X_train)
+    matrix_free(X_test)
+    array_free_f32(y_train)
+    array_free_f32(y_test)
+    dataset_free(digits)
+    dataset_free(iris)
+
+    println("OK: RandomForestClassifier fit produces a bit-identical forest")
+    return 0
+}
