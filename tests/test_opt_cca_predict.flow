@@ -1,0 +1,165 @@
+# Regression test for the CCA projection optimization (roadmap rank 40,
+# issue #249).
+#
+# flow-scikit's CCA exposes no predict; cca_transform is the projection through
+# the fitted weight matrices that the roadmap row points at. It used to call
+# matrix_at and matrix_set once per element and re-chase model.x_weights[c] on
+# every step of the inner loop. It now hoists the row bases and the weight
+# vector and indexes the row-major data arrays directly.
+#
+# The accumulation order is unchanged, so the result must be bit-identical.
+# This test compares every output cell against a copy of the old implementation
+# with ==, no tolerance.
+
+import "lib/scikit/cross_decomposition.flow"
+
+extern {
+    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+}
+
+const OPTCCA_TIME_UTC: i32 = 1
+
+function optcca_now_ns() -> i64 {
+    let ts: ptr<i64> = malloc(16) as ptr<i64>
+    timespec_get(ts, OPTCCA_TIME_UTC)
+    let value: i64 = ts[0] * 1000000000 + ts[1]
+    free(ts as ptr<void>)
+    return value
+}
+
+# Byte-for-byte copy of the pre-optimization cca_transform.
+function optcca_reference_transform(model: CCA, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, model.n_components)
+    for i in 0 to X.rows {
+        for c in 0 to model.n_components {
+            let mut s: f32 = 0.0
+            for j in 0 to model.n_x_features {
+                s = s + matrix_at(X, i, j) * model.x_weights[c][j]
+            }
+            matrix_set(result, i, c, s)
+        }
+    }
+    return result
+}
+
+function optcca_fill(m: Matrix, seed_start: i32, mode: i32) -> void {
+    let mut seed: i32 = seed_start
+    for i in 0 to m.rows {
+        for j in 0 to m.cols {
+            seed = (seed * 1103515245 + 12345) % 100000
+            if mode == 1 {
+                # Wide dynamic range including exact zeros and negatives, so the
+                # direct data indexing is exercised on awkward values.
+                if (i + j) % 7 == 0 {
+                    m.data[i * m.cols + j] = 0.0
+                } else {
+                    m.data[i * m.cols + j] = ((seed as f32) / 5000.0 - 10.0) * 1000.0
+                }
+            } else {
+                m.data[i * m.cols + j] = (seed as f32) / 50000.0 - 1.0
+            }
+        }
+    }
+}
+
+function optcca_case(name: string, n: i32, p: i32, q: i32, nc: i32, mode: i32) -> i32 {
+    let X: Matrix = matrix_new(n, p)
+    let Y: Matrix = matrix_new(n, q)
+    optcca_fill(X, 3, mode)
+    optcca_fill(Y, 5501, mode)
+
+    let model: CCA = cca_fit(X, Y, nc, 20, 0.000001)
+    let got: Matrix = cca_transform(model, X)
+    let want: Matrix = optcca_reference_transform(model, X)
+
+    let mut bad: i32 = 0
+    if got.rows != n {
+        bad = bad + 1
+        printf("  MISMATCH %s rows got %d want %d\n", name, got.rows, n)
+    }
+    if got.cols != nc {
+        bad = bad + 1
+        printf("  MISMATCH %s cols got %d want %d\n", name, got.cols, nc)
+    }
+    for i in 0 to n {
+        for c in 0 to nc {
+            if got.data[i * nc + c] != want.data[i * nc + c] {
+                bad = bad + 1
+                if bad < 10 {
+                    printf("  MISMATCH %s row %d comp %d got %.9f want %.9f\n", name, i, c, got.data[i * nc + c] as f64, want.data[i * nc + c] as f64)
+                }
+            }
+        }
+    }
+
+    # The projection must also work on a matrix that is not the training one.
+    let Xq: Matrix = matrix_new(n, p)
+    optcca_fill(Xq, 777, mode)
+    let got_q: Matrix = cca_transform(model, Xq)
+    let want_q: Matrix = optcca_reference_transform(model, Xq)
+    for i in 0 to n {
+        for c in 0 to nc {
+            if got_q.data[i * nc + c] != want_q.data[i * nc + c] {
+                bad = bad + 1
+                if bad < 10 {
+                    printf("  MISMATCH %s holdout row %d comp %d got %.9f want %.9f\n", name, i, c, got_q.data[i * nc + c] as f64, want_q.data[i * nc + c] as f64)
+                }
+            }
+        }
+    }
+
+    if bad == 0 {
+        printf("  ok %s\n", name)
+    }
+
+    matrix_free(got)
+    matrix_free(want)
+    matrix_free(got_q)
+    matrix_free(want_q)
+    matrix_free(Xq)
+    cca_free(model)
+    matrix_free(X)
+    matrix_free(Y)
+    return bad
+}
+
+function main() -> i32 {
+    printf("test_opt_cca_predict\n")
+    let mut failures: i32 = 0
+
+    failures = failures + optcca_case("small_20x4", 20, 4, 3, 2, 0)
+    failures = failures + optcca_case("single_component", 30, 6, 2, 1, 0)
+    failures = failures + optcca_case("single_row", 1, 5, 3, 1, 0)
+    failures = failures + optcca_case("single_feature", 25, 1, 2, 1, 0)
+    failures = failures + optcca_case("zeros_and_large", 40, 8, 4, 3, 1)
+    failures = failures + optcca_case("realistic_400x32", 400, 32, 6, 4, 0)
+
+    # Timing on a realistic workload, reported for the record.
+    let n: i32 = 2000
+    let p: i32 = 64
+    let q: i32 = 8
+    let nc: i32 = 4
+    let Xb: Matrix = matrix_new(n, p)
+    let Yb: Matrix = matrix_new(n, q)
+    optcca_fill(Xb, 3, 0)
+    optcca_fill(Yb, 5501, 0)
+    let model: CCA = cca_fit(Xb, Yb, nc, 20, 0.000001)
+    let reps: i32 = 50
+    let t0: i64 = optcca_now_ns()
+    for r in 0 to reps {
+        let Z: Matrix = cca_transform(model, Xb)
+        matrix_free(Z)
+    }
+    let t1: i64 = optcca_now_ns()
+    printf("  transform 2000 by 64, 4 components: %f ms per call\n", ((t1 - t0) as f64) / 1000000.0 / (reps as f64))
+    cca_free(model)
+    matrix_free(Xb)
+    matrix_free(Yb)
+
+    if failures == 0 {
+        printf("PASS test_opt_cca_predict\n")
+        return 0
+    }
+    printf("FAIL test_opt_cca_predict: %d mismatches\n", failures)
+    return 1
+}
