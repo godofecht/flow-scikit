@@ -21,6 +21,54 @@ export struct DictVectorizer {
     fitted: bool
 }
 
+# Locates `key` in the ascending array `sorted_keys` of length `n`.
+# Returns the index when the key is present, otherwise -(insertion_point) - 1.
+# Small vocabularies use a linear scan with an early exit, which beats the branch
+# overhead of a binary search; larger ones binary search.
+# Module-unique name per compiler bug #465.
+function _fe_extra_dv_find(sorted_keys: ptr<i32>, n: i32, key: i32) -> i32 {
+    if n <= 12 {
+        let mut out: i32 = 0 - n - 1
+        let mut i: i32 = 0
+        let mut done: bool = false
+        while i < n && not done {
+            let v: i32 = sorted_keys[i]
+            if v == key {
+                out = i
+                done = true
+            } else {
+                if v > key {
+                    out = 0 - i - 1
+                    done = true
+                }
+            }
+            i = i + 1
+        }
+        return out
+    }
+
+    let mut lo: i32 = 0
+    let mut hi: i32 = n - 1
+    let mut found: i32 = 0 - 1
+    while lo <= hi && found < 0 {
+        let mid: i32 = (lo + hi) / 2
+        let v: i32 = sorted_keys[mid]
+        if v == key {
+            found = mid
+        } else {
+            if v < key {
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
+        }
+    }
+    if found >= 0 {
+        return found
+    }
+    return 0 - lo - 1
+}
+
 export function dict_vectorizer_fit(X_keys: ptr<ptr<i32> >, X_vals: ptr<ptr<f32> >, n_samples: i32, n_keys_per_sample: ptr<i32>) -> DictVectorizer {
     # Collect all unique feature keys (represented as integer hashes)
     let max_features: i32 = 0
@@ -29,21 +77,32 @@ export function dict_vectorizer_fit(X_keys: ptr<ptr<i32> >, X_vals: ptr<ptr<f32>
     }
 
     let all_keys: ptr<i32> = array_new_f32(max_features) as ptr<i32>
+    # Mirror of all_keys held in ascending order so membership is a search over
+    # sorted data instead of a full scan of every key seen so far.
+    let probe_keys: ptr<i32> = array_new_f32(max_features) as ptr<i32>
     let mut n_unique: i32 = 0
 
     for i in 0 to n_samples {
         for k in 0 to n_keys_per_sample[i] {
             let key: i32 = X_keys[i][k]
-            let mut found: bool = false
-            for j in 0 to n_unique {
-                if all_keys[j] == key { found = true }
-            }
-            if not found {
+            let pos: i32 = _fe_extra_dv_find(probe_keys, n_unique, key)
+            if pos < 0 {
+                let ins: i32 = 0 - pos - 1
+                let mut m: i32 = n_unique
+                while m > ins {
+                    probe_keys[m] = probe_keys[m - 1]
+                    m = m - 1
+                }
+                probe_keys[ins] = key
+                # all_keys stays in first-seen order, so the emitted feature
+                # columns are identical to the previous implementation's.
                 all_keys[n_unique] = key
                 n_unique = n_unique + 1
             }
         }
     }
+
+    array_free_f32(probe_keys as ptr<f32>)
 
     let feature_names: ptr<ptr<i32> > = malloc((n_unique as i64) * 8) as ptr<ptr<i32> >
     for i in 0 to n_unique {
