@@ -2453,12 +2453,33 @@ export function lars_fit(X: Matrix, y: ptr<f32>, n_features_to_select: i32) -> L
     }
 }
 
+# Same y = X * w + b batch as elastic_net_predict: one cblas_sgemv with the row
+# stride passed as lda above the 65536 rows * features work threshold, and the
+# scalar kernel with matrix_at folded into a direct row-major index below it.
 export function lars_predict(model: Lars, X: Matrix) -> ptr<f32> {
-    let result: ptr<f32> = array_new_f32(X.rows)
-    for i in 0 to X.rows {
-        let mut s: f32 = model.bias
-        for j in 0 to model.n_features {
-            s = s + model.weights[j] * matrix_at(X, i, j)
+    let rows: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(rows)
+    if rows <= 0 { return result }
+
+    let nf: i32 = model.n_features
+    let bias: f32 = model.bias
+    let w: ptr<f32> = model.weights
+    let data: ptr<f32> = X.data
+    let stride: i32 = X.cols
+
+    if nf > 0 && nf <= stride && rows * nf >= 65536 {
+        blas_matvec_ld(data, rows, nf, stride, w, result, 1.0, 0.0)
+        for i in 0 to rows {
+            result[i] = result[i] + bias
+        }
+        return result
+    }
+
+    for i in 0 to rows {
+        let base: i32 = i * stride
+        let mut s: f32 = bias
+        for j in 0 to nf {
+            s = s + w[j] * data[base + j]
         }
         result[i] = s
     }
