@@ -98,44 +98,6 @@ export function random_forest_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: 
     }
 }
 
-export function random_forest_classifier_predict(model: RandomForestClassifier, X: Matrix) -> ptr<f32> {
-    let preds: ptr<f32> = array_new_f32(X.rows)
-    let row: ptr<f32> = array_new_f32(X.cols)
-
-    for i in 0 to X.rows {
-        matrix_row(X, i, row)
-
-        let votes: ptr<i32> = malloc((model.n_classes as i64) * 4) as ptr<i32>
-        for c in 0 to model.n_classes {
-            votes[c] = 0
-        }
-
-        for t in 0 to model.n_trees {
-            let pred: f32 = decision_tree_classifier_predict_one(model.trees[t], row)
-            for c in 0 to model.n_classes {
-                if model.classes[c] == pred {
-                    votes[c] = votes[c] + 1
-                }
-            }
-        }
-
-        let mut best_c: i32 = 0
-        let mut best_votes: i32 = 0
-        for c in 0 to model.n_classes {
-            if votes[c] > best_votes {
-                best_votes = votes[c]
-                best_c = c
-            }
-        }
-
-        preds[i] = model.classes[best_c]
-        free(votes as ptr<void>)
-    }
-
-    array_free_f32(row)
-    return preds
-}
-
 # Raw per-class vote counts for every row of X, as an (X.rows x n_classes)
 # matrix. Shared inference kernel for the RandomForestClassifier.
 #
@@ -243,6 +205,40 @@ export function random_forest_classifier_predict_proba(model: RandomForestClassi
         pd[k] = pd[k] / denom
     }
     return probs
+}
+
+# predict is a majority vote, which is the same reduction predict_proba runs
+# before normalising. It reuses the shared vote kernel and then takes the
+# argmax over raw counts, so the traversal work is done once, in one place.
+#
+# Tie-breaking is preserved exactly: scanning ascending from class 0 with a
+# strict comparison against a running best that starts at zero picks the
+# lowest-indexed class holding the strict maximum, and falls back to class 0
+# when no tree voted. Dividing every count by the same positive n_trees is
+# monotone, so the argmax over counts is the argmax over probabilities.
+export function random_forest_classifier_predict(model: RandomForestClassifier, X: Matrix) -> ptr<f32> {
+    let counts: Matrix = rf_clf_vote_counts(model, X)
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    let n_classes: i32 = model.n_classes
+    let cd: ptr<f32> = counts.data
+
+    let mut base: i32 = 0
+    for i in 0 to X.rows {
+        let mut best_c: i32 = 0
+        let mut best_votes: f32 = 0.0
+        for c in 0 to n_classes {
+            let v: f32 = cd[base + c]
+            if v > best_votes {
+                best_votes = v
+                best_c = c
+            }
+        }
+        preds[i] = model.classes[best_c]
+        base = base + n_classes
+    }
+
+    matrix_free(counts)
+    return preds
 }
 
 export function random_forest_classifier_decide(model: RandomForestClassifier, probs: Matrix) -> ptr<f32> {
