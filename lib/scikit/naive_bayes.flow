@@ -652,15 +652,21 @@ export function complement_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, alpha:
 
 export function complement_nb_predict(model: ComplementNB, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
+    let p: i32 = model.n_features
+    let n_classes: i32 = model.n_classes
     let result: ptr<f32> = array_new_f32(n)
 
     for i in 0 to n {
         let mut best_c: i32 = 0
         let mut best_score: f32 = -9999999999.0
-        for c in 0 to model.n_classes {
+        let row_base: i32 = i * p
+        for c in 0 to n_classes {
             let mut score: f32 = model.class_log_prior[c]
-            for j in 0 to model.n_features {
-                score = score + matrix_at(X, i, j) * model.feature_log_prob[c][j]
+            # Hoisting the class weight row out of the feature loop turns a
+            # double pointer dereference per element into one per class.
+            let weights: ptr<f32> = model.feature_log_prob[c]
+            for j in 0 to p {
+                score = score + X.data[row_base + j] * weights[j]
             }
             if score > best_score {
                 best_score = score
