@@ -125,6 +125,18 @@ function _kmeans_assign(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, n
     let cross: ptr<f32> = scratch.cross
     let best_out: ptr<f32> = scratch.best_out
 
+    # Below the BLAS work threshold the sgemm dispatch costs more per iteration
+    # than the whole scalar assignment, so run the direct kernel.
+    if not _kmeans_use_blas(n, n_clusters, n_features) {
+        let mut small_inertia: f32 = 0.0
+        for i in 0 to n {
+            let best_k: i32 = _kmeans_nearest_centroid(x_data, i * x_stride, centroids, n_clusters, n_features, best_out)
+            labels[i] = best_k
+            small_inertia = small_inertia + best_out[0]
+        }
+        return small_inertia
+    }
+
     let mut cnorm_max: f32 = 0.0
     for k in 0 to n_clusters {
         let crow: ptr<f32> = centroids[k]
