@@ -17,6 +17,8 @@ extern {
     function cblas_dgemm(order: i32, transa: i32, transb: i32, m: i32, n: i32, k: i32, alpha: f64, a: ptr<f64>, lda: i32, b: ptr<f64>, ldb: i32, beta: f64, c: ptr<f64>, ldc: i32) -> void
     function cblas_dgemv(order: i32, trans: i32, m: i32, n: i32, alpha: f64, a: ptr<f64>, lda: i32, x: ptr<f64>, incx: i32, beta: f64, y: ptr<f64>, incy: i32) -> void
     function cblas_ddot(n: i32, x: ptr<f64>, incx: i32, y: ptr<f64>, incy: i32) -> f64
+    function cblas_daxpy(n: i32, alpha: f64, x: ptr<f64>, incx: i32, y: ptr<f64>, incy: i32) -> void
+    function cblas_dger(order: i32, m: i32, n: i32, alpha: f64, x: ptr<f64>, incx: i32, y: ptr<f64>, incy: i32, a: ptr<f64>, lda: i32) -> void
 }
 
 # Matrix-vector multiply: y = alpha * A * x + beta * y
