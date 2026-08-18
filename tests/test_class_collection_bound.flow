@@ -1,0 +1,348 @@
+# Regression test for issue #398: heap buffer overflow in the unique-label
+# collection loops.
+#
+# Every classifier fit in the library derived its class vector with the same
+# loop shape:
+#
+#     let classes: ptr<f32> = array_new_f32(n_classes)
+#     let mut n_found: i32 = 0
+#     for i in 0 to n {
+#         let mut found: bool = false
+#         for c in 0 to n_found {
+#             if classes[c] == y[i] { found = true }
+#         }
+#         if not found {
+#             classes[n_found] = y[i]      # no bound against n_classes
+#             n_found = n_found + 1
+#         }
+#     }
+#
+# n_classes is caller supplied. When y carries more distinct labels than
+# n_classes declares, the append runs past the end of the allocation.
+#
+# The fix grows the buffer to hold every distinct label rather than truncating,
+# so count and first-appearance order are exactly what the old loop produced
+# and no class is dropped. Truncating instead would have changed results for
+# callers that already understate n_classes: tests/test_estimator_persistence
+# fits LinearSVC with n_classes=2 on three-class iris and its printed accuracy
+# moves 0.6444 -> 0.4222 under a truncating fix.
+#
+# t398_legacy_collect below is the pre-fix loop verbatim, run against a canary
+# region laid out immediately after the declared capacity inside one
+# allocation. It corrupts the canary, which is the defect. Case 1 then asserts
+# the invariant the old code violated: the buffer must be able to hold every
+# entry written into it. The old code sized it at n_classes and wrote one entry
+# per distinct label, so it fails that assertion. Case 1 also pins count and
+# first-appearance order to the legacy kernel so the fix cannot silently drop
+# or reorder a class.
+#
+# The end-to-end overflow was also confirmed under AddressSanitizer on
+# origin/main (FLOW_ASAN=1, discriminant_lda_fit with n_classes=2 on 5 distinct
+# labels): heap-buffer-overflow, WRITE of size 4, 0 bytes after an 8-byte
+# region. The same program is clean after the fix.
+
+import "lib/scikit/matrix.flow"
+import "lib/scikit/validation.flow"
+import "lib/scikit/discriminant_analysis.flow"
+import "lib/scikit/dummy.flow"
+import "lib/scikit/naive_bayes.flow"
+
+const T398_CANARY: i32 = 16
+
+# The class-discovery loop exactly as it stood before issue #398 was fixed.
+function t398_legacy_collect(src: ptr<f32>, n: i32, out: ptr<f32>) -> i32 {
+    let mut n_found: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for c in 0 to n_found {
+            if out[c] == src[i] { found = true }
+        }
+        if not found {
+            out[n_found] = src[i]
+            n_found = n_found + 1
+        }
+    }
+    return n_found
+}
+
+# Count how many floats of the canary region past cap were written.
+function t398_canary_damage(block: ptr<f32>, cap: i32) -> i32 {
+    let mut damage: i32 = 0
+    for c in 0 to T398_CANARY {
+        if block[cap + c] != 0.0 { damage = damage + 1 }
+    }
+    return damage
+}
+
+function t398_case_overflow() -> i32 {
+    # 5 distinct labels, caller declares 2.
+    let n: i32 = 40
+    let cap: i32 = 2
+    let y: ptr<f32> = array_new_f32(n)
+    for i in 0 to n { y[i] = (i % 5) as f32 }
+
+    let legacy_block: ptr<f32> = array_new_f32(cap + T398_CANARY)
+    let legacy_found: i32 = t398_legacy_collect(y, n, legacy_block)
+    let legacy_damage: i32 = t398_canary_damage(legacy_block, cap)
+
+    let fixed: DistinctF32 = distinct_f32(y, n, cap)
+
+    printf("  legacy wrote %d entries into a %d entry buffer, %d floats past the end\n", legacy_found, cap, legacy_damage)
+    printf("  fixed wrote %d entries into a %d entry buffer\n", fixed.count, fixed.capacity)
+
+    let mut bad: i32 = 0
+    if legacy_damage == 0 {
+        printf("  FAIL the legacy kernel did not overflow, the test setup is wrong\n")
+        bad = bad + 1
+    }
+    # The invariant the old code violated: the buffer must hold every entry
+    # written into it. The old code sized it at n_classes (2 here) and wrote
+    # one entry per distinct label (5 here).
+    if fixed.capacity < fixed.count {
+        printf("  FAIL capacity %d is smaller than count %d\n", fixed.capacity, fixed.count)
+        bad = bad + 1
+    }
+    if fixed.capacity < cap {
+        printf("  FAIL capacity %d below the declared n_classes %d\n", fixed.capacity, cap)
+        bad = bad + 1
+    }
+    if fixed.count != legacy_found {
+        printf("  FAIL count changed: legacy %d fixed %d\n", legacy_found, fixed.count)
+        bad = bad + 1
+    }
+    for c in 0 to legacy_found {
+        if fixed.values[c] != legacy_block[c] {
+            printf("  FAIL class %d legacy %f fixed %f\n", c, legacy_block[c] as f64, fixed.values[c] as f64)
+            bad = bad + 1
+        }
+    }
+    if bad == 0 { printf("  ok overflow_grown_not_truncated\n") }
+
+    array_free_f32(y)
+    array_free_f32(legacy_block)
+    array_free_f32(fixed.values)
+    return bad
+}
+
+# For any capacity, the fixed kernel must agree with the legacy one entry for
+# entry. The legacy buffer is over-allocated here so the oracle itself stays in
+# bounds.
+function t398_case_parity(name: string, y: ptr<f32>, n: i32, cap: i32) -> i32 {
+    let a: ptr<f32> = array_new_f32(n + cap)
+    let na: i32 = t398_legacy_collect(y, n, a)
+    let b: DistinctF32 = distinct_f32(y, n, cap)
+    let mut bad: i32 = 0
+    if na != b.count {
+        printf("  FAIL %s count legacy %d fixed %d\n", name, na, b.count)
+        bad = bad + 1
+    }
+    for c in 0 to na {
+        if a[c] != b.values[c] {
+            printf("  FAIL %s index %d legacy %f fixed %f\n", name, c, a[c] as f64, b.values[c] as f64)
+            bad = bad + 1
+        }
+    }
+    if b.capacity < cap {
+        printf("  FAIL %s capacity %d below requested %d\n", name, b.capacity, cap)
+        bad = bad + 1
+    }
+    # The tail up to the declared capacity must stay zeroed, the way
+    # array_new_f32 left it before.
+    for c in na to b.capacity {
+        if b.values[c] != 0.0 {
+            printf("  FAIL %s tail index %d is %f, expected 0\n", name, c, b.values[c] as f64)
+            bad = bad + 1
+        }
+    }
+    if bad == 0 { printf("  ok %s count=%d capacity=%d\n", name, b.count, b.capacity) }
+    array_free_f32(a)
+    array_free_f32(b.values)
+    return bad
+}
+
+function t398_case_validation() -> i32 {
+    let n: i32 = 40
+    let y: ptr<f32> = array_new_f32(n)
+    for i in 0 to n { y[i] = (i % 5) as f32 }
+
+    let mut bad: i32 = 0
+    let too_few: ValidationResult = ensure_n_classes(y, n, 2)
+    if too_few.ok {
+        printf("  FAIL ensure_n_classes accepted n_classes=2 for 5 distinct labels\n")
+        bad = bad + 1
+    }
+    if too_few.code != ENSURE_ERR_TOO_MANY_CLASSES {
+        printf("  FAIL ensure_n_classes returned code %d\n", too_few.code)
+        bad = bad + 1
+    }
+    let exact: ValidationResult = ensure_n_classes(y, n, 5)
+    if not exact.ok {
+        printf("  FAIL ensure_n_classes rejected an exact n_classes\n")
+        bad = bad + 1
+    }
+    let generous: ValidationResult = ensure_n_classes(y, n, 9)
+    if not generous.ok {
+        printf("  FAIL ensure_n_classes rejected a generous n_classes\n")
+        bad = bad + 1
+    }
+    if bad == 0 { printf("  ok ensure_n_classes\n") }
+    array_free_f32(y)
+    return bad
+}
+
+# End to end: the fits that used to overflow must survive an understated
+# n_classes and must still find every class.
+function t398_case_estimators() -> i32 {
+    let n: i32 = 40
+    let p: i32 = 3
+    let X: Matrix = matrix_new(n, p)
+    let y: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let lbl: i32 = i % 5
+        y[i] = lbl as f32
+        matrix_set(X, i, 0, (i as f32) * 0.1)
+        matrix_set(X, i, 1, (lbl as f32) + 0.5)
+        matrix_set(X, i, 2, (i as f32) * 0.01 - (lbl as f32))
+    }
+
+    let mut bad: i32 = 0
+
+    # LDA and QDA report n_found, so an understated n_classes must still give 5.
+    let lda_small: LinearDiscriminantAnalysis = discriminant_lda_fit(X, y, 2)
+    if lda_small.n_classes != 5 {
+        printf("  FAIL lda with n_classes=2 found %d classes, expected 5\n", lda_small.n_classes)
+        bad = bad + 1
+    }
+    let lda_full: LinearDiscriminantAnalysis = discriminant_lda_fit(X, y, 5)
+    if lda_full.n_classes != 5 {
+        printf("  FAIL lda with n_classes=5 found %d classes\n", lda_full.n_classes)
+        bad = bad + 1
+    }
+    for c in 0 to 5 {
+        if lda_full.classes[c] != (c as f32) {
+            printf("  FAIL lda class %d is %f\n", c, lda_full.classes[c] as f64)
+            bad = bad + 1
+        }
+        if lda_small.classes[c] != lda_full.classes[c] {
+            printf("  FAIL lda class %d differs between n_classes=2 and n_classes=5\n", c)
+            bad = bad + 1
+        }
+    }
+
+    let qda_small: QuadraticDiscriminantAnalysis = qda_fit(X, y, 2)
+    if qda_small.n_classes != 5 {
+        printf("  FAIL qda with n_classes=2 found %d classes, expected 5\n", qda_small.n_classes)
+        bad = bad + 1
+    }
+
+    let dummy_small: DummyClassifier = dummy_classifier_fit(y, n, 2, 0, 0.0, 1)
+    for c in 0 to 5 {
+        if dummy_small.classes[c] != (c as f32) {
+            printf("  FAIL dummy class %d is %f\n", c, dummy_small.classes[c] as f64)
+            bad = bad + 1
+        }
+    }
+
+    let nb_x: Matrix = matrix_new(n, p)
+    for i in 0 to n {
+        for j in 0 to p {
+            let v: f32 = ((i + j) % 7) as f32
+            matrix_set(nb_x, i, j, v)
+        }
+    }
+    let mnb_small: MultinomialNB = multinomial_nb_fit(nb_x, y, 2, 1.0)
+    for c in 0 to 5 {
+        if mnb_small.classes[c] != (c as f32) {
+            printf("  FAIL multinomial_nb class %d is %f\n", c, mnb_small.classes[c] as f64)
+            bad = bad + 1
+        }
+    }
+    let bnb_small: BernoulliNB = bernoulli_nb_fit(nb_x, y, 2, 1.0)
+    for c in 0 to 5 {
+        if bnb_small.classes[c] != (c as f32) {
+            printf("  FAIL bernoulli_nb class %d is %f\n", c, bnb_small.classes[c] as f64)
+            bad = bad + 1
+        }
+    }
+
+    if bad == 0 { printf("  ok estimators_survive_understated_n_classes\n") }
+
+    array_free_f32(y)
+    matrix_free(X)
+    matrix_free(nb_x)
+    return bad
+}
+
+function main() -> i32 {
+    printf("test_class_collection_bound\n")
+    let mut failures: i32 = 0
+
+    failures = failures + t398_case_overflow()
+
+    let y1: ptr<f32> = array_new_f32(9)
+    y1[0] = 2.0
+    y1[1] = 0.0
+    y1[2] = 2.0
+    y1[3] = 1.0
+    y1[4] = 0.0
+    y1[5] = 1.0
+    y1[6] = 2.0
+    y1[7] = 0.0
+    y1[8] = 1.0
+    failures = failures + t398_case_parity("contiguous_unordered", y1, 9, 3)
+    failures = failures + t398_case_parity("cap_understated", y1, 9, 2)
+    failures = failures + t398_case_parity("cap_overstated", y1, 9, 8)
+    array_free_f32(y1)
+
+    let y2: ptr<f32> = array_new_f32(6)
+    y2[0] = -5.0
+    y2[1] = 100.0
+    y2[2] = 0.0
+    y2[3] = 100.0
+    y2[4] = -5.0
+    y2[5] = 42.0
+    failures = failures + t398_case_parity("sparse_negative", y2, 6, 4)
+    array_free_f32(y2)
+
+    let y3: ptr<f32> = array_new_f32(5)
+    y3[0] = 0.5
+    y3[1] = 1.25
+    y3[2] = 0.5
+    y3[3] = -3.75
+    y3[4] = 1.25
+    failures = failures + t398_case_parity("fractional_fallback", y3, 5, 3)
+    array_free_f32(y3)
+
+    let y4: ptr<f32> = array_new_f32(4)
+    y4[0] = 3000000.0
+    y4[1] = 1.0
+    y4[2] = 3000000.0
+    y4[3] = 2.0
+    failures = failures + t398_case_parity("huge_magnitude_fallback", y4, 4, 3)
+    array_free_f32(y4)
+
+    let y5: ptr<f32> = array_new_f32(1)
+    y5[0] = 7.0
+    failures = failures + t398_case_parity("single_sample", y5, 1, 1)
+    array_free_f32(y5)
+
+    let y6: ptr<f32> = array_new_f32(64)
+    for i in 0 to 64 { y6[i] = 3.0 }
+    failures = failures + t398_case_parity("all_same_label", y6, 64, 1)
+    array_free_f32(y6)
+
+    let y7: ptr<f32> = array_new_f32(2000)
+    for i in 0 to 2000 { y7[i] = ((i * 7) % 200) as f32 }
+    failures = failures + t398_case_parity("wide_label_set", y7, 2000, 200)
+    array_free_f32(y7)
+
+    failures = failures + t398_case_validation()
+    failures = failures + t398_case_estimators()
+
+    if failures == 0 {
+        printf("test_class_collection_bound PASSED\n")
+        return 0
+    }
+    printf("test_class_collection_bound FAILED with %d failures\n", failures)
+    return 1
+}
