@@ -422,28 +422,44 @@ export function bagging_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n
     let trees: ptr<DecisionTreeClassifier> = malloc((n_estimators as i64) * 128) as ptr<DecisionTreeClassifier>
     srand(seed)
 
+    # Bootstrap scratch, allocated once and reused by every estimator. The old
+    # loop allocated and freed the index array, the bootstrap design matrix and
+    # the bootstrap target vector on every iteration. Each estimator overwrites
+    # all three in full before reading them, so reuse is safe.
+    #
+    # The draw order is deliberately untouched: n_samples calls to rand() per
+    # estimator, in the same order, so a given seed produces the same fitted
+    # ensemble. Issue #205 owns the sampling scheme itself.
+    let n_samples: i32 = X.rows
+    let n_cols: i32 = X.cols
+    let row_bytes: i64 = (n_cols as i64) * 4
+    let indices: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+    let X_boot: Matrix = matrix_new(n_samples, n_cols)
+    let y_boot: ptr<f32> = array_new_f32(n_samples)
+    let x_data: ptr<f32> = X.data
+    let boot_data: ptr<f32> = X_boot.data
+
     for t in 0 to n_estimators {
-        let n_samples: i32 = X.rows
-        let indices: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
         for i in 0 to n_samples {
             indices[i] = rand() % n_samples
         }
 
-        let X_boot: Matrix = matrix_new(n_samples, X.cols)
-        let y_boot: ptr<f32> = array_new_f32(n_samples)
+        # Row-major memcpy instead of n_samples * n_cols matrix_set/matrix_at
+        # call pairs. On digits that is 115k accessor pairs per estimator.
+        let mut dst: i32 = 0
         for i in 0 to n_samples {
-            y_boot[i] = y[indices[i]]
-            for j in 0 to X.cols {
-                matrix_set(X_boot, i, j, matrix_at(X, indices[i], j))
-            }
+            let src: i32 = indices[i]
+            y_boot[i] = y[src]
+            memcpy((boot_data + dst) as ptr<void>, (x_data + src * n_cols) as ptr<void>, row_bytes)
+            dst = dst + n_cols
         }
 
         trees[t] = decision_tree_classifier_fit(X_boot, y_boot, n_classes, max_depth, CRITERION_GINI)
-
-        free(indices as ptr<void>)
-        matrix_free(X_boot)
-        array_free_f32(y_boot)
     }
+
+    free(indices as ptr<void>)
+    matrix_free(X_boot)
+    array_free_f32(y_boot)
 
     return BaggingClassifier {
         trees: trees,
