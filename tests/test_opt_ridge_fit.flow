@@ -1,0 +1,207 @@
+# Regression test for the BLAS-backed Gram accumulation in ridge_fit.
+# The check that matters is element-wise coefficient parity against the
+# previous scalar triple loop, kept verbatim below as an independent
+# reference. It is exercised on a well-conditioned design, a near-collinear
+# design at two penalties, a design with column scales spanning eight orders
+# of magnitude, and a single-feature problem. Two hand-checkable cases pin the
+# shrinkage direction and the intercept.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+}
+
+function optrf_close(a: f32, b: f32, tolerance: f32) -> bool {
+    let d: f32 = a - b
+    if d < 0.0 { d = -d }
+    return d <= tolerance
+}
+
+# Verbatim copy of the pre-change ridge_fit body: means, then the scalar
+# m * n * n accumulation of XtX and Xty from recentred elements, then the same
+# f64 Gaussian elimination and the same intercept recovery.
+function optrf_reference_fit(X: Matrix, y: ptr<f32>, alpha: f32) -> Ridge {
+    let n: i32 = X.cols
+    let m: i32 = X.rows
+    let x_mean: ptr<f64> = array_new_f64(n)
+    let mut y_mean: f64 = 0.0
+    for i in 0 to m {
+        y_mean = y_mean + (y[i] as f64)
+        for j in 0 to n {
+            x_mean[j] = x_mean[j] + (matrix_at(X, i, j) as f64)
+        }
+    }
+    y_mean = y_mean / (m as f64)
+    for j in 0 to n {
+        x_mean[j] = x_mean[j] / (m as f64)
+    }
+    let XtX: ptr<f64> = array_new_f64(n * n)
+    let Xty: ptr<f64> = array_new_f64(n)
+    for i in 0 to m {
+        for j in 0 to n {
+            let xj: f64 = (matrix_at(X, i, j) as f64) - x_mean[j]
+            Xty[j] = Xty[j] + xj * ((y[i] as f64) - y_mean)
+            for k in 0 to n {
+                let xk: f64 = (matrix_at(X, i, k) as f64) - x_mean[k]
+                XtX[j * n + k] = XtX[j * n + k] + xj * xk
+            }
+        }
+    }
+    let alpha_d: f64 = alpha as f64
+    for j in 0 to n {
+        XtX[j * n + j] = XtX[j * n + j] + alpha_d
+    }
+    _solve_f64(XtX, Xty, n)
+    let mut bias_d: f64 = y_mean
+    for j in 0 to n {
+        bias_d = bias_d - x_mean[j] * Xty[j]
+    }
+    let weights: ptr<f32> = array_new_f32(n)
+    for j in 0 to n {
+        weights[j] = Xty[j] as f32
+    }
+    array_free_f64(x_mean)
+    array_free_f64(XtX)
+    array_free_f64(Xty)
+    let b32: f32 = bias_d as f32
+    return Ridge { weights: weights, bias: b32, n_features: n, alpha: alpha, fitted: true }
+}
+
+# mode 0: well conditioned.
+# mode 1: near-collinear columns (every column is column 0 plus a whisper).
+# mode 2: column scales spanning 1e-4 to 1e4.
+function optrf_case(rows: i32, cols: i32, mode: i32, alpha: f32, seed0: i32) -> i32 {
+    let X: Matrix = matrix_new(rows, cols)
+    let y: ptr<f32> = array_new_f32(rows)
+    let mut seed: i32 = seed0
+    for i in 0 to rows {
+        let mut acc: f32 = 0.0
+        let mut first: f32 = 0.0
+        for j in 0 to cols {
+            seed = (seed * 1103515245 + 12345) % 2147483647
+            if seed < 0 { seed = -seed }
+            let r: f32 = ((seed % 4000) as f32) / 1000.0 - 2.0
+            let mut v: f32 = r
+            if mode == 1 {
+                if j == 0 { first = r }
+                if j > 0 { v = first + r * 0.0001 }
+            }
+            if mode == 2 {
+                let mut scale: f32 = 1.0
+                let e: i32 = j % 5
+                if e == 1 { scale = 100.0 }
+                if e == 2 { scale = 0.01 }
+                if e == 3 { scale = 10000.0 }
+                if e == 4 { scale = 0.0001 }
+                v = r * scale
+            }
+            matrix_set(X, i, j, v)
+            acc = acc + v * (((j % 5) + 1) as f32)
+        }
+        seed = (seed * 1103515245 + 12345) % 2147483647
+        if seed < 0 { seed = -seed }
+        y[i] = acc * 0.5 + 3.25 + ((seed % 200) as f32) / 1000.0 - 0.1
+    }
+
+    let want: Ridge = optrf_reference_fit(X, y, alpha)
+    let got: Ridge = ridge_fit(X, y, alpha, 1000, 0.01)
+
+    let mut bad: i32 = 0
+    if got.bias != want.bias {
+        bad = bad + 1
+        printf("  bias reference=%.9g got=%.9g\n", want.bias as f64, got.bias as f64)
+    }
+    for j in 0 to cols {
+        if got.weights[j] != want.weights[j] {
+            bad = bad + 1
+            if bad < 6 {
+                printf("  w%d reference=%.9g got=%.9g\n", j, want.weights[j] as f64, got.weights[j] as f64)
+            }
+        }
+    }
+    if bad > 0 {
+        printf("FAIL: ridge_fit coefficients moved (rows=%d cols=%d mode=%d)\n", rows, cols, mode)
+    }
+    ridge_free(want)
+    ridge_free(got)
+    array_free_f32(y)
+    matrix_free(X)
+    return bad
+}
+
+function main() -> i32 {
+    # ---- Coefficient parity against the previous implementation ----
+    let mut bad: i32 = 0
+    bad = bad + optrf_case(442, 10, 0, 1.0, 11)
+    bad = bad + optrf_case(800, 24, 0, 1.0, 99991)
+    bad = bad + optrf_case(50, 8, 0, 0.001, 7)
+    bad = bad + optrf_case(300, 12, 1, 1.0, 4242)
+    bad = bad + optrf_case(300, 12, 1, 0.0001, 4242)
+    bad = bad + optrf_case(500, 20, 2, 1.0, 31337)
+    bad = bad + optrf_case(500, 20, 2, 0.01, 31337)
+    bad = bad + optrf_case(1000, 1, 0, 1.0, 5)
+    if bad > 0 {
+        printf("  total mismatching coefficients: %d\n", bad)
+        return 1
+    }
+
+    # ---- Hand-checkable case: tiny penalty recovers the generator ----
+    let X1: Matrix = matrix_new(200, 2)
+    let y1: ptr<f32> = array_new_f32(200)
+    let mut seed: i32 = 1234567
+    for i in 0 to 200 {
+        seed = (seed * 1103515245 + 12345) % 2147483647
+        if seed < 0 { seed = -seed }
+        let a: f32 = ((seed % 4000) as f32) / 1000.0 - 2.0
+        seed = (seed * 1103515245 + 12345) % 2147483647
+        if seed < 0 { seed = -seed }
+        let b: f32 = ((seed % 4000) as f32) / 1000.0 - 2.0
+        matrix_set(X1, i, 0, a)
+        matrix_set(X1, i, 1, b)
+        y1[i] = 2.0 * a - 1.0 * b + 0.5
+    }
+    let m1: Ridge = ridge_fit(X1, y1, 0.0001, 1000, 0.01)
+    if not optrf_close(m1.weights[0], 2.0, 0.01) || not optrf_close(m1.weights[1], -1.0, 0.01) {
+        println("FAIL: ridge_fit with a tiny penalty no longer recovers the generator")
+        printf("  w0=%.9f w1=%.9f\n", m1.weights[0], m1.weights[1])
+        return 1
+    }
+    if not optrf_close(m1.bias, 0.5, 0.01) {
+        println("FAIL: ridge_fit intercept moved")
+        printf("  b=%.9f\n", m1.bias)
+        return 1
+    }
+
+    # ---- A larger penalty must shrink both coefficients toward zero ----
+    let m2: Ridge = ridge_fit(X1, y1, 1000.0, 1000, 0.01)
+    let mut a0: f32 = m2.weights[0]
+    if a0 < 0.0 { a0 = -a0 }
+    let mut a1: f32 = m2.weights[1]
+    if a1 < 0.0 { a1 = -a1 }
+    if a0 >= 2.0 || a1 >= 1.0 {
+        println("FAIL: a large alpha no longer shrinks the coefficients")
+        printf("  |w0|=%.9f |w1|=%.9f\n", a0, a1)
+        return 1
+    }
+    # The intercept is not penalised. With the coefficients driven to nearly
+    # zero it must sit at the response mean.
+    let mut ysum: f64 = 0.0
+    for i in 0 to 200 {
+        ysum = ysum + (y1[i] as f64)
+    }
+    let ybar: f32 = (ysum / 200.0) as f32
+    if not optrf_close(m2.bias, ybar, 0.05) {
+        println("FAIL: the intercept was shrunk along with the coefficients")
+        printf("  b=%.9f response mean=%.9f\n", m2.bias, ybar)
+        return 1
+    }
+
+    ridge_free(m1)
+    ridge_free(m2)
+    array_free_f32(y1)
+    matrix_free(X1)
+
+    println("OK: ridge_fit coefficients bit-identical after the BLAS Gram rewrite")
+    return 0
+}
