@@ -2,6 +2,70 @@
 
 ## Unreleased
 
+### Estimator hot-path optimization pass
+
+65 pull requests, one per roadmap entry, each carrying a regression test
+that keeps a verbatim copy of the code it replaced and compares against
+it element-wise. All 19 canonical benchmark score fields are unchanged:
+no fitted model moved. Aggregate across the canonical suite went from
+3802 ms to 1560 ms measured locally, and the test suite grew from 41
+files to 91.
+
+Largest wins, fit and predict measured separately:
+
+- `KMeans` predict 24x, fit 8.9x. Squared-euclidean expansion with the
+  cross term as one `cblas_sgemm`, an f32 guard band that falls back to
+  the original kernel for near-ties so exact ties keep their tie-break,
+  and a work threshold below which the scalar path runs.
+- `LogisticRegression` predict 34x, fit 6.4x. The decision scores were
+  computed per element through `matrix_at`, which copies the `Matrix`
+  struct by value; they are now one `cblas_sgemv`. The LBFGS loop was
+  also evaluating the same gradient twice per iteration.
+- `KernelSVC` predict 13x. One-vs-one prediction built 45 separate
+  kernel blocks, expanding 1437 training rows into 12933 kernel rows and
+  calling `exp` 4.66M times where 517k suffice.
+- `BaggingRegressor.predict` 577x. It called a whole-matrix tree predict
+  once per row per tree and kept a single element, doing n^2*m traversals
+  to produce n*m numbers.
+- `AgglomerativeClustering.fit` 35x at n=1600. Lance-Williams updates
+  were already present; the cost was rescanning the full distance upper
+  triangle on every merge. Each active row now caches its closest
+  partner, changing growth per doubling from 8.2x to 4.6x.
+
+### Correctness fixes found during that pass
+
+- SparsePCA read `grad` after freeing it, so its convergence test ran on
+  freed heap. It stopped at iteration 11 of 200 depending on allocator
+  contents, shipping under-converged models. Two sites fixed.
+- Tree nodes were allocated with `malloc` and the builder never writes
+  `value` on internal nodes or `feature`/`threshold` on leaves, so those
+  fields held nondeterministic garbage. Now `calloc`.
+- Unique-label collection wrote past its allocation when the caller
+  understated `n_classes`. The same pattern appeared across twelve
+  library files and is now bounded in all of them.
+
+### Benchmark gating
+
+- `runtime_log2_ratio` was the only symmetric rule in the disparity
+  policy, so a genuine speedup failed the gate exactly as a slowdown
+  would. It is now one-sided, with large improvements reported as a
+  non-blocking notice rather than ignored.
+- The gate was also nondeterministic: identical commits produced
+  opposite results. Root cause was OpenBLAS thread count left to runtime
+  detection, which swings the LogisticRegression ratio by about 3 log2
+  units. Threads are pinned and the environment fingerprint now covers
+  CPU model and thread settings.
+- `freeze-results` was losing a concurrent `git push` race, which is why
+  the baseline went stale rather than any gate failure.
+
+### Documentation
+
+- Added `docs/design-rationale.md` recording the API positions the
+  library already holds against recurring scikit-learn criticism.
+- `AGENTS.md` build instructions now include the required `FLOW_LDFLAGS`,
+  without which the link step fails, plus guidance on measuring and on
+  working alongside concurrent agents.
+
 ### Algorithmic depth improvements
 
 - Replaced KernelRidge gradient descent with Cholesky decomposition.
