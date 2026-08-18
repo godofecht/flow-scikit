@@ -226,6 +226,10 @@ def emit_tree_state(dataset, model, n_features, depth_cap):
     if leaf_samples.sum() > 0:
         mean_leaf_depth = float((depths[leaf] * leaf_samples).sum() / leaf_samples.sum())
     emit_detail("DecisionTree", dataset, "mean_leaf_depth", mean_leaf_depth)
+    emit_detail("DecisionTree", dataset, "preorder_split_features",
+                np.where(leaf, -1.0, tree.feature.astype(np.float64)))
+    emit_detail("DecisionTree", dataset, "preorder_split_thresholds",
+                np.where(leaf, 0.0, tree.threshold.astype(np.float64)))
 
 
 def emit_forest_state(dataset, model, X_test, n_train):

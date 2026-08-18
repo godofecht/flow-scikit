@@ -61,6 +61,18 @@ def relative_diff(a: float, b: float) -> float:
     return abs(a - b) / max(abs(a), abs(b), 1e-12)
 
 
+def first_divergent_index(pairs: list[tuple[float, float]]) -> int:
+    """Index of the first element the two runs disagree on, or -1 if none.
+
+    The tolerance absorbs float32 print rounding so a shared structure emitted
+    at slightly different precision does not read as a divergence.
+    """
+    for index, (a, b) in enumerate(pairs):
+        if abs(a - b) > 1e-9 + 1e-6 * max(abs(a), abs(b)):
+            return index
+    return -1
+
+
 def enrich_state_from_raw_details(
     key: tuple[str, str, str],
     state: dict,
@@ -75,7 +87,9 @@ def enrich_state_from_raw_details(
     pairing every field both runners emitted for the row.
 
     Scalars produce `<field>_abs_diff` and `<field>_relative_diff`. Equal-length
-    vectors produce `<field>_max_abs_diff` and `<field>_max_relative_diff`.
+    vectors produce `<field>_max_abs_diff`, `<field>_max_relative_diff` and
+    `<field>_first_divergent_index`, which is -1 when the two vectors match
+    elementwise and otherwise points at the first position they disagree on.
     Length disagreement is itself evidence and is recorded as
     `<field>_length_abs_diff`. Anything compare_v2 already computed wins, so the
     existing KMeans and PCA key names are unchanged.
@@ -96,6 +110,7 @@ def enrich_state_from_raw_details(
             pairs = list(zip(sk_value, fl_value))
             state.setdefault(f"{field}_max_abs_diff", max((abs(a - b) for a, b in pairs), default=0.0))
             state.setdefault(f"{field}_max_relative_diff", max((relative_diff(a, b) for a, b in pairs), default=0.0))
+            state.setdefault(f"{field}_first_divergent_index", first_divergent_index(pairs))
         else:
             state.setdefault(f"{field}_abs_diff", abs(sk_value - fl_value))
             state.setdefault(f"{field}_relative_diff", relative_diff(sk_value, fl_value))

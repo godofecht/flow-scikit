@@ -476,6 +476,27 @@ function msd207_tree_state(dataset: string, t: DecisionTreeClassifier, n_feature
     msd207_detail_list_i32("DecisionTree", dataset, "split_feature_histogram", hist, n_features)
     msd207_detail_f32("DecisionTree", dataset, "mean_leaf_depth", mean_leaf_depth)
 
+    # Full preorder split list. Node ids are assigned parent-before-children,
+    # left subtree first, on both sides, so index i names the same position in
+    # both trees and the first index where these disagree is the first
+    # structural divergence. Leaves emit -1 / 0.0 rather than the unwritten
+    # feature/threshold fields described in issue #359.
+    let pre_features: ptr<f32> = array_new_f32(t.n_nodes)
+    let pre_thresholds: ptr<f32> = array_new_f32(t.n_nodes)
+    for i in 0 to t.n_nodes {
+        if t.nodes[i].is_leaf {
+            pre_features[i] = -1.0
+            pre_thresholds[i] = 0.0
+        } else {
+            pre_features[i] = (t.nodes[i].feature) as f32
+            pre_thresholds[i] = t.nodes[i].threshold
+        }
+    }
+    msd207_detail_list_f32("DecisionTree", dataset, "preorder_split_features", pre_features, t.n_nodes)
+    msd207_detail_list_f32("DecisionTree", dataset, "preorder_split_thresholds", pre_thresholds, t.n_nodes)
+    array_free_f32(pre_features)
+    array_free_f32(pre_thresholds)
+
     free(depths as ptr<void>)
     free(hist as ptr<void>)
     free(per_depth as ptr<void>)
