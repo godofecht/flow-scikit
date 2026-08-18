@@ -1,0 +1,214 @@
+# Regression test for the optimized LabelEncoder.transform (roadmap rank 92,
+# issue #301).
+#
+# label_encoder_transform now locates each label with a search over the sorted
+# class vector instead of scanning every class for every sample. The encoded
+# output must match the old full-scan behaviour exactly, including the case of
+# a label that was never seen during fit, which the old code left at the 0.0
+# the calloc-backed result buffer already held.
+
+import "lib/scikit/scikit.flow"
+
+# Literal reimplementation of the pre-optimization scan, used as the oracle.
+function tolet_reference_transform(classes: ptr<f32>, n_classes: i32, y: ptr<f32>, n: i32, out: ptr<f32>) -> void {
+    for i in 0 to n {
+        out[i] = 0.0
+    }
+    for i in 0 to n {
+        for k in 0 to n_classes {
+            if classes[k] == y[i] {
+                out[i] = (k as f32)
+            }
+        }
+    }
+    return
+}
+
+function tolet_known_values() -> i32 {
+    let mut failures: i32 = 0
+
+    let y: ptr<f32> = array_new_f32(6)
+    y[0] = 2.0
+    y[1] = 0.0
+    y[2] = 1.0
+    y[3] = 2.0
+    y[4] = 0.0
+    y[5] = 1.0
+    let enc: LabelEncoder = label_encoder_fit(y, 6)
+
+    let want: ptr<f32> = array_new_f32(6)
+    want[0] = 2.0
+    want[1] = 0.0
+    want[2] = 1.0
+    want[3] = 2.0
+    want[4] = 0.0
+    want[5] = 1.0
+
+    let got: ptr<f32> = label_encoder_transform(enc, y, 6)
+    for i in 0 to 6 {
+        if got[i] != want[i] {
+            print("  FAIL basic encode at ")
+            print(i)
+            print(": got ")
+            print(got[i])
+            print(" wanted ")
+            println(want[i])
+            failures = failures + 1
+        }
+    }
+    if failures == 0 {
+        println("  OK basic encode")
+    }
+    array_free_f32(got)
+
+    # Labels the encoder never saw. The old code left these at 0.0.
+    let unseen: ptr<f32> = array_new_f32(4)
+    unseen[0] = -5.0
+    unseen[1] = 0.0
+    unseen[2] = 99.0
+    unseen[3] = 1.5
+    let got2: ptr<f32> = label_encoder_transform(enc, unseen, 4)
+    let mut bad: i32 = 0
+    if got2[0] != 0.0 {
+        bad = 1
+    }
+    if got2[1] != 0.0 {
+        bad = 1
+    }
+    if got2[2] != 0.0 {
+        bad = 1
+    }
+    if got2[3] != 0.0 {
+        bad = 1
+    }
+    if bad != 0 {
+        println("  FAIL unseen labels did not encode as 0.0")
+        failures = failures + 1
+    } else {
+        println("  OK unseen labels encode as 0.0")
+    }
+    array_free_f32(got2)
+    array_free_f32(unseen)
+    array_free_f32(want)
+    label_encoder_free(enc)
+    array_free_f32(y)
+
+    # Single class: everything maps to 0.
+    let s: ptr<f32> = array_new_f32(3)
+    s[0] = 4.0
+    s[1] = 4.0
+    s[2] = 4.0
+    let enc1: LabelEncoder = label_encoder_fit(s, 3)
+    let g1: ptr<f32> = label_encoder_transform(enc1, s, 3)
+    if g1[0] != 0.0 || g1[1] != 0.0 || g1[2] != 0.0 {
+        println("  FAIL single class encode")
+        failures = failures + 1
+    } else {
+        println("  OK single class encode")
+    }
+    array_free_f32(g1)
+    label_encoder_free(enc1)
+    array_free_f32(s)
+
+    # Negative and fractional labels, first and last class both exercised.
+    let m: ptr<f32> = array_new_f32(5)
+    m[0] = 3.25
+    m[1] = -7.5
+    m[2] = 0.0
+    m[3] = -7.5
+    m[4] = 3.25
+    let encm: LabelEncoder = label_encoder_fit(m, 5)
+    let gm: ptr<f32> = label_encoder_transform(encm, m, 5)
+    if gm[0] != 2.0 || gm[1] != 0.0 || gm[2] != 1.0 || gm[3] != 0.0 || gm[4] != 2.0 {
+        print("  FAIL negative/fractional encode: ")
+        print(gm[0])
+        print(" ")
+        print(gm[1])
+        print(" ")
+        println(gm[2])
+        failures = failures + 1
+    } else {
+        println("  OK negative and fractional labels")
+    }
+    array_free_f32(gm)
+    label_encoder_free(encm)
+    array_free_f32(m)
+
+    return failures
+}
+
+function tolet_workload(n: i32, n_classes: i32, seed: i32) -> i32 {
+    let y: ptr<f32> = array_new_f32(n)
+    let mut s: i32 = seed
+    for i in 0 to n {
+        s = (s * 1103515245 + 12345) % 2147483647
+        if s < 0 {
+            s = 0 - s
+        }
+        y[i] = ((s % n_classes) as f32) * 0.5 - 3.0
+    }
+
+    let enc: LabelEncoder = label_encoder_fit(y, n)
+
+    # Query set contains labels the encoder saw plus labels it did not.
+    let q: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        if i % 7 == 0 {
+            q[i] = 1000.0 + (i as f32)
+        } else {
+            q[i] = y[i]
+        }
+    }
+
+    let want: ptr<f32> = array_new_f32(n)
+    tolet_reference_transform(enc.classes, enc.n_classes, q, n, want)
+    let got: ptr<f32> = label_encoder_transform(enc, q, n)
+
+    let mut failures: i32 = 0
+    for i in 0 to n {
+        if got[i] != want[i] {
+            if failures == 0 {
+                print("  FAIL workload at ")
+                print(i)
+                print(": got ")
+                print(got[i])
+                print(" wanted ")
+                println(want[i])
+            }
+            failures = 1
+        }
+    }
+    if failures == 0 {
+        print("  OK workload n=")
+        print(n)
+        print(" classes=")
+        print(enc.n_classes)
+        println("")
+    }
+
+    array_free_f32(got)
+    array_free_f32(want)
+    array_free_f32(q)
+    label_encoder_free(enc)
+    array_free_f32(y)
+    return failures
+}
+
+function main() -> i32 {
+    println("LabelEncoder.transform optimization regression test")
+    println("==================================================")
+    let mut failures: i32 = 0
+    failures = failures + tolet_known_values()
+    failures = failures + tolet_workload(5000, 12, 5)
+    failures = failures + tolet_workload(5000, 13, 5)
+    failures = failures + tolet_workload(5000, 251, 17)
+    failures = failures + tolet_workload(1500, 1500, 23)
+
+    if failures != 0 {
+        print("FAILURES: ")
+        println(failures)
+        return 1
+    }
+    println("All LabelEncoder.transform optimization tests passed!")
+    return 0
+}
