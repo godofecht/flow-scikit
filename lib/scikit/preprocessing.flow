@@ -1807,14 +1807,43 @@ export function label_binarizer_fit(y: ptr<f32>, n: i32, neg_label: f32, pos_lab
 }
 
 export function label_binarizer_transform(model: LabelBinarizer, y: ptr<f32>, n: i32) -> Matrix {
-    let result: Matrix = matrix_new(n, model.n_classes)
-    for i in 0 to n {
-        for c in 0 to model.n_classes {
-            if y[i] == model.classes[c] {
-                matrix_set(result, i, c, model.pos_label)
-            } else {
-                matrix_set(result, i, c, model.neg_label)
+    let n_classes: i32 = model.n_classes
+    let classes: ptr<f32> = model.classes
+    let neg: f32 = model.neg_label
+    let pos: f32 = model.pos_label
+    let result: Matrix = matrix_new(n, n_classes)
+    let data: ptr<f32> = result.data
+
+    # matrix_new hands back a calloc-backed buffer, so when neg_label is
+    # positive zero every negative cell already holds the right value and the
+    # fill loop can be dropped. The reciprocal test separates +0.0 from -0.0,
+    # which compare equal but print differently.
+    let mut skip_neg: bool = false
+    if neg == 0.0 {
+        if 1.0 / neg > 0.0 {
+            skip_neg = true
+        }
+    }
+
+    let mut base: i32 = 0
+    if skip_neg {
+        for i in 0 to n {
+            let k: i32 = _preprocessing_label_class_index(classes, n_classes, y[i])
+            if k >= 0 {
+                data[base + k] = pos
             }
+            base = base + n_classes
+        }
+    } else {
+        for i in 0 to n {
+            for c in 0 to n_classes {
+                data[base + c] = neg
+            }
+            let k: i32 = _preprocessing_label_class_index(classes, n_classes, y[i])
+            if k >= 0 {
+                data[base + k] = pos
+            }
+            base = base + n_classes
         }
     }
     return result
