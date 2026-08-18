@@ -1514,56 +1514,79 @@ export function dictionary_learning_fit(X: Matrix, n_components: i32, alpha: f32
         }
     }
 
+    # Two work buffers reused for every (iteration, sample, atom) instead of a
+    # fresh allocate/free pair per sample and per updated atom. The old code
+    # allocated max_iter * n * (1 + n_components) times.
+    let codes: ptr<f32> = array_new_f32(n_components)
+    let prev_atom: ptr<f32> = array_new_f32(p)
+    let xdata: ptr<f32> = X.data
+    let xstride: i32 = X.cols
+
     let mut n_iter: i32 = 0
     for iter in 0 to max_iter {
         n_iter = iter + 1
         let mut total_change: f32 = 0.0
 
         for i in 0 to n {
-            let codes: ptr<f32> = array_new_f32(n_components)
+            let xbase: i32 = i * xstride
 
             for c in 0 to n_components {
+                let atom: ptr<f32> = dictionary[c]
                 let mut dot: f32 = 0.0
                 for j in 0 to p {
-                    dot = dot + matrix_at(X, i, j) * dictionary[c][j]
+                    dot = dot + xdata[xbase + j] * atom[j]
                 }
-                if (fabs((dot) as f64) as f32) > alpha {
-                    if dot > 0 {
-                        codes[c] = dot - alpha
-                    } else {
-                        codes[c] = dot + alpha
-                    }
+                # fabs(dot) > alpha, without a libm call per (sample, atom).
+                if dot > alpha {
+                    codes[c] = dot - alpha
+                } elif dot < -alpha {
+                    codes[c] = dot + alpha
                 } else {
                     codes[c] = 0.0
                 }
             }
 
             for c in 0 to n_components {
-                if (fabs((codes[c]) as f64) as f32) < 0.0000000001 { continue }
-                let old: ptr<f32> = array_copy_f32(dictionary[c], p)
-                for j in 0 to p {
-                    let residual: f32 = matrix_at(X, i, j) - codes[c] * dictionary[c][j]
-                    dictionary[c][j] = dictionary[c][j] + 0.01 * codes[c] * residual
-                }
+                let code_c: f32 = codes[c]
+                if (fabs((code_c) as f64) as f32) < 0.0000000001 { continue }
+                let atom: ptr<f32> = dictionary[c]
+
+                # Fused: save the previous value, apply the gradient step and
+                # accumulate the squared norm in one pass. Every arithmetic
+                # expression and every accumulation order is unchanged.
                 let mut norm: f32 = 0.0
-                for j in 0 to p { norm = norm + dictionary[c][j] * dictionary[c][j] }
-                norm = sqrt((norm as f64)) as f32
-                if norm > 0.0000000001 {
-                    for j in 0 to p { dictionary[c][j] = dictionary[c][j] / norm }
-                }
-                let mut change: f32 = 0.0
                 for j in 0 to p {
-                    change = change + fabs((dictionary[c][j] - old[j]) as f64) as f32
+                    let prev: f32 = atom[j]
+                    prev_atom[j] = prev
+                    let residual: f32 = xdata[xbase + j] - code_c * prev
+                    let updated: f32 = prev + 0.01 * code_c * residual
+                    atom[j] = updated
+                    norm = norm + updated * updated
+                }
+                norm = sqrt((norm as f64)) as f32
+
+                # Fused: normalize and accumulate the L1 change in one pass.
+                let mut change: f32 = 0.0
+                if norm > 0.0000000001 {
+                    for j in 0 to p {
+                        let scaled: f32 = atom[j] / norm
+                        atom[j] = scaled
+                        change = change + fabs((scaled - prev_atom[j]) as f64) as f32
+                    }
+                } else {
+                    for j in 0 to p {
+                        change = change + fabs((atom[j] - prev_atom[j]) as f64) as f32
+                    }
                 }
                 total_change = total_change + change
-                array_free_f32(old)
             }
-
-            array_free_f32(codes)
         }
 
         if total_change / (n as f32) < tol { break }
     }
+
+    array_free_f32(prev_atom)
+    array_free_f32(codes)
 
     return DictionaryLearning {
         dictionary: dictionary,
