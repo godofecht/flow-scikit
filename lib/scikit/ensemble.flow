@@ -29,20 +29,12 @@ export struct RandomForestClassifier {
 }
 
 export function random_forest_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_trees: i32, max_depth: i32, seed: i32) -> RandomForestClassifier {
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to X.rows {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] {
-                found = true
-            }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # n_classes, which wrote past the allocation whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, X.rows, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     let trees: ptr<DecisionTreeClassifier> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeClassifier>
     let mut prng: PRNG = prng_seed(seed)
@@ -317,20 +309,12 @@ export struct BaggingClassifier {
 }
 
 export function bagging_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_estimators: i32, max_depth: i32, seed: i32) -> BaggingClassifier {
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to X.rows {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] {
-                found = true
-            }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # n_classes, which wrote past the allocation whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, X.rows, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     let trees: ptr<DecisionTreeClassifier> = malloc((n_estimators as i64) * 128) as ptr<DecisionTreeClassifier>
     srand(seed)
@@ -509,20 +493,12 @@ function _gb_sigmoid(x: f32) -> f32 {
 }
 
 export function gradient_boosting_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_trees: i32, learning_rate: f32, max_depth: i32, seed: i32) -> GradientBoostingClassifier {
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to X.rows {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] {
-                found = true
-            }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # n_classes, which wrote past the allocation whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, X.rows, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     let y_binary: ptr<f32> = array_new_f32(X.rows)
     for i in 0 to X.rows {
@@ -780,20 +756,12 @@ export struct AdaBoostClassifier {
 }
 
 export function adaboost_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_trees: i32, max_depth: i32, seed: i32) -> AdaBoostClassifier {
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to X.rows {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] {
-                found = true
-            }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # n_classes, which wrote past the allocation whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, X.rows, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     let trees: ptr<DecisionTreeClassifier> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeClassifier>
     let alphas: ptr<f32> = array_new_f32(n_trees)
@@ -1202,18 +1170,12 @@ export function extra_trees_classifier_fit(
     X: Matrix, y: ptr<f32>, n_classes: i32,
     n_trees: i32, max_depth: i32, seed: i32
 ) -> ExtraTreesClassifier {
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to X.rows {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] { found = true; break }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # n_classes, which wrote past the allocation whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, X.rows, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     let trees: ptr<DecisionTreeClassifier> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeClassifier>
     let n_features: i32 = X.cols
