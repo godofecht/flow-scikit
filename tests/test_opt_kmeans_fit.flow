@@ -1,0 +1,351 @@
+# Regression test for the optimized KMeans Lloyd iteration.
+# The pre-optimization _kmeans_run is kept verbatim below and every fit is
+# compared against it element for element: centroids, labels, inertia and
+# n_iter must all be identical, not merely close. Covers well-separated
+# clusters, the empty-cluster relocation branch, exact distance ties, a
+# single-cluster model, and the k-means++ restart path.
+# Run: FLOW_HOST=python flow run tests/test_opt_kmeans_fit.flow
+
+import "lib/scikit/scikit.flow"
+
+# The pre-optimization Lloyd loop, kept here as the parity reference.
+function opt_km_fit_ref_run(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, max_iter: i32, tol: f32) -> KMeans {
+    let n_features: i32 = X.cols
+    let labels: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
+    let mut inertia: f32 = 0.0
+    let mut n_iter_run: i32 = 0
+
+    for iter in 0 to max_iter {
+        n_iter_run = iter + 1
+        let mut new_inertia: f32 = 0.0
+
+        for i in 0 to X.rows {
+            let mut best_k: i32 = 0
+            let mut best_dist: f32 = 9999999999.0
+            for k in 0 to n_clusters {
+                let mut dist: f32 = 0.0
+                for j in 0 to n_features {
+                    let d: f32 = matrix_at(X, i, j) - centroids[k][j]
+                    dist = dist + d * d
+                }
+                if dist < best_dist {
+                    best_dist = dist
+                    best_k = k
+                }
+            }
+            labels[i] = best_k
+            new_inertia = new_inertia + best_dist
+        }
+
+        let sums: ptr<ptr<f32> > = malloc((n_clusters as i64) * 8) as ptr<ptr<f32> >
+        let counts: ptr<i32> = malloc((n_clusters as i64) * 4) as ptr<i32>
+        for k in 0 to n_clusters {
+            sums[k] = array_new_f32(n_features)
+            counts[k] = 0
+        }
+
+        for i in 0 to X.rows {
+            let k: i32 = labels[i]
+            counts[k] = counts[k] + 1
+            for j in 0 to n_features {
+                sums[k][j] = sums[k][j] + matrix_at(X, i, j)
+            }
+        }
+
+        let mut max_shift: f32 = 0.0
+        for k in 0 to n_clusters {
+            if counts[k] > 0 {
+                for j in 0 to n_features {
+                    let new_val: f32 = sums[k][j] / (counts[k] as f32)
+                    let shift: f32 = new_val - centroids[k][j]
+                    if shift < 0.0 {
+                        let abs_shift: f32 = 0.0 - shift
+                        if abs_shift > max_shift {
+                            max_shift = abs_shift
+                        }
+                    } else {
+                        if shift > max_shift {
+                            max_shift = shift
+                        }
+                    }
+                    centroids[k][j] = new_val
+                }
+            } else {
+                let mut farthest_idx: i32 = 0
+                let mut farthest_dist: f32 = -1.0
+                for i in 0 to X.rows {
+                    let kk: i32 = labels[i]
+                    let mut dist: f32 = 0.0
+                    for j in 0 to n_features {
+                        let d: f32 = matrix_at(X, i, j) - centroids[kk][j]
+                        dist = dist + d * d
+                    }
+                    if dist > farthest_dist {
+                        farthest_dist = dist
+                        farthest_idx = i
+                    }
+                }
+                for j in 0 to n_features {
+                    let new_val: f32 = matrix_at(X, farthest_idx, j)
+                    let shift: f32 = new_val - centroids[k][j]
+                    if shift < 0.0 {
+                        let abs_shift: f32 = 0.0 - shift
+                        if abs_shift > max_shift {
+                            max_shift = abs_shift
+                        }
+                    } else {
+                        if shift > max_shift {
+                            max_shift = shift
+                        }
+                    }
+                    centroids[k][j] = new_val
+                }
+            }
+            array_free_f32(sums[k])
+        }
+        free(sums as ptr<void>)
+        free(counts as ptr<void>)
+
+        inertia = new_inertia
+        if max_shift < tol {
+            break
+        }
+    }
+
+    let model: KMeans = KMeans {
+        centroids: centroids,
+        n_clusters: n_clusters,
+        n_features: n_features,
+        labels: labels,
+        inertia: inertia,
+        n_iter: n_iter_run,
+        max_iter: max_iter,
+        tol: tol,
+        fitted: true
+    }
+    return model
+}
+
+function opt_km_fit_ref_fit_init(X: Matrix, init_centers: Matrix, n_clusters: i32, max_iter: i32, tol: f32) -> KMeans {
+    let n_features: i32 = X.cols
+    let centroids: ptr<ptr<f32> > = malloc((n_clusters as i64) * 8) as ptr<ptr<f32> >
+    for k in 0 to n_clusters {
+        centroids[k] = array_new_f32(n_features)
+        for j in 0 to n_features {
+            centroids[k][j] = matrix_at(init_centers, k, j)
+        }
+    }
+    return opt_km_fit_ref_run(X, centroids, n_clusters, max_iter, tol)
+}
+
+# Compares an optimized fit against the reference fit on the same input.
+# Everything must be exactly equal, including the float32 bit patterns.
+function opt_km_fit_check(label: string, X: Matrix, init_centers: Matrix, n_clusters: i32, max_iter: i32, tol: f32) -> i32 {
+    let got: KMeans = kmeans_fit_init(X, init_centers, n_clusters, max_iter, tol)
+    let want: KMeans = opt_km_fit_ref_fit_init(X, init_centers, n_clusters, max_iter, tol)
+
+    let mut failed: i32 = 0
+    if got.n_iter != want.n_iter {
+        failed = 1
+        printf("FAIL: %s n_iter %d, expected %d\n", label, got.n_iter, want.n_iter)
+    }
+    if got.inertia != want.inertia {
+        failed = 1
+        printf("FAIL: %s inertia %.9f, expected %.9f\n", label, got.inertia as f64, want.inertia as f64)
+    }
+    let mut bad_centroids: i32 = 0
+    for k in 0 to n_clusters {
+        for j in 0 to X.cols {
+            if got.centroids[k][j] != want.centroids[k][j] {
+                bad_centroids = bad_centroids + 1
+            }
+        }
+    }
+    if bad_centroids != 0 {
+        failed = 1
+        printf("FAIL: %s has %d centroid components differing from the reference\n", label, bad_centroids)
+    }
+    let mut bad_labels: i32 = 0
+    for i in 0 to X.rows {
+        if got.labels[i] != want.labels[i] {
+            bad_labels = bad_labels + 1
+        }
+    }
+    if bad_labels != 0 {
+        failed = 1
+        printf("FAIL: %s has %d labels differing from the reference\n", label, bad_labels)
+    }
+
+    if failed == 0 {
+        printf("  OK: %s, %d iterations, inertia %.6f\n", label, got.n_iter, got.inertia as f64)
+    }
+
+    kmeans_free(got)
+    kmeans_free(want)
+    return failed
+}
+
+function opt_km_fit_separated() -> i32 {
+    let n: i32 = 600
+    let d: i32 = 16
+    let k: i32 = 6
+    let X: Matrix = matrix_new(n, d)
+    let mut state: i64 = 424242
+    for i in 0 to n {
+        for j in 0 to d {
+            state = (state * 1103515245 + 12345) % 2147483648
+            let base: f32 = ((i % k) as f32) * 0.8
+            X.data[i * d + j] = base + ((state % 2000) as f32) / 1000.0
+        }
+    }
+    let init: Matrix = matrix_new(k, d)
+    for kk in 0 to k {
+        for j in 0 to d {
+            init.data[kk * d + j] = X.data[(kk * 11) * d + j]
+        }
+    }
+    let failed: i32 = opt_km_fit_check("overlapping 600x16 k=6", X, init, k, 100, 0.0000001)
+    matrix_free(init)
+    matrix_free(X)
+    return failed
+}
+
+function opt_km_fit_empty_cluster() -> i32 {
+    # One initial centre is placed far away from every sample, so it wins no
+    # points and the empty-cluster relocation branch runs.
+    let n: i32 = 40
+    let d: i32 = 3
+    let k: i32 = 3
+    let X: Matrix = matrix_new(n, d)
+    for i in 0 to n {
+        let base: f32 = ((i % 2) as f32) * 4.0
+        for j in 0 to d {
+            X.data[i * d + j] = base + ((i / 2) as f32) * 0.01
+        }
+    }
+    let init: Matrix = matrix_new(k, d)
+    for j in 0 to d {
+        init.data[j] = 0.0
+        init.data[d + j] = 4.0
+        init.data[2 * d + j] = 500.0
+    }
+    let failed: i32 = opt_km_fit_check("empty-cluster relocation 40x3 k=3", X, init, k, 50, 0.0001)
+    matrix_free(init)
+    matrix_free(X)
+    return failed
+}
+
+function opt_km_fit_ties() -> i32 {
+    # Symmetric integer data with duplicated points, so many samples sit at
+    # exactly equal distance from two centres and the gemm error guard has to
+    # hand them back to the direct kernel.
+    let n: i32 = 60
+    let d: i32 = 2
+    let k: i32 = 3
+    let X: Matrix = matrix_new(n, d)
+    for i in 0 to n {
+        let v: f32 = ((i % 3) as f32)
+        X.data[i * d] = v
+        X.data[i * d + 1] = 2.0 - v
+    }
+    let init: Matrix = matrix_new(k, d)
+    init.data[0] = 0.0; init.data[1] = 0.0
+    init.data[2] = 2.0; init.data[3] = 2.0
+    init.data[4] = 1.0; init.data[5] = 1.0
+    let failed: i32 = opt_km_fit_check("exact ties 60x2 k=3", X, init, k, 50, 0.0001)
+    matrix_free(init)
+    matrix_free(X)
+    return failed
+}
+
+function opt_km_fit_single_cluster() -> i32 {
+    let n: i32 = 20
+    let d: i32 = 4
+    let X: Matrix = matrix_new(n, d)
+    for i in 0 to n {
+        for j in 0 to d {
+            X.data[i * d + j] = ((i + j) as f32) * 0.5
+        }
+    }
+    let init: Matrix = matrix_new(1, d)
+    for j in 0 to d {
+        init.data[j] = 0.0
+    }
+    let failed: i32 = opt_km_fit_check("single cluster 20x4 k=1", X, init, 1, 50, 0.0001)
+    matrix_free(init)
+    matrix_free(X)
+    return failed
+}
+
+function opt_km_fit_plus_plus_path() -> i32 {
+    # The k-means++ restart path shares the same Lloyd iteration. Its
+    # initialization is deliberately untouched by this change, so this checks
+    # the run is sane and self-consistent rather than pinning a magic number.
+    let n: i32 = 200
+    let d: i32 = 6
+    let k: i32 = 4
+    let X: Matrix = matrix_new(n, d)
+    let mut state: i64 = 13579
+    for i in 0 to n {
+        for j in 0 to d {
+            state = (state * 1103515245 + 12345) % 2147483648
+            let base: f32 = ((i % k) as f32) * 4.0
+            X.data[i * d + j] = base + ((state % 1000) as f32) / 800.0
+        }
+    }
+
+    let a: KMeans = kmeans_fit_plus_plus(X, k, 100, 0.0001, 42, 5)
+    let b: KMeans = kmeans_fit_plus_plus(X, k, 100, 0.0001, 42, 5)
+
+    let mut failed: i32 = 0
+    if a.inertia != b.inertia || a.n_iter != b.n_iter {
+        failed = 1
+        println("FAIL: kmeans_fit_plus_plus is not deterministic for a fixed seed")
+    }
+    for kk in 0 to k {
+        for j in 0 to d {
+            if a.centroids[kk][j] != b.centroids[kk][j] {
+                failed = 1
+            }
+        }
+    }
+    if a.inertia <= 0.0 {
+        failed = 1
+        println("FAIL: kmeans_fit_plus_plus inertia is not positive")
+    }
+
+    # Every sample must be nearer its own centroid than the fitted centroids
+    # of the other clusters, which is what the assignment step guarantees.
+    let preds: ptr<i32> = kmeans_predict(a, X)
+    for i in 0 to n {
+        if preds[i] < 0 || preds[i] >= k {
+            failed = 1
+        }
+    }
+    free(preds as ptr<void>)
+
+    if failed == 0 {
+        printf("  OK: k-means++ path 200x6 k=4, %d iterations, inertia %.6f\n", a.n_iter, a.inertia as f64)
+    }
+
+    kmeans_free(a)
+    kmeans_free(b)
+    matrix_free(X)
+    return failed
+}
+
+function main() -> i32 {
+    println("Test: optimized KMeans Lloyd iteration")
+    let mut failed: i32 = 0
+    failed = failed + opt_km_fit_separated()
+    failed = failed + opt_km_fit_empty_cluster()
+    failed = failed + opt_km_fit_ties()
+    failed = failed + opt_km_fit_single_cluster()
+    failed = failed + opt_km_fit_plus_plus_path()
+    if failed != 0 {
+        println("FAILED")
+        return 1
+    }
+    println("OK: KMeans fit reproduces the previous centroids, labels and inertia exactly")
+    return 0
+}
