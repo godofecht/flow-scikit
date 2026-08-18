@@ -942,6 +942,37 @@ export struct Birch {
     fitted: bool
 }
 
+# Single-pass CF-leaf assignment.
+#
+# Every sample is compared against every subcluster built so far, and the
+# subcluster list grows as the pass proceeds, so this is the quadratic part of
+# Birch. Three things were being paid for per element and are not any more.
+#
+# First, the scan searched for the global nearest subcluster and only then
+# asked whether it was within the threshold. A subcluster further away than
+# the threshold cannot be used whether or not it is the nearest one: if it
+# wins the argmin the sample opens a new subcluster, and if it loses it is
+# irrelevant. So the search starts bounded at the threshold instead of at
+# infinity. That bound is tight from the first sample, where the old code
+# started at 1e10 and only tightened after a full row.
+#
+# The old code compared best_dist against 1e10 first and against the squared
+# threshold second, which quietly rejects a subcluster at a squared distance
+# of 1e10 or more even when the threshold is larger than that. The bound keeps
+# that behaviour by clamping at the same 1e10.
+#
+# Second, squared distances accumulate non-negative terms, so a running sum
+# that has reached the bound can never come back below it. The scan checks
+# once every 8 features and abandons the rest of the row when it has.
+#
+# Third, matrix_at recomputed row * cols per element and centroids[c] was
+# reloaded per element, in both the search and the centroid update. Both read
+# the backing arrays directly now.
+#
+# The running-mean update is left exactly as it was, including the division
+# per element. Accumulating a linear sum and dividing once at the end would be
+# the textbook CF-triple form and would be cheaper, but it rounds differently
+# in f32 and would move fitted centroids.
 export function birch_fit(X: Matrix, threshold: f32, branching_factor: i32) -> Birch {
     let n: i32 = X.rows
     let n_features: i32 = X.cols
@@ -953,34 +984,62 @@ export function birch_fit(X: Matrix, threshold: f32, branching_factor: i32) -> B
 
     let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
 
+    let mut bound: f32 = threshold * threshold
+    if bound > 10000000000.0 {
+        bound = 10000000000.0
+    }
+
+    let x_data: ptr<f32> = X.data
+    let x_stride: i32 = X.cols
+
     for i in 0 to n {
+        let xbase: i32 = i * x_stride
         let mut best_c: i32 = -1
-        let mut best_dist: f32 = 10000000000.0
+        let mut best_dist: f32 = bound
 
         for c in 0 to n_clusters {
+            let crow: ptr<f32> = centroids[c]
             let mut dist_sq: f32 = 0.0
-            for k in 0 to n_features {
-                let d: f32 = matrix_at(X, i, k) - centroids[c][k]
-                dist_sq = dist_sq + d * d
+            let mut k: i32 = 0
+            let mut bailed: bool = false
+            while k < n_features {
+                let mut lim: i32 = k + 8
+                if lim > n_features {
+                    lim = n_features
+                }
+                while k < lim {
+                    let d: f32 = x_data[xbase + k] - crow[k]
+                    dist_sq = dist_sq + d * d
+                    k = k + 1
+                }
+                if dist_sq >= best_dist {
+                    bailed = true
+                    break
+                }
             }
-            if dist_sq < best_dist {
-                best_dist = dist_sq
-                best_c = c
+            if not bailed {
+                if dist_sq < best_dist {
+                    best_dist = dist_sq
+                    best_c = c
+                }
             }
         }
 
-        if best_c >= 0 && best_dist < threshold * threshold {
+        if best_c >= 0 {
             let count: f32 = (cluster_counts[best_c] as f32)
+            let denom: f32 = count + 1.0
+            let crow: ptr<f32> = centroids[best_c]
             for k in 0 to n_features {
-                let new_val: f32 = (centroids[best_c][k] * count + matrix_at(X, i, k)) / (count + 1.0)
-                centroids[best_c][k] = new_val
+                let new_val: f32 = (crow[k] * count + x_data[xbase + k]) / denom
+                crow[k] = new_val
             }
             cluster_counts[best_c] = cluster_counts[best_c] + 1
             labels[i] = best_c
         } else {
-            centroids[n_clusters] = array_new_f32(n_features)
+            let newrow: ptr<f32> = array_new_f32(n_features)
+            centroids[n_clusters] = newrow
             for k in 0 to n_features {
-                centroids[n_clusters][k] = matrix_at(X, i, k)
+                newrow[k] = x_data[xbase + k]
             }
             cluster_counts[n_clusters] = 1
             labels[i] = n_clusters
