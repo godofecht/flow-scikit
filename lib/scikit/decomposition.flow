@@ -2,6 +2,7 @@
 # Implements PCA via power iteration for eigendecomposition of covariance matrix.
 
 import "lib/scikit/matrix.flow"
+import "lib/scikit/blas.flow"
 
 extern {
     function tanh(x: f64) -> f64
@@ -136,16 +137,43 @@ export function pca_fit(X: Matrix, n_components: i32) -> PCA {
 }
 
 export function pca_transform(model: PCA, X: Matrix) -> Matrix {
-    let result: Matrix = matrix_new(X.rows, model.n_components)
-    for i in 0 to X.rows {
-        for c in 0 to model.n_components {
-            let mut sum: f32 = 0.0
-            for j in 0 to model.n_features {
-                sum = sum + (matrix_at(X, i, j) - model.mean[j]) * model.components[c][j]
-            }
-            matrix_set(result, i, c, sum)
+    let n_samples: i32 = X.rows
+    let d: i32 = model.n_features
+    let k: i32 = model.n_components
+    let result: Matrix = matrix_new(n_samples, k)
+    if n_samples <= 0 || d <= 0 || k <= 0 {
+        return result
+    }
+
+    # Subtract the mean once per element instead of once per (element, component).
+    let centered: Matrix = matrix_new(n_samples, d)
+    let src: ptr<f32> = X.data
+    let dst: ptr<f32> = centered.data
+    let mean: ptr<f32> = model.mean
+    let src_stride: i32 = X.cols
+    for i in 0 to n_samples {
+        let src_base: i32 = i * src_stride
+        let dst_base: i32 = i * d
+        for j in 0 to d {
+            dst[dst_base + j] = src[src_base + j] - mean[j]
         }
     }
+
+    # Pack the components into a contiguous d x k row-major matrix so the
+    # projection is a single cblas_sgemm instead of a hand-rolled triple loop.
+    let W: Matrix = matrix_new(d, k)
+    let wdata: ptr<f32> = W.data
+    for c in 0 to k {
+        let comp: ptr<f32> = model.components[c]
+        for j in 0 to d {
+            wdata[j * k + c] = comp[j]
+        }
+    }
+
+    blas_matmat(dst, wdata, result.data, n_samples, k, d, 1.0, 0.0)
+
+    matrix_free(centered)
+    matrix_free(W)
     return result
 }
 
