@@ -876,6 +876,26 @@ function test_sparse_pca() -> i32 {
         }
     }
 
+    # The soft-thresholded loadings settle on one non-zero feature per
+    # component, so 6 of the 8 entries are zero. This count was printed and
+    # never checked, which hid the use-after-free of issue #378: the
+    # convergence test read a freed gradient buffer, so the iteration count
+    # and the loadings varied run to run on one unmodified binary.
+    if n_zeros != 6 {
+        print("  FAIL: expected 6 sparse zeros, got ")
+        println(n_zeros)
+        return 1
+    }
+    # The convergence test compares the raw gradient magnitude against tol,
+    # which never falls below 0.0001 on this workload, so the loop runs the
+    # full 200 iterations. Under the bug it stopped at iteration 10 whenever
+    # the freed buffer happened to read back as near-zero.
+    if spca.n_iter != 200 {
+        print("  FAIL: expected n_iter 200, got ")
+        println(spca.n_iter)
+        return 1
+    }
+
     print("  OK: 2 components, ")
     print(n_zeros)
     println(" sparse zeros in loading vectors")
