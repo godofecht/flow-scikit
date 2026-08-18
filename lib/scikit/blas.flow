@@ -57,6 +57,13 @@ export function blas_matmat(A: ptr<f32>, B: ptr<f32>, C: ptr<f32>, m: i32, n: i3
     cblas_sgemm(CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, CBLAS_NO_TRANS, m, n, k, alpha, A, k, B, n, beta, C, n)
 }
 
+# Matrix-vector multiply with an explicit leading dimension (row stride).
+# A is row-major m x n stored with lda elements per row, x is length n,
+# y is length m. Lets callers view a sub-block of a wider matrix.
+export function blas_matvec_ld(A: ptr<f32>, m: i32, n: i32, lda: i32, x: ptr<f32>, y: ptr<f32>, alpha: f32, beta: f32) -> void {
+    cblas_sgemv(CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, m, n, alpha, A, lda, x, 1, beta, y, 1)
+}
+
 # Matrix times transposed matrix: C = alpha * A * B^T + beta * C
 # A is m x k with leading dimension lda, B is n x k with leading dimension ldb,
 # C is m x n with leading dimension n. All row-major.
