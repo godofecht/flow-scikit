@@ -275,9 +275,16 @@ export function multinomial_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, alpha
     let n: i32 = X.rows
     let p: i32 = X.cols
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
-    for c in 0 to n_classes {
+    # Issue #398: classes and class_counts held exactly n_classes entries while
+    # the loop below appended one entry per distinct label, so labels carrying
+    # more distinct values than the caller declared wrote past both
+    # allocations. Both are now sized to hold every distinct label, never fewer
+    # than n_classes entries.
+    let found_classes: DistinctF32 = distinct_f32(y, n, n_classes)
+    let class_cap: i32 = found_classes.capacity
+    let classes: ptr<f32> = found_classes.values
+    let class_counts: ptr<i32> = malloc((class_cap as i64) * 4) as ptr<i32>
+    for c in 0 to class_cap {
         class_counts[c] = 0
     }
 
@@ -419,9 +426,16 @@ export function bernoulli_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, alpha: 
     let n: i32 = X.rows
     let p: i32 = X.cols
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
-    for c in 0 to n_classes {
+    # Issue #398: classes and class_counts held exactly n_classes entries while
+    # the loop below appended one entry per distinct label, so labels carrying
+    # more distinct values than the caller declared wrote past both
+    # allocations. Both are now sized to hold every distinct label, never fewer
+    # than n_classes entries.
+    let found_classes: DistinctF32 = distinct_f32(y, n, n_classes)
+    let class_cap: i32 = found_classes.capacity
+    let classes: ptr<f32> = found_classes.values
+    let class_counts: ptr<i32> = malloc((class_cap as i64) * 4) as ptr<i32>
+    for c in 0 to class_cap {
         class_counts[c] = 0
     }
 
@@ -484,21 +498,47 @@ export function bernoulli_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, alpha: 
     }
 }
 
+# log(1 - p) for an absent feature, expressed exactly as the original inline
+# formulation so the accumulated float32 score is unchanged.
+function _bernoulli_nb_absent_term(present_log_prob: f32) -> f32 {
+    return log((1.0 - exp(present_log_prob as f64) as f32) as f64) as f32
+}
+
+# The absent-feature contribution depends only on fitted state, so it is the
+# same for every sample.  Building the table once per predict call replaces
+# n_samples * n_classes * n_features exp()/log() pairs with n_classes *
+# n_features of them.
+function _bernoulli_nb_prepare_absent(model: BernoulliNB, absent_log_prob: ptr<f32>) -> void {
+    let p: i32 = model.n_features
+    for c in 0 to model.n_classes {
+        let base: i32 = c * p
+        let present: ptr<f32> = model.feature_log_prob[c]
+        for j in 0 to p {
+            absent_log_prob[base + j] = _bernoulli_nb_absent_term(present[j])
+        }
+    }
+}
+
 export function bernoulli_nb_predict(model: BernoulliNB, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
+    let p: i32 = model.n_features
     let result: ptr<f32> = array_new_f32(n)
+    let absent_log_prob: ptr<f32> = array_new_f32(model.n_classes * p)
+    _bernoulli_nb_prepare_absent(model, absent_log_prob)
 
     for i in 0 to n {
         let mut best_c: i32 = 0
         let mut best_score: f32 = -10000000000.0
+        let row_base: i32 = i * p
         for c in 0 to model.n_classes {
             let mut score: f32 = model.class_log_prior[c]
-            for j in 0 to model.n_features {
-                let x_ij: f32 = matrix_at(X, i, j)
-                if x_ij > 0.5 {
-                    score = score + model.feature_log_prob[c][j]
+            let present: ptr<f32> = model.feature_log_prob[c]
+            let class_base: i32 = c * p
+            for j in 0 to p {
+                if X.data[row_base + j] > 0.5 {
+                    score = score + present[j]
                 } else {
-                    score = score + log((1.0 - exp(model.feature_log_prob[c][j] as f64) as f32) as f64) as f32
+                    score = score + absent_log_prob[class_base + j]
                 }
             }
             if score > best_score {
@@ -509,6 +549,7 @@ export function bernoulli_nb_predict(model: BernoulliNB, X: Matrix) -> ptr<f32> 
         result[i] = model.classes[best_c]
     }
 
+    array_free_f32(absent_log_prob)
     return result
 }
 
