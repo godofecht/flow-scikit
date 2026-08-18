@@ -186,7 +186,7 @@ function opt_km_fit_check(label: string, X: Matrix, init_centers: Matrix, n_clus
 }
 
 function opt_km_fit_separated() -> i32 {
-    let n: i32 = 600
+    let n: i32 = 900
     let d: i32 = 16
     let k: i32 = 6
     let X: Matrix = matrix_new(n, d)
@@ -204,7 +204,7 @@ function opt_km_fit_separated() -> i32 {
             init.data[kk * d + j] = X.data[(kk * 11) * d + j]
         }
     }
-    let failed: i32 = opt_km_fit_check("overlapping 600x16 k=6", X, init, k, 100, 0.0000001)
+    let failed: i32 = opt_km_fit_check("overlapping 900x16 k=6 (sgemm path)", X, init, k, 100, 0.0000001)
     matrix_free(init)
     matrix_free(X)
     return failed
@@ -229,7 +229,7 @@ function opt_km_fit_empty_cluster() -> i32 {
         init.data[d + j] = 4.0
         init.data[2 * d + j] = 500.0
     }
-    let failed: i32 = opt_km_fit_check("empty-cluster relocation 40x3 k=3", X, init, k, 50, 0.0001)
+    let failed: i32 = opt_km_fit_check("empty-cluster relocation 40x3 k=3 (scalar path)", X, init, k, 50, 0.0001)
     matrix_free(init)
     matrix_free(X)
     return failed
