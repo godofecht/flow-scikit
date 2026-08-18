@@ -119,21 +119,131 @@ export function dict_vectorizer_fit(X_keys: ptr<ptr<i32> >, X_vals: ptr<ptr<f32>
     }
 }
 
-export function dict_vectorizer_transform(model: DictVectorizer, X_keys: ptr<ptr<i32> >, X_vals: ptr<ptr<f32> >, n_samples: i32, n_keys_per_sample: ptr<i32>) -> Matrix {
-    let result: Matrix = matrix_new(n_samples, model.n_features)
-    for i in 0 to n_samples {
-        for j in 0 to model.n_features {
-            matrix_set(result, i, j, 0.0)
-        }
-        for k in 0 to n_keys_per_sample[i] {
-            let key: i32 = X_keys[i][k]
-            for j in 0 to model.n_features {
-                if model.feature_names[j][0] == key {
-                    matrix_set(result, i, j, X_vals[i][k])
-                }
+# Sifts one element down a max-heap keyed on `keys`, carrying `cols` along.
+# Module-unique name per compiler bug #465.
+function _fe_extra_dv_sift(keys: ptr<i32>, cols: ptr<i32>, start: i32, n: i32) -> void {
+    let mut root: i32 = start
+    let mut running: bool = true
+    while running {
+        let child: i32 = 2 * root + 1
+        if child >= n {
+            running = false
+        } else {
+            let mut target: i32 = root
+            if keys[target] < keys[child] { target = child }
+            if child + 1 < n {
+                if keys[target] < keys[child + 1] { target = child + 1 }
+            }
+            if target == root {
+                running = false
+            } else {
+                let tk: i32 = keys[root]
+                keys[root] = keys[target]
+                keys[target] = tk
+                let tc: i32 = cols[root]
+                cols[root] = cols[target]
+                cols[target] = tc
+                root = target
             }
         }
     }
+}
+
+# Sorts the (key, column) pairs ascending by key in O(V log V) with no
+# allocation. Heapsort rather than insertion sort so a wide vocabulary does not
+# reintroduce a quadratic term.
+function _fe_extra_dv_sort_pairs(keys: ptr<i32>, cols: ptr<i32>, n: i32) -> void {
+    let mut start: i32 = n / 2 - 1
+    while start >= 0 {
+        _fe_extra_dv_sift(keys, cols, start, n)
+        start = start - 1
+    }
+    let mut end: i32 = n - 1
+    while end > 0 {
+        let tk: i32 = keys[0]
+        keys[0] = keys[end]
+        keys[end] = tk
+        let tc: i32 = cols[0]
+        cols[0] = cols[end]
+        cols[end] = tc
+        _fe_extra_dv_sift(keys, cols, 0, end)
+        end = end - 1
+    }
+}
+
+export function dict_vectorizer_transform(model: DictVectorizer, X_keys: ptr<ptr<i32> >, X_vals: ptr<ptr<f32> >, n_samples: i32, n_keys_per_sample: ptr<i32>) -> Matrix {
+    # matrix_new is calloc-backed, so the output starts zeroed. The previous
+    # O(n_samples * n_features) clearing pass wrote zeros over zeros.
+    let result: Matrix = matrix_new(n_samples, model.n_features)
+    let n_feat: i32 = model.n_features
+    if n_feat <= 0 {
+        return result
+    }
+
+    let mut total_keys: i32 = 0
+    for i in 0 to n_samples {
+        total_keys = total_keys + n_keys_per_sample[i]
+    }
+
+    # Work threshold. Scanning costs n_feat per lookup. Indexing costs one
+    # heapsort of the vocabulary plus about log2(n_feat) per lookup. 24 is a
+    # conservative stand-in for that log factor plus the per-lookup overhead,
+    # so the crossover sits above the point where indexing actually pays. Below
+    # it the original scan runs and its output is bit-identical to the previous
+    # code, which is a parity bonus.
+    let scan_ops: i64 = (total_keys as i64) * (n_feat as i64)
+    let index_ops: i64 = ((total_keys as i64) + (n_feat as i64)) * 24
+
+    # Build the key -> column index once per call instead of rescanning the
+    # whole vocabulary for every key of every sample.
+    let mut use_index: bool = scan_ops > index_ops
+    let idx_keys: ptr<i32> = array_new_f32(n_feat) as ptr<i32>
+    let idx_cols: ptr<i32> = array_new_f32(n_feat) as ptr<i32>
+
+    if use_index {
+        for j in 0 to n_feat {
+            idx_keys[j] = model.feature_names[j][0]
+            idx_cols[j] = j
+        }
+        _fe_extra_dv_sort_pairs(idx_keys, idx_cols, n_feat)
+
+        # A vocabulary built by dict_vectorizer_fit is duplicate free, but the
+        # struct is exported and can be assembled by hand. The old loop wrote
+        # the value into every matching column; a single-column index cannot
+        # reproduce that, so fall back to the scan when duplicates are present.
+        for j in 1 to n_feat {
+            if idx_keys[j] == idx_keys[j - 1] { use_index = false }
+        }
+    }
+
+    if not use_index {
+        array_free_f32(idx_keys as ptr<f32>)
+        array_free_f32(idx_cols as ptr<f32>)
+        for i in 0 to n_samples {
+            for k in 0 to n_keys_per_sample[i] {
+                let key: i32 = X_keys[i][k]
+                for j in 0 to n_feat {
+                    if model.feature_names[j][0] == key {
+                        matrix_set(result, i, j, X_vals[i][k])
+                    }
+                }
+            }
+        }
+        return result
+    }
+
+    for i in 0 to n_samples {
+        let row_base: i32 = i * n_feat
+        for k in 0 to n_keys_per_sample[i] {
+            let pos: i32 = _fe_extra_dv_find(idx_keys, n_feat, X_keys[i][k])
+            if pos >= 0 {
+                result.data[row_base + idx_cols[pos]] = X_vals[i][k]
+            }
+        }
+    }
+
+    array_free_f32(idx_keys as ptr<f32>)
+    array_free_f32(idx_cols as ptr<f32>)
     return result
 }
 
