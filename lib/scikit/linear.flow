@@ -782,24 +782,65 @@ export function logistic_predict_proba(model: LogisticRegression, X: Matrix) -> 
     return probs
 }
 
+# One-vs-rest class prediction: argmax over the per-class decision scores.
+# The scores for one class are a matrix-vector product against a contiguous
+# row-major X, so each class costs one cblas_sgemv and the running argmax is
+# carried across classes in two m-length buffers. Class order is preserved, so
+# ties still resolve to the lowest class index exactly as before.
 export function logistic_predict(model: LogisticRegression, X: Matrix) -> ptr<f32> {
-    let n: i32 = X.rows
-    let result: ptr<f32> = array_new_f32(n)
-    for i in 0 to n {
-        let mut best_score: f32 = -1000000.0
-        let mut best_class: i32 = 0
-        for c in 0 to model.n_classes {
-            let mut z: f32 = model.biases[c]
-            for j in 0 to model.n_features {
-                z = z + model.weights[c * model.n_features + j] * matrix_at(X, i, j)
+    let rows: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(rows)
+    if rows <= 0 { return result }
+
+    let nf: i32 = model.n_features
+    let nc: i32 = model.n_classes
+
+    if nf <= 0 || nf > X.cols {
+        for i in 0 to rows {
+            let mut best_score: f32 = -1000000.0
+            let mut best_class: i32 = 0
+            for c in 0 to nc {
+                let mut z: f32 = model.biases[c]
+                for j in 0 to nf {
+                    z = z + model.weights[c * nf + j] * matrix_at(X, i, j)
+                }
+                if z > best_score {
+                    best_score = z
+                    best_class = c
+                }
             }
-            if z > best_score {
-                best_score = z
-                best_class = c
+            result[i] = model.classes[best_class]
+        }
+        return result
+    }
+
+    let scores: ptr<f32> = array_new_f32(rows)
+    let best: ptr<f32> = array_new_f32(rows)
+    let best_cls: ptr<i32> = malloc((rows as i64) * 4) as ptr<i32>
+    for i in 0 to rows {
+        best[i] = -1000000.0
+        best_cls[i] = 0
+    }
+
+    for c in 0 to nc {
+        blas_matvec_ld(X.data, rows, nf, X.cols, model.weights + c * nf, scores, 1.0, 0.0)
+        let b: f32 = model.biases[c]
+        for i in 0 to rows {
+            let z: f32 = scores[i] + b
+            if z > best[i] {
+                best[i] = z
+                best_cls[i] = c
             }
         }
-        result[i] = model.classes[best_class]
     }
+
+    for i in 0 to rows {
+        result[i] = model.classes[best_cls[i]]
+    }
+
+    array_free_f32(scores)
+    array_free_f32(best)
+    free(best_cls as ptr<void>)
     return result
 }
 
