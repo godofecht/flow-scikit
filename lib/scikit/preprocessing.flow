@@ -1148,35 +1148,49 @@ export function function_transformer_init(func_kind: i32, validate: bool) -> Fun
 
 export function function_transformer_transform(ft: FunctionTransformer, X: Matrix) -> Matrix {
     let result: Matrix = matrix_new(X.rows, X.cols)
-    for i in 0 to X.rows {
-        for j in 0 to X.cols {
-            let val: f32 = matrix_at(X, i, j)
-            if ft.func_kind == FUNC_LOG {
-                if val > 0.0 {
-                    matrix_set(result, i, j, log(val as f64) as f32)
-                } else {
-                    matrix_set(result, i, j, 0.0)
-                }
-            } elif ft.func_kind == FUNC_SQRT {
-                if val > 0.0 {
-                    matrix_set(result, i, j, sqrt(val as f64) as f32)
-                } else {
-                    matrix_set(result, i, j, 0.0)
-                }
-            } elif ft.func_kind == FUNC_SQUARE {
-                matrix_set(result, i, j, val * val)
-            } elif ft.func_kind == FUNC_ABS {
-                if val < 0.0 {
-                    matrix_set(result, i, j, 0.0 - val)
-                } else {
-                    matrix_set(result, i, j, val)
-                }
-            } elif ft.func_kind == FUNC_RECIPROCAL {
-                if val > 0.0000000001 || val < -0.0000000001 {
-                    matrix_set(result, i, j, 1.0 / val)
-                } else {
-                    matrix_set(result, i, j, 0.0)
-                }
+    let n: i32 = X.rows * X.cols
+    let src: ptr<f32> = X.data
+    let dst: ptr<f32> = result.data
+    let kind: i32 = ft.func_kind
+
+    # The function kind is fixed for the whole matrix, so it is selected once
+    # here instead of being re-tested for every element. Each branch walks the
+    # row-major buffers directly rather than going through matrix_at and
+    # matrix_set. Cells the old code explicitly set to 0.0 are left alone:
+    # matrix_new is calloc-backed and already holds positive zero there.
+    if kind == FUNC_LOG {
+        for i in 0 to n {
+            let val: f32 = src[i]
+            if val > 0.0 {
+                dst[i] = log(val as f64) as f32
+            }
+        }
+    } elif kind == FUNC_SQRT {
+        for i in 0 to n {
+            let val: f32 = src[i]
+            if val > 0.0 {
+                dst[i] = sqrt(val as f64) as f32
+            }
+        }
+    } elif kind == FUNC_SQUARE {
+        for i in 0 to n {
+            let val: f32 = src[i]
+            dst[i] = val * val
+        }
+    } elif kind == FUNC_ABS {
+        for i in 0 to n {
+            let val: f32 = src[i]
+            if val < 0.0 {
+                dst[i] = 0.0 - val
+            } else {
+                dst[i] = val
+            }
+        }
+    } elif kind == FUNC_RECIPROCAL {
+        for i in 0 to n {
+            let val: f32 = src[i]
+            if val > 0.0000000001 || val < -0.0000000001 {
+                dst[i] = 1.0 / val
             }
         }
     }

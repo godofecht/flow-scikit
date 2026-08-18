@@ -1,0 +1,247 @@
+# Regression test for the optimized FunctionTransformer.transform (roadmap
+# rank 67, issue #276).
+#
+# function_transformer_transform used to re-test ft.func_kind against all five
+# constants for every element of the matrix, and read and wrote every cell
+# through matrix_at and matrix_set. It now selects the kind once and walks the
+# row-major buffers directly, one tight loop per kind.
+#
+# The cells the old code explicitly set to 0.0 (non-positive input to log and
+# sqrt, near-zero input to reciprocal) are now left as the positive zero that
+# calloc-backed matrix_new already put there, so the output must be identical.
+
+import "lib/scikit/scikit.flow"
+
+# Literal reimplementation of the pre-optimization loop, used as the oracle.
+function toftt_reference(ft: FunctionTransformer, X: Matrix) -> Matrix {
+    let result: Matrix = matrix_new(X.rows, X.cols)
+    for i in 0 to X.rows {
+        for j in 0 to X.cols {
+            let val: f32 = matrix_at(X, i, j)
+            if ft.func_kind == 0 {
+                if val > 0.0 {
+                    matrix_set(result, i, j, log(val as f64) as f32)
+                } else {
+                    matrix_set(result, i, j, 0.0)
+                }
+            } elif ft.func_kind == 1 {
+                if val > 0.0 {
+                    matrix_set(result, i, j, sqrt(val as f64) as f32)
+                } else {
+                    matrix_set(result, i, j, 0.0)
+                }
+            } elif ft.func_kind == 2 {
+                matrix_set(result, i, j, val * val)
+            } elif ft.func_kind == 3 {
+                if val < 0.0 {
+                    matrix_set(result, i, j, 0.0 - val)
+                } else {
+                    matrix_set(result, i, j, val)
+                }
+            } elif ft.func_kind == 4 {
+                if val > 0.0000000001 || val < -0.0000000001 {
+                    matrix_set(result, i, j, 1.0 / val)
+                } else {
+                    matrix_set(result, i, j, 0.0)
+                }
+            }
+        }
+    }
+    return result
+}
+
+function toftt_compare(name: string, want: Matrix, got: Matrix) -> i32 {
+    if want.rows != got.rows || want.cols != got.cols {
+        print("  FAIL ")
+        print(name)
+        println(": shape mismatch")
+        return 1
+    }
+    for i in 0 to want.rows {
+        for j in 0 to want.cols {
+            let a: f32 = matrix_at(want, i, j)
+            let b: f32 = matrix_at(got, i, j)
+            if a != b {
+                print("  FAIL ")
+                print(name)
+                print(" at (")
+                print(i)
+                print(",")
+                print(j)
+                print("): got ")
+                print(b)
+                print(" wanted ")
+                println(a)
+                return 1
+            }
+        }
+    }
+    print("  OK ")
+    println(name)
+    return 0
+}
+
+function toftt_edge_matrix() -> Matrix {
+    # Boundary values every branch cares about: zero, negatives, values just
+    # inside and just outside the reciprocal cutoff, and large magnitudes.
+    let X: Matrix = matrix_new(3, 4)
+    matrix_set(X, 0, 0, 0.0)
+    matrix_set(X, 0, 1, 1.0)
+    matrix_set(X, 0, 2, -1.0)
+    matrix_set(X, 0, 3, 4.0)
+    matrix_set(X, 1, 0, 0.00000000001)
+    matrix_set(X, 1, 1, -0.00000000001)
+    matrix_set(X, 1, 2, 0.000000001)
+    matrix_set(X, 1, 3, -0.000000001)
+    matrix_set(X, 2, 0, 2.71828182)
+    matrix_set(X, 2, 1, -1000.0)
+    matrix_set(X, 2, 2, 1000.0)
+    matrix_set(X, 2, 3, 0.25)
+    return X
+}
+
+function toftt_kind(kind: i32, X: Matrix, name: string) -> i32 {
+    let ft: FunctionTransformer = function_transformer_init(kind, false)
+    let want: Matrix = toftt_reference(ft, X)
+    let got: Matrix = function_transformer_transform(ft, X)
+    let failures: i32 = toftt_compare(name, want, got)
+    matrix_free(got)
+    matrix_free(want)
+    return failures
+}
+
+function toftt_known_values() -> i32 {
+    let mut failures: i32 = 0
+
+    let X: Matrix = matrix_new(1, 4)
+    matrix_set(X, 0, 0, 9.0)
+    matrix_set(X, 0, 1, 0.0)
+    matrix_set(X, 0, 2, -4.0)
+    matrix_set(X, 0, 3, 0.25)
+
+    let sq: FunctionTransformer = function_transformer_init(1, false)
+    let gs: Matrix = function_transformer_transform(sq, X)
+    if matrix_at(gs, 0, 0) != 3.0 || matrix_at(gs, 0, 1) != 0.0 || matrix_at(gs, 0, 2) != 0.0 || matrix_at(gs, 0, 3) != 0.5 {
+        println("  FAIL sqrt known values")
+        failures = failures + 1
+    } else {
+        println("  OK sqrt known values")
+    }
+    matrix_free(gs)
+
+    let sqr: FunctionTransformer = function_transformer_init(2, false)
+    let gq: Matrix = function_transformer_transform(sqr, X)
+    if matrix_at(gq, 0, 0) != 81.0 || matrix_at(gq, 0, 1) != 0.0 || matrix_at(gq, 0, 2) != 16.0 || matrix_at(gq, 0, 3) != 0.0625 {
+        println("  FAIL square known values")
+        failures = failures + 1
+    } else {
+        println("  OK square known values")
+    }
+    matrix_free(gq)
+
+    let ab: FunctionTransformer = function_transformer_init(3, false)
+    let ga: Matrix = function_transformer_transform(ab, X)
+    if matrix_at(ga, 0, 0) != 9.0 || matrix_at(ga, 0, 1) != 0.0 || matrix_at(ga, 0, 2) != 4.0 || matrix_at(ga, 0, 3) != 0.25 {
+        println("  FAIL abs known values")
+        failures = failures + 1
+    } else {
+        println("  OK abs known values")
+    }
+    matrix_free(ga)
+
+    let rc: FunctionTransformer = function_transformer_init(4, false)
+    let gr: Matrix = function_transformer_transform(rc, X)
+    let mut badr: i32 = 0
+    # 1/9 is not exactly representable, so check it against the f32 rounding.
+    let inv9: f32 = matrix_at(gr, 0, 0)
+    if inv9 * 9.0 < 0.9999 || inv9 * 9.0 > 1.0001 {
+        badr = 1
+    }
+    if matrix_at(gr, 0, 1) != 0.0 {
+        badr = 1
+    }
+    if matrix_at(gr, 0, 2) != -0.25 {
+        badr = 1
+    }
+    if matrix_at(gr, 0, 3) != 4.0 {
+        badr = 1
+    }
+    if badr != 0 {
+        println("  FAIL reciprocal known values")
+        failures = failures + 1
+    } else {
+        println("  OK reciprocal known values")
+    }
+    matrix_free(gr)
+
+    # An unrecognised kind must still return an all-zero matrix of the right shape.
+    let unknown: FunctionTransformer = function_transformer_init(7, false)
+    let gu: Matrix = function_transformer_transform(unknown, X)
+    let mut badu: i32 = 0
+    if gu.rows != 1 || gu.cols != 4 {
+        badu = 1
+    }
+    for j in 0 to 4 {
+        if matrix_at(gu, 0, j) != 0.0 {
+            badu = 1
+        }
+    }
+    if badu != 0 {
+        println("  FAIL unknown kind should give an all-zero matrix")
+        failures = failures + 1
+    } else {
+        println("  OK unknown kind gives an all-zero matrix")
+    }
+    matrix_free(gu)
+
+    matrix_free(X)
+    return failures
+}
+
+function toftt_workload(rows: i32, cols: i32) -> i32 {
+    let X: Matrix = matrix_new(rows, cols)
+    let mut s: i32 = 97
+    for i in 0 to rows {
+        for j in 0 to cols {
+            s = (s * 1103515245 + 12345) % 2147483647
+            if s < 0 {
+                s = 0 - s
+            }
+            # Spread over positives, negatives and exact zero.
+            matrix_set(X, i, j, ((s % 4001) as f32) * 0.01 - 20.0)
+        }
+    }
+    let mut failures: i32 = 0
+    failures = failures + toftt_kind(0, X, "workload log")
+    failures = failures + toftt_kind(1, X, "workload sqrt")
+    failures = failures + toftt_kind(2, X, "workload square")
+    failures = failures + toftt_kind(3, X, "workload abs")
+    failures = failures + toftt_kind(4, X, "workload reciprocal")
+    matrix_free(X)
+    return failures
+}
+
+function main() -> i32 {
+    println("FunctionTransformer.transform optimization regression test")
+    println("=========================================================")
+    let mut failures: i32 = 0
+    failures = failures + toftt_known_values()
+
+    let E: Matrix = toftt_edge_matrix()
+    failures = failures + toftt_kind(0, E, "edge cases log")
+    failures = failures + toftt_kind(1, E, "edge cases sqrt")
+    failures = failures + toftt_kind(2, E, "edge cases square")
+    failures = failures + toftt_kind(3, E, "edge cases abs")
+    failures = failures + toftt_kind(4, E, "edge cases reciprocal")
+    matrix_free(E)
+
+    failures = failures + toftt_workload(300, 40)
+
+    if failures != 0 {
+        print("FAILURES: ")
+        println(failures)
+        return 1
+    }
+    println("All FunctionTransformer.transform optimization tests passed!")
+    return 0
+}
