@@ -68,20 +68,67 @@ Filed issues so far:
 
 ## Build and test
 
+BLAS linkage is required. Without `FLOW_LDFLAGS` the build fails at the
+link step with undefined `cblas_*` symbols.
+
+macOS:
 ```
-FLOW_HOST=python flow run tests/test_new_features.flow
+export FLOW_HOST=python
+export FLOW_OPT_LEVEL=0
+export FLOW_LDFLAGS="-framework Accelerate"
+flow run tests/test_new_features.flow
 ```
 
-Run all tests:
+Linux, matching CI:
 ```
-for f in tests/test_*.flow; do
-  FLOW_HOST=python flow run "$f"
-done
+export FLOW_HOST=python
+export FLOW_OPT_LEVEL=0
+export FLOW_LDFLAGS="-lm -lopenblas"
+flow run tests/test_new_features.flow
 ```
 
-Run all examples:
+Run everything the way CI does:
 ```
-for f in examples/*.flow; do
-  FLOW_HOST=python flow run "$f"
-done
+python tools/run_all.py
 ```
+
+`tools/run_all.py` passes a file purely on its process exit code. A test
+that prints `FAIL` and returns 0 is invisible. New tests must count
+failures and `return 1` from `main`; see `tests/test_preprocessing.flow`.
+Verify a new test is a real gate by deliberately breaking its assertion
+and confirming a non-zero exit.
+
+## Measuring
+
+`flow run` writes compiled C and binaries into a single shared build
+directory next to the `flow` binary, regardless of which worktree you
+are in. Two processes compiling a file with the same basename overwrite
+each other's executable mid-run, which surfaces as a bus error or a
+wrong number in a file you did not touch. Give scratch harnesses a
+unique prefix, and re-run a single file on its own before believing an
+unexplained failure.
+
+Timing on a developer machine is unreliable unless you check the load
+first. Measurements taken at load average 126 on a 14-core machine
+varied by 3x on the same row and reversed the sign of a comparison.
+Interleave the two variants in one process, take a median of several
+runs, and time an untouched estimator alongside as a control. CI's
+`Scaled benchmark report` is the authority for anything published.
+
+Substituting cblas for a scalar loop needs a work threshold. OpenBLAS
+spends roughly 0.1 ms dispatching threads, so a change that is 40x
+faster on digits can be 25x slower at 100 rows and 8 features. Gate on
+a size product and run the original scalar path below it.
+
+BLAS results are not bit-identical across implementations. Code verified
+bit-identical on macOS Accelerate has been found to differ under OpenBLAS
+on Linux, which matters wherever a threshold turns a last-ulp difference
+into a different answer. Verify on the platform CI runs on before
+claiming bit-identity.
+
+## Working alongside other agents
+
+Worktrees share one `.git`. Never run `git stash`: the stash stack is
+global, and one agent's `stash pop` has already consumed another's work.
+Commit to your own branch instead. Do not `git gc`, reset outside your
+worktree, or touch a branch you did not create.
