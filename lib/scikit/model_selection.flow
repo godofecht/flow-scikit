@@ -2119,22 +2119,14 @@ export function group_shuffle_split_init(n_splits: i32, test_size: f32, seed: i3
 export function group_shuffle_split_get_split(
     gss: GroupShuffleSplit, groups: ptr<i32>, n: i32, n_groups: i32, split: i32
 ) -> TrainTestSplit {
-    let unique_groups: ptr<i32> = malloc((n_groups as i64) * 4) as ptr<i32>
-    let mut n_found: i32 = 0
+    # Issue #398: unique_groups held exactly n_groups entries and the loop
+    # appended one entry per distinct group id with no check, so a caller
+    # understating n_groups wrote past the allocation. The buffer now grows to
+    # hold every distinct group id.
+    let found_groups: DistinctI32 = distinct_i32(groups, n, n_groups)
+    let unique_groups: ptr<i32> = found_groups.values
+    let n_found: i32 = found_groups.count
     let mut i: i32 = 0
-    while i < n {
-        let mut found: bool = false
-        let mut k: i32 = 0
-        while k < n_found {
-            if unique_groups[k] == groups[i] { found = true }
-            k = k + 1
-        }
-        if not found {
-            unique_groups[n_found] = groups[i]
-            n_found = n_found + 1
-        }
-        i = i + 1
-    }
 
     let n_test_groups: i32 = ((n_found as f32) * gss.test_size) as i32
     if n_test_groups < 1 { n_test_groups = 1 }
