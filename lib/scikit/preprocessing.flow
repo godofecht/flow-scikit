@@ -654,25 +654,48 @@ export struct LabelEncoder {
     fitted: bool
 }
 
-export function label_encoder_fit(y: ptr<f32>, n: i32) -> LabelEncoder {
-    let classes: ptr<f32> = array_new_f32(n)
-    let mut n_classes: i32 = 0
-
+# Collects the distinct values of y into out, kept in ascending order at all
+# times. Membership is a search over the classes found so far (linear with an
+# early exit while the count is small, binary above) instead of a full linear
+# scan, so the pass is O(n log C + C^2) rather than O(n * C + C^2). The result
+# is identical to a linear dedupe followed by an ascending sort.
+function _preprocessing_label_sorted_unique(y: ptr<f32>, n: i32, out: ptr<f32>) -> i32 {
+    let mut count: i32 = 0
     for i in 0 to n {
-        let mut found: bool = false
-        for k in 0 to n_classes {
-            if classes[k] == y[i] {
-                found = true
+        let v: f32 = y[i]
+        let mut lo: i32 = 0
+        if count <= 12 {
+            while lo < count && out[lo] < v {
+                lo = lo + 1
+            }
+        } else {
+            let mut hi: i32 = count
+            while lo < hi {
+                let mid: i32 = (lo + hi) >> 1
+                if out[mid] < v {
+                    lo = mid + 1
+                } else {
+                    hi = mid
+                }
             }
         }
-        if not found {
-            classes[n_classes] = y[i]
-            n_classes = n_classes + 1
+        if lo < count && out[lo] == v {
+            continue
         }
+        let mut j: i32 = count
+        while j > lo {
+            out[j] = out[j - 1]
+            j = j - 1
+        }
+        out[lo] = v
+        count = count + 1
     }
+    return count
+}
 
-    _insertion_sort(classes, n_classes)
-
+export function label_encoder_fit(y: ptr<f32>, n: i32) -> LabelEncoder {
+    let classes: ptr<f32> = array_new_f32(n)
+    let n_classes: i32 = _preprocessing_label_sorted_unique(y, n, classes)
     return LabelEncoder { classes: classes, n_classes: n_classes, fitted: true }
 }
 
