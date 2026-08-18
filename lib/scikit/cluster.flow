@@ -455,6 +455,17 @@ export function kmeans_predict(model: KMeans, X: Matrix) -> ptr<i32> {
     let x_data: ptr<f32> = X.data
     let x_stride: i32 = X.cols
 
+    # Below the BLAS work threshold the sgemm dispatch costs more than the
+    # whole scalar loop, so go straight to the direct kernel.
+    if not _kmeans_use_blas(n, n_clusters, n_features) {
+        let small_best: ptr<f32> = array_new_f32(32)
+        for i in 0 to n {
+            preds[i] = _kmeans_nearest_centroid(x_data, i * x_stride, centroids, n_clusters, n_features, small_best)
+        }
+        array_free_f32(small_best)
+        return preds
+    }
+
     # Pack the centroid rows contiguously and take their norms in one pass.
     let cbuf: ptr<f32> = array_new_f32(n_clusters * n_features)
     let cnorm: ptr<f32> = array_new_f32(n_clusters)
