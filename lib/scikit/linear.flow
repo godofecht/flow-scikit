@@ -821,14 +821,36 @@ export function logistic_decide(model: LogisticRegression, probs: ptr<f32>, n_sa
     return labels
 }
 
+# Binary decision scores: z = X * w + b for the first (positive) coefficient row.
+# X is contiguous row-major, so the whole thing is one cblas_sgemv with the
+# matrix row stride passed as lda. Falls back to the scalar dot product when the
+# feature count does not fit inside a row of X.
 export function logistic_decision_function(model: LogisticRegression, X: Matrix) -> ptr<f32> {
-    let scores: ptr<f32> = array_new_f32(X.rows)
-    for i in 0 to X.rows {
-        let mut z: f32 = model.bias
-        for j in 0 to model.n_features {
-            z = z + model.weights[j] * matrix_at(X, i, j)
+    let rows: i32 = X.rows
+    let scores: ptr<f32> = array_new_f32(rows)
+    if rows <= 0 { return scores }
+
+    let nf: i32 = model.n_features
+    let bias: f32 = model.bias
+    let w: ptr<f32> = model.weights
+
+    if nf <= 0 || nf > X.cols {
+        let data: ptr<f32> = X.data
+        let stride: i32 = X.cols
+        for i in 0 to rows {
+            let mut z: f32 = bias
+            let base: i32 = i * stride
+            for j in 0 to nf {
+                z = z + w[j] * data[base + j]
+            }
+            scores[i] = z
         }
-        scores[i] = z
+        return scores
+    }
+
+    blas_matvec_ld(X.data, rows, nf, X.cols, w, scores, 1.0, 0.0)
+    for i in 0 to rows {
+        scores[i] = scores[i] + bias
     }
     return scores
 }
