@@ -816,26 +816,57 @@ export function categorical_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_cat
 
 export function categorical_nb_predict(model: CategoricalNB, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
+    let p: i32 = model.n_features
+    let n_classes: i32 = model.n_classes
     let result: ptr<f32> = array_new_f32(n)
+    # One score buffer and one code buffer for the whole call, not per sample.
+    let scores: ptr<f32> = array_new_f32(n_classes)
+    let codes: ptr<i32> = malloc((p as i64) * 4) as ptr<i32>
 
     for i in 0 to n {
-        let mut best_c: i32 = 0
-        let mut best_score: f32 = -9999999999.0
-        for c in 0 to model.n_classes {
-            let mut score: f32 = model.class_log_prior[c]
-            for j in 0 to model.n_features {
-                let cat: i32 = matrix_at(X, i, j) as i32
-                if cat >= 0 && cat < model.n_categories[j] {
-                    score = score + model.category_log_prob[j][c][cat]
+        # Decode and range-check the row's category codes once instead of once
+        # per class.  Out of range stays -1 and contributes nothing, as before.
+        let row_base: i32 = i * p
+        for j in 0 to p {
+            let cat: i32 = X.data[row_base + j] as i32
+            if cat >= 0 && cat < model.n_categories[j] {
+                codes[j] = cat
+            } else {
+                codes[j] = -1
+            }
+        }
+
+        for c in 0 to n_classes {
+            scores[c] = model.class_log_prior[c]
+        }
+
+        # Feature-outer accumulation keeps one feature's category table hot for
+        # every class instead of walking p separate allocations once per class.
+        # Each class still sums its terms in ascending feature order, so the
+        # accumulated float32 score is unchanged.
+        for j in 0 to p {
+            let cat: i32 = codes[j]
+            if cat >= 0 {
+                let feature_table: ptr<ptr<f32> > = model.category_log_prob[j]
+                for c in 0 to n_classes {
+                    scores[c] = scores[c] + feature_table[c][cat]
                 }
             }
-            if score > best_score {
-                best_score = score
+        }
+
+        let mut best_c: i32 = 0
+        let mut best_score: f32 = -9999999999.0
+        for c in 0 to n_classes {
+            if scores[c] > best_score {
+                best_score = scores[c]
                 best_c = c
             }
         }
         result[i] = best_c as f32
     }
+
+    array_free_f32(scores)
+    free(codes as ptr<void>)
     return result
 }
 
