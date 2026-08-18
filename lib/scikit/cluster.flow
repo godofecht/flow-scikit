@@ -1088,22 +1088,71 @@ export function birch_fit(X: Matrix, threshold: f32, branching_factor: i32) -> B
     }
 }
 
+# Nearest subcluster for every sample.
+#
+# Birch keeps one subcluster per leaf entry, so a fitted model routinely holds
+# hundreds of centroids. The scan is an argmin over squared distances, and the
+# squares are non-negative, so a running sum that has already reached the
+# current best can never come back below it. Once that happens the rest of the
+# centroid row is skipped. The check runs once per 8 features, which keeps the
+# comparison cost to a fraction of one per element while still cutting most
+# rows short after the first block.
+#
+# The remaining terms are accumulated in the original order and compared with
+# the same strict less-than tie-break, so the returned label is bit-identical
+# to the previous per-pair loop, not merely close to it.
+#
+# Sample and centroid reads go straight to the backing arrays: matrix_at
+# recomputes row * cols per element, and model.centroids[c] reloaded the
+# centroid pointer per element.
 export function birch_predict(model: Birch, X: Matrix) -> ptr<i32> {
     let n: i32 = X.rows
+    let n_clusters: i32 = model.n_clusters
+    let n_features: i32 = model.n_features
     let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    if n <= 0 {
+        return labels
+    }
+    if n_clusters <= 0 || n_features <= 0 {
+        for i in 0 to n {
+            labels[i] = 0
+        }
+        return labels
+    }
+
+    let x_data: ptr<f32> = X.data
+    let x_stride: i32 = X.cols
+    let centroids: ptr<ptr<f32> > = model.centroids
 
     for i in 0 to n {
+        let xbase: i32 = i * x_stride
         let mut best_c: i32 = 0
         let mut best_dist: f32 = 10000000000.0
-        for c in 0 to model.n_clusters {
+        for c in 0 to n_clusters {
+            let crow: ptr<f32> = centroids[c]
             let mut dist_sq: f32 = 0.0
-            for k in 0 to model.n_features {
-                let d: f32 = matrix_at(X, i, k) - model.centroids[c][k]
-                dist_sq = dist_sq + d * d
+            let mut k: i32 = 0
+            let mut bailed: bool = false
+            while k < n_features {
+                let mut lim: i32 = k + 8
+                if lim > n_features {
+                    lim = n_features
+                }
+                while k < lim {
+                    let d: f32 = x_data[xbase + k] - crow[k]
+                    dist_sq = dist_sq + d * d
+                    k = k + 1
+                }
+                if dist_sq >= best_dist {
+                    bailed = true
+                    break
+                }
             }
-            if dist_sq < best_dist {
-                best_dist = dist_sq
-                best_c = c
+            if not bailed {
+                if dist_sq < best_dist {
+                    best_dist = dist_sq
+                    best_c = c
+                }
             }
         }
         labels[i] = best_c
