@@ -1798,13 +1798,33 @@ export function huber_regressor_fit(X: Matrix, y: ptr<f32>, epsilon: f32, max_it
     }
 }
 
+# Same y = X * w + b batch as elastic_net_predict: one cblas_sgemv with the row
+# stride passed as lda above the 65536 rows * features work threshold, and the
+# scalar kernel with matrix_at folded into a direct row-major index below it.
 export function huber_regressor_predict(model: HuberRegressor, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
     let result: ptr<f32> = array_new_f32(n)
+    if n <= 0 { return result }
+
+    let nf: i32 = model.n_features
+    let bias: f32 = model.bias
+    let w: ptr<f32> = model.weights
+    let data: ptr<f32> = X.data
+    let stride: i32 = X.cols
+
+    if nf > 0 && nf <= stride && n * nf >= 65536 {
+        blas_matvec_ld(data, n, nf, stride, w, result, 1.0, 0.0)
+        for i in 0 to n {
+            result[i] = result[i] + bias
+        }
+        return result
+    }
+
     for i in 0 to n {
-        let mut pred: f32 = model.bias
-        for j in 0 to model.n_features {
-            pred = pred + model.weights[j] * matrix_at(X, i, j)
+        let base: i32 = i * stride
+        let mut pred: f32 = bias
+        for j in 0 to nf {
+            pred = pred + w[j] * data[base + j]
         }
         result[i] = pred
     }
