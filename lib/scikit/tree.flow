@@ -6,6 +6,7 @@ import "lib/scikit/prng.flow"
 
 extern {
     function malloc(size: i64) -> ptr<void>
+    function calloc(count: i64, size: i64) -> ptr<void>
     function free(p: ptr<void>) -> void
     function fabs(x: f64) -> f64
     function printf(fmt: string, ...) -> i32
@@ -20,6 +21,17 @@ export const CRITERION_ENTROPY: i32 = 1
 export const CRITERION_MSE: i32 = 2
 export const CRITERION_MAE: i32 = 3
 
+# Node arrays for this struct are allocated with calloc, never malloc.
+# The builders write only the fields each node kind needs: a leaf leaves
+# feature and threshold alone, an internal node leaves value alone, and the
+# ExtraTree builders also leave n_samples and impurity alone. With malloc
+# those fields hold whatever the allocator handed back, so two runs that fit
+# the same tree on the same data produce different bytes. Nothing reads an
+# unwritten field, so prediction is unaffected, but it makes per-node learned
+# structure impossible to compare against sklearn.
+# sizeof(TreeNode) is 32 on arm64: eight 4-byte fields, with the bool padded
+# to 4. The stride below stays at the repo's generous 36 so the tail padding
+# is zeroed too, which no per-field write could reach.
 export struct TreeNode {
     feature: i32,
     threshold: f32,
@@ -213,7 +225,7 @@ export function decision_tree_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: 
     }
 
     let max_nodes: i32 = 2 * X.rows + 1
-    let nodes: ptr<TreeNode> = malloc((max_nodes as i64) * 36) as ptr<TreeNode>
+    let nodes: ptr<TreeNode> = calloc(max_nodes as i64, 36) as ptr<TreeNode>
     let n_nodes_ptr: ptr<i32> = malloc(4) as ptr<i32>
     n_nodes_ptr[0] = 0
 
@@ -590,7 +602,7 @@ export function decision_tree_classifier_fit_rf(X: Matrix, y: ptr<f32>, n_classe
     }
 
     let max_nodes: i32 = 2 * X.rows + 1
-    let nodes: ptr<TreeNode> = malloc((max_nodes as i64) * 36) as ptr<TreeNode>
+    let nodes: ptr<TreeNode> = calloc(max_nodes as i64, 36) as ptr<TreeNode>
     let n_nodes_ptr: ptr<i32> = malloc(4) as ptr<i32>
     n_nodes_ptr[0] = 0
 
@@ -684,7 +696,7 @@ export function decision_tree_classifier_feature_importances(model: DecisionTree
 
 export function decision_tree_regressor_fit(X: Matrix, y: ptr<f32>, max_depth: i32, criterion: i32) -> DecisionTreeRegressor {
     let max_nodes: i32 = 2 * X.rows + 1
-    let nodes: ptr<TreeNode> = malloc((max_nodes as i64) * 36) as ptr<TreeNode>
+    let nodes: ptr<TreeNode> = calloc(max_nodes as i64, 36) as ptr<TreeNode>
     let n_nodes_ptr: ptr<i32> = malloc(4) as ptr<i32>
     n_nodes_ptr[0] = 0
 
@@ -937,7 +949,7 @@ export struct ExtraTreeClassifier {
 
 export function extra_tree_classifier_fit(X: Matrix, y: ptr<f32>, n_samples: i32, n_features: i32, n_classes: i32, max_depth: i32, seed: i32) -> ExtraTreeClassifier {
     srand(seed)
-    let nodes: ptr<TreeNode> = malloc((1024 as i64) * 36) as ptr<TreeNode>
+    let nodes: ptr<TreeNode> = calloc(1024 as i64, 36) as ptr<TreeNode>
     let mut n_nodes: i32 = 0
 
     n_nodes = _extra_tree_clf_build(nodes, n_nodes, X, y, n_samples, n_features, n_classes, 0, max_depth, seed)
@@ -1088,7 +1100,7 @@ export struct ExtraTreeRegressor {
 
 export function extra_tree_regressor_fit(X: Matrix, y: ptr<f32>, n_samples: i32, n_features: i32, max_depth: i32, seed: i32) -> ExtraTreeRegressor {
     srand(seed)
-    let nodes: ptr<TreeNode> = malloc((1024 as i64) * 36) as ptr<TreeNode>
+    let nodes: ptr<TreeNode> = calloc(1024 as i64, 36) as ptr<TreeNode>
     let mut n_nodes: i32 = 0
 
     n_nodes = _extra_tree_reg_build(nodes, n_nodes, X, y, n_samples, n_features, 0, max_depth, seed)
