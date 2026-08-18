@@ -1,0 +1,212 @@
+# Regression test for the optimized kmeans_predict.
+# Checks hand-computed assignments, exact ties (which must resolve to the lowest
+# centroid index, as the original per-pair loop did), duplicate centroids, a
+# single-cluster model, and a realistic workload compared label-for-label
+# against the pre-optimization kernel.
+# Run: FLOW_HOST=python flow run tests/test_opt_kmeans_predict.flow
+
+import "lib/scikit/scikit.flow"
+
+# The pre-optimization kernel, kept here as the parity reference.
+function opt_km_pr_reference(model: KMeans, X: Matrix) -> ptr<i32> {
+    let preds: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
+    for i in 0 to X.rows {
+        let mut best_k: i32 = 0
+        let mut best_dist: f32 = 9999999999.0
+        for k in 0 to model.n_clusters {
+            let mut dist: f32 = 0.0
+            for j in 0 to model.n_features {
+                let d: f32 = matrix_at(X, i, j) - model.centroids[k][j]
+                dist = dist + d * d
+            }
+            if dist < best_dist {
+                best_dist = dist
+                best_k = k
+            }
+        }
+        preds[i] = best_k
+    }
+    return preds
+}
+
+function opt_km_pr_model(n_clusters: i32, n_features: i32) -> KMeans {
+    let centroids: ptr<ptr<f32> > = malloc((n_clusters as i64) * 8) as ptr<ptr<f32> >
+    for k in 0 to n_clusters {
+        centroids[k] = array_new_f32(n_features)
+    }
+    let labels: ptr<i32> = malloc(128) as ptr<i32>
+    let model: KMeans = KMeans {
+        centroids: centroids,
+        n_clusters: n_clusters,
+        n_features: n_features,
+        labels: labels,
+        inertia: 0.0,
+        n_iter: 0,
+        max_iter: 0,
+        tol: 0.0,
+        fitted: true
+    }
+    return model
+}
+
+function opt_km_pr_known_values() -> i32 {
+    let model: KMeans = opt_km_pr_model(3, 2)
+    model.centroids[0][0] = 0.0;  model.centroids[0][1] = 0.0
+    model.centroids[1][0] = 10.0; model.centroids[1][1] = 0.0
+    model.centroids[2][0] = 0.0;  model.centroids[2][1] = 10.0
+
+    let X: Matrix = matrix_new(4, 2)
+    matrix_set(X, 0, 0, 0.0);  matrix_set(X, 0, 1, 0.0)
+    matrix_set(X, 1, 0, 9.0);  matrix_set(X, 1, 1, 1.0)
+    matrix_set(X, 2, 0, 1.0);  matrix_set(X, 2, 1, 8.0)
+    matrix_set(X, 3, 0, 2.0);  matrix_set(X, 3, 1, 2.0)
+
+    let preds: ptr<i32> = kmeans_predict(model, X)
+    let mut failed: i32 = 0
+    if preds[0] != 0 { failed = 1 }
+    if preds[1] != 1 { failed = 1 }
+    if preds[2] != 2 { failed = 1 }
+    if preds[3] != 0 { failed = 1 }
+    if failed != 0 {
+        println("FAIL: kmeans_predict known assignments changed")
+        printf("  got %d %d %d %d\n", preds[0], preds[1], preds[2], preds[3])
+    }
+
+    free(preds as ptr<void>)
+    matrix_free(X)
+    kmeans_free(model)
+    return failed
+}
+
+function opt_km_pr_ties() -> i32 {
+    # Two centroids at equal distance, and two identical centroids. Both cases
+    # must resolve to the lowest index, which is what strict less-than gives.
+    let model: KMeans = opt_km_pr_model(3, 2)
+    model.centroids[0][0] = 0.0; model.centroids[0][1] = 0.0
+    model.centroids[1][0] = 2.0; model.centroids[1][1] = 2.0
+    model.centroids[2][0] = 0.0; model.centroids[2][1] = 0.0
+
+    let X: Matrix = matrix_new(3, 2)
+    matrix_set(X, 0, 0, 1.0); matrix_set(X, 0, 1, 1.0)
+    matrix_set(X, 1, 0, 0.0); matrix_set(X, 1, 1, 0.0)
+    matrix_set(X, 2, 0, 2.0); matrix_set(X, 2, 1, 2.0)
+
+    let preds: ptr<i32> = kmeans_predict(model, X)
+    let ref_preds: ptr<i32> = opt_km_pr_reference(model, X)
+    let mut failed: i32 = 0
+    if preds[0] != 0 { failed = 1 }
+    if preds[1] != 0 { failed = 1 }
+    if preds[2] != 1 { failed = 1 }
+    for i in 0 to 3 {
+        if preds[i] != ref_preds[i] { failed = 1 }
+    }
+    if failed != 0 {
+        println("FAIL: kmeans_predict tie handling changed")
+        printf("  got %d %d %d, reference %d %d %d\n",
+            preds[0], preds[1], preds[2], ref_preds[0], ref_preds[1], ref_preds[2])
+    }
+
+    free(preds as ptr<void>)
+    free(ref_preds as ptr<void>)
+    matrix_free(X)
+    kmeans_free(model)
+    return failed
+}
+
+function opt_km_pr_single_cluster() -> i32 {
+    let model: KMeans = opt_km_pr_model(1, 3)
+    model.centroids[0][0] = 1.0
+    model.centroids[0][1] = 2.0
+    model.centroids[0][2] = 3.0
+
+    let X: Matrix = matrix_new(2, 3)
+    matrix_set(X, 0, 0, 100.0); matrix_set(X, 0, 1, 0.0); matrix_set(X, 0, 2, 0.0)
+    matrix_set(X, 1, 0, 1.0);   matrix_set(X, 1, 1, 2.0); matrix_set(X, 1, 2, 3.0)
+
+    let preds: ptr<i32> = kmeans_predict(model, X)
+    let mut failed: i32 = 0
+    if preds[0] != 0 || preds[1] != 0 { failed = 1 }
+    if failed != 0 {
+        println("FAIL: kmeans_predict single-cluster case changed")
+    }
+    free(preds as ptr<void>)
+    matrix_free(X)
+    kmeans_free(model)
+    return failed
+}
+
+function opt_km_pr_workload() -> i32 {
+    let n: i32 = 600
+    let d: i32 = 24
+    let k: i32 = 6
+    let X: Matrix = matrix_new(n, d)
+    let mut state: i64 = 987654321
+    for i in 0 to n {
+        for j in 0 to d {
+            state = (state * 1103515245 + 12345) % 2147483648
+            let base: f32 = ((i % k) as f32) * 3.0
+            X.data[i * d + j] = base + ((state % 1000) as f32) / 500.0
+        }
+    }
+
+    let model: KMeans = kmeans_fit(X, k, 50, 0.0001, 7)
+    let preds: ptr<i32> = kmeans_predict(model, X)
+    let ref_preds: ptr<i32> = opt_km_pr_reference(model, X)
+
+    let mut failed: i32 = 0
+    let mut diffs: i32 = 0
+    for i in 0 to n {
+        if preds[i] != ref_preds[i] { diffs = diffs + 1 }
+        if preds[i] < 0 || preds[i] >= k { failed = 1 }
+    }
+    if diffs != 0 {
+        failed = 1
+        println("FAIL: kmeans_predict labels diverged from the direct kernel")
+        printf("  %d of %d labels differ\n", diffs, n)
+    }
+
+    # Predicting on data far outside the training range must still land on the
+    # nearest centroid, which is a stress case for the norm expansion.
+    let Xfar: Matrix = matrix_new(3, d)
+    for j in 0 to d {
+        Xfar.data[j] = 1000.0
+        Xfar.data[d + j] = -1000.0
+        Xfar.data[2 * d + j] = 0.0
+    }
+    let far_preds: ptr<i32> = kmeans_predict(model, Xfar)
+    let far_ref: ptr<i32> = opt_km_pr_reference(model, Xfar)
+    for i in 0 to 3 {
+        if far_preds[i] != far_ref[i] {
+            failed = 1
+            println("FAIL: kmeans_predict diverged on out-of-range samples")
+        }
+    }
+
+    if failed == 0 {
+        printf("  OK: 600x24 into 6 clusters, %d label differences\n", diffs)
+    }
+
+    free(far_preds as ptr<void>)
+    free(far_ref as ptr<void>)
+    matrix_free(Xfar)
+    free(preds as ptr<void>)
+    free(ref_preds as ptr<void>)
+    kmeans_free(model)
+    matrix_free(X)
+    return failed
+}
+
+function main() -> i32 {
+    println("Test: optimized KMeans.predict")
+    let mut failed: i32 = 0
+    failed = failed + opt_km_pr_known_values()
+    failed = failed + opt_km_pr_ties()
+    failed = failed + opt_km_pr_single_cluster()
+    failed = failed + opt_km_pr_workload()
+    if failed != 0 {
+        println("FAILED")
+        return 1
+    }
+    println("OK: KMeans.predict optimization preserves assignments")
+    return 0
+}

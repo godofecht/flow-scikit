@@ -2,6 +2,7 @@
 # Implements PCA via power iteration for eigendecomposition of covariance matrix.
 
 import "lib/scikit/matrix.flow"
+import "lib/scikit/blas.flow"
 
 extern {
     function tanh(x: f64) -> f64
@@ -22,27 +23,42 @@ export struct PCA {
 
 export function pca_fit(X: Matrix, n_components: i32) -> PCA {
     let n_features: i32 = X.cols
+    let n_samples: i32 = X.rows
     let mean: ptr<f32> = array_new_f32(n_features)
+    let xdata: ptr<f32> = X.data
 
-    for j in 0 to n_features {
-        let col: ptr<f32> = array_new_f32(X.rows)
-        for i in 0 to X.rows {
-            col[i] = matrix_at(X, i, j)
+    # Column sums straight off the row-major buffer. The previous version
+    # allocated, filled and freed an f32[n_samples] column per feature.
+    # Accumulation order per column is unchanged, so the means are identical.
+    for i in 0 to n_samples {
+        let row_base: i32 = i * n_features
+        for j in 0 to n_features {
+            mean[j] = mean[j] + xdata[row_base + j]
         }
-        mean[j] = array_mean(col, X.rows)
-        array_free_f32(col)
+    }
+    let n_samples_f: f32 = n_samples as f32
+    for j in 0 to n_features {
+        mean[j] = mean[j] / n_samples_f
     }
 
+    # Covariance is symmetric, so only the upper triangle is accumulated and
+    # then mirrored. Multiplication is commutative, so the mirrored entry is
+    # the same value the old loop computed for (j2, j1).
     let cov: Matrix = matrix_new(n_features, n_features)
+    let cov_data: ptr<f32> = cov.data
+    let ddof_denom: f32 = (n_samples as f32) - 1.0
     for j1 in 0 to n_features {
-        for j2 in 0 to n_features {
+        for j2 in j1 to n_features {
             let mut sum: f32 = 0.0
-            for i in 0 to X.rows {
-                let d1: f32 = matrix_at(X, i, j1) - mean[j1]
-                let d2: f32 = matrix_at(X, i, j2) - mean[j2]
+            for i in 0 to n_samples {
+                let row_base: i32 = i * n_features
+                let d1: f32 = xdata[row_base + j1] - mean[j1]
+                let d2: f32 = xdata[row_base + j2] - mean[j2]
                 sum = sum + d1 * d2
             }
-            matrix_set(cov, j1, j2, sum / ((X.rows as f32) - 1.0))
+            let val: f32 = sum / ddof_denom
+            cov_data[j1 * n_features + j2] = val
+            cov_data[j2 * n_features + j1] = val
         }
     }
 
@@ -50,55 +66,60 @@ export function pca_fit(X: Matrix, n_components: i32) -> PCA {
     let explained_variance: ptr<f32> = array_new_f32(n_components)
 
     let cov_copy: Matrix = matrix_copy(cov)
+    let cc_data: ptr<f32> = cov_copy.data
+
+    # One reusable work vector for every power iteration and every Rayleigh
+    # quotient, instead of an allocate/free pair per iteration.
+    let work: ptr<f32> = array_new_f32(n_features)
+    let init_component: f32 = 1.0 / sqrt((n_features as f64) as f32)
 
     for c in 0 to n_components {
         let eigvec: ptr<f32> = array_new_f32(n_features)
         for j in 0 to n_features {
-            eigvec[j] = 1.0 / sqrt((n_features as f64) as f32)
+            eigvec[j] = init_component
         }
 
         for _ in 0 to 100 {
-            let new_vec: ptr<f32> = array_new_f32(n_features)
             for j1 in 0 to n_features {
+                let cov_row: i32 = j1 * n_features
                 let mut sum: f32 = 0.0
                 for j2 in 0 to n_features {
-                    sum = sum + matrix_at(cov_copy, j1, j2) * eigvec[j2]
+                    sum = sum + cc_data[cov_row + j2] * eigvec[j2]
                 }
-                new_vec[j1] = sum
+                work[j1] = sum
             }
 
-            let norm: f32 = 0.0
+            let mut norm: f32 = 0.0
             for j in 0 to n_features {
-                norm = norm + new_vec[j] * new_vec[j]
+                norm = norm + work[j] * work[j]
             }
             norm = sqrt(norm as f64) as f32
             if norm < 0.0000000001 {
                 norm = 1.0
             }
             for j in 0 to n_features {
-                eigvec[j] = new_vec[j] / norm
+                eigvec[j] = work[j] / norm
             }
-            array_free_f32(new_vec)
         }
 
-        let eigval: f32 = 0.0
-        let tmp: ptr<f32> = array_new_f32(n_features)
+        let mut eigval: f32 = 0.0
         for j1 in 0 to n_features {
+            let cov_row: i32 = j1 * n_features
             let mut sum: f32 = 0.0
             for j2 in 0 to n_features {
-                sum = sum + matrix_at(cov_copy, j1, j2) * eigvec[j2]
+                sum = sum + cc_data[cov_row + j2] * eigvec[j2]
             }
-            tmp[j1] = sum
+            work[j1] = sum
         }
         for j in 0 to n_features {
-            eigval = eigval + eigvec[j] * tmp[j]
+            eigval = eigval + eigvec[j] * work[j]
         }
-        array_free_f32(tmp)
 
         for j1 in 0 to n_features {
+            let cov_row: i32 = j1 * n_features
+            let scaled: f32 = eigval * eigvec[j1]
             for j2 in 0 to n_features {
-                let val: f32 = matrix_at(cov_copy, j1, j2) - eigval * eigvec[j1] * eigvec[j2]
-                matrix_set(cov_copy, j1, j2, val)
+                cc_data[cov_row + j2] = cc_data[cov_row + j2] - scaled * eigvec[j2]
             }
         }
 
@@ -106,9 +127,11 @@ export function pca_fit(X: Matrix, n_components: i32) -> PCA {
         explained_variance[c] = eigval
     }
 
+    array_free_f32(work)
+
     let mut total_var: f32 = 0.0
     for j in 0 to n_features {
-        total_var = total_var + matrix_at(cov, j, j)
+        total_var = total_var + cov_data[j * n_features + j]
     }
 
     let explained_variance_ratio: ptr<f32> = array_new_f32(n_components)
@@ -136,16 +159,43 @@ export function pca_fit(X: Matrix, n_components: i32) -> PCA {
 }
 
 export function pca_transform(model: PCA, X: Matrix) -> Matrix {
-    let result: Matrix = matrix_new(X.rows, model.n_components)
-    for i in 0 to X.rows {
-        for c in 0 to model.n_components {
-            let mut sum: f32 = 0.0
-            for j in 0 to model.n_features {
-                sum = sum + (matrix_at(X, i, j) - model.mean[j]) * model.components[c][j]
-            }
-            matrix_set(result, i, c, sum)
+    let n_samples: i32 = X.rows
+    let d: i32 = model.n_features
+    let k: i32 = model.n_components
+    let result: Matrix = matrix_new(n_samples, k)
+    if n_samples <= 0 || d <= 0 || k <= 0 {
+        return result
+    }
+
+    # Subtract the mean once per element instead of once per (element, component).
+    let centered: Matrix = matrix_new(n_samples, d)
+    let src: ptr<f32> = X.data
+    let dst: ptr<f32> = centered.data
+    let mean: ptr<f32> = model.mean
+    let src_stride: i32 = X.cols
+    for i in 0 to n_samples {
+        let src_base: i32 = i * src_stride
+        let dst_base: i32 = i * d
+        for j in 0 to d {
+            dst[dst_base + j] = src[src_base + j] - mean[j]
         }
     }
+
+    # Pack the components into a contiguous d x k row-major matrix so the
+    # projection is a single cblas_sgemm instead of a hand-rolled triple loop.
+    let W: Matrix = matrix_new(d, k)
+    let wdata: ptr<f32> = W.data
+    for c in 0 to k {
+        let comp: ptr<f32> = model.components[c]
+        for j in 0 to d {
+            wdata[j * k + c] = comp[j]
+        }
+    }
+
+    blas_matmat(dst, wdata, result.data, n_samples, k, d, 1.0, 0.0)
+
+    matrix_free(centered)
+    matrix_free(W)
     return result
 }
 
@@ -493,34 +543,35 @@ export function fast_ica_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f
     let n: i32 = X.rows
     let p: i32 = X.cols
 
+    let xdata: ptr<f32> = X.data
+    let xstride: i32 = X.cols
+
     let mean: ptr<f32> = array_new_f32(p)
     for j in 0 to p {
         let mut m: f32 = 0.0
+        let mut base: i32 = j
         for i in 0 to n {
-            m = m + matrix_at(X, i, j)
+            m = m + xdata[base]
+            base = base + xstride
         }
         mean[j] = m / (n as f32)
     }
 
     let Xc: Matrix = matrix_new(n, p)
+    let cdata: ptr<f32> = Xc.data
     for i in 0 to n {
+        let xbase: i32 = i * xstride
+        let cbase: i32 = i * p
         for j in 0 to p {
-            matrix_set(Xc, i, j, matrix_at(X, i, j) - mean[j])
+            cdata[cbase + j] = xdata[xbase + j] - mean[j]
         }
     }
+
+    # The p x p covariance of Xc used to be formed here at a cost of O(n * p^2)
+    # and then freed without ever being read: whitening comes from pca_fit
+    # below, which computes its own covariance. Removing it changes no result.
 
     # Whitening via PCA
-    let cov: Matrix = matrix_new(p, p)
-    for i in 0 to p {
-        for j in 0 to p {
-            let mut s: f32 = 0.0
-            for k in 0 to n {
-                s = s + matrix_at(Xc, k, i) * matrix_at(Xc, k, j)
-            }
-            matrix_set(cov, i, j, s / (n as f32))
-        }
-    }
-
     let pca_model: PCA = pca_fit(X, n_components)
     let whitening: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
     for c in 0 to n_components {
@@ -533,13 +584,17 @@ export function fast_ica_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f
     }
 
     let Xw: Matrix = matrix_new(n, n_components)
+    let wdata: ptr<f32> = Xw.data
     for i in 0 to n {
+        let cbase: i32 = i * p
+        let wbase: i32 = i * n_components
         for c in 0 to n_components {
+            let wrow: ptr<f32> = whitening[c]
             let mut s: f32 = 0.0
             for j in 0 to p {
-                s = s + matrix_at(Xc, i, j) * whitening[c][j]
+                s = s + cdata[cbase + j] * wrow[j]
             }
-            matrix_set(Xw, i, c, s)
+            wdata[wbase + c] = s
         }
     }
 
@@ -548,6 +603,10 @@ export function fast_ica_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f
     let components: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
     let mut n_iter: i32 = 0
 
+    let w_old: ptr<f32> = array_new_f32(n_components)
+    let gw: ptr<f32> = array_new_f32(n_components)
+    let g_w: ptr<f32> = array_new_f32(n_components)
+
     for c in 0 to n_components {
         components[c] = array_new_f32(n_components)
         for j in 0 to n_components {
@@ -555,43 +614,46 @@ export function fast_ica_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f
         }
         _gram_schmidt(components[c], components, c, n_components)
 
+        let w: ptr<f32> = components[c]
+
         for iter in 0 to max_iter {
             n_iter = iter + 1
 
-            let w_old: ptr<f32> = array_copy_f32(components[c], n_components)
-
-            let gw: ptr<f32> = array_new_f32(n_components)
-            let g_w: ptr<f32> = array_new_f32(n_components)
+            # w_old, gw and g_w are reused across iterations instead of being
+            # allocated and freed on every one. gw and g_w are accumulators, so
+            # they are reset explicitly to the zeros calloc used to supply.
+            for j in 0 to n_components {
+                w_old[j] = w[j]
+                gw[j] = 0.0
+                g_w[j] = 0.0
+            }
 
             for i in 0 to n {
+                let wbase: i32 = i * n_components
                 let mut dot: f32 = 0.0
                 for j in 0 to n_components {
-                    dot = dot + components[c][j] * matrix_at(Xw, i, j)
+                    dot = dot + w[j] * wdata[wbase + j]
                 }
                 let t: f32 = tanh((dot) as f64) as f32
                 let g_deriv: f32 = 1.0 - t * t
 
                 for j in 0 to n_components {
-                    gw[j] = gw[j] + t * matrix_at(Xw, i, j)
-                    g_w[j] = g_w[j] + g_deriv * components[c][j]
+                    gw[j] = gw[j] + t * wdata[wbase + j]
+                    g_w[j] = g_w[j] + g_deriv * w[j]
                 }
             }
 
             for j in 0 to n_components {
-                components[c][j] = (gw[j] - g_w[j] * components[c][j]) / (n as f32)
+                w[j] = (gw[j] - g_w[j] * w[j]) / (n as f32)
             }
 
-            _gram_schmidt(components[c], components, c, n_components)
+            _gram_schmidt(w, components, c, n_components)
 
             let mut dot: f32 = 0.0
             for j in 0 to n_components {
-                dot = dot + components[c][j] * w_old[j]
+                dot = dot + w[j] * w_old[j]
             }
             let convergence: f32 = fabs((fabs((dot) as f64) as f32 - 1.0) as f64) as f32
-
-            array_free_f32(w_old)
-            array_free_f32(gw)
-            array_free_f32(g_w)
 
             if convergence < tol { break }
         }
@@ -609,13 +671,16 @@ export function fast_ica_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f
         }
     }
 
+    array_free_f32(w_old)
+    array_free_f32(gw)
+    array_free_f32(g_w)
+
     for c in 0 to n_components {
         array_free_f32(whitening[c])
     }
     free(whitening as ptr<void>)
     matrix_free(Xw)
     matrix_free(Xc)
-    matrix_free(cov)
     pca_free(pca_model)
 
     return FastICA {
@@ -752,15 +817,18 @@ export function sparse_pca_fit(X: Matrix, n_components: i32, alpha: f32, max_ite
                 }
             }
 
-            array_free_f32(grad)
-
             if iter > 0 && iter % 10 == 0 {
                 let mut change: f32 = 0.0
                 for j in 0 to p {
                     change = change + fabs((grad[j]) as f64) as f32
                 }
-                if change / (p as f32) < tol { break }
+                if change / (p as f32) < tol {
+                    array_free_f32(grad)
+                    break
+                }
             }
+
+            array_free_f32(grad)
         }
     }
 
@@ -909,15 +977,18 @@ export function minibatch_sparse_pca_fit(
                 }
             }
 
-            array_free_f32(grad)
-
             if iter > 0 && iter % 10 == 0 {
                 let mut change: f32 = 0.0
                 for j in 0 to p {
                     change = change + fabs((grad[j]) as f64) as f32
                 }
-                if change / (p as f32) < tol { break }
+                if change / (p as f32) < tol {
+                    array_free_f32(grad)
+                    break
+                }
             }
+
+            array_free_f32(grad)
         }
     }
 
@@ -1514,56 +1585,79 @@ export function dictionary_learning_fit(X: Matrix, n_components: i32, alpha: f32
         }
     }
 
+    # Two work buffers reused for every (iteration, sample, atom) instead of a
+    # fresh allocate/free pair per sample and per updated atom. The old code
+    # allocated max_iter * n * (1 + n_components) times.
+    let codes: ptr<f32> = array_new_f32(n_components)
+    let prev_atom: ptr<f32> = array_new_f32(p)
+    let xdata: ptr<f32> = X.data
+    let xstride: i32 = X.cols
+
     let mut n_iter: i32 = 0
     for iter in 0 to max_iter {
         n_iter = iter + 1
         let mut total_change: f32 = 0.0
 
         for i in 0 to n {
-            let codes: ptr<f32> = array_new_f32(n_components)
+            let xbase: i32 = i * xstride
 
             for c in 0 to n_components {
+                let atom: ptr<f32> = dictionary[c]
                 let mut dot: f32 = 0.0
                 for j in 0 to p {
-                    dot = dot + matrix_at(X, i, j) * dictionary[c][j]
+                    dot = dot + xdata[xbase + j] * atom[j]
                 }
-                if (fabs((dot) as f64) as f32) > alpha {
-                    if dot > 0 {
-                        codes[c] = dot - alpha
-                    } else {
-                        codes[c] = dot + alpha
-                    }
+                # fabs(dot) > alpha, without a libm call per (sample, atom).
+                if dot > alpha {
+                    codes[c] = dot - alpha
+                } elif dot < -alpha {
+                    codes[c] = dot + alpha
                 } else {
                     codes[c] = 0.0
                 }
             }
 
             for c in 0 to n_components {
-                if (fabs((codes[c]) as f64) as f32) < 0.0000000001 { continue }
-                let old: ptr<f32> = array_copy_f32(dictionary[c], p)
-                for j in 0 to p {
-                    let residual: f32 = matrix_at(X, i, j) - codes[c] * dictionary[c][j]
-                    dictionary[c][j] = dictionary[c][j] + 0.01 * codes[c] * residual
-                }
+                let code_c: f32 = codes[c]
+                if (fabs((code_c) as f64) as f32) < 0.0000000001 { continue }
+                let atom: ptr<f32> = dictionary[c]
+
+                # Fused: save the previous value, apply the gradient step and
+                # accumulate the squared norm in one pass. Every arithmetic
+                # expression and every accumulation order is unchanged.
                 let mut norm: f32 = 0.0
-                for j in 0 to p { norm = norm + dictionary[c][j] * dictionary[c][j] }
-                norm = sqrt((norm as f64)) as f32
-                if norm > 0.0000000001 {
-                    for j in 0 to p { dictionary[c][j] = dictionary[c][j] / norm }
-                }
-                let mut change: f32 = 0.0
                 for j in 0 to p {
-                    change = change + fabs((dictionary[c][j] - old[j]) as f64) as f32
+                    let prev: f32 = atom[j]
+                    prev_atom[j] = prev
+                    let residual: f32 = xdata[xbase + j] - code_c * prev
+                    let updated: f32 = prev + 0.01 * code_c * residual
+                    atom[j] = updated
+                    norm = norm + updated * updated
+                }
+                norm = sqrt((norm as f64)) as f32
+
+                # Fused: normalize and accumulate the L1 change in one pass.
+                let mut change: f32 = 0.0
+                if norm > 0.0000000001 {
+                    for j in 0 to p {
+                        let scaled: f32 = atom[j] / norm
+                        atom[j] = scaled
+                        change = change + fabs((scaled - prev_atom[j]) as f64) as f32
+                    }
+                } else {
+                    for j in 0 to p {
+                        change = change + fabs((atom[j] - prev_atom[j]) as f64) as f32
+                    }
                 }
                 total_change = total_change + change
-                array_free_f32(old)
             }
-
-            array_free_f32(codes)
         }
 
         if total_change / (n as f32) < tol { break }
     }
+
+    array_free_f32(prev_atom)
+    array_free_f32(codes)
 
     return DictionaryLearning {
         dictionary: dictionary,
@@ -1577,22 +1671,38 @@ export function dictionary_learning_fit(X: Matrix, n_components: i32, alpha: f32
 
 export function dictionary_learning_transform(model: DictionaryLearning, X: Matrix) -> Matrix {
     let n: i32 = X.rows
-    let result: Matrix = matrix_new(n, model.n_components)
+    let k: i32 = model.n_components
+    let d: i32 = model.n_features
+    let alpha: f32 = model.alpha
+    let result: Matrix = matrix_new(n, k)
+    if n <= 0 || k <= 0 || d <= 0 {
+        return result
+    }
+
+    # Direct row-major indexing instead of matrix_at/matrix_set accessor calls.
+    # The dot-product accumulation order is unchanged, so the result is
+    # bit-identical to the previous triple loop.
+    let xdata: ptr<f32> = X.data
+    let xstride: i32 = X.cols
+    let out: ptr<f32> = result.data
 
     for i in 0 to n {
-        for c in 0 to model.n_components {
+        let xbase: i32 = i * xstride
+        let obase: i32 = i * k
+        for c in 0 to k {
+            let atom: ptr<f32> = model.dictionary[c]
             let mut dot: f32 = 0.0
-            for j in 0 to model.n_features {
-                dot = dot + matrix_at(X, i, j) * model.dictionary[c][j]
+            for j in 0 to d {
+                dot = dot + xdata[xbase + j] * atom[j]
             }
-            if (fabs((dot) as f64) as f32) > model.alpha {
+            if (fabs((dot) as f64) as f32) > alpha {
                 if dot > 0 {
-                    matrix_set(result, i, c, dot - model.alpha)
+                    out[obase + c] = dot - alpha
                 } else {
-                    matrix_set(result, i, c, dot + model.alpha)
+                    out[obase + c] = dot + alpha
                 }
             } else {
-                matrix_set(result, i, c, 0.0)
+                out[obase + c] = 0.0
             }
         }
     }

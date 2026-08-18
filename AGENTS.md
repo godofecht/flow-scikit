@@ -39,6 +39,17 @@ Filed issues so far:
   code generation for regression and clustering. Ridge R2 jumps from 0.33
   to 0.61, KMeans iris drops from 0.80 to 0.47. Workaround: import prng.flow
   directly from cluster.flow and ensemble.flow instead of through scikit.flow.
+- #547: Follow-up to #469, which is closed. Dead code in a module the program
+  never calls decides whether that program corrupts its heap. Growing
+  mixture.flow makes examples/regression_demo.flow SIGBUS inside malloc
+  (mfm_alloc, reached from linear_regression_predict) after printing all of
+  its output, 10 runs out of 10 on macOS arm64. Appending one never-called
+  6-line function to mixture.flow makes it exit 0, 12 runs out of 12.
+  regression_demo never calls anything in mixture.flow. Linux is unaffected;
+  CI run-all is green. No workaround applied, since a dead function added to
+  nudge codegen breaks again on the next edit. When an unrelated example
+  starts crashing after you grow a library file, check this before assuming
+  your change is wrong.
 
 ## Flow transpiler constraints (workarounds)
 
