@@ -1796,20 +1796,7 @@ export struct LabelBinarizer {
 
 export function label_binarizer_fit(y: ptr<f32>, n: i32, neg_label: f32, pos_label: f32) -> LabelBinarizer {
     let classes: ptr<f32> = array_new_f32(n)
-    let mut n_classes: i32 = 0
-
-    for i in 0 to n {
-        let mut found: bool = false
-        for k in 0 to n_classes {
-            if classes[k] == y[i] { found = true }
-        }
-        if not found {
-            classes[n_classes] = y[i]
-            n_classes = n_classes + 1
-        }
-    }
-
-    _insertion_sort(classes, n_classes)
+    let n_classes: i32 = _preprocessing_label_sorted_unique(y, n, classes)
 
     let result: LabelBinarizer = LabelBinarizer {
         classes: classes, n_classes: n_classes,

@@ -1,0 +1,245 @@
+# Regression test for the optimized LabelBinarizer.fit (roadmap rank 89,
+# issue #298).
+#
+# label_binarizer_fit now shares _preprocessing_label_sorted_unique with
+# label_encoder_fit instead of carrying its own copy of the linear
+# scan-then-insertion-sort pass. The class vector must stay ascending,
+# deduplicated and identically ordered, because label_binarizer_transform and
+# label_binarizer_inverse_transform index columns by class position.
+
+import "lib/scikit/scikit.flow"
+
+# Literal reimplementation of the pre-optimization algorithm, used as the oracle.
+function tolbf_reference_fit(y: ptr<f32>, n: i32, out: ptr<f32>) -> i32 {
+    let mut c: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to c {
+            if out[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            out[c] = y[i]
+            c = c + 1
+        }
+    }
+    for i in 1 to c {
+        let key: f32 = out[i]
+        let mut j: i32 = i - 1
+        while j >= 0 && out[j] > key {
+            out[j + 1] = out[j]
+            j = j - 1
+        }
+        out[j + 1] = key
+    }
+    return c
+}
+
+function tolbf_check(name: string, y: ptr<f32>, n: i32, want: ptr<f32>, n_want: i32) -> i32 {
+    let lb: LabelBinarizer = label_binarizer_fit(y, n, 0.0, 1.0)
+    if lb.n_classes != n_want {
+        print("  FAIL ")
+        print(name)
+        print(": n_classes ")
+        print(lb.n_classes)
+        print(" wanted ")
+        println(n_want)
+        label_binarizer_free(lb)
+        return 1
+    }
+    for k in 0 to n_want {
+        if lb.classes[k] != want[k] {
+            print("  FAIL ")
+            print(name)
+            print(": classes[")
+            print(k)
+            print("] = ")
+            print(lb.classes[k])
+            print(" wanted ")
+            println(want[k])
+            label_binarizer_free(lb)
+            return 1
+        }
+    }
+    if lb.neg_label != 0.0 || lb.pos_label != 1.0 || lb.fitted != true {
+        print("  FAIL ")
+        print(name)
+        println(": labels or fitted flag not carried through")
+        label_binarizer_free(lb)
+        return 1
+    }
+    print("  OK ")
+    println(name)
+    label_binarizer_free(lb)
+    return 0
+}
+
+function tolbf_known_values() -> i32 {
+    let mut failures: i32 = 0
+
+    let a: ptr<f32> = array_new_f32(6)
+    a[0] = 2.0
+    a[1] = 0.0
+    a[2] = 1.0
+    a[3] = 2.0
+    a[4] = 0.0
+    a[5] = 1.0
+    let ea: ptr<f32> = array_new_f32(3)
+    ea[0] = 0.0
+    ea[1] = 1.0
+    ea[2] = 2.0
+    failures = failures + tolbf_check("unsorted with duplicates", a, 6, ea, 3)
+
+    let b: ptr<f32> = array_new_f32(1)
+    b[0] = -3.5
+    let eb: ptr<f32> = array_new_f32(1)
+    eb[0] = -3.5
+    failures = failures + tolbf_check("single sample", b, 1, eb, 1)
+
+    let c: ptr<f32> = array_new_f32(4)
+    c[0] = 8.0
+    c[1] = 8.0
+    c[2] = 8.0
+    c[3] = 8.0
+    let ec: ptr<f32> = array_new_f32(1)
+    ec[0] = 8.0
+    failures = failures + tolbf_check("all identical", c, 4, ec, 1)
+
+    let d: ptr<f32> = array_new_f32(5)
+    d[0] = 4.0
+    d[1] = 1.0
+    d[2] = 0.0
+    d[3] = -1.5
+    d[4] = -9.0
+    let ed: ptr<f32> = array_new_f32(5)
+    ed[0] = -9.0
+    ed[1] = -1.5
+    ed[2] = 0.0
+    ed[3] = 1.0
+    ed[4] = 4.0
+    failures = failures + tolbf_check("descending with negatives", d, 5, ed, 5)
+
+    array_free_f32(a)
+    array_free_f32(ea)
+    array_free_f32(b)
+    array_free_f32(eb)
+    array_free_f32(c)
+    array_free_f32(ec)
+    array_free_f32(d)
+    array_free_f32(ed)
+    return failures
+}
+
+function tolbf_column_order() -> i32 {
+    # Column c of the transform must correspond to the c-th smallest class, and
+    # inverse_transform must recover the original labels.
+    let y: ptr<f32> = array_new_f32(4)
+    y[0] = 5.0
+    y[1] = -1.0
+    y[2] = 2.0
+    y[3] = 5.0
+    let lb: LabelBinarizer = label_binarizer_fit(y, 4, 0.0, 1.0)
+    let Y: Matrix = label_binarizer_transform(lb, y, 4)
+    let mut failures: i32 = 0
+    if Y.cols != 3 || Y.rows != 4 {
+        println("  FAIL column order: unexpected shape")
+        failures = 1
+    }
+    # classes are [-1, 2, 5]
+    if matrix_at(Y, 0, 2) != 1.0 || matrix_at(Y, 0, 0) != 0.0 || matrix_at(Y, 0, 1) != 0.0 {
+        println("  FAIL column order: row 0")
+        failures = 1
+    }
+    if matrix_at(Y, 1, 0) != 1.0 {
+        println("  FAIL column order: row 1")
+        failures = 1
+    }
+    if matrix_at(Y, 2, 1) != 1.0 {
+        println("  FAIL column order: row 2")
+        failures = 1
+    }
+    let back: ptr<f32> = label_binarizer_inverse_transform(lb, Y, 4)
+    for i in 0 to 4 {
+        if back[i] != y[i] {
+            print("  FAIL column order: inverse at ")
+            println(i)
+            failures = 1
+        }
+    }
+    if failures == 0 {
+        println("  OK class column order and inverse round trip")
+    }
+    array_free_f32(back)
+    matrix_free(Y)
+    label_binarizer_free(lb)
+    array_free_f32(y)
+    return failures
+}
+
+function tolbf_workload(n: i32, n_classes: i32, seed: i32) -> i32 {
+    let y: ptr<f32> = array_new_f32(n)
+    let mut s: i32 = seed
+    for i in 0 to n {
+        s = (s * 1103515245 + 12345) % 2147483647
+        if s < 0 {
+            s = 0 - s
+        }
+        y[i] = ((s % n_classes) as f32) * 0.125 - 2.0
+    }
+
+    let want: ptr<f32> = array_new_f32(n)
+    let n_want: i32 = tolbf_reference_fit(y, n, want)
+
+    let lb: LabelBinarizer = label_binarizer_fit(y, n, -1.0, 1.0)
+    let mut failures: i32 = 0
+    if lb.n_classes != n_want {
+        print("  FAIL workload: n_classes ")
+        print(lb.n_classes)
+        print(" wanted ")
+        println(n_want)
+        failures = 1
+    } else {
+        for k in 0 to n_want {
+            if lb.classes[k] != want[k] {
+                print("  FAIL workload: classes[")
+                print(k)
+                print("] = ")
+                print(lb.classes[k])
+                print(" wanted ")
+                println(want[k])
+                failures = 1
+            }
+        }
+    }
+    if failures == 0 {
+        print("  OK workload n=")
+        print(n)
+        print(" classes=")
+        print(n_want)
+        println("")
+    }
+    label_binarizer_free(lb)
+    array_free_f32(want)
+    array_free_f32(y)
+    return failures
+}
+
+function main() -> i32 {
+    println("LabelBinarizer.fit optimization regression test")
+    println("==============================================")
+    let mut failures: i32 = 0
+    failures = failures + tolbf_known_values()
+    failures = failures + tolbf_column_order()
+    failures = failures + tolbf_workload(5000, 11, 3)
+    failures = failures + tolbf_workload(5000, 199, 13)
+    failures = failures + tolbf_workload(1200, 1200, 31)
+
+    if failures != 0 {
+        print("FAILURES: ")
+        println(failures)
+        return 1
+    }
+    println("All LabelBinarizer.fit optimization tests passed!")
+    return 0
+}
