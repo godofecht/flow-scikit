@@ -1,0 +1,217 @@
+# Regression test for the optimized LabelBinarizer.transform (roadmap rank 90,
+# issue #299).
+#
+# label_binarizer_transform used to compare every sample against every class
+# and write a cell through matrix_set for each of the n * C positions. It now
+# finds the one positive column with a search over the sorted class vector,
+# writes the row through Matrix.data directly, and skips the negative fill
+# entirely when neg_label is positive zero, because matrix_new is calloc-backed.
+#
+# The tests below cover both fill paths (neg_label 0.0 and neg_label -1.0),
+# unseen labels, single-class models, and a randomized workload checked against
+# a literal reimplementation of the old double loop.
+
+import "lib/scikit/scikit.flow"
+
+function tolbt_reference_transform(model: LabelBinarizer, y: ptr<f32>, n: i32) -> Matrix {
+    let result: Matrix = matrix_new(n, model.n_classes)
+    for i in 0 to n {
+        for c in 0 to model.n_classes {
+            if y[i] == model.classes[c] {
+                matrix_set(result, i, c, model.pos_label)
+            } else {
+                matrix_set(result, i, c, model.neg_label)
+            }
+        }
+    }
+    return result
+}
+
+function tolbt_compare(name: string, a: Matrix, b: Matrix) -> i32 {
+    if a.rows != b.rows || a.cols != b.cols {
+        print("  FAIL ")
+        print(name)
+        println(": shape mismatch")
+        return 1
+    }
+    for i in 0 to a.rows {
+        for j in 0 to a.cols {
+            if matrix_at(a, i, j) != matrix_at(b, i, j) {
+                print("  FAIL ")
+                print(name)
+                print(" at (")
+                print(i)
+                print(",")
+                print(j)
+                print("): got ")
+                print(matrix_at(b, i, j))
+                print(" wanted ")
+                println(matrix_at(a, i, j))
+                return 1
+            }
+        }
+    }
+    print("  OK ")
+    println(name)
+    return 0
+}
+
+function tolbt_known_values() -> i32 {
+    let mut failures: i32 = 0
+
+    let y: ptr<f32> = array_new_f32(4)
+    y[0] = 5.0
+    y[1] = -1.0
+    y[2] = 2.0
+    y[3] = 5.0
+
+    # neg_label 0.0: the calloc skip path.
+    let lb0: LabelBinarizer = label_binarizer_fit(y, 4, 0.0, 1.0)
+    let g0: Matrix = label_binarizer_transform(lb0, y, 4)
+    # classes are [-1, 2, 5]
+    let mut bad: i32 = 0
+    if matrix_at(g0, 0, 0) != 0.0 || matrix_at(g0, 0, 1) != 0.0 || matrix_at(g0, 0, 2) != 1.0 {
+        bad = 1
+    }
+    if matrix_at(g0, 1, 0) != 1.0 || matrix_at(g0, 1, 1) != 0.0 || matrix_at(g0, 1, 2) != 0.0 {
+        bad = 1
+    }
+    if matrix_at(g0, 2, 0) != 0.0 || matrix_at(g0, 2, 1) != 1.0 || matrix_at(g0, 2, 2) != 0.0 {
+        bad = 1
+    }
+    if matrix_at(g0, 3, 0) != 0.0 || matrix_at(g0, 3, 1) != 0.0 || matrix_at(g0, 3, 2) != 1.0 {
+        bad = 1
+    }
+    if bad != 0 {
+        println("  FAIL neg_label 0.0 known values")
+        failures = failures + 1
+    } else {
+        println("  OK neg_label 0.0 known values")
+    }
+    matrix_free(g0)
+
+    # neg_label -1.0: the explicit fill path.
+    let lbn: LabelBinarizer = label_binarizer_fit(y, 4, -1.0, 1.0)
+    let gn: Matrix = label_binarizer_transform(lbn, y, 4)
+    let mut badn: i32 = 0
+    if matrix_at(gn, 0, 0) != -1.0 || matrix_at(gn, 0, 1) != -1.0 || matrix_at(gn, 0, 2) != 1.0 {
+        badn = 1
+    }
+    if matrix_at(gn, 1, 0) != 1.0 || matrix_at(gn, 1, 1) != -1.0 || matrix_at(gn, 1, 2) != -1.0 {
+        badn = 1
+    }
+    if matrix_at(gn, 2, 0) != -1.0 || matrix_at(gn, 2, 1) != 1.0 || matrix_at(gn, 2, 2) != -1.0 {
+        badn = 1
+    }
+    if badn != 0 {
+        println("  FAIL neg_label -1.0 known values")
+        failures = failures + 1
+    } else {
+        println("  OK neg_label -1.0 known values")
+    }
+    matrix_free(gn)
+
+    # A label the binarizer never saw must produce an all-negative row.
+    let unseen: ptr<f32> = array_new_f32(2)
+    unseen[0] = 42.0
+    unseen[1] = 2.0
+    let gu: Matrix = label_binarizer_transform(lb0, unseen, 2)
+    let mut badu: i32 = 0
+    if matrix_at(gu, 0, 0) != 0.0 || matrix_at(gu, 0, 1) != 0.0 || matrix_at(gu, 0, 2) != 0.0 {
+        badu = 1
+    }
+    if matrix_at(gu, 1, 1) != 1.0 {
+        badu = 1
+    }
+    let gu2: Matrix = label_binarizer_transform(lbn, unseen, 2)
+    if matrix_at(gu2, 0, 0) != -1.0 || matrix_at(gu2, 0, 1) != -1.0 || matrix_at(gu2, 0, 2) != -1.0 {
+        badu = 1
+    }
+    if badu != 0 {
+        println("  FAIL unseen label rows")
+        failures = failures + 1
+    } else {
+        println("  OK unseen label rows are all negative")
+    }
+    matrix_free(gu2)
+    matrix_free(gu)
+    array_free_f32(unseen)
+
+    label_binarizer_free(lbn)
+    label_binarizer_free(lb0)
+    array_free_f32(y)
+
+    # Single class: one column, always positive.
+    let s: ptr<f32> = array_new_f32(3)
+    s[0] = 7.0
+    s[1] = 7.0
+    s[2] = 7.0
+    let lbs: LabelBinarizer = label_binarizer_fit(s, 3, 0.0, 1.0)
+    let gs: Matrix = label_binarizer_transform(lbs, s, 3)
+    if gs.cols != 1 || matrix_at(gs, 0, 0) != 1.0 || matrix_at(gs, 1, 0) != 1.0 || matrix_at(gs, 2, 0) != 1.0 {
+        println("  FAIL single class transform")
+        failures = failures + 1
+    } else {
+        println("  OK single class transform")
+    }
+    matrix_free(gs)
+    label_binarizer_free(lbs)
+    array_free_f32(s)
+
+    return failures
+}
+
+function tolbt_workload(n: i32, n_classes: i32, seed: i32, neg: f32, pos: f32, name: string) -> i32 {
+    let y: ptr<f32> = array_new_f32(n)
+    let mut s: i32 = seed
+    for i in 0 to n {
+        s = (s * 1103515245 + 12345) % 2147483647
+        if s < 0 {
+            s = 0 - s
+        }
+        y[i] = ((s % n_classes) as f32) * 0.25 - 1.0
+    }
+
+    let lb: LabelBinarizer = label_binarizer_fit(y, n, neg, pos)
+
+    # Query set mixes fitted labels with labels the binarizer never saw.
+    let q: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        if i % 9 == 0 {
+            q[i] = 500.0 + (i as f32)
+        } else {
+            q[i] = y[i]
+        }
+    }
+
+    let want: Matrix = tolbt_reference_transform(lb, q, n)
+    let got: Matrix = label_binarizer_transform(lb, q, n)
+    let failures: i32 = tolbt_compare(name, want, got)
+
+    matrix_free(got)
+    matrix_free(want)
+    array_free_f32(q)
+    label_binarizer_free(lb)
+    array_free_f32(y)
+    return failures
+}
+
+function main() -> i32 {
+    println("LabelBinarizer.transform optimization regression test")
+    println("====================================================")
+    let mut failures: i32 = 0
+    failures = failures + tolbt_known_values()
+    failures = failures + tolbt_workload(2000, 11, 3, 0.0, 1.0, "workload C=11 neg=0")
+    failures = failures + tolbt_workload(2000, 11, 3, -1.0, 1.0, "workload C=11 neg=-1")
+    failures = failures + tolbt_workload(2000, 97, 19, 0.0, 1.0, "workload C=97 neg=0")
+    failures = failures + tolbt_workload(2000, 97, 19, -1.0, 2.5, "workload C=97 neg=-1 pos=2.5")
+    failures = failures + tolbt_workload(400, 400, 29, 0.0, 1.0, "workload all-distinct neg=0")
+
+    if failures != 0 {
+        print("FAILURES: ")
+        println(failures)
+        return 1
+    }
+    println("All LabelBinarizer.transform optimization tests passed!")
+    return 0
+}

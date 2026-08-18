@@ -1,0 +1,337 @@
+# Regression test for the DictVectorizer.fit vocabulary collection path.
+# Roadmap rank 53 / issue #262.
+#
+# fit must emit the unique feature keys in FIRST-SEEN order. The optimized
+# implementation keeps a private ascending mirror of the vocabulary so that
+# membership is a search over sorted data, but the emitted order is unchanged.
+# These cases pin that contract, including the linear/binary crossover at 12
+# entries, insertion at the front and back of the sorted mirror, duplicate keys
+# inside one sample, and samples with no keys at all.
+#
+# Run: ./flow run tests/test_opt_dictvectorizer_fit.flow
+
+import "lib/scikit/matrix.flow"
+import "lib/scikit/feature_extraction_extra.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+}
+
+function opt_dv_fit_expect_i32(label: string, got: i32, want: i32) -> i32 {
+    if got == want {
+        return 0
+    }
+    print("  FAIL ")
+    print(label)
+    print(": got ")
+    print(got)
+    print(" want ")
+    println(want)
+    return 1
+}
+
+# Builds a ragged key/value corpus from a flat description.
+# `flat_keys` holds every key back to back; `counts[i]` is the key count of
+# sample i. Values are derived deterministically so parity is checkable.
+function opt_dv_fit_build(flat_keys: ptr<i32>, counts: ptr<i32>, n_samples: i32, keys_out: ptr<ptr<i32> >, vals_out: ptr<ptr<f32> >) -> void {
+    let mut cursor: i32 = 0
+    for i in 0 to n_samples {
+        let c: i32 = counts[i]
+        let kk: ptr<i32> = array_new_f32(c + 1) as ptr<i32>
+        let vv: ptr<f32> = array_new_f32(c + 1)
+        for k in 0 to c {
+            kk[k] = flat_keys[cursor]
+            vv[k] = ((flat_keys[cursor] + 1) as f32) * 0.25
+            cursor = cursor + 1
+        }
+        keys_out[i] = kk
+        vals_out[i] = vv
+    }
+}
+
+function opt_dv_fit_release(keys: ptr<ptr<i32> >, vals: ptr<ptr<f32> >, n_samples: i32) -> void {
+    for i in 0 to n_samples {
+        array_free_f32(keys[i] as ptr<f32>)
+        array_free_f32(vals[i])
+    }
+    free(keys as ptr<void>)
+    free(vals as ptr<void>)
+}
+
+# Runs fit over a flat corpus and checks the vocabulary against `want`.
+function opt_dv_fit_case(label: string, flat_keys: ptr<i32>, counts: ptr<i32>, n_samples: i32, want: ptr<i32>, want_n: i32) -> i32 {
+    let keys: ptr<ptr<i32> > = malloc((n_samples as i64) * 8 + 64) as ptr<ptr<i32> >
+    let vals: ptr<ptr<f32> > = malloc((n_samples as i64) * 8 + 64) as ptr<ptr<f32> >
+    opt_dv_fit_build(flat_keys, counts, n_samples, keys, vals)
+
+    let model: DictVectorizer = dict_vectorizer_fit(keys, vals, n_samples, counts)
+
+    let mut failures: i32 = 0
+    failures = failures + opt_dv_fit_expect_i32(label, model.n_features, want_n)
+    if model.n_features == want_n {
+        for j in 0 to want_n {
+            failures = failures + opt_dv_fit_expect_i32(label, model.feature_names[j][0], want[j])
+        }
+    }
+    if model.fitted {
+        failures = failures + 0
+    } else {
+        println("  FAIL fitted flag not set")
+        failures = failures + 1
+    }
+
+    dict_vectorizer_free(model)
+    opt_dv_fit_release(keys, vals, n_samples)
+    return failures
+}
+
+# Case 1: keys arrive in descending order, so every new key inserts at the
+# front of the sorted mirror. The emitted vocabulary must stay first-seen.
+function opt_dv_fit_test_descending() -> i32 {
+    let n: i32 = 4
+    let counts: ptr<i32> = array_new_f32(n + 8) as ptr<i32>
+    counts[0] = 2
+    counts[1] = 2
+    counts[2] = 2
+    counts[3] = 2
+    let flat: ptr<i32> = array_new_f32(16) as ptr<i32>
+    flat[0] = 90
+    flat[1] = 80
+    flat[2] = 70
+    flat[3] = 60
+    flat[4] = 50
+    flat[5] = 40
+    flat[6] = 30
+    flat[7] = 20
+    let want: ptr<i32> = array_new_f32(16) as ptr<i32>
+    want[0] = 90
+    want[1] = 80
+    want[2] = 70
+    want[3] = 60
+    want[4] = 50
+    want[5] = 40
+    want[6] = 30
+    want[7] = 20
+    let f: i32 = opt_dv_fit_case("descending", flat, counts, n, want, 8)
+    array_free_f32(counts as ptr<f32>)
+    array_free_f32(flat as ptr<f32>)
+    array_free_f32(want as ptr<f32>)
+    return f
+}
+
+# Case 2: repeats within and across samples, plus an empty sample.
+function opt_dv_fit_test_repeats() -> i32 {
+    let n: i32 = 4
+    let counts: ptr<i32> = array_new_f32(n + 8) as ptr<i32>
+    counts[0] = 3
+    counts[1] = 0
+    counts[2] = 4
+    counts[3] = 2
+    let flat: ptr<i32> = array_new_f32(16) as ptr<i32>
+    flat[0] = 7
+    flat[1] = 7
+    flat[2] = 3
+    flat[3] = 3
+    flat[4] = 11
+    flat[5] = 7
+    flat[6] = 3
+    flat[7] = 11
+    flat[8] = 2
+    let want: ptr<i32> = array_new_f32(16) as ptr<i32>
+    want[0] = 7
+    want[1] = 3
+    want[2] = 11
+    want[3] = 2
+    let f: i32 = opt_dv_fit_case("repeats", flat, counts, n, want, 4)
+    array_free_f32(counts as ptr<f32>)
+    array_free_f32(flat as ptr<f32>)
+    array_free_f32(want as ptr<f32>)
+    return f
+}
+
+# Case 3: negative and zero keys, which must sort and compare correctly.
+function opt_dv_fit_test_signed() -> i32 {
+    let n: i32 = 2
+    let counts: ptr<i32> = array_new_f32(n + 8) as ptr<i32>
+    counts[0] = 3
+    counts[1] = 3
+    let flat: ptr<i32> = array_new_f32(16) as ptr<i32>
+    flat[0] = 0
+    flat[1] = 0 - 5
+    flat[2] = 4
+    flat[3] = 0 - 5
+    flat[4] = 0 - 9
+    flat[5] = 0
+    let want: ptr<i32> = array_new_f32(16) as ptr<i32>
+    want[0] = 0
+    want[1] = 0 - 5
+    want[2] = 4
+    want[3] = 0 - 9
+    let f: i32 = opt_dv_fit_case("signed", flat, counts, n, want, 4)
+    array_free_f32(counts as ptr<f32>)
+    array_free_f32(flat as ptr<f32>)
+    array_free_f32(want as ptr<f32>)
+    return f
+}
+
+# Case 4: a single sample with a single key, the smallest useful input.
+function opt_dv_fit_test_single() -> i32 {
+    let n: i32 = 1
+    let counts: ptr<i32> = array_new_f32(n + 8) as ptr<i32>
+    counts[0] = 1
+    let flat: ptr<i32> = array_new_f32(8) as ptr<i32>
+    flat[0] = 42
+    let want: ptr<i32> = array_new_f32(8) as ptr<i32>
+    want[0] = 42
+    let f: i32 = opt_dv_fit_case("single", flat, counts, n, want, 1)
+    array_free_f32(counts as ptr<f32>)
+    array_free_f32(flat as ptr<f32>)
+    array_free_f32(want as ptr<f32>)
+    return f
+}
+
+# Case 5: 40 distinct keys interleaved so the vocabulary crosses the 12-entry
+# linear/binary boundary in both directions of insertion, and each key repeats
+# so the found path is exercised as well as the miss path.
+function opt_dv_fit_test_crossover() -> i32 {
+    let n: i32 = 8
+    let per: i32 = 10
+    let counts: ptr<i32> = array_new_f32(n + 8) as ptr<i32>
+    for i in 0 to n {
+        counts[i] = per
+    }
+    let total: i32 = n * per
+    let flat: ptr<i32> = array_new_f32(total + 8) as ptr<i32>
+    # Keys 0..39, visited as 0, 39, 1, 38, ... so insertions land at both ends,
+    # then the whole run repeats to hit the membership-found path.
+    let want: ptr<i32> = array_new_f32(total + 8) as ptr<i32>
+    let mut cursor: i32 = 0
+    let mut lo: i32 = 0
+    let mut hi: i32 = 39
+    while lo <= hi {
+        flat[cursor] = lo
+        want[cursor] = lo
+        cursor = cursor + 1
+        if lo != hi {
+            flat[cursor] = hi
+            want[cursor] = hi
+            cursor = cursor + 1
+        }
+        lo = lo + 1
+        hi = hi - 1
+    }
+    let n_unique: i32 = cursor
+    for r in 0 to n_unique {
+        flat[n_unique + r] = flat[r]
+    }
+
+    let f: i32 = opt_dv_fit_case("crossover", flat, counts, n, want, n_unique)
+    array_free_f32(counts as ptr<f32>)
+    array_free_f32(flat as ptr<f32>)
+    array_free_f32(want as ptr<f32>)
+    return f
+}
+
+# Realistic workload: 600 samples, 12 keys each, drawn from a 200-key space.
+# Checks the vocabulary is complete, duplicate free, and first-seen ordered.
+function opt_dv_fit_test_workload() -> i32 {
+    let n_samples: i32 = 600
+    let per: i32 = 12
+    let vocab: i32 = 200
+
+    let counts: ptr<i32> = array_new_f32(n_samples + 8) as ptr<i32>
+    let keys: ptr<ptr<i32> > = malloc((n_samples as i64) * 8 + 64) as ptr<ptr<i32> >
+    let vals: ptr<ptr<f32> > = malloc((n_samples as i64) * 8 + 64) as ptr<ptr<f32> >
+
+    let mut seed: i32 = 20250818
+    for i in 0 to n_samples {
+        counts[i] = per
+        let kk: ptr<i32> = array_new_f32(per + 1) as ptr<i32>
+        let vv: ptr<f32> = array_new_f32(per + 1)
+        for k in 0 to per {
+            seed = (seed * 1103515) % 2147483647
+            if seed < 0 { seed = 0 - seed }
+            seed = (seed + 12345) % 2147483647
+            kk[k] = seed % vocab
+            vv[k] = ((seed % 50) as f32) * 0.5
+        }
+        keys[i] = kk
+        vals[i] = vv
+    }
+
+    let model: DictVectorizer = dict_vectorizer_fit(keys, vals, n_samples, counts)
+
+    let mut failures: i32 = 0
+    failures = failures + opt_dv_fit_expect_i32("workload vocab size", model.n_features, vocab)
+
+    # Every emitted key must be distinct and inside the generating range.
+    let seen: ptr<i32> = array_new_f32(vocab + 8) as ptr<i32>
+    for j in 0 to vocab {
+        seen[j] = 0
+    }
+    let mut bad: i32 = 0
+    for j in 0 to model.n_features {
+        let key: i32 = model.feature_names[j][0]
+        if key < 0 || key >= vocab {
+            bad = bad + 1
+        } else {
+            if seen[key] != 0 { bad = bad + 1 }
+            seen[key] = 1
+        }
+    }
+    failures = failures + opt_dv_fit_expect_i32("workload distinct keys", bad, 0)
+
+    # First-seen order: walk the corpus and confirm the emitted vocabulary is
+    # exactly the order of first appearance.
+    let expected: ptr<i32> = array_new_f32(vocab + 8) as ptr<i32>
+    for j in 0 to vocab {
+        seen[j] = 0
+    }
+    let mut n_expected: i32 = 0
+    for i in 0 to n_samples {
+        for k in 0 to counts[i] {
+            let key: i32 = keys[i][k]
+            if seen[key] == 0 {
+                seen[key] = 1
+                expected[n_expected] = key
+                n_expected = n_expected + 1
+            }
+        }
+    }
+    failures = failures + opt_dv_fit_expect_i32("workload first-seen count", n_expected, model.n_features)
+    let mut order_bad: i32 = 0
+    if n_expected == model.n_features {
+        for j in 0 to n_expected {
+            if model.feature_names[j][0] != expected[j] { order_bad = order_bad + 1 }
+        }
+    }
+    failures = failures + opt_dv_fit_expect_i32("workload first-seen order", order_bad, 0)
+
+    array_free_f32(seen as ptr<f32>)
+    array_free_f32(expected as ptr<f32>)
+    dict_vectorizer_free(model)
+    opt_dv_fit_release(keys, vals, n_samples)
+    array_free_f32(counts as ptr<f32>)
+    return failures
+}
+
+function main() -> i32 {
+    println("=== DictVectorizer.fit optimization regression (#262) ===")
+
+    let mut failures: i32 = 0
+    failures = failures + opt_dv_fit_test_descending()
+    failures = failures + opt_dv_fit_test_repeats()
+    failures = failures + opt_dv_fit_test_signed()
+    failures = failures + opt_dv_fit_test_single()
+    failures = failures + opt_dv_fit_test_crossover()
+    failures = failures + opt_dv_fit_test_workload()
+
+    if failures == 0 {
+        println("All DictVectorizer.fit optimization tests passed!")
+        return 0
+    }
+    print("FAILED checks: ")
+    println(failures)
+    return 1
+}

@@ -138,6 +138,191 @@ export function array_free_f32(p: ptr<f32>) -> void {
     free(p as ptr<void>)
 }
 
+# Distinct-value collection, issue #398.
+#
+# Roughly thirty fit functions in this library derived their class vector with
+# the same hand-rolled loop:
+#
+#     let classes: ptr<f32> = array_new_f32(n_classes)
+#     let mut n_found: i32 = 0
+#     for i in 0 to n {
+#         let mut found: bool = false
+#         for c in 0 to n_found {
+#             if classes[c] == y[i] { found = true }
+#         }
+#         if not found {
+#             classes[n_found] = y[i]
+#             n_found = n_found + 1
+#         }
+#     }
+#
+# n_classes is caller supplied and nothing tied it to the number of distinct
+# labels in y, so labels carrying more distinct values than the caller declared
+# wrote past the end of the allocation. n_found still counted every distinct
+# value, and the membership scan read those out-of-bounds slots back, so the
+# loop behaved as though the buffer had always been large enough.
+#
+# distinct_f32 keeps exactly that behaviour and makes it legal: the buffer is
+# sized to hold every distinct value, never fewer than the caller's declared
+# capacity. No class is dropped, count is the same number the old loop
+# produced, and first-appearance order is preserved, which is what fixes the
+# column order of every predict_proba in the library.
+#
+# Membership used to be a linear rescan with no early exit, so the pass was
+# O(n * n_found). Labels are almost always small integers; when they are,
+# membership is a direct-index table lookup and the pass is O(n). Fractional
+# values, huge magnitudes and NaN fall back to the original scan, now with an
+# early exit.
+export struct DistinctF32 {
+    values: ptr<f32>,
+    count: i32,
+    capacity: i32
+}
+
+export struct DistinctI32 {
+    values: ptr<i32>,
+    count: i32,
+    capacity: i32
+}
+
+export function distinct_f32(src: ptr<f32>, n: i32, min_capacity: i32) -> DistinctF32 {
+    let mut cap: i32 = min_capacity
+    if cap < 0 { cap = 0 }
+
+    if n < 1 {
+        let empty: ptr<f32> = array_new_f32(cap)
+        let empty_result: DistinctF32 = DistinctF32 { values: empty, count: 0, capacity: cap }
+        return empty_result
+    }
+
+    let mut lo: f32 = src[0]
+    let mut hi: f32 = src[0]
+    let mut use_table: bool = true
+    for i in 0 to n {
+        let v: f32 = src[i]
+        if v < -1000000.0 || v > 1000000.0 {
+            use_table = false
+            break
+        }
+        let t: f32 = (v as i32) as f32
+        if t != v {
+            use_table = false
+            break
+        }
+        if v < lo { lo = v }
+        if v > hi { hi = v }
+    }
+
+    let lo_i: i32 = lo as i32
+    let mut span: i32 = 1
+    if use_table {
+        span = (hi as i32) - lo_i + 1
+        if span < 1 || span > 4000000 { use_table = false }
+    }
+
+    if use_table {
+        let mut values: ptr<f32> = array_new_f32(cap)
+        let seen: ptr<f32> = array_new_f32(span)
+        let mut count: i32 = 0
+        for i in 0 to n {
+            let v: f32 = src[i]
+            let idx: i32 = (v as i32) - lo_i
+            if seen[idx] == 0.0 {
+                seen[idx] = 1.0
+                if count < cap { values[count] = v }
+                count = count + 1
+            }
+        }
+        if count > cap {
+            # y carried more distinct labels than the caller declared. Grow to
+            # fit and refill rather than drop a class.
+            array_free_f32(values)
+            cap = count
+            values = array_new_f32(cap)
+            for i in 0 to span { seen[i] = 0.0 }
+            let mut w: i32 = 0
+            for i in 0 to n {
+                let v: f32 = src[i]
+                let idx: i32 = (v as i32) - lo_i
+                if seen[idx] == 0.0 {
+                    seen[idx] = 1.0
+                    values[w] = v
+                    w = w + 1
+                }
+            }
+        }
+        array_free_f32(seen)
+        let table_result: DistinctF32 = DistinctF32 { values: values, count: count, capacity: cap }
+        return table_result
+    }
+
+    # Fractional values, huge magnitudes and NaN keep the original linear scan,
+    # now with an early exit. The sample count is an upper bound on the number
+    # of distinct values, so collect into scratch and size the result after.
+    let scratch: ptr<f32> = array_new_f32(n)
+    let mut count: i32 = 0
+    for i in 0 to n {
+        let v: f32 = src[i]
+        let mut found: bool = false
+        for c in 0 to count {
+            if scratch[c] == v {
+                found = true
+                break
+            }
+        }
+        if not found {
+            scratch[count] = v
+            count = count + 1
+        }
+    }
+
+    if cap < count { cap = count }
+    let values: ptr<f32> = array_new_f32(cap)
+    for c in 0 to count { values[c] = scratch[c] }
+    array_free_f32(scratch)
+
+    let result: DistinctF32 = DistinctF32 { values: values, count: count, capacity: cap }
+    return result
+}
+
+# Same contract as distinct_f32 for i32 sources.
+export function distinct_i32(src: ptr<i32>, n: i32, min_capacity: i32) -> DistinctI32 {
+    let mut cap: i32 = min_capacity
+    if cap < 0 { cap = 0 }
+
+    if n < 1 {
+        let empty: ptr<i32> = malloc((cap as i64) * 4) as ptr<i32>
+        let empty_result: DistinctI32 = DistinctI32 { values: empty, count: 0, capacity: cap }
+        return empty_result
+    }
+
+    let scratch: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let mut count: i32 = 0
+    for i in 0 to n {
+        let v: i32 = src[i]
+        let mut found: bool = false
+        for c in 0 to count {
+            if scratch[c] == v {
+                found = true
+                break
+            }
+        }
+        if not found {
+            scratch[count] = v
+            count = count + 1
+        }
+    }
+
+    if cap < count { cap = count }
+    let values: ptr<i32> = malloc((cap as i64) * 4) as ptr<i32>
+    for c in 0 to cap { values[c] = 0 }
+    for c in 0 to count { values[c] = scratch[c] }
+    free(scratch as ptr<void>)
+
+    let result: DistinctI32 = DistinctI32 { values: values, count: count, capacity: cap }
+    return result
+}
+
 # f64 array support for higher-precision internal computations
 export function array_new_f64(n: i32) -> ptr<f64> {
     let p: ptr<void> = calloc((n as i64) * 8, 1)

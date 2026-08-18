@@ -1,0 +1,265 @@
+# Regression test for the BaggingRegressor.fit optimization
+# (roadmap rank 28, issue #237).
+#
+# The optimization only moves the bootstrap buffers out of the estimator loop
+# and replaces per-element accessor pairs with a row-major memcpy. It must not
+# touch the random draw order or the bootstrap sampling scheme, so the fitted
+# ensemble has to be identical for a given seed. This test proves that by
+# comparing the two fits node by node, not just by comparing an error metric.
+#
+# Per issue #359 the tree builder leaves some TreeNode fields unwritten
+# depending on the node kind: a leaf never writes feature or threshold, and an
+# internal node never writes value. Those fields hold whatever malloc handed
+# back, so they differ run to run on main alone. The comparison below skips
+# them for the kind that does not write them.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+    function printf(fmt: string, ...) -> i32
+}
+
+const BRF_TIME_UTC: i32 = 1
+
+function brf_now_ns() -> i64 {
+    let ts: ptr<i64> = malloc(16) as ptr<i64>
+    timespec_get(ts, BRF_TIME_UTC)
+    let value: i64 = ts[0] * 1000000000 + ts[1]
+    free(ts as ptr<void>)
+    return value
+}
+
+function brf_abs(x: f32) -> f32 {
+    if x < 0.0 { return -x }
+    return x
+}
+
+# Pre-#237 reference implementation, kept only for A/B parity and timing.
+function brf_reference_fit(X: Matrix, y: ptr<f32>, n_estimators: i32, max_depth: i32, seed: i32) -> BaggingRegressor {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_estimators as i64) * 128) as ptr<DecisionTreeRegressor>
+    srand(seed)
+
+    let mut i: i32 = 0
+    while i < n_estimators {
+        let X_boot: Matrix = matrix_new(n, n_features)
+        let y_boot: ptr<f32> = array_new_f32(n)
+        let mut j: i32 = 0
+        while j < n {
+            let idx: i32 = rand() % n
+            let mut k: i32 = 0
+            while k < n_features {
+                matrix_set(X_boot, j, k, matrix_at(X, idx, k))
+                k = k + 1
+            }
+            y_boot[j] = y[idx]
+            j = j + 1
+        }
+        trees[i] = decision_tree_regressor_fit(X_boot, y_boot, max_depth, 2)
+        matrix_free(X_boot)
+        array_free_f32(y_boot)
+        i = i + 1
+    }
+
+    let result: BaggingRegressor = BaggingRegressor {
+        trees: trees,
+        n_estimators: n_estimators,
+        n_features: n_features,
+        fitted: true
+    }
+    return result
+}
+
+# Element-wise comparison of two fitted ensembles, skipping the TreeNode
+# fields the builder never writes for that node kind (issue #359).
+function brf_same_ensemble(a: BaggingRegressor, b: BaggingRegressor) -> bool {
+    if a.n_estimators != b.n_estimators { return false }
+    if a.n_features != b.n_features { return false }
+    for t in 0 to a.n_estimators {
+        let ta: DecisionTreeRegressor = a.trees[t]
+        let tb: DecisionTreeRegressor = b.trees[t]
+        if ta.n_nodes != tb.n_nodes { return false }
+        if ta.max_depth != tb.max_depth { return false }
+        if ta.criterion != tb.criterion { return false }
+        for k in 0 to ta.n_nodes {
+            let na: ptr<TreeNode> = ta.nodes + k
+            let nb: ptr<TreeNode> = tb.nodes + k
+            if na.is_leaf != nb.is_leaf { return false }
+            if na.n_samples != nb.n_samples { return false }
+            if na.impurity != nb.impurity { return false }
+            if na.left != nb.left { return false }
+            if na.right != nb.right { return false }
+            if na.is_leaf {
+                # feature and threshold are never written for a leaf
+                if na.value != nb.value { return false }
+            } else {
+                # value is never written for an internal node
+                if na.feature != nb.feature { return false }
+                if na.threshold != nb.threshold { return false }
+            }
+        }
+    }
+    return true
+}
+
+function brf_same_preds(a: ptr<f32>, b: ptr<f32>, n: i32) -> bool {
+    for i in 0 to n {
+        if a[i] != b[i] { return false }
+    }
+    return true
+}
+
+function brf_check_case(X: Matrix, y: ptr<f32>, n_estimators: i32, max_depth: i32, seed: i32, label: string) -> i32 {
+    let reference: BaggingRegressor = brf_reference_fit(X, y, n_estimators, max_depth, seed)
+    let optimized: BaggingRegressor = bagging_regressor_fit(X, y, n_estimators, max_depth, seed)
+
+    if not brf_same_ensemble(reference, optimized) {
+        print("FAIL: fitted ensemble differs for ")
+        println(label)
+        return 1
+    }
+
+    let p_ref: ptr<f32> = bagging_regressor_predict(reference, X)
+    let p_opt: ptr<f32> = bagging_regressor_predict(optimized, X)
+    if not brf_same_preds(p_ref, p_opt, X.rows) {
+        print("FAIL: predictions differ for ")
+        println(label)
+        return 1
+    }
+    array_free_f32(p_ref)
+    array_free_f32(p_opt)
+
+    bagging_regressor_free(reference)
+    bagging_regressor_free(optimized)
+    return 0
+}
+
+function main() -> i32 {
+    # ---------------------------------------------------------------
+    # 1. Realistic workload: diabetes, 10 estimators, depth 6, seed 42.
+    # ---------------------------------------------------------------
+    let d: Dataset = load_diabetes()
+    let n: i32 = d.X.rows
+    let reference: BaggingRegressor = brf_reference_fit(d.X, d.y, 10, 6, 42)
+    let optimized: BaggingRegressor = bagging_regressor_fit(d.X, d.y, 10, 6, 42)
+
+    if not brf_same_ensemble(reference, optimized) {
+        println("FAIL: diabetes ensemble is not identical for seed 42")
+        return 1
+    }
+
+    let p_ref: ptr<f32> = bagging_regressor_predict(reference, d.X)
+    let p_opt: ptr<f32> = bagging_regressor_predict(optimized, d.X)
+    if not brf_same_preds(p_ref, p_opt, n) {
+        println("FAIL: diabetes predictions diverged")
+        return 1
+    }
+
+    # training R^2 must be a sane fit, and identical between the two
+    let mut mean_y: f32 = 0.0
+    for i in 0 to n { mean_y = mean_y + d.y[i] }
+    mean_y = mean_y / (n as f32)
+    let mut ss_res: f32 = 0.0
+    let mut ss_tot: f32 = 0.0
+    for i in 0 to n {
+        let e: f32 = d.y[i] - p_opt[i]
+        ss_res = ss_res + e * e
+        let c: f32 = d.y[i] - mean_y
+        ss_tot = ss_tot + c * c
+    }
+    let r2: f32 = 1.0 - ss_res / ss_tot
+    if r2 < 0.5 {
+        println("FAIL: diabetes training R2 collapsed")
+        return 1
+    }
+    printf("BaggingRegressor fit diabetes: train R2=%.6f trees=%d\n", r2 as f64, optimized.n_estimators)
+    array_free_f32(p_ref)
+    array_free_f32(p_opt)
+    bagging_regressor_free(reference)
+    bagging_regressor_free(optimized)
+
+    # ---------------------------------------------------------------
+    # 2. A/B timing on the diabetes workload.
+    # ---------------------------------------------------------------
+    let repeats: i32 = 5
+    let start_reference: i64 = brf_now_ns()
+    for r in 0 to repeats {
+        let m: BaggingRegressor = brf_reference_fit(d.X, d.y, 10, 6, 42)
+        bagging_regressor_free(m)
+    }
+    let end_reference: i64 = brf_now_ns()
+
+    let start_optimized: i64 = brf_now_ns()
+    for r in 0 to repeats {
+        let m: BaggingRegressor = bagging_regressor_fit(d.X, d.y, 10, 6, 42)
+        bagging_regressor_free(m)
+    }
+    let end_optimized: i64 = brf_now_ns()
+
+    let reference_ms: f64 = ((end_reference - start_reference) as f64) / 1000000.0 / (repeats as f64)
+    let optimized_ms: f64 = ((end_optimized - start_optimized) as f64) / 1000000.0 / (repeats as f64)
+    printf("BaggingRegressor fit A/B (diabetes): reference=%.3f ms optimized=%.3f ms speedup=%.3fx\n", reference_ms, optimized_ms, reference_ms / optimized_ms)
+
+    # ---------------------------------------------------------------
+    # 3. Edge cases.
+    # ---------------------------------------------------------------
+    let small_X: Matrix = matrix_new(20, 4)
+    let small_y: ptr<f32> = array_new_f32(20)
+    for i in 0 to 20 {
+        matrix_set(small_X, i, 0, (i as f32) * 0.5)
+        matrix_set(small_X, i, 1, ((i % 4) as f32) * 2.0)
+        matrix_set(small_X, i, 2, 3.0)
+        matrix_set(small_X, i, 3, ((i % 2) as f32) * -1.0)
+        small_y[i] = (i as f32) * 1.5 - 3.0
+    }
+
+    # a single estimator
+    if brf_check_case(small_X, small_y, 1, 4, 7, "single estimator") != 0 { return 1 }
+    # depth 0, so every tree is a single leaf
+    if brf_check_case(small_X, small_y, 5, 0, 3, "depth 0") != 0 { return 1 }
+    # more estimators than rows
+    if brf_check_case(small_X, small_y, 30, 3, 9, "30 estimators") != 0 { return 1 }
+    # a different seed must still agree between the two fits
+    if brf_check_case(small_X, small_y, 6, 4, 12345, "seed 12345") != 0 { return 1 }
+    # a deep tree, so most nodes are internal
+    if brf_check_case(small_X, small_y, 4, 12, 31, "depth 12") != 0 { return 1 }
+
+    # a single-row training set, the smallest bootstrap the loop can draw
+    let one_X: Matrix = matrix_new(1, 4)
+    let one_y: ptr<f32> = array_new_f32(1)
+    for j in 0 to 4 { matrix_set(one_X, 0, j, matrix_at(small_X, 0, j)) }
+    one_y[0] = small_y[0]
+    if brf_check_case(one_X, one_y, 4, 4, 21, "single training row") != 0 { return 1 }
+    matrix_free(one_X)
+    array_free_f32(one_y)
+
+    # a single-column design matrix, where a bootstrap row is one f32
+    let thin_X: Matrix = matrix_new(20, 1)
+    for i in 0 to 20 { matrix_set(thin_X, i, 0, matrix_at(small_X, i, 0)) }
+    if brf_check_case(thin_X, small_y, 6, 4, 5, "single feature") != 0 { return 1 }
+    matrix_free(thin_X)
+
+    # a constant target, so every tree is a single leaf at the same value
+    let flat_y: ptr<f32> = array_new_f32(20)
+    for i in 0 to 20 { flat_y[i] = 4.25 }
+    if brf_check_case(small_X, flat_y, 6, 4, 11, "constant target") != 0 { return 1 }
+    let flat: BaggingRegressor = bagging_regressor_fit(small_X, flat_y, 6, 4, 11)
+    let p_flat: ptr<f32> = bagging_regressor_predict(flat, small_X)
+    for i in 0 to 20 {
+        if brf_abs(p_flat[i] - 4.25) > 0.0001 {
+            println("FAIL: constant-target fit did not reproduce the constant")
+            return 1
+        }
+    }
+    array_free_f32(p_flat)
+    bagging_regressor_free(flat)
+    array_free_f32(flat_y)
+
+    matrix_free(small_X)
+    array_free_f32(small_y)
+
+    println("PASS: test_opt_baggingregressor_fit")
+    return 0
+}

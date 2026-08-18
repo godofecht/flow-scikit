@@ -133,18 +133,11 @@ export function mlp_classifier_fit(
         }
     }
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut class_idx: i32 = 0
-    for i in 0 to n {
-        let mut found: bool = false
-        for c in 0 to class_idx {
-            if classes[c] == y[i] { found = true; break }
-        }
-        if not found {
-            classes[class_idx] = y[i]
-            class_idx = class_idx + 1
-        }
-    }
+    # Issue #398: this used to append at classes[class_idx] with no check
+    # against n_classes, which wrote past the allocation whenever y carried
+    # more distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, n, n_classes)
+    let classes: ptr<f32> = found_classes.values
 
     let activations: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >
     let zs: ptr<ptr<f32> > = malloc((n_layers as i64) * 8) as ptr<ptr<f32> >

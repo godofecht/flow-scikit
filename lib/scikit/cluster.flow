@@ -3,6 +3,7 @@
 
 import "lib/scikit/matrix.flow"
 import "lib/scikit/prng.flow"
+import "lib/scikit/blas.flow"
 
 export struct KMeans {
     centroids: ptr<ptr<f32> >,
@@ -47,56 +48,189 @@ export function kmeans_fit_init(X: Matrix, init_centers: Matrix, n_clusters: i32
     return _kmeans_run(X, centroids, n_clusters, max_iter, tol)
 }
 
+# Scratch buffers for one Lloyd run. Allocated once per fit and reused across
+# iterations, instead of the per-iteration malloc/calloc/free the accumulator
+# arrays used to do.
+struct KMeansScratch {
+    cbuf: ptr<f32>,
+    cnorm: ptr<f32>,
+    cross: ptr<f32>,
+    best_out: ptr<f32>,
+    sums: ptr<f32>,
+    counts: ptr<i32>
+}
+
+function _kmeans_scratch_new(n: i32, n_clusters: i32, n_features: i32) -> KMeansScratch {
+    let cbuf: ptr<f32> = array_new_f32(n_clusters * n_features)
+    let cnorm: ptr<f32> = array_new_f32(n_clusters)
+    # malloc, not calloc: sgemm with beta = 0 overwrites every element.
+    let cross: ptr<f32> = malloc(((n as i64) * (n_clusters as i64)) * 4) as ptr<f32>
+    let best_out: ptr<f32> = array_new_f32(32)
+    let sums: ptr<f32> = array_new_f32(n_clusters * n_features)
+    let counts: ptr<i32> = malloc((n_clusters as i64) * 4) as ptr<i32>
+    let scratch: KMeansScratch = KMeansScratch {
+        cbuf: cbuf,
+        cnorm: cnorm,
+        cross: cross,
+        best_out: best_out,
+        sums: sums,
+        counts: counts
+    }
+    return scratch
+}
+
+function _kmeans_scratch_free(scratch: KMeansScratch) -> void {
+    array_free_f32(scratch.cbuf)
+    array_free_f32(scratch.cnorm)
+    free(scratch.cross as ptr<void>)
+    array_free_f32(scratch.best_out)
+    array_free_f32(scratch.sums)
+    free(scratch.counts as ptr<void>)
+}
+
+# Squared distance from one sample to one centroid, accumulated in the same
+# order as the original per-pair loop.
+function _kmeans_sqdist(x_data: ptr<f32>, x_base: i32, crow: ptr<f32>, n_features: i32) -> f32 {
+    let mut dist: f32 = 0.0
+    for j in 0 to n_features {
+        let d: f32 = x_data[x_base + j] - crow[j]
+        dist = dist + d * d
+    }
+    return dist
+}
+
+# One Lloyd assignment pass. Fills labels and returns the inertia.
+#
+# The argmin is taken from the squared-euclidean expansion
+#   ||x - c||^2 = ||x||^2 + ||c||^2 - 2 * (x . c)
+# with the cross term as a single sgemm, exactly as kmeans_predict does. The
+# ||x||^2 term is common to all centroids so it drops out of the comparison.
+#
+# The winner is only accepted when it beats the runner-up by more than a
+# conservative float32 error guard; anything inside the guard band, including
+# exact ties, is re-decided by the direct kernel. The winning squared distance
+# is then recomputed directly, in the original accumulation order, so the
+# inertia this returns is bit-identical to the old triple loop. Cost per
+# iteration drops from n*k*d scalar operations to one gemm plus n*d.
+function _kmeans_assign(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, n_features: i32, labels: ptr<i32>, scratch: KMeansScratch) -> f32 {
+    let n: i32 = X.rows
+    if n <= 0 || n_clusters <= 0 || n_features <= 0 {
+        return 0.0
+    }
+
+    let x_data: ptr<f32> = X.data
+    let x_stride: i32 = X.cols
+    let cbuf: ptr<f32> = scratch.cbuf
+    let cnorm: ptr<f32> = scratch.cnorm
+    let cross: ptr<f32> = scratch.cross
+    let best_out: ptr<f32> = scratch.best_out
+
+    # Below the BLAS work threshold the sgemm dispatch costs more per iteration
+    # than the whole scalar assignment, so run the direct kernel.
+    if not _kmeans_use_blas(n, n_clusters, n_features) {
+        let mut small_inertia: f32 = 0.0
+        for i in 0 to n {
+            let best_k: i32 = _kmeans_nearest_centroid(x_data, i * x_stride, centroids, n_clusters, n_features, best_out)
+            labels[i] = best_k
+            small_inertia = small_inertia + best_out[0]
+        }
+        return small_inertia
+    }
+
+    let mut cnorm_max: f32 = 0.0
+    for k in 0 to n_clusters {
+        let crow: ptr<f32> = centroids[k]
+        let cbase: i32 = k * n_features
+        let mut cs: f32 = 0.0
+        for j in 0 to n_features {
+            let v: f32 = crow[j]
+            cbuf[cbase + j] = v
+            cs = cs + v * v
+        }
+        cnorm[k] = cs
+        if cs > cnorm_max {
+            cnorm_max = cs
+        }
+    }
+
+    blas_matmat_nt(x_data, cbuf, cross, n, n_clusters, n_features, x_stride, n_features, -2.0, 0.0)
+
+    let mut inertia: f32 = 0.0
+    for i in 0 to n {
+        let xbase: i32 = i * x_stride
+        let xs: f32 = blas_dot(n_features, x_data + xbase, x_data + xbase)
+        let rbase: i32 = i * n_clusters
+        let mut best: f32 = cnorm[0] + cross[rbase]
+        let mut best_k: i32 = 0
+        let mut second: f32 = 9999999999.0
+        for k in 1 to n_clusters {
+            let v: f32 = cnorm[k] + cross[rbase + k]
+            if v < best {
+                second = best
+                best = v
+                best_k = k
+            } else {
+                if v < second {
+                    second = v
+                }
+            }
+        }
+
+        let guard: f32 = (xs + cnorm_max) * 0.0001 + 0.000001
+        let mut best_dist: f32 = 0.0
+        if second - best > guard {
+            best_dist = _kmeans_sqdist(x_data, xbase, centroids[best_k], n_features)
+        } else {
+            best_k = _kmeans_nearest_centroid(x_data, xbase, centroids, n_clusters, n_features, best_out)
+            best_dist = best_out[0]
+        }
+        labels[i] = best_k
+        inertia = inertia + best_dist
+    }
+    return inertia
+}
+
 function _kmeans_run(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, max_iter: i32, tol: f32) -> KMeans {
     let n_features: i32 = X.cols
 
     let labels: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
     let mut inertia: f32 = 0.0
     let mut n_iter_run: i32 = 0
+    let scratch: KMeansScratch = _kmeans_scratch_new(X.rows, n_clusters, n_features)
+    let sums: ptr<f32> = scratch.sums
+    let counts: ptr<i32> = scratch.counts
+    let x_data: ptr<f32> = X.data
 
     for iter in 0 to max_iter {
         n_iter_run = iter + 1
-        let mut new_inertia: f32 = 0.0
+        let new_inertia: f32 = _kmeans_assign(X, centroids, n_clusters, n_features, labels, scratch)
 
-        for i in 0 to X.rows {
-            let mut best_k: i32 = 0
-            let mut best_dist: f32 = 9999999999.0
-            for k in 0 to n_clusters {
-                let mut dist: f32 = 0.0
-                for j in 0 to n_features {
-                    let d: f32 = matrix_at(X, i, j) - centroids[k][j]
-                    dist = dist + d * d
-                }
-                if dist < best_dist {
-                    best_dist = dist
-                    best_k = k
-                }
-            }
-            labels[i] = best_k
-            new_inertia = new_inertia + best_dist
+        for idx in 0 to n_clusters * n_features {
+            sums[idx] = 0.0
         }
-
-        let sums: ptr<ptr<f32> > = malloc((n_clusters as i64) * 8) as ptr<ptr<f32> >
-        let counts: ptr<i32> = malloc((n_clusters as i64) * 4) as ptr<i32>
         for k in 0 to n_clusters {
-            sums[k] = array_new_f32(n_features)
             counts[k] = 0
         }
 
         for i in 0 to X.rows {
             let k: i32 = labels[i]
             counts[k] = counts[k] + 1
+            let sbase: i32 = k * n_features
+            let xbase: i32 = i * n_features
             for j in 0 to n_features {
-                sums[k][j] = sums[k][j] + matrix_at(X, i, j)
+                sums[sbase + j] = sums[sbase + j] + x_data[xbase + j]
             }
         }
 
         let mut max_shift: f32 = 0.0
         for k in 0 to n_clusters {
+            let crow: ptr<f32> = centroids[k]
+            let sbase: i32 = k * n_features
             if counts[k] > 0 {
+                let count_f: f32 = counts[k] as f32
                 for j in 0 to n_features {
-                    let new_val: f32 = sums[k][j] / (counts[k] as f32)
-                    let shift: f32 = new_val - centroids[k][j]
+                    let new_val: f32 = sums[sbase + j] / count_f
+                    let shift: f32 = new_val - crow[j]
                     if shift < 0.0 {
                         let abs_shift: f32 = 0.0 - shift
                         if abs_shift > max_shift {
@@ -107,7 +241,7 @@ function _kmeans_run(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, max_
                             max_shift = shift
                         }
                     }
-                    centroids[k][j] = new_val
+                    crow[j] = new_val
                 }
             } else {
                 # Empty cluster: relocate centroid to the point with the
@@ -117,20 +251,16 @@ function _kmeans_run(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, max_
                 let mut farthest_idx: i32 = 0
                 let mut farthest_dist: f32 = -1.0
                 for i in 0 to X.rows {
-                    let kk: i32 = labels[i]
-                    let mut dist: f32 = 0.0
-                    for j in 0 to n_features {
-                        let d: f32 = matrix_at(X, i, j) - centroids[kk][j]
-                        dist = dist + d * d
-                    }
+                    let dist: f32 = _kmeans_sqdist(x_data, i * n_features, centroids[labels[i]], n_features)
                     if dist > farthest_dist {
                         farthest_dist = dist
                         farthest_idx = i
                     }
                 }
+                let fbase: i32 = farthest_idx * n_features
                 for j in 0 to n_features {
-                    let new_val: f32 = matrix_at(X, farthest_idx, j)
-                    let shift: f32 = new_val - centroids[k][j]
+                    let new_val: f32 = x_data[fbase + j]
+                    let shift: f32 = new_val - crow[j]
                     if shift < 0.0 {
                         let abs_shift: f32 = 0.0 - shift
                         if abs_shift > max_shift {
@@ -141,13 +271,10 @@ function _kmeans_run(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, max_
                             max_shift = shift
                         }
                     }
-                    centroids[k][j] = new_val
+                    crow[j] = new_val
                 }
             }
-            array_free_f32(sums[k])
         }
-        free(sums as ptr<void>)
-        free(counts as ptr<void>)
 
         inertia = new_inertia
 
@@ -155,6 +282,8 @@ function _kmeans_run(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, max_
             break
         }
     }
+
+    _kmeans_scratch_free(scratch)
 
     return KMeans {
         centroids: centroids,
@@ -252,63 +381,56 @@ function _kmeans_lloyd(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, ma
     let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
     let mut inertia: f32 = 0.0
     let mut n_iter_run: i32 = 0
+    let scratch: KMeansScratch = _kmeans_scratch_new(n, n_clusters, n_features)
+    let sums: ptr<f32> = scratch.sums
+    let counts: ptr<i32> = scratch.counts
+    let x_data: ptr<f32> = X.data
 
     for iter in 0 to max_iter {
         n_iter_run = iter + 1
-        let mut new_inertia: f32 = 0.0
+        let new_inertia: f32 = _kmeans_assign(X, centroids, n_clusters, n_features, labels, scratch)
 
-        for i in 0 to n {
-            let mut best_k: i32 = 0
-            let mut best_dist: f32 = 9999999999.0
-            for k in 0 to n_clusters {
-                let mut dist: f32 = 0.0
-                for j in 0 to n_features {
-                    let d: f32 = matrix_at(X, i, j) - centroids[k][j]
-                    dist = dist + d * d
-                }
-                if dist < best_dist { best_dist = dist; best_k = k }
-            }
-            labels[i] = best_k
-            new_inertia = new_inertia + best_dist
+        for idx in 0 to n_clusters * n_features {
+            sums[idx] = 0.0
         }
-
-        let sums: ptr<ptr<f32> > = malloc((n_clusters as i64) * 8) as ptr<ptr<f32> >
-        let counts: ptr<i32> = malloc((n_clusters as i64) * 4) as ptr<i32>
         for k in 0 to n_clusters {
-            sums[k] = array_new_f32(n_features)
             counts[k] = 0
         }
         for i in 0 to n {
             let k: i32 = labels[i]
             counts[k] = counts[k] + 1
+            let sbase: i32 = k * n_features
+            let xbase: i32 = i * n_features
             for j in 0 to n_features {
-                sums[k][j] = sums[k][j] + matrix_at(X, i, j)
+                sums[sbase + j] = sums[sbase + j] + x_data[xbase + j]
             }
         }
 
         let mut max_shift: f32 = 0.0
         for k in 0 to n_clusters {
             if counts[k] > 0 {
+                let crow: ptr<f32> = centroids[k]
+                let sbase: i32 = k * n_features
+                let count_f: f32 = counts[k] as f32
                 for j in 0 to n_features {
-                    let new_val: f32 = sums[k][j] / (counts[k] as f32)
-                    let shift: f32 = new_val - centroids[k][j]
+                    let new_val: f32 = sums[sbase + j] / count_f
+                    let shift: f32 = new_val - crow[j]
                     if shift < 0.0 {
                         let abs_shift: f32 = 0.0 - shift
                         if abs_shift > max_shift { max_shift = abs_shift }
                     } else {
                         if shift > max_shift { max_shift = shift }
                     }
-                    centroids[k][j] = new_val
+                    crow[j] = new_val
                 }
             }
-            array_free_f32(sums[k])
         }
-        free(sums as ptr<void>)
-        free(counts as ptr<void>)
 
         inertia = new_inertia
         if max_shift < tol { break }
     }
+
+    _kmeans_scratch_free(scratch)
 
     return KMeans {
         centroids: centroids,
@@ -374,39 +496,259 @@ export function kmeans_fit_plus_plus(X: Matrix, n_clusters: i32, max_iter: i32, 
     }
 }
 
-export function kmeans_predict(model: KMeans, X: Matrix) -> ptr<i32> {
-    let preds: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
-    for i in 0 to X.rows {
-        let mut best_k: i32 = 0
-        let mut best_dist: f32 = 9999999999.0
-        for k in 0 to model.n_clusters {
-            let mut dist: f32 = 0.0
-            for j in 0 to model.n_features {
-                let d: f32 = matrix_at(X, i, j) - model.centroids[k][j]
-                dist = dist + d * d
+# Nearest centroid for the sample stored at x_data[x_base .. x_base+n_features).
+#
+# The squared distance to each centroid is accumulated in the same order and
+# compared with the same strict less-than tie-break as the original per-pair
+# loop, so the chosen index and the returned distance are bit-identical.
+# The one addition is a partial-distance bail-out: squares are non-negative, so
+# a running sum that has already reached the current best cannot come back
+# below it, and the rest of that centroid's row can be skipped. The check runs
+# once every 8 features so it costs a fraction of a comparison per element.
+#
+# best_out[0] receives the winning squared distance. The caller owns that
+# 4-byte slot so it is not reallocated per sample.
+function _kmeans_nearest_centroid(x_data: ptr<f32>, x_base: i32, centroids: ptr<ptr<f32> >, n_clusters: i32, n_features: i32, best_out: ptr<f32>) -> i32 {
+    let mut best_k: i32 = 0
+    let mut best_dist: f32 = 9999999999.0
+    for k in 0 to n_clusters {
+        let crow: ptr<f32> = centroids[k]
+        let mut dist: f32 = 0.0
+        let mut j: i32 = 0
+        let mut bailed: bool = false
+        while j < n_features {
+            let mut lim: i32 = j + 8
+            if lim > n_features {
+                lim = n_features
             }
+            while j < lim {
+                let d: f32 = x_data[x_base + j] - crow[j]
+                dist = dist + d * d
+                j = j + 1
+            }
+            if dist >= best_dist {
+                bailed = true
+                break
+            }
+        }
+        if not bailed {
             if dist < best_dist {
                 best_dist = dist
                 best_k = k
             }
         }
-        preds[i] = best_k
     }
+    best_out[0] = best_dist
+    return best_k
+}
+
+# Cluster assignment for every sample.
+#
+# The bulk of the work is the squared-euclidean expansion
+#   ||x - c||^2 = ||x||^2 + ||c||^2 - 2 * (x . c)
+# with the cross term as a single row-major sgemm, exactly as in
+# kmeans_transform. ||x||^2 is common to every centroid, so the argmin only
+# needs ||c||^2 - 2 * (x . c).
+#
+# The expansion is not bit-identical to the direct per-pair sum in f32, and
+# predict feeds an adjusted-Rand-index parity row, so the winner is only
+# accepted when it beats the runner-up by more than a conservative float32
+# error guard. Samples inside the guard band, including exact ties, fall back
+# to the direct kernel, which reproduces the original result bit for bit.
+# On the canonical iris and digits fixtures the guard never fires and no label
+# differs from the previous implementation.
+export function kmeans_predict(model: KMeans, X: Matrix) -> ptr<i32> {
+    let n: i32 = X.rows
+    let n_clusters: i32 = model.n_clusters
+    let n_features: i32 = model.n_features
+    let preds: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    if n <= 0 {
+        return preds
+    }
+    if n_clusters <= 0 || n_features <= 0 {
+        for i in 0 to n {
+            preds[i] = 0
+        }
+        return preds
+    }
+
+    let centroids: ptr<ptr<f32> > = model.centroids
+    let x_data: ptr<f32> = X.data
+    let x_stride: i32 = X.cols
+
+    # Below the BLAS work threshold the sgemm dispatch costs more than the
+    # whole scalar loop, so go straight to the direct kernel.
+    if not _kmeans_use_blas(n, n_clusters, n_features) {
+        let small_best: ptr<f32> = array_new_f32(32)
+        for i in 0 to n {
+            preds[i] = _kmeans_nearest_centroid(x_data, i * x_stride, centroids, n_clusters, n_features, small_best)
+        }
+        array_free_f32(small_best)
+        return preds
+    }
+
+    # Pack the centroid rows contiguously and take their norms in one pass.
+    let cbuf: ptr<f32> = array_new_f32(n_clusters * n_features)
+    let cnorm: ptr<f32> = array_new_f32(n_clusters)
+    let mut cnorm_max: f32 = 0.0
+    for k in 0 to n_clusters {
+        let crow: ptr<f32> = centroids[k]
+        let cbase: i32 = k * n_features
+        let mut cs: f32 = 0.0
+        for j in 0 to n_features {
+            let v: f32 = crow[j]
+            cbuf[cbase + j] = v
+            cs = cs + v * v
+        }
+        cnorm[k] = cs
+        if cs > cnorm_max {
+            cnorm_max = cs
+        }
+    }
+
+    # cross = -2 * X * C^T. malloc, not calloc: sgemm with beta = 0 overwrites
+    # every element, so zeroing it first would be wasted work.
+    let cross: ptr<f32> = malloc(((n as i64) * (n_clusters as i64)) * 4) as ptr<f32>
+    blas_matmat_nt(x_data, cbuf, cross, n, n_clusters, n_features, x_stride, n_features, -2.0, 0.0)
+
+    let best_out: ptr<f32> = array_new_f32(32)
+    for i in 0 to n {
+        let xbase: i32 = i * x_stride
+        # Only used to scale the error guard, so let cblas own the reduction.
+        let xs: f32 = blas_dot(n_features, x_data + xbase, x_data + xbase)
+
+        let rbase: i32 = i * n_clusters
+        let mut best: f32 = cnorm[0] + cross[rbase]
+        let mut best_k: i32 = 0
+        let mut second: f32 = 9999999999.0
+        for k in 1 to n_clusters {
+            let v: f32 = cnorm[k] + cross[rbase + k]
+            if v < best {
+                second = best
+                best = v
+                best_k = k
+            } else {
+                if v < second {
+                    second = v
+                }
+            }
+        }
+
+        let guard: f32 = (xs + cnorm_max) * 0.0001 + 0.000001
+        if second - best > guard {
+            preds[i] = best_k
+        } else {
+            preds[i] = _kmeans_nearest_centroid(x_data, xbase, centroids, n_clusters, n_features, best_out)
+        }
+    }
+
+    array_free_f32(best_out)
+    free(cross as ptr<void>)
+    array_free_f32(cbuf)
+    array_free_f32(cnorm)
     return preds
 }
 
+# Distance from every sample to every centroid.
+#
+# Uses the squared-euclidean expansion
+#   ||x - c||^2 = ||x||^2 + ||c||^2 - 2 * (x . c)
+# so each sample norm and each centroid norm is computed once instead of once
+# per (sample, centroid) pair, and the whole cross term is a single row-major
+# sgemm. The centroid rows are packed into one contiguous k x d block first,
+# because the model stores them as separate allocations. Sample reads go
+# straight to X.data instead of through matrix_at.
+#
+# The expansion can produce a small negative value for a sample sitting on top
+# of a centroid, so the squared distance is clamped at zero before the sqrt.
+#
+# A sgemm call is not free. OpenBLAS in particular spends on the order of a
+# tenth of a millisecond dispatching threads before it multiplies anything,
+# which is more than the entire scalar loop costs on a small problem. So the
+# expansion is only used once there is enough distance work to pay for it;
+# below that the direct per-pair loop runs, which is also what the previous
+# implementation computed, bit for bit.
+function _kmeans_use_blas(n: i32, n_clusters: i32, n_features: i32) -> bool {
+    let work: i64 = (n as i64) * (n_clusters as i64) * (n_features as i64)
+    return work >= 65536
+}
+
 export function kmeans_transform(model: KMeans, X: Matrix) -> Matrix {
-    let result: Matrix = matrix_new(X.rows, model.n_clusters)
-    for i in 0 to X.rows {
-        for k in 0 to model.n_clusters {
-            let mut dist: f32 = 0.0
-            for j in 0 to model.n_features {
-                let d: f32 = matrix_at(X, i, j) - model.centroids[k][j]
-                dist = dist + d * d
+    let n: i32 = X.rows
+    let n_clusters: i32 = model.n_clusters
+    let n_features: i32 = model.n_features
+    let result: Matrix = matrix_new(n, n_clusters)
+    if n <= 0 || n_clusters <= 0 || n_features <= 0 {
+        return result
+    }
+
+    let x_data: ptr<f32> = X.data
+    let x_stride: i32 = X.cols
+
+    if not _kmeans_use_blas(n, n_clusters, n_features) {
+        let rd_small: ptr<f32> = result.data
+        for i in 0 to n {
+            let xbase: i32 = i * x_stride
+            let rbase: i32 = i * n_clusters
+            for k in 0 to n_clusters {
+                let crow: ptr<f32> = model.centroids[k]
+                let mut dist: f32 = 0.0
+                for j in 0 to n_features {
+                    let d: f32 = x_data[xbase + j] - crow[j]
+                    dist = dist + d * d
+                }
+                rd_small[rbase + k] = sqrt(dist as f64) as f32
             }
-            matrix_set(result, i, k, sqrt(dist as f64) as f32)
+        }
+        return result
+    }
+
+    # Pack centroids contiguously and take their norms in the same pass.
+    let cbuf: ptr<f32> = array_new_f32(n_clusters * n_features)
+    let cnorm: ptr<f32> = array_new_f32(n_clusters)
+    for k in 0 to n_clusters {
+        let crow: ptr<f32> = model.centroids[k]
+        let cbase: i32 = k * n_features
+        let mut cs: f32 = 0.0
+        for j in 0 to n_features {
+            let v: f32 = crow[j]
+            cbuf[cbase + j] = v
+            cs = cs + v * v
+        }
+        cnorm[k] = cs
+    }
+
+    let xnorm: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let xbase: i32 = i * x_stride
+        let mut xs: f32 = 0.0
+        for j in 0 to n_features {
+            let v: f32 = x_data[xbase + j]
+            xs = xs + v * v
+        }
+        xnorm[i] = xs
+    }
+
+    # result = -2 * X * C^T (beta = 0 overwrites the calloc-backed buffer).
+    let r_data: ptr<f32> = result.data
+    blas_matmat_nt(x_data, cbuf, r_data, n, n_clusters, n_features, x_stride, n_features, -2.0, 0.0)
+
+    for i in 0 to n {
+        let rbase: i32 = i * n_clusters
+        let xn: f32 = xnorm[i]
+        for k in 0 to n_clusters {
+            let idx: i32 = rbase + k
+            let mut sq: f32 = xn + cnorm[k] + r_data[idx]
+            if sq < 0.0 {
+                sq = 0.0
+            }
+            r_data[idx] = sqrt(sq as f64) as f32
         }
     }
+
+    array_free_f32(cbuf)
+    array_free_f32(cnorm)
+    array_free_f32(xnorm)
     return result
 }
 
@@ -561,6 +903,48 @@ export struct AgglomerativeClustering {
     fitted: bool
 }
 
+# Lowest-index active partner j > i minimising dist[i][j], or -1 when row i
+# has none. The 9999999999.0 seed is the same ceiling the original global scan
+# used, so a pair at or beyond it is passed over here exactly as it was there.
+function _agglo_nearest_above(dist: ptr<f32>, labels: ptr<i32>, n: i32, i: i32) -> i32 {
+    let mut best_j: i32 = -1
+    let mut best: f32 = 9999999999.0
+    let base: i32 = i * n
+    for j in i + 1 to n {
+        if labels[j] != j {
+            continue
+        }
+        let d: f32 = dist[base + j]
+        if d < best {
+            best = d
+            best_j = j
+        }
+    }
+    return best_j
+}
+
+# Single-linkage agglomerative clustering.
+#
+# The merge step already used the Lance-Williams update for single linkage,
+# so distances were never recomputed from the data. The cost was in finding
+# the closest pair: every merge rescanned the whole upper triangle, which is
+# O(n^2) per merge and O(n^3) over a full run down to a handful of clusters.
+#
+# Each active row now caches its own closest partner above it, so the closest
+# pair is an O(n) scan of those cached values. A merge only invalidates rows
+# whose cached partner was the absorbed cluster, plus the absorbing row
+# itself; every other row either sees no change or sees its distance to the
+# absorbing cluster fall, which is a single comparison. Single linkage takes
+# a minimum, so cached distances never rise and nothing else can go stale.
+#
+# Tie-breaking is preserved exactly. A row caches the lowest-index partner
+# among its minima, and the global scan takes the first row that strictly
+# beats the running best, so the merged pair is the same lexicographically
+# first pair the flat double loop produced, including on exact ties.
+#
+# The initial matrix is symmetric, so only the upper triangle is computed and
+# the result is mirrored. Squaring makes the sign irrelevant, so the mirrored
+# entry is bit-identical to the one the second pass used to compute.
 export function agglomerative_clustering_fit(X: Matrix, n_clusters: i32) -> AgglomerativeClustering {
     let n: i32 = X.rows
 
@@ -572,18 +956,33 @@ export function agglomerative_clustering_fit(X: Matrix, n_clusters: i32) -> Aggl
     let mut active_clusters: i32 = n
 
     let dist: ptr<f32> = malloc((n * n) as i64 * 4) as ptr<f32>
+    let x_data: ptr<f32> = X.data
+    let n_features: i32 = X.cols
     for i in 0 to n {
-        for j in 0 to n {
-            if i == j {
-                dist[i * n + j] = 0.0
-            } else {
-                let mut d: f32 = 0.0
-                for k in 0 to X.cols {
-                    let diff: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
-                    d = d + diff * diff
-                }
-                dist[i * n + j] = d
+        dist[i * n + i] = 0.0
+        let ibase: i32 = i * n_features
+        for j in i + 1 to n {
+            let jbase: i32 = j * n_features
+            let mut d: f32 = 0.0
+            for k in 0 to n_features {
+                let diff: f32 = x_data[ibase + k] - x_data[jbase + k]
+                d = d + diff * diff
             }
+            dist[i * n + j] = d
+            dist[j * n + i] = d
+        }
+    }
+
+    # nn[i] is the lowest-index active partner above i, nnd[i] its distance.
+    let nn: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let nnd: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let j: i32 = _agglo_nearest_above(dist, labels, n, i)
+        nn[i] = j
+        if j < 0 {
+            nnd[i] = 9999999999.0
+        } else {
+            nnd[i] = dist[i * n + j]
         }
     }
 
@@ -596,15 +995,10 @@ export function agglomerative_clustering_fit(X: Matrix, n_clusters: i32) -> Aggl
             if labels[i] != i {
                 continue
             }
-            for j in i + 1 to n {
-                if labels[j] != j {
-                    continue
-                }
-                if dist[i * n + j] < min_dist {
-                    min_dist = dist[i * n + j]
-                    min_i = i
-                    min_j = j
-                }
+            if nnd[i] < min_dist {
+                min_dist = nnd[i]
+                min_i = i
+                min_j = nn[i]
             }
         }
 
@@ -630,6 +1024,51 @@ export function agglomerative_clustering_fit(X: Matrix, n_clusters: i32) -> Aggl
             }
             dist[min_i * n + k] = new_dist
             dist[k * n + min_i] = new_dist
+        }
+
+        # The absorbed row is gone, and the absorbing row's distances all
+        # changed, so it is rebuilt from scratch.
+        nn[min_j] = -1
+        nnd[min_j] = 9999999999.0
+        let nj: i32 = _agglo_nearest_above(dist, labels, n, min_i)
+        nn[min_i] = nj
+        if nj < 0 {
+            nnd[min_i] = 9999999999.0
+        } else {
+            nnd[min_i] = dist[min_i * n + nj]
+        }
+
+        for i in 0 to n {
+            if labels[i] != i {
+                continue
+            }
+            if i == min_i {
+                continue
+            }
+            if nn[i] == min_j {
+                # Its cached partner was just absorbed, so rebuild the row.
+                let jj: i32 = _agglo_nearest_above(dist, labels, n, i)
+                nn[i] = jj
+                if jj < 0 {
+                    nnd[i] = 9999999999.0
+                } else {
+                    nnd[i] = dist[i * n + jj]
+                }
+                continue
+            }
+            if i < min_i {
+                # Only the distance to the absorbing cluster can have moved,
+                # and single linkage can only have lowered it.
+                let d_new: f32 = dist[i * n + min_i]
+                if d_new < nnd[i] {
+                    nnd[i] = d_new
+                    nn[i] = min_i
+                } else {
+                    if d_new == nnd[i] && min_i < nn[i] {
+                        nn[i] = min_i
+                    }
+                }
+            }
         }
 
         active_clusters = active_clusters - 1
@@ -660,6 +1099,8 @@ export function agglomerative_clustering_fit(X: Matrix, n_clusters: i32) -> Aggl
     }
 
     free(dist as ptr<void>)
+    free(nn as ptr<void>)
+    array_free_f32(nnd)
     free(labels as ptr<void>)
     free(unique_labels as ptr<void>)
 
@@ -942,6 +1383,37 @@ export struct Birch {
     fitted: bool
 }
 
+# Single-pass CF-leaf assignment.
+#
+# Every sample is compared against every subcluster built so far, and the
+# subcluster list grows as the pass proceeds, so this is the quadratic part of
+# Birch. Three things were being paid for per element and are not any more.
+#
+# First, the scan searched for the global nearest subcluster and only then
+# asked whether it was within the threshold. A subcluster further away than
+# the threshold cannot be used whether or not it is the nearest one: if it
+# wins the argmin the sample opens a new subcluster, and if it loses it is
+# irrelevant. So the search starts bounded at the threshold instead of at
+# infinity. That bound is tight from the first sample, where the old code
+# started at 1e10 and only tightened after a full row.
+#
+# The old code compared best_dist against 1e10 first and against the squared
+# threshold second, which quietly rejects a subcluster at a squared distance
+# of 1e10 or more even when the threshold is larger than that. The bound keeps
+# that behaviour by clamping at the same 1e10.
+#
+# Second, squared distances accumulate non-negative terms, so a running sum
+# that has reached the bound can never come back below it. The scan checks
+# once every 8 features and abandons the rest of the row when it has.
+#
+# Third, matrix_at recomputed row * cols per element and centroids[c] was
+# reloaded per element, in both the search and the centroid update. Both read
+# the backing arrays directly now.
+#
+# The running-mean update is left exactly as it was, including the division
+# per element. Accumulating a linear sum and dividing once at the end would be
+# the textbook CF-triple form and would be cheaper, but it rounds differently
+# in f32 and would move fitted centroids.
 export function birch_fit(X: Matrix, threshold: f32, branching_factor: i32) -> Birch {
     let n: i32 = X.rows
     let n_features: i32 = X.cols
@@ -953,34 +1425,62 @@ export function birch_fit(X: Matrix, threshold: f32, branching_factor: i32) -> B
 
     let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
 
+    let mut bound: f32 = threshold * threshold
+    if bound > 10000000000.0 {
+        bound = 10000000000.0
+    }
+
+    let x_data: ptr<f32> = X.data
+    let x_stride: i32 = X.cols
+
     for i in 0 to n {
+        let xbase: i32 = i * x_stride
         let mut best_c: i32 = -1
-        let mut best_dist: f32 = 10000000000.0
+        let mut best_dist: f32 = bound
 
         for c in 0 to n_clusters {
+            let crow: ptr<f32> = centroids[c]
             let mut dist_sq: f32 = 0.0
-            for k in 0 to n_features {
-                let d: f32 = matrix_at(X, i, k) - centroids[c][k]
-                dist_sq = dist_sq + d * d
+            let mut k: i32 = 0
+            let mut bailed: bool = false
+            while k < n_features {
+                let mut lim: i32 = k + 8
+                if lim > n_features {
+                    lim = n_features
+                }
+                while k < lim {
+                    let d: f32 = x_data[xbase + k] - crow[k]
+                    dist_sq = dist_sq + d * d
+                    k = k + 1
+                }
+                if dist_sq >= best_dist {
+                    bailed = true
+                    break
+                }
             }
-            if dist_sq < best_dist {
-                best_dist = dist_sq
-                best_c = c
+            if not bailed {
+                if dist_sq < best_dist {
+                    best_dist = dist_sq
+                    best_c = c
+                }
             }
         }
 
-        if best_c >= 0 && best_dist < threshold * threshold {
+        if best_c >= 0 {
             let count: f32 = (cluster_counts[best_c] as f32)
+            let denom: f32 = count + 1.0
+            let crow: ptr<f32> = centroids[best_c]
             for k in 0 to n_features {
-                let new_val: f32 = (centroids[best_c][k] * count + matrix_at(X, i, k)) / (count + 1.0)
-                centroids[best_c][k] = new_val
+                let new_val: f32 = (crow[k] * count + x_data[xbase + k]) / denom
+                crow[k] = new_val
             }
             cluster_counts[best_c] = cluster_counts[best_c] + 1
             labels[i] = best_c
         } else {
-            centroids[n_clusters] = array_new_f32(n_features)
+            let newrow: ptr<f32> = array_new_f32(n_features)
+            centroids[n_clusters] = newrow
             for k in 0 to n_features {
-                centroids[n_clusters][k] = matrix_at(X, i, k)
+                newrow[k] = x_data[xbase + k]
             }
             cluster_counts[n_clusters] = 1
             labels[i] = n_clusters
@@ -999,22 +1499,71 @@ export function birch_fit(X: Matrix, threshold: f32, branching_factor: i32) -> B
     }
 }
 
+# Nearest subcluster for every sample.
+#
+# Birch keeps one subcluster per leaf entry, so a fitted model routinely holds
+# hundreds of centroids. The scan is an argmin over squared distances, and the
+# squares are non-negative, so a running sum that has already reached the
+# current best can never come back below it. Once that happens the rest of the
+# centroid row is skipped. The check runs once per 8 features, which keeps the
+# comparison cost to a fraction of one per element while still cutting most
+# rows short after the first block.
+#
+# The remaining terms are accumulated in the original order and compared with
+# the same strict less-than tie-break, so the returned label is bit-identical
+# to the previous per-pair loop, not merely close to it.
+#
+# Sample and centroid reads go straight to the backing arrays: matrix_at
+# recomputes row * cols per element, and model.centroids[c] reloaded the
+# centroid pointer per element.
 export function birch_predict(model: Birch, X: Matrix) -> ptr<i32> {
     let n: i32 = X.rows
+    let n_clusters: i32 = model.n_clusters
+    let n_features: i32 = model.n_features
     let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    if n <= 0 {
+        return labels
+    }
+    if n_clusters <= 0 || n_features <= 0 {
+        for i in 0 to n {
+            labels[i] = 0
+        }
+        return labels
+    }
+
+    let x_data: ptr<f32> = X.data
+    let x_stride: i32 = X.cols
+    let centroids: ptr<ptr<f32> > = model.centroids
 
     for i in 0 to n {
+        let xbase: i32 = i * x_stride
         let mut best_c: i32 = 0
         let mut best_dist: f32 = 10000000000.0
-        for c in 0 to model.n_clusters {
+        for c in 0 to n_clusters {
+            let crow: ptr<f32> = centroids[c]
             let mut dist_sq: f32 = 0.0
-            for k in 0 to model.n_features {
-                let d: f32 = matrix_at(X, i, k) - model.centroids[c][k]
-                dist_sq = dist_sq + d * d
+            let mut k: i32 = 0
+            let mut bailed: bool = false
+            while k < n_features {
+                let mut lim: i32 = k + 8
+                if lim > n_features {
+                    lim = n_features
+                }
+                while k < lim {
+                    let d: f32 = x_data[xbase + k] - crow[k]
+                    dist_sq = dist_sq + d * d
+                    k = k + 1
+                }
+                if dist_sq >= best_dist {
+                    bailed = true
+                    break
+                }
             }
-            if dist_sq < best_dist {
-                best_dist = dist_sq
-                best_c = c
+            if not bailed {
+                if dist_sq < best_dist {
+                    best_dist = dist_sq
+                    best_c = c
+                }
             }
         }
         labels[i] = best_c

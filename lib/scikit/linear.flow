@@ -476,18 +476,12 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
     let n: i32 = X.cols
     let m: i32 = X.rows
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to m {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] { found = true }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # n_classes, which wrote past the allocation whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, m, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
     let nc: i32 = n_found
 
     let all_weights: ptr<f32> = array_new_f32(nc * n)
@@ -502,11 +496,15 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
     # LBFGS avoids the O(m*d^2) Hessian, needing only O(m*d) per iteration.
     let d: i32 = n + 1
     let X_aug: ptr<f32> = malloc((m as i64) * (d as i64) * 4) as ptr<f32>
+    let x_data: ptr<f32> = X.data
+    let x_stride: i32 = X.cols
     for i in 0 to m {
+        let src: i32 = i * x_stride
+        let dst: i32 = i * d
         for j in 0 to n {
-            X_aug[i * d + j] = matrix_at(X, i, j)
+            X_aug[dst + j] = x_data[src + j]
         }
-        X_aug[i * d + n] = 1.0
+        X_aug[dst + n] = 1.0
     }
 
     let theta: ptr<f32> = array_new_f32(d)
@@ -514,6 +512,10 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
     let p_arr: ptr<f32> = array_new_f32(m)
     let z_arr: ptr<f32> = array_new_f32(m)
     let err_arr: ptr<f32> = array_new_f32(m)
+    # One-vs-rest target for the class currently being fitted. The comparison
+    # against classes[c] is loop-invariant across LBFGS iterations, so it is
+    # built once per class instead of m times per iteration.
+    let label_arr: ptr<f32> = array_new_f32(m)
 
     # LBFGS history buffers (memory = 10)
     let mem: i32 = 10
@@ -536,33 +538,37 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
     if max_iter > 100 { max_iter = 100 }
     if max_iter < 10 { max_iter = 10 }
 
+    let inv_m: f32 = 1.0 / (m as f32)
+
     for c in 0 to nc {
         for j in 0 to d { theta[j] = 0.0 }
+
+        let target: f32 = classes[c]
+        for i in 0 to m {
+            label_arr[i] = 0.0
+            if y[i] == target { label_arr[i] = 1.0 }
+        }
 
         let mut iter: i32 = 0
         let mut converged: bool = false
         let mut hist_size: i32 = 0
         let mut hist_idx: i32 = 0
 
+        # Gradient at the starting point. Every later iteration ends by
+        # evaluating the gradient at the theta it just stepped to, which is the
+        # same value this block used to recompute at the top of the loop, so
+        # the loop now carries it forward instead of redoing both sgemv calls.
+        blas_matvec(X_aug, m, d, theta, z_arr, 1.0, 0.0)
+        for i in 0 to m {
+            p_arr[i] = sigmoid(z_arr[i])
+            err_arr[i] = p_arr[i] - label_arr[i]
+        }
+        blas_matvec_trans(X_aug, m, d, err_arr, grad, inv_m, 0.0)
+        for j in 0 to n {
+            grad[j] = grad[j] + l2_coeff * theta[j]
+        }
+
         while iter < max_iter && not converged {
-            # Forward pass: z = X_aug * theta (BLAS sgemv)
-            blas_matvec(X_aug, m, d, theta, z_arr, 1.0, 0.0)
-
-            # Sigmoid and error
-            for i in 0 to m {
-                p_arr[i] = sigmoid(z_arr[i])
-                let label: f32 = 0.0
-                if y[i] == classes[c] { label = 1.0 }
-                err_arr[i] = p_arr[i] - label
-            }
-
-            # Gradient: grad = X_aug^T * err / m + l2 * theta (BLAS sgemv)
-            let inv_m: f32 = 1.0 / (m as f32)
-            blas_matvec_trans(X_aug, m, d, err_arr, grad, inv_m, 0.0)
-            for j in 0 to n {
-                grad[j] = grad[j] + l2_coeff * theta[j]
-            }
-
             # Check convergence
             let mut gnorm: f32 = 0.0
             for j in 0 to d {
@@ -650,13 +656,12 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
             # theta = theta + step * direction
             for j in 0 to d { theta[j] = theta_prev[j] + step * direction[j] }
 
-            # Recompute gradient at new theta for LBFGS history
+            # Gradient at the new theta, for the LBFGS history and for the next
+            # iteration's convergence check and direction.
             blas_matvec(X_aug, m, d, theta, z_arr, 1.0, 0.0)
             for i in 0 to m {
                 p_arr[i] = sigmoid(z_arr[i])
-                let label: f32 = 0.0
-                if y[i] == classes[c] { label = 1.0 }
-                err_arr[i] = p_arr[i] - label
+                err_arr[i] = p_arr[i] - label_arr[i]
             }
             blas_matvec_trans(X_aug, m, d, err_arr, grad, inv_m, 0.0)
             for j in 0 to n {
@@ -692,6 +697,7 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
     array_free_f32(p_arr)
     array_free_f32(z_arr)
     array_free_f32(err_arr)
+    array_free_f32(label_arr)
     free(s_hist as ptr<void>)
     free(y_hist as ptr<void>)
     array_free_f32(rho_hist)
@@ -720,18 +726,12 @@ export function logistic_regression_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_c
     let n: i32 = S.n_cols
     let n_samples: i32 = S.n_rows
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to n_samples {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] { found = true }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # n_classes, which wrote past the allocation whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, n_samples, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
     let nc: i32 = n_found
 
     let all_weights: ptr<f32> = array_new_f32(nc * n)
@@ -802,36 +802,77 @@ export function logistic_regression_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_c
     }
 }
 
+# Positive-class probabilities. This is exactly sigmoid(decision_function), so
+# it reuses the BLAS-backed score path and maps the result in place rather than
+# repeating the dot product with per-element matrix_at calls.
 export function logistic_predict_proba(model: LogisticRegression, X: Matrix) -> ptr<f32> {
-    let probs: ptr<f32> = array_new_f32(X.rows)
-    for i in 0 to X.rows {
-        let mut z: f32 = model.bias
-        for j in 0 to model.n_features {
-            z = z + model.weights[j] * matrix_at(X, i, j)
-        }
-        probs[i] = sigmoid(z)
+    let probs: ptr<f32> = logistic_decision_function(model, X)
+    let rows: i32 = X.rows
+    for i in 0 to rows {
+        probs[i] = sigmoid(probs[i])
     }
     return probs
 }
 
+# One-vs-rest class prediction: argmax over the per-class decision scores.
+# The scores for one class are a matrix-vector product against a contiguous
+# row-major X, so each class costs one cblas_sgemv and the running argmax is
+# carried across classes in two m-length buffers. Class order is preserved, so
+# ties still resolve to the lowest class index exactly as before.
 export function logistic_predict(model: LogisticRegression, X: Matrix) -> ptr<f32> {
-    let n: i32 = X.rows
-    let result: ptr<f32> = array_new_f32(n)
-    for i in 0 to n {
-        let mut best_score: f32 = -1000000.0
-        let mut best_class: i32 = 0
-        for c in 0 to model.n_classes {
-            let mut z: f32 = model.biases[c]
-            for j in 0 to model.n_features {
-                z = z + model.weights[c * model.n_features + j] * matrix_at(X, i, j)
+    let rows: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(rows)
+    if rows <= 0 { return result }
+
+    let nf: i32 = model.n_features
+    let nc: i32 = model.n_classes
+
+    if nf <= 0 || nf > X.cols {
+        for i in 0 to rows {
+            let mut best_score: f32 = -1000000.0
+            let mut best_class: i32 = 0
+            for c in 0 to nc {
+                let mut z: f32 = model.biases[c]
+                for j in 0 to nf {
+                    z = z + model.weights[c * nf + j] * matrix_at(X, i, j)
+                }
+                if z > best_score {
+                    best_score = z
+                    best_class = c
+                }
             }
-            if z > best_score {
-                best_score = z
-                best_class = c
+            result[i] = model.classes[best_class]
+        }
+        return result
+    }
+
+    let scores: ptr<f32> = array_new_f32(rows)
+    let best: ptr<f32> = array_new_f32(rows)
+    let best_cls: ptr<i32> = malloc((rows as i64) * 4) as ptr<i32>
+    for i in 0 to rows {
+        best[i] = -1000000.0
+        best_cls[i] = 0
+    }
+
+    for c in 0 to nc {
+        blas_matvec_ld(X.data, rows, nf, X.cols, model.weights + c * nf, scores, 1.0, 0.0)
+        let b: f32 = model.biases[c]
+        for i in 0 to rows {
+            let z: f32 = scores[i] + b
+            if z > best[i] {
+                best[i] = z
+                best_cls[i] = c
             }
         }
-        result[i] = model.classes[best_class]
     }
+
+    for i in 0 to rows {
+        result[i] = model.classes[best_cls[i]]
+    }
+
+    array_free_f32(scores)
+    array_free_f32(best)
+    free(best_cls as ptr<void>)
     return result
 }
 
@@ -853,14 +894,36 @@ export function logistic_decide(model: LogisticRegression, probs: ptr<f32>, n_sa
     return labels
 }
 
+# Binary decision scores: z = X * w + b for the first (positive) coefficient row.
+# X is contiguous row-major, so the whole thing is one cblas_sgemv with the
+# matrix row stride passed as lda. Falls back to the scalar dot product when the
+# feature count does not fit inside a row of X.
 export function logistic_decision_function(model: LogisticRegression, X: Matrix) -> ptr<f32> {
-    let scores: ptr<f32> = array_new_f32(X.rows)
-    for i in 0 to X.rows {
-        let mut z: f32 = model.bias
-        for j in 0 to model.n_features {
-            z = z + model.weights[j] * matrix_at(X, i, j)
+    let rows: i32 = X.rows
+    let scores: ptr<f32> = array_new_f32(rows)
+    if rows <= 0 { return scores }
+
+    let nf: i32 = model.n_features
+    let bias: f32 = model.bias
+    let w: ptr<f32> = model.weights
+
+    if nf <= 0 || nf > X.cols {
+        let data: ptr<f32> = X.data
+        let stride: i32 = X.cols
+        for i in 0 to rows {
+            let mut z: f32 = bias
+            let base: i32 = i * stride
+            for j in 0 to nf {
+                z = z + w[j] * data[base + j]
+            }
+            scores[i] = z
         }
-        scores[i] = z
+        return scores
+    }
+
+    blas_matvec_ld(X.data, rows, nf, X.cols, w, scores, 1.0, 0.0)
+    for i in 0 to rows {
+        scores[i] = scores[i] + bias
     }
     return scores
 }
@@ -1131,20 +1194,12 @@ export function sgd_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, loss:
     let weights: ptr<f32> = array_new_f32(n)
     let bias: f32 = 0.0
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to X.rows {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] {
-                found = true
-            }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # n_classes, which wrote past the allocation whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, X.rows, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     for epoch in 0 to epochs {
         for i in 0 to X.rows {
@@ -1327,20 +1382,12 @@ export struct MultiClassLogisticRegression {
 export function multiclass_logistic_fit(X: Matrix, y: ptr<f32>, n_classes: i32, epochs: i32, lr: f32, penalty: Penalty) -> MultiClassLogisticRegression {
     let n: i32 = X.cols
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to X.rows {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] {
-                found = true
-            }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # n_classes, which wrote past the allocation whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, X.rows, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     let weights: ptr<ptr<f32> > = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
     let bias: ptr<f32> = array_new_f32(n_classes)
@@ -1547,12 +1594,41 @@ export function elastic_net_fit(X: Matrix, y: ptr<f32>, alpha: f32, l1_ratio: f3
     }
 }
 
+# Predictions are y = X * w + b over a contiguous row-major X. The old loop
+# called matrix_at once per element, and matrix_at takes the Matrix struct by
+# value, so every element access copied the struct.
+#
+# Above a work threshold the whole batch is one cblas_sgemv with the row stride
+# passed as lda, then an add of the bias. Below it the scalar kernel runs, with
+# matrix_at replaced by the identical row-major index it computes, so small
+# batches stay bit-identical to the previous code and avoid the ~0.1 ms OpenBLAS
+# thread dispatch. 65536 is the same rows * features product KMeans uses; at
+# that size the scalar kernel is already ~0.08 ms per call, so the dispatch no
+# longer dominates.
 export function elastic_net_predict(model: ElasticNet, X: Matrix) -> ptr<f32> {
-    let preds: ptr<f32> = array_new_f32(X.rows)
-    for i in 0 to X.rows {
-        let mut pred: f32 = model.bias
-        for j in 0 to model.n_features {
-            pred = pred + model.weights[j] * matrix_at(X, i, j)
+    let rows: i32 = X.rows
+    let preds: ptr<f32> = array_new_f32(rows)
+    if rows <= 0 { return preds }
+
+    let nf: i32 = model.n_features
+    let bias: f32 = model.bias
+    let w: ptr<f32> = model.weights
+    let data: ptr<f32> = X.data
+    let stride: i32 = X.cols
+
+    if nf > 0 && nf <= stride && rows * nf >= 65536 {
+        blas_matvec_ld(data, rows, nf, stride, w, preds, 1.0, 0.0)
+        for i in 0 to rows {
+            preds[i] = preds[i] + bias
+        }
+        return preds
+    }
+
+    for i in 0 to rows {
+        let base: i32 = i * stride
+        let mut pred: f32 = bias
+        for j in 0 to nf {
+            pred = pred + w[j] * data[base + j]
         }
         preds[i] = pred
     }
@@ -1731,13 +1807,33 @@ export function huber_regressor_fit(X: Matrix, y: ptr<f32>, epsilon: f32, max_it
     }
 }
 
+# Same y = X * w + b batch as elastic_net_predict: one cblas_sgemv with the row
+# stride passed as lda above the 65536 rows * features work threshold, and the
+# scalar kernel with matrix_at folded into a direct row-major index below it.
 export function huber_regressor_predict(model: HuberRegressor, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
     let result: ptr<f32> = array_new_f32(n)
+    if n <= 0 { return result }
+
+    let nf: i32 = model.n_features
+    let bias: f32 = model.bias
+    let w: ptr<f32> = model.weights
+    let data: ptr<f32> = X.data
+    let stride: i32 = X.cols
+
+    if nf > 0 && nf <= stride && n * nf >= 65536 {
+        blas_matvec_ld(data, n, nf, stride, w, result, 1.0, 0.0)
+        for i in 0 to n {
+            result[i] = result[i] + bias
+        }
+        return result
+    }
+
     for i in 0 to n {
-        let mut pred: f32 = model.bias
-        for j in 0 to model.n_features {
-            pred = pred + model.weights[j] * matrix_at(X, i, j)
+        let base: i32 = i * stride
+        let mut pred: f32 = bias
+        for j in 0 to nf {
+            pred = pred + w[j] * data[base + j]
         }
         result[i] = pred
     }
@@ -2366,12 +2462,33 @@ export function lars_fit(X: Matrix, y: ptr<f32>, n_features_to_select: i32) -> L
     }
 }
 
+# Same y = X * w + b batch as elastic_net_predict: one cblas_sgemv with the row
+# stride passed as lda above the 65536 rows * features work threshold, and the
+# scalar kernel with matrix_at folded into a direct row-major index below it.
 export function lars_predict(model: Lars, X: Matrix) -> ptr<f32> {
-    let result: ptr<f32> = array_new_f32(X.rows)
-    for i in 0 to X.rows {
-        let mut s: f32 = model.bias
-        for j in 0 to model.n_features {
-            s = s + model.weights[j] * matrix_at(X, i, j)
+    let rows: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(rows)
+    if rows <= 0 { return result }
+
+    let nf: i32 = model.n_features
+    let bias: f32 = model.bias
+    let w: ptr<f32> = model.weights
+    let data: ptr<f32> = X.data
+    let stride: i32 = X.cols
+
+    if nf > 0 && nf <= stride && rows * nf >= 65536 {
+        blas_matvec_ld(data, rows, nf, stride, w, result, 1.0, 0.0)
+        for i in 0 to rows {
+            result[i] = result[i] + bias
+        }
+        return result
+    }
+
+    for i in 0 to rows {
+        let base: i32 = i * stride
+        let mut s: f32 = bias
+        for j in 0 to nf {
+            s = s + w[j] * data[base + j]
         }
         result[i] = s
     }
@@ -4308,15 +4425,37 @@ export function lasso_lars_fit(X: Matrix, y: ptr<f32>, alpha: f32, max_iter: i32
     return result
 }
 
+# Same y = X * w + b batch as elastic_net_predict: one cblas_sgemv with the row
+# stride passed as lda above the 65536 rows * features work threshold, and the
+# scalar kernel with matrix_at folded into a direct row-major index below it.
 export function lasso_lars_predict(model: LassoLars, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
     let result: ptr<f32> = array_new_f32(n)
+    if n <= 0 { return result }
+
+    let nf: i32 = model.n_features
+    let bias: f32 = model.bias
+    let w: ptr<f32> = model.weights
+    let data: ptr<f32> = X.data
+    let stride: i32 = X.cols
+
+    if nf > 0 && nf <= stride && n * nf >= 65536 {
+        blas_matvec_ld(data, n, nf, stride, w, result, 1.0, 0.0)
+        let mut k: i32 = 0
+        while k < n {
+            result[k] = result[k] + bias
+            k = k + 1
+        }
+        return result
+    }
+
     let mut i: i32 = 0
     while i < n {
-        let mut pred: f32 = model.bias
+        let base: i32 = i * stride
+        let mut pred: f32 = bias
         let mut j: i32 = 0
-        while j < model.n_features {
-            pred = pred + model.weights[j] * matrix_at(X, i, j)
+        while j < nf {
+            pred = pred + w[j] * data[base + j]
             j = j + 1
         }
         result[i] = pred
@@ -4428,15 +4567,37 @@ export function lasso_lars_cv_fit(X: Matrix, y: ptr<f32>, n_alphas: i32) -> Lass
     return result
 }
 
+# Same y = X * w + b batch as elastic_net_predict: one cblas_sgemv with the row
+# stride passed as lda above the 65536 rows * features work threshold, and the
+# scalar kernel with matrix_at folded into a direct row-major index below it.
 export function lasso_lars_cv_predict(model: LassoLarsCV, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
     let result: ptr<f32> = array_new_f32(n)
+    if n <= 0 { return result }
+
+    let nf: i32 = model.n_features
+    let bias: f32 = model.bias
+    let w: ptr<f32> = model.weights
+    let data: ptr<f32> = X.data
+    let stride: i32 = X.cols
+
+    if nf > 0 && nf <= stride && n * nf >= 65536 {
+        blas_matvec_ld(data, n, nf, stride, w, result, 1.0, 0.0)
+        let mut k: i32 = 0
+        while k < n {
+            result[k] = result[k] + bias
+            k = k + 1
+        }
+        return result
+    }
+
     let mut i: i32 = 0
     while i < n {
-        let mut pred: f32 = model.bias
+        let base: i32 = i * stride
+        let mut pred: f32 = bias
         let mut j: i32 = 0
-        while j < model.n_features {
-            pred = pred + model.weights[j] * matrix_at(X, i, j)
+        while j < nf {
+            pred = pred + w[j] * data[base + j]
             j = j + 1
         }
         result[i] = pred
