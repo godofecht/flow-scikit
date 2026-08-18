@@ -67,26 +67,38 @@ def enrich_state_from_raw_details(
     sklearn_details: dict,
     flow_details: dict,
 ) -> dict:
-    """Preserve state evidence even when strict score parity exits early.
+    """Derive learned-state deltas from the frozen DETAIL records.
 
-    KMeans already emits inertia and iteration count for every canonical row.
-    The strict Digits score gate currently fails before compare_v2 records those
-    fields, so derive their deltas here instead of losing evidence.
+    compare_v2.py stops at the first failed gate, so a row whose score misses
+    its tolerance never reaches the estimator-specific state comparison and its
+    evidence is lost. This pass works straight off the DETAIL records instead,
+    pairing every field both runners emitted for the row.
+
+    Scalars produce `<field>_abs_diff` and `<field>_relative_diff`. Equal-length
+    vectors produce `<field>_max_abs_diff` and `<field>_max_relative_diff`.
+    Length disagreement is itself evidence and is recorded as
+    `<field>_length_abs_diff`. Anything compare_v2 already computed wins, so the
+    existing KMeans and PCA key names are unchanged.
     """
     algorithm, dataset, _ = key
-    if algorithm != "KMeans":
-        return state
-
-    sk_inertia = sklearn_details.get((algorithm, dataset, "inertia"))
-    fl_inertia = flow_details.get((algorithm, dataset, "inertia"))
-    if isinstance(sk_inertia, float) and isinstance(fl_inertia, float):
-        state.setdefault("inertia_relative_diff", relative_diff(sk_inertia, fl_inertia))
-
-    sk_iter = sklearn_details.get((algorithm, dataset, "n_iter"))
-    fl_iter = flow_details.get((algorithm, dataset, "n_iter"))
-    if isinstance(sk_iter, float) and isinstance(fl_iter, float):
-        state["n_iter_abs_diff"] = abs(sk_iter - fl_iter)
-
+    for (algo, ds, field), sk_value in sorted(sklearn_details.items()):
+        if algo != algorithm or ds != dataset:
+            continue
+        fl_value = flow_details.get((algo, ds, field))
+        if fl_value is None:
+            continue
+        if isinstance(sk_value, list) or isinstance(fl_value, list):
+            if not (isinstance(sk_value, list) and isinstance(fl_value, list)):
+                continue
+            if len(sk_value) != len(fl_value):
+                state.setdefault(f"{field}_length_abs_diff", float(abs(len(sk_value) - len(fl_value))))
+                continue
+            pairs = list(zip(sk_value, fl_value))
+            state.setdefault(f"{field}_max_abs_diff", max((abs(a - b) for a, b in pairs), default=0.0))
+            state.setdefault(f"{field}_max_relative_diff", max((relative_diff(a, b) for a, b in pairs), default=0.0))
+        else:
+            state.setdefault(f"{field}_abs_diff", abs(sk_value - fl_value))
+            state.setdefault(f"{field}_relative_diff", relative_diff(sk_value, fl_value))
     return state
 
 
