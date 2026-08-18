@@ -493,34 +493,35 @@ export function fast_ica_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f
     let n: i32 = X.rows
     let p: i32 = X.cols
 
+    let xdata: ptr<f32> = X.data
+    let xstride: i32 = X.cols
+
     let mean: ptr<f32> = array_new_f32(p)
     for j in 0 to p {
         let mut m: f32 = 0.0
+        let mut base: i32 = j
         for i in 0 to n {
-            m = m + matrix_at(X, i, j)
+            m = m + xdata[base]
+            base = base + xstride
         }
         mean[j] = m / (n as f32)
     }
 
     let Xc: Matrix = matrix_new(n, p)
+    let cdata: ptr<f32> = Xc.data
     for i in 0 to n {
+        let xbase: i32 = i * xstride
+        let cbase: i32 = i * p
         for j in 0 to p {
-            matrix_set(Xc, i, j, matrix_at(X, i, j) - mean[j])
+            cdata[cbase + j] = xdata[xbase + j] - mean[j]
         }
     }
+
+    # The p x p covariance of Xc used to be formed here at a cost of O(n * p^2)
+    # and then freed without ever being read: whitening comes from pca_fit
+    # below, which computes its own covariance. Removing it changes no result.
 
     # Whitening via PCA
-    let cov: Matrix = matrix_new(p, p)
-    for i in 0 to p {
-        for j in 0 to p {
-            let mut s: f32 = 0.0
-            for k in 0 to n {
-                s = s + matrix_at(Xc, k, i) * matrix_at(Xc, k, j)
-            }
-            matrix_set(cov, i, j, s / (n as f32))
-        }
-    }
-
     let pca_model: PCA = pca_fit(X, n_components)
     let whitening: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
     for c in 0 to n_components {
@@ -533,13 +534,17 @@ export function fast_ica_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f
     }
 
     let Xw: Matrix = matrix_new(n, n_components)
+    let wdata: ptr<f32> = Xw.data
     for i in 0 to n {
+        let cbase: i32 = i * p
+        let wbase: i32 = i * n_components
         for c in 0 to n_components {
+            let wrow: ptr<f32> = whitening[c]
             let mut s: f32 = 0.0
             for j in 0 to p {
-                s = s + matrix_at(Xc, i, j) * whitening[c][j]
+                s = s + cdata[cbase + j] * wrow[j]
             }
-            matrix_set(Xw, i, c, s)
+            wdata[wbase + c] = s
         }
     }
 
@@ -548,6 +553,10 @@ export function fast_ica_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f
     let components: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
     let mut n_iter: i32 = 0
 
+    let w_old: ptr<f32> = array_new_f32(n_components)
+    let gw: ptr<f32> = array_new_f32(n_components)
+    let g_w: ptr<f32> = array_new_f32(n_components)
+
     for c in 0 to n_components {
         components[c] = array_new_f32(n_components)
         for j in 0 to n_components {
@@ -555,43 +564,46 @@ export function fast_ica_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f
         }
         _gram_schmidt(components[c], components, c, n_components)
 
+        let w: ptr<f32> = components[c]
+
         for iter in 0 to max_iter {
             n_iter = iter + 1
 
-            let w_old: ptr<f32> = array_copy_f32(components[c], n_components)
-
-            let gw: ptr<f32> = array_new_f32(n_components)
-            let g_w: ptr<f32> = array_new_f32(n_components)
+            # w_old, gw and g_w are reused across iterations instead of being
+            # allocated and freed on every one. gw and g_w are accumulators, so
+            # they are reset explicitly to the zeros calloc used to supply.
+            for j in 0 to n_components {
+                w_old[j] = w[j]
+                gw[j] = 0.0
+                g_w[j] = 0.0
+            }
 
             for i in 0 to n {
+                let wbase: i32 = i * n_components
                 let mut dot: f32 = 0.0
                 for j in 0 to n_components {
-                    dot = dot + components[c][j] * matrix_at(Xw, i, j)
+                    dot = dot + w[j] * wdata[wbase + j]
                 }
                 let t: f32 = tanh((dot) as f64) as f32
                 let g_deriv: f32 = 1.0 - t * t
 
                 for j in 0 to n_components {
-                    gw[j] = gw[j] + t * matrix_at(Xw, i, j)
-                    g_w[j] = g_w[j] + g_deriv * components[c][j]
+                    gw[j] = gw[j] + t * wdata[wbase + j]
+                    g_w[j] = g_w[j] + g_deriv * w[j]
                 }
             }
 
             for j in 0 to n_components {
-                components[c][j] = (gw[j] - g_w[j] * components[c][j]) / (n as f32)
+                w[j] = (gw[j] - g_w[j] * w[j]) / (n as f32)
             }
 
-            _gram_schmidt(components[c], components, c, n_components)
+            _gram_schmidt(w, components, c, n_components)
 
             let mut dot: f32 = 0.0
             for j in 0 to n_components {
-                dot = dot + components[c][j] * w_old[j]
+                dot = dot + w[j] * w_old[j]
             }
             let convergence: f32 = fabs((fabs((dot) as f64) as f32 - 1.0) as f64) as f32
-
-            array_free_f32(w_old)
-            array_free_f32(gw)
-            array_free_f32(g_w)
 
             if convergence < tol { break }
         }
@@ -609,13 +621,16 @@ export function fast_ica_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f
         }
     }
 
+    array_free_f32(w_old)
+    array_free_f32(gw)
+    array_free_f32(g_w)
+
     for c in 0 to n_components {
         array_free_f32(whitening[c])
     }
     free(whitening as ptr<void>)
     matrix_free(Xw)
     matrix_free(Xc)
-    matrix_free(cov)
     pca_free(pca_model)
 
     return FastICA {
