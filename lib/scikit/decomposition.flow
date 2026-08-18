@@ -780,15 +780,18 @@ export function sparse_pca_fit(X: Matrix, n_components: i32, alpha: f32, max_ite
                 }
             }
 
-            array_free_f32(grad)
-
             if iter > 0 && iter % 10 == 0 {
                 let mut change: f32 = 0.0
                 for j in 0 to p {
                     change = change + fabs((grad[j]) as f64) as f32
                 }
-                if change / (p as f32) < tol { break }
+                if change / (p as f32) < tol {
+                    array_free_f32(grad)
+                    break
+                }
             }
+
+            array_free_f32(grad)
         }
     }
 
@@ -937,15 +940,18 @@ export function minibatch_sparse_pca_fit(
                 }
             }
 
-            array_free_f32(grad)
-
             if iter > 0 && iter % 10 == 0 {
                 let mut change: f32 = 0.0
                 for j in 0 to p {
                     change = change + fabs((grad[j]) as f64) as f32
                 }
-                if change / (p as f32) < tol { break }
+                if change / (p as f32) < tol {
+                    array_free_f32(grad)
+                    break
+                }
             }
+
+            array_free_f32(grad)
         }
     }
 
