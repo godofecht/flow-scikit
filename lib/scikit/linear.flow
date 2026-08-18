@@ -150,15 +150,25 @@ export function _solve_f64(A: ptr<f64>, b: ptr<f64>, n: i32) -> void {
 # Solves min ||X*w - y||^2 where X is m x n (m >= n).
 # Modifies X and y in place. Result is stored in y[0..n-1].
 # This avoids forming XtX (which squares the condition number).
+#
+# The Householder sequence is unchanged: reflectors are still built for columns
+# 0..n-1 in that order, with no pivoting, from the same alpha/beta formulas.
+# Only the loops that apply a reflector move to BLAS. Applying H to the
+# trailing block is v^T A followed by a rank-1 update, which are exactly
+# dgemv(trans) and dger over a sub-block addressed by an explicit leading
+# dimension, with the reflector read as a strided column. The old code walked
+# the whole trailing block once per column in scalar f64.
 export function _solve_lstsq_qr(X: ptr<f64>, y: ptr<f64>, m: i32, n: i32) -> void {
+    let dots: ptr<f64> = array_new_f64(n)
+
     # Apply n Householder transformations to reduce X to upper triangular
     for k in 0 to n {
+        let rows: i32 = m - k
+        if rows <= 0 { continue }
+        let vcol: ptr<f64> = X + k * n + k
+
         # Compute Householder vector for column k, rows k..m
-        let mut norm: f64 = 0.0
-        for i in k to m {
-            let v: f64 = X[i * n + k]
-            norm = norm + v * v
-        }
+        let mut norm: f64 = blas_dot_strided_f64(rows, vcol, n, vcol, n)
         norm = sqrt(norm)
         if norm < 0.000000000000001 { continue }
 
@@ -170,39 +180,27 @@ export function _solve_lstsq_qr(X: ptr<f64>, y: ptr<f64>, m: i32, n: i32) -> voi
         X[k * n + k] = X[k * n + k] - alpha
 
         # beta = 2 / (v^T v)
-        let mut vtv: f64 = 0.0
-        for i in k to m {
-            let v: f64 = X[i * n + k]
-            vtv = vtv + v * v
-        }
+        let vtv: f64 = blas_dot_strided_f64(rows, vcol, n, vcol, n)
         if vtv < 0.000000000000001 { continue }
         let beta: f64 = 2.0 / vtv
 
         # Apply H to remaining columns of X (columns k+1..n-1)
-        for j in (k + 1) to n {
-            let mut dot: f64 = 0.0
-            for i in k to m {
-                dot = dot + X[i * n + k] * X[i * n + j]
-            }
-            let factor: f64 = beta * dot
-            for i in k to m {
-                X[i * n + j] = X[i * n + j] - factor * X[i * n + k]
-            }
+        let cols: i32 = n - k - 1
+        if cols > 0 {
+            let block: ptr<f64> = X + k * n + k + 1
+            blas_matvec_trans_ld_f64(block, rows, cols, n, vcol, n, dots, 1.0, 0.0)
+            blas_ger_ld_f64(block, rows, cols, n, vcol, n, dots, 0.0 - beta)
         }
 
         # Apply H to y
-        let mut dot_y: f64 = 0.0
-        for i in k to m {
-            dot_y = dot_y + X[i * n + k] * y[i]
-        }
-        let factor_y: f64 = beta * dot_y
-        for i in k to m {
-            y[i] = y[i] - factor_y * X[i * n + k]
-        }
+        let dot_y: f64 = blas_dot_strided_f64(rows, vcol, n, y + k, 1)
+        blas_axpy_strided_f64(rows, 0.0 - beta * dot_y, vcol, n, y + k, 1)
 
         # Set the diagonal element of R
         X[k * n + k] = alpha
     }
+
+    array_free_f64(dots)
 
     # Back-substitution: R * w = y(0..n-1)
     let mut i: i32 = n - 1
@@ -324,13 +322,17 @@ export function linear_regression_fit(X: Matrix, y: ptr<f32>, penalty: Penalty) 
     let n: i32 = X.cols
     let m: i32 = X.rows
 
-    # Center data in f64 for precision.
+    # Center data in f64 for precision. X is contiguous row-major, so both
+    # sweeps index X.data directly; matrix_at copies the Matrix struct by value
+    # on every element.
+    let xdata: ptr<f32> = X.data
     let x_mean: ptr<f64> = array_new_f64(n)
     let mut y_mean: f64 = 0.0
     for i in 0 to m {
         y_mean = y_mean + (y[i] as f64)
+        let base: i32 = i * n
         for j in 0 to n {
-            x_mean[j] = x_mean[j] + (matrix_at(X, i, j) as f64)
+            x_mean[j] = x_mean[j] + (xdata[base + j] as f64)
         }
     }
     y_mean = y_mean / (m as f64)
@@ -345,8 +347,9 @@ export function linear_regression_fit(X: Matrix, y: ptr<f32>, penalty: Penalty) 
     let yc: ptr<f64> = array_new_f64(m)
     for i in 0 to m {
         yc[i] = (y[i] as f64) - y_mean
+        let base: i32 = i * n
         for j in 0 to n {
-            Xc[i * n + j] = (matrix_at(X, i, j) as f64) - x_mean[j]
+            Xc[base + j] = (xdata[base + j] as f64) - x_mean[j]
         }
     }
 
@@ -357,12 +360,18 @@ export function linear_regression_fit(X: Matrix, y: ptr<f32>, penalty: Penalty) 
         # But for simplicity, use normal equations for regularized case
         let XtX: ptr<f64> = array_new_f64(n * n)
         let Xty: ptr<f64> = array_new_f64(n)
+        # Same accumulation order as before; the row base, the row of XtX and
+        # the response value are hoisted out of the inner loop instead of being
+        # recomputed for every one of the m * n * n updates.
         for i in 0 to m {
+            let base: i32 = i * n
+            let yi: f64 = yc[i]
             for j in 0 to n {
-                let xj: f64 = Xc[i * n + j]
-                Xty[j] = Xty[j] + xj * yc[i]
+                let xj: f64 = Xc[base + j]
+                Xty[j] = Xty[j] + xj * yi
+                let rowj: i32 = j * n
                 for k in 0 to n {
-                    XtX[j * n + k] = XtX[j * n + k] + xj * Xc[i * n + k]
+                    XtX[rowj + k] = XtX[rowj + k] + xj * Xc[base + k]
                 }
             }
         }
