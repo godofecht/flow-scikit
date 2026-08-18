@@ -100,11 +100,11 @@ function main() -> i32 {
         step_standard_scaler("scaler"),
         step_logistic_regression("classifier", 2, 500, 0.1, penalty_l2(0.01))
     ]
-    let pipeline: Pipeline = pipeline_new(steps, 2)
+    let mut pipeline: Pipeline = pipeline_new(steps, 2)
 
     println("Fitting pipeline...")
     handle Progress with ConsoleProgress {
-        pipeline_fit(pipeline, split.X_train, split.y_train)
+        pipeline = pipeline_fit(pipeline, split.X_train, split.y_train)
     }
 
     println("")

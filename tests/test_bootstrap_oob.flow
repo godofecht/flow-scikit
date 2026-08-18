@@ -1,0 +1,132 @@
+# Tests for BootstrapOOB cross-validator.
+
+import "lib/scikit/model_selection.flow"
+import "lib/scikit/matrix.flow"
+
+extern {
+    function fabs(x: f64) -> f64
+}
+
+function test_bootstrap_oob() -> i32 {
+    print("Test: BootstrapOOB")
+    println("")
+    let mut failures: i32 = 0
+
+    let n_samples: i32 = 10000
+    let bs: BootstrapOOB = bootstrap_oob_init(1, 42)
+    let fold: FoldIndices = bootstrap_oob_get_split(bs, n_samples, 0)
+
+    # 1. Check sampling is with replacement
+    let counts: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+    let mut i: i32 = 0
+    while i < n_samples {
+        counts[i] = 0
+        i = i + 1
+    }
+
+    i = 0
+    while i < fold.n_train {
+        let idx: i32 = fold.train_indices[i]
+        counts[idx] = counts[idx] + 1
+        i = i + 1
+    }
+
+    let mut has_duplicates: bool = false
+    i = 0
+    while i < n_samples {
+        if counts[i] > 1 {
+            has_duplicates = true
+        }
+        i = i + 1
+    }
+
+    if not has_duplicates {
+        print("  FAIL: no duplicates found, sampling might not be with replacement")
+        println("")
+        failures = failures + 1
+    }
+
+    # 2. Check out-of-bag complement is correct
+    let mut oob_correct: bool = true
+    i = 0
+    while i < fold.n_test {
+        let idx: i32 = fold.test_indices[i]
+        if counts[idx] != 0 {
+            oob_correct = false
+        }
+        i = i + 1
+    }
+
+    let mut total_zero_count: i32 = 0
+    i = 0
+    while i < n_samples {
+        if counts[i] == 0 {
+            total_zero_count = total_zero_count + 1
+        }
+        i = i + 1
+    }
+
+    if total_zero_count != fold.n_test {
+        oob_correct = false
+    }
+
+    if not oob_correct {
+        print("  FAIL: out-of-bag indices do not exactly complement the in-bag set")
+        println("")
+        failures = failures + 1
+    }
+
+    # 3. Check expected out-of-bag fraction (~1/e = 36.8%)
+    let expected_fraction: f32 = 0.36787944
+    let actual_fraction: f32 = (fold.n_test as f32) / (n_samples as f32)
+    let diff: f32 = fabs((actual_fraction - expected_fraction) as f64) as f32
+    if diff > 0.02 {
+        print("  FAIL: expected OOB fraction ~0.368, got ")
+        print(actual_fraction)
+        println("")
+        failures = failures + 1
+    }
+
+    # 4. Check fixed seed reproduces split
+    let bs2: BootstrapOOB = bootstrap_oob_init(1, 42)
+    let fold2: FoldIndices = bootstrap_oob_get_split(bs2, n_samples, 0)
+
+    let mut seeds_match: bool = true
+    if fold.n_train != fold2.n_train || fold.n_test != fold2.n_test {
+        seeds_match = false
+    }
+
+    i = 0
+    while i < fold.n_train && seeds_match {
+        if fold.train_indices[i] != fold2.train_indices[i] {
+            seeds_match = false
+        }
+        i = i + 1
+    }
+
+    if not seeds_match {
+        print("  FAIL: a fixed seed did not reproduce the same split")
+        println("")
+        failures = failures + 1
+    }
+
+    fold_indices_free(fold)
+    fold_indices_free(fold2)
+    free(counts as ptr<void>)
+
+    return failures
+}
+
+export function main() -> i32 {
+    let mut failures: i32 = 0
+    failures = failures + test_bootstrap_oob()
+    if failures == 0 {
+        print("All tests passed.")
+        println("")
+    } else {
+        print(failures)
+        print(" tests failed.")
+        println("")
+    }
+    return failures
+}

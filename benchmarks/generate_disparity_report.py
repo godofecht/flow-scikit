@@ -61,32 +61,59 @@ def relative_diff(a: float, b: float) -> float:
     return abs(a - b) / max(abs(a), abs(b), 1e-12)
 
 
+def first_divergent_index(pairs: list[tuple[float, float]]) -> int:
+    """Index of the first element the two runs disagree on, or -1 if none.
+
+    The tolerance absorbs float32 print rounding so a shared structure emitted
+    at slightly different precision does not read as a divergence.
+    """
+    for index, (a, b) in enumerate(pairs):
+        if abs(a - b) > 1e-9 + 1e-6 * max(abs(a), abs(b)):
+            return index
+    return -1
+
+
 def enrich_state_from_raw_details(
     key: tuple[str, str, str],
     state: dict,
     sklearn_details: dict,
     flow_details: dict,
 ) -> dict:
-    """Preserve state evidence even when strict score parity exits early.
+    """Derive learned-state deltas from the frozen DETAIL records.
 
-    KMeans already emits inertia and iteration count for every canonical row.
-    The strict Digits score gate currently fails before compare_v2 records those
-    fields, so derive their deltas here instead of losing evidence.
+    compare_v2.py stops at the first failed gate, so a row whose score misses
+    its tolerance never reaches the estimator-specific state comparison and its
+    evidence is lost. This pass works straight off the DETAIL records instead,
+    pairing every field both runners emitted for the row.
+
+    Scalars produce `<field>_abs_diff` and `<field>_relative_diff`. Equal-length
+    vectors produce `<field>_max_abs_diff`, `<field>_max_relative_diff` and
+    `<field>_first_divergent_index`, which is -1 when the two vectors match
+    elementwise and otherwise points at the first position they disagree on.
+    Length disagreement is itself evidence and is recorded as
+    `<field>_length_abs_diff`. Anything compare_v2 already computed wins, so the
+    existing KMeans and PCA key names are unchanged.
     """
     algorithm, dataset, _ = key
-    if algorithm != "KMeans":
-        return state
-
-    sk_inertia = sklearn_details.get((algorithm, dataset, "inertia"))
-    fl_inertia = flow_details.get((algorithm, dataset, "inertia"))
-    if isinstance(sk_inertia, float) and isinstance(fl_inertia, float):
-        state.setdefault("inertia_relative_diff", relative_diff(sk_inertia, fl_inertia))
-
-    sk_iter = sklearn_details.get((algorithm, dataset, "n_iter"))
-    fl_iter = flow_details.get((algorithm, dataset, "n_iter"))
-    if isinstance(sk_iter, float) and isinstance(fl_iter, float):
-        state["n_iter_abs_diff"] = abs(sk_iter - fl_iter)
-
+    for (algo, ds, field), sk_value in sorted(sklearn_details.items()):
+        if algo != algorithm or ds != dataset:
+            continue
+        fl_value = flow_details.get((algo, ds, field))
+        if fl_value is None:
+            continue
+        if isinstance(sk_value, list) or isinstance(fl_value, list):
+            if not (isinstance(sk_value, list) and isinstance(fl_value, list)):
+                continue
+            if len(sk_value) != len(fl_value):
+                state.setdefault(f"{field}_length_abs_diff", float(abs(len(sk_value) - len(fl_value))))
+                continue
+            pairs = list(zip(sk_value, fl_value))
+            state.setdefault(f"{field}_max_abs_diff", max((abs(a - b) for a, b in pairs), default=0.0))
+            state.setdefault(f"{field}_max_relative_diff", max((relative_diff(a, b) for a, b in pairs), default=0.0))
+            state.setdefault(f"{field}_first_divergent_index", first_divergent_index(pairs))
+        else:
+            state.setdefault(f"{field}_abs_diff", abs(sk_value - fl_value))
+            state.setdefault(f"{field}_relative_diff", relative_diff(sk_value, fl_value))
     return state
 
 
@@ -98,6 +125,7 @@ def main() -> int:
     p.add_argument("--kmeans-audit", type=Path, default=ROOT / "kmeans_semantics_audit.json")
     p.add_argument("--sklearn-raw", type=Path, default=ROOT / "sklearn_results_v2.txt")
     p.add_argument("--flow-raw", type=Path, default=ROOT / "flow_results_v2.txt")
+    p.add_argument("--host-environment", type=Path, default=ROOT / "headline_environment.json")
     p.add_argument("--output", type=Path, default=ROOT / "disparity_report.json")
     args = p.parse_args()
 
@@ -107,6 +135,7 @@ def main() -> int:
     kmeans_audit = json.loads(args.kmeans_audit.read_text()) if args.kmeans_audit.exists() else None
     sklearn_details = parse_details(args.sklearn_raw)
     flow_details = parse_details(args.flow_raw)
+    host_env = json.loads(args.host_environment.read_text()) if args.host_environment.exists() else {}
 
     diag_by_key = {(r["algorithm"], r["dataset"], r["metric"]): r for r in diagnostics}
     contract_by_key = {(r["algorithm"], r["dataset"], r["metric"]): r for r in contract_doc["rows"]}
@@ -185,8 +214,13 @@ def main() -> int:
         })
 
     payload = {
-        "schema_version": 2,
+        "schema_version": 3,
         "environment_id": headline.get("environment_id"),
+        # Hardware plus BLAS thread configuration. environment_id only covers the
+        # software stack, so it cannot tell two runner machines apart; wall-clock
+        # comparisons are only meaningful within one runtime_environment_id.
+        "runtime_environment_id": host_env.get("runtime_environment_id"),
+        "host": host_env.get("host"),
         "policy": "headline eligibility never erases disparity evidence; strict diagnostics, learned-state diagnostics and final eligibility decisions are retained separately",
         "counts": {
             "rows": len(rows),

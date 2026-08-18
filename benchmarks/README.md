@@ -28,6 +28,55 @@ Canonical v2 consumes persisted train/test fixtures shared by Python and Flow. C
 
 Digits KMeans is classified as `approximately equivalent`. [`audit_kmeans_semantics.py`](audit_kmeans_semantics.py) records that the first trajectory divergence occurs during initialization; the final objective remains closely matched. [`finalize_kmeans_parity.py`](finalize_kmeans_parity.py) applies the explicit clustering-equivalence gate before the row becomes headline-eligible.
 
+## Learned-state diagnostics
+
+A score tolerance says two implementations agree on the answer. It says nothing
+about whether they agree on the model. Both runners therefore emit `DETAIL`
+records alongside each `RESULT` line:
+
+```
+DETAIL|<algorithm>|<dataset>|<field>|<value or comma-separated values>
+```
+
+[`generate_disparity_report.py`](generate_disparity_report.py) pairs every field
+both runners emitted for a canonical row and writes the deltas into that row's
+`model_state_diagnostics`. Scalars give `<field>_abs_diff` and
+`<field>_relative_diff`; equal-length vectors give `<field>_max_abs_diff`,
+`<field>_max_relative_diff` and `<field>_first_divergent_index`, which is `-1`
+when the vectors match elementwise and otherwise points at the first position
+they disagree on; a length disagreement is recorded as
+`<field>_length_abs_diff`. This runs off the frozen `DETAIL` records rather than
+the parity comparison, so a row that misses its score tolerance still keeps its
+state evidence. [`model_state_coverage.py`](model_state_coverage.py) audits which
+canonical rows have any state evidence at all.
+
+What each estimator emits:
+
+| Row | Learned state |
+| --- | --- |
+| LogisticRegression, LinearSVC | sorted class labels, coefficient Frobenius norm, per-class row norms, intercepts |
+| KernelSVC_RBF | gamma, C, one-vs-one pair labels and sizes, support-vector count per pair, bounded (at-C) support count per pair, summed absolute dual coefficients per pair, intercept per pair |
+| DecisionTree | node and leaf counts, realized depth, root split feature/threshold/impurity, both depth-1 splits, node count per depth, split-feature histogram, sample-weighted mean leaf depth, full preorder split feature and threshold vectors |
+| RandomForest | per-tree node/leaf counts, depths, root splits and impurities, per-tree bootstrap index checksum and unique-sample fraction, per-tree feature-subsample seed, mean vote margin, mean top-vote fraction, unanimous-vote fraction |
+| GaussianNB | sorted class labels, class priors, per-class mean and variance row norms, Frobenius norms, variance min/max |
+| KMeans | inertia, iteration count, sorted center norms, sorted training cluster sizes |
+| PCA | explained-variance ratios, singular values, reconstruction MSE, first two components |
+| Ridge, Lasso, LinearRegression | full coefficient vector, intercept, coefficient L2 norm and absolute sum, zero-coefficient count |
+| KernelRidge_RBF | alpha, gamma, training size, dual-coefficient norm, absolute sum, min, max and mean |
+
+Large structures are summarised rather than dumped, with one exception. A single
+decision tree emits its full preorder split vectors, because node ids are
+assigned parent-before-children and left-subtree-first on both sides, so index
+`i` names the same position in both trees and `first_divergent_index` is then a
+literal pointer at the first structurally different node. Forests emit per-tree
+scalars and a bootstrap checksum instead of every bootstrap index; kernel SVMs
+emit per-pair aggregates instead of every dual coefficient. Per-class and
+per-pair vectors are ordered by class label so they line up with sklearn
+regardless of the order Flow discovered the classes in.
+
+Emission happens outside the timing windows and reads only fitted state, so it
+does not move any canonical metric or timing.
+
 ## Running the canonical benchmark
 
 ```bash

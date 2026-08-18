@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import shlex
 import statistics
 import subprocess
@@ -14,6 +15,52 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmarks"
+
+# Environment variables that decide how many threads the native BLAS spawns.
+# They change both wall-clock and floating-point reduction order, so they are
+# part of the measurement environment and are recorded with it.
+THREAD_LIMIT_VARS = (
+    "OPENBLAS_NUM_THREADS",
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+)
+
+
+def cpu_model() -> str:
+    """Best-effort CPU identification for the current host."""
+    try:
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith("model name"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    try:
+        out = subprocess.run(
+            ["sysctl", "-n", "machdep.cpu.brand_string"],
+            capture_output=True, text=True, check=True,
+        )
+        return out.stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    return platform.processor() or platform.machine() or "unknown"
+
+
+def host_fingerprint() -> dict:
+    """Describe the measurement host.
+
+    `environment_id` only covers the software stack, so two runs on different
+    GitHub runner hardware share one id even though their wall-clock ratios and
+    their float32 results differ. Runtime comparisons need the hardware and the
+    BLAS thread configuration as well, which is what this records.
+    """
+    return {
+        "machine": platform.machine(),
+        "cpu_model": cpu_model(),
+        "logical_cpus": os.cpu_count(),
+        "thread_limits": {var: os.environ.get(var) for var in THREAD_LIMIT_VARS},
+    }
 
 
 def percentile(values: list[float], p: float) -> float:
@@ -154,14 +201,25 @@ def main() -> int:
 
     env_payload = json.dumps({"sklearn": py_meta, "flow": flow_meta}, sort_keys=True, separators=(",", ":"))
     environment_id = hashlib.sha256(env_payload.encode()).hexdigest()[:16]
-    (BENCH / "headline_environment.json").write_text(json.dumps({"environment_id": environment_id, "metadata": {"sklearn": py_meta, "flow": flow_meta}}, indent=2) + "\n")
+    host = host_fingerprint()
+    runtime_payload = json.dumps({"software": env_payload, "host": host}, sort_keys=True, separators=(",", ":"))
+    runtime_environment_id = hashlib.sha256(runtime_payload.encode()).hexdigest()[:16]
+    (BENCH / "headline_environment.json").write_text(json.dumps({
+        "environment_id": environment_id,
+        "runtime_environment_id": runtime_environment_id,
+        "host": host,
+        "metadata": {"sklearn": py_meta, "flow": flow_meta},
+    }, indent=2) + "\n")
 
     subprocess.run(
         [sys.executable, str(BENCH / "compare_v2.py"), "--sklearn", str(py_path), "--flow", str(flow_path), "--environment-id", environment_id],
         cwd=ROOT,
         check=True,
     )
-    print(f"environment_id={environment_id}; process_repeats={args.repeats}")
+    print(
+        f"environment_id={environment_id}; runtime_environment_id={runtime_environment_id}; "
+        f"process_repeats={args.repeats}; cpu={host['cpu_model']!r}; logical_cpus={host['logical_cpus']}"
+    )
     return 0
 
 

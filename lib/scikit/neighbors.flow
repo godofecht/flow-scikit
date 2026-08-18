@@ -27,16 +27,75 @@ export struct Neighbor {
 export function knn_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, k: i32) -> KNNClassifier {
     let classes: ptr<f32> = array_new_f32(n_classes)
     let mut n_found: i32 = 0
-    for i in 0 to X.rows {
-        let mut found: bool = false
-        for c in 0 to n_found {
-            if classes[c] == y[i] {
-                found = true
+    let n: i32 = X.rows
+
+    # Class discovery used to rescan the whole discovered-class list for every
+    # sample, which is O(n * n_classes). Label sets are almost always small
+    # integers, so when they are, membership is tested against a direct-index
+    # table in O(1) and the whole pass becomes O(n). First-appearance order is
+    # preserved exactly, so the probability column order that
+    # knn_classifier_predict_proba and knn_classifier_decide depend on is
+    # unchanged.
+    let mut lo: f32 = 0.0
+    let mut hi: f32 = 0.0
+    let mut use_table: bool = false
+    if n > 0 {
+        lo = y[0]
+        hi = y[0]
+        use_table = true
+        for i in 0 to n {
+            let v: f32 = y[i]
+            if v < -1000000.0 || v > 1000000.0 {
+                use_table = false
+                break
+            }
+            let t: f32 = (v as i32) as f32
+            if t != v {
+                use_table = false
+                break
+            }
+            if v < lo { lo = v }
+            if v > hi { hi = v }
+        }
+    }
+
+    let lo_i: i32 = lo as i32
+    let mut span: i32 = 1
+    if use_table {
+        span = (hi as i32) - lo_i + 1
+        if span < 1 || span > 4000000 { use_table = false }
+    }
+
+    if use_table {
+        let seen: ptr<f32> = array_new_f32(span)
+        for i in 0 to n {
+            let v: f32 = y[i]
+            let idx: i32 = (v as i32) - lo_i
+            if seen[idx] == 0.0 {
+                seen[idx] = 1.0
+                if n_found < n_classes {
+                    classes[n_found] = v
+                    n_found = n_found + 1
+                }
             }
         }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
+        array_free_f32(seen)
+    } else {
+        for i in 0 to n {
+            let v: f32 = y[i]
+            let mut found: bool = false
+            for c in 0 to n_found {
+                if classes[c] == v {
+                    found = true
+                    break
+                }
+            }
+            if not found {
+                if n_found < n_classes {
+                    classes[n_found] = v
+                    n_found = n_found + 1
+                }
+            }
         }
     }
 
