@@ -158,6 +158,601 @@ function reconstruction_mse(original: Matrix, reconstructed: Matrix) -> f32 {
     return (total / (n as f64)) as f32
 }
 
+# ---------------------------------------------------------------------------
+# Model-state diagnostics (issue #207).
+#
+# Everything below runs OUTSIDE the timed fit/predict windows and only reads
+# learned state. No fitted numeric is touched, so every RESULT| line stays
+# byte-identical.
+#
+# Issue #359: tree.flow allocates TreeNode with malloc and the builder leaves
+# `value` unwritten on internal nodes and `feature`/`threshold` unwritten on
+# leaves, so those fields hold heap garbage that differs run to run. Nothing
+# here reads `value` on an internal node or `feature`/`threshold` on a leaf.
+# ---------------------------------------------------------------------------
+
+function msd207_detail_f32(algo: string, dataset: string, key: string, value: f32) -> void {
+    printf("DETAIL|%s|%s|%s|%.9g\n", algo, dataset, key, value)
+}
+
+function msd207_detail_i32(algo: string, dataset: string, key: string, value: i32) -> void {
+    printf("DETAIL|%s|%s|%s|%d\n", algo, dataset, key, value)
+}
+
+function msd207_detail_list_f32(algo: string, dataset: string, key: string, values: ptr<f32>, n: i32) -> void {
+    printf("DETAIL|%s|%s|%s|", algo, dataset, key)
+    for i in 0 to n {
+        if i > 0 { printf(",") }
+        printf("%.9g", values[i])
+    }
+    printf("\n")
+}
+
+function msd207_detail_list_i32(algo: string, dataset: string, key: string, values: ptr<i32>, n: i32) -> void {
+    printf("DETAIL|%s|%s|%s|", algo, dataset, key)
+    for i in 0 to n {
+        if i > 0 { printf(",") }
+        printf("%d", values[i])
+    }
+    printf("\n")
+}
+
+function msd207_l2_norm(v: ptr<f32>, n: i32) -> f32 {
+    let mut total: f64 = 0.0
+    for i in 0 to n {
+        let x: f64 = (v[i]) as f64
+        total = total + x * x
+    }
+    return sqrt((total) as f64) as f32
+}
+
+function msd207_abs_sum(v: ptr<f32>, n: i32) -> f32 {
+    let mut total: f64 = 0.0
+    for i in 0 to n {
+        total = total + fabs((v[i]) as f64)
+    }
+    return total as f32
+}
+
+# Ascending permutation of class-label indices so that per-class diagnostics
+# line up with sklearn's sorted classes_ regardless of discovery order.
+function msd207_class_order(classes: ptr<f32>, n: i32) -> ptr<i32> {
+    let order: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n { order[i] = i }
+    for i in 1 to n {
+        let carried: i32 = order[i]
+        let key_val: f32 = classes[carried]
+        let mut j: i32 = i - 1
+        while j >= 0 && classes[order[j]] > key_val {
+            order[j + 1] = order[j]
+            j = j - 1
+        }
+        order[j + 1] = carried
+    }
+    return order
+}
+
+function msd207_sort_f32_ascending(v: ptr<f32>, n: i32) -> void {
+    for i in 1 to n {
+        let carried: f32 = v[i]
+        let mut j: i32 = i - 1
+        while j >= 0 && v[j] > carried {
+            v[j + 1] = v[j]
+            j = j - 1
+        }
+        v[j + 1] = carried
+    }
+}
+
+function msd207_sort_i32_descending(v: ptr<i32>, n: i32) -> void {
+    for i in 1 to n {
+        let carried: i32 = v[i]
+        let mut j: i32 = i - 1
+        while j >= 0 && v[j] < carried {
+            v[j + 1] = v[j]
+            j = j - 1
+        }
+        v[j + 1] = carried
+    }
+}
+
+# ---- linear models -------------------------------------------------------
+
+function msd207_linear_state(algo: string, dataset: string, w: ptr<f32>, n: i32, intercept: f32) -> void {
+    msd207_detail_list_f32(algo, dataset, "coef", w, n)
+    msd207_detail_f32(algo, dataset, "intercept", intercept)
+    msd207_detail_f32(algo, dataset, "coef_l2_norm", msd207_l2_norm(w, n))
+    msd207_detail_f32(algo, dataset, "coef_abs_sum", msd207_abs_sum(w, n))
+    let mut zeros: i32 = 0
+    for i in 0 to n {
+        if w[i] == 0.0 { zeros = zeros + 1 }
+    }
+    msd207_detail_i32(algo, dataset, "n_zero_coefs", zeros)
+}
+
+# Shared emitter for one-vs-rest coefficient blocks held as nc row vectors.
+function msd207_ovr_state(algo: string, dataset: string, rows: ptr<ptr<f32> >, biases: ptr<f32>, classes: ptr<f32>, nc: i32, nf: i32) -> void {
+    let order: ptr<i32> = msd207_class_order(classes, nc)
+    let row_norms: ptr<f32> = array_new_f32(nc)
+    let ordered_bias: ptr<f32> = array_new_f32(nc)
+    let ordered_classes: ptr<f32> = array_new_f32(nc)
+    let mut fro: f64 = 0.0
+    let mut abs_total: f64 = 0.0
+    for k in 0 to nc {
+        let c: i32 = order[k]
+        let norm: f32 = msd207_l2_norm(rows[c], nf)
+        row_norms[k] = norm
+        ordered_bias[k] = biases[c]
+        ordered_classes[k] = classes[c]
+        fro = fro + (norm as f64) * (norm as f64)
+        abs_total = abs_total + (msd207_abs_sum(rows[c], nf)) as f64
+    }
+    msd207_detail_list_f32(algo, dataset, "classes", ordered_classes, nc)
+    msd207_detail_f32(algo, dataset, "coef_frobenius_norm", sqrt((fro) as f64) as f32)
+    msd207_detail_f32(algo, dataset, "coef_abs_sum", abs_total as f32)
+    msd207_detail_list_f32(algo, dataset, "coef_row_l2_norms", row_norms, nc)
+    msd207_detail_list_f32(algo, dataset, "intercepts", ordered_bias, nc)
+    free(order as ptr<void>)
+    array_free_f32(row_norms)
+    array_free_f32(ordered_bias)
+    array_free_f32(ordered_classes)
+}
+
+function msd207_logreg_state(dataset: string, m: LogisticRegression) -> void {
+    let rows: ptr<ptr<f32> > = malloc((m.n_classes as i64) * 8) as ptr<ptr<f32> >
+    for c in 0 to m.n_classes {
+        rows[c] = m.weights + c * m.n_features
+    }
+    msd207_ovr_state("LogisticRegression", dataset, rows, m.biases, m.classes, m.n_classes, m.n_features)
+    free(rows as ptr<void>)
+}
+
+function msd207_linsvc_state(dataset: string, m: LinearSVCMulti) -> void {
+    msd207_ovr_state("LinearSVC", dataset, m.weights, m.biases, m.classes, m.n_classes, m.n_features)
+}
+
+# ---- naive Bayes ---------------------------------------------------------
+
+function msd207_gnb_state(dataset: string, m: GaussianNB) -> void {
+    let order: ptr<i32> = msd207_class_order(m.classes, m.n_classes)
+    let ordered_classes: ptr<f32> = array_new_f32(m.n_classes)
+    let priors: ptr<f32> = array_new_f32(m.n_classes)
+    let theta_norms: ptr<f32> = array_new_f32(m.n_classes)
+    let var_norms: ptr<f32> = array_new_f32(m.n_classes)
+    let mut theta_fro: f64 = 0.0
+    let mut var_fro: f64 = 0.0
+    let mut var_min: f32 = 0.0
+    let mut var_max: f32 = 0.0
+    let mut seen: bool = false
+    for k in 0 to m.n_classes {
+        let c: i32 = order[k]
+        ordered_classes[k] = m.classes[c]
+        priors[k] = m.priors[c]
+        theta_norms[k] = msd207_l2_norm(m.means[c], m.n_features)
+        var_norms[k] = msd207_l2_norm(m.variances[c], m.n_features)
+        theta_fro = theta_fro + (theta_norms[k] as f64) * (theta_norms[k] as f64)
+        var_fro = var_fro + (var_norms[k] as f64) * (var_norms[k] as f64)
+        for j in 0 to m.n_features {
+            let v: f32 = m.variances[c][j]
+            if not seen {
+                var_min = v
+                var_max = v
+                seen = true
+            }
+            if v < var_min { var_min = v }
+            if v > var_max { var_max = v }
+        }
+    }
+    msd207_detail_list_f32("GaussianNB", dataset, "classes", ordered_classes, m.n_classes)
+    msd207_detail_list_f32("GaussianNB", dataset, "class_priors", priors, m.n_classes)
+    msd207_detail_list_f32("GaussianNB", dataset, "theta_row_l2_norms", theta_norms, m.n_classes)
+    msd207_detail_list_f32("GaussianNB", dataset, "var_row_l2_norms", var_norms, m.n_classes)
+    msd207_detail_f32("GaussianNB", dataset, "theta_frobenius_norm", sqrt((theta_fro) as f64) as f32)
+    msd207_detail_f32("GaussianNB", dataset, "var_frobenius_norm", sqrt((var_fro) as f64) as f32)
+    msd207_detail_f32("GaussianNB", dataset, "var_min", var_min)
+    msd207_detail_f32("GaussianNB", dataset, "var_max", var_max)
+    free(order as ptr<void>)
+    array_free_f32(ordered_classes)
+    array_free_f32(priors)
+    array_free_f32(theta_norms)
+    array_free_f32(var_norms)
+}
+
+# ---- decision trees ------------------------------------------------------
+
+# Node ids are assigned preorder (parent before either child), so a single
+# forward sweep resolves every depth. Same layout as sklearn's tree_ arrays.
+function msd207_tree_depths(t: DecisionTreeClassifier) -> ptr<i32> {
+    let depths: ptr<i32> = malloc((t.n_nodes as i64) * 4) as ptr<i32>
+    for i in 0 to t.n_nodes { depths[i] = 0 }
+    for i in 0 to t.n_nodes {
+        if not t.nodes[i].is_leaf {
+            let l: i32 = t.nodes[i].left
+            let r: i32 = t.nodes[i].right
+            if l > i && l < t.n_nodes { depths[l] = depths[i] + 1 }
+            if r > i && r < t.n_nodes { depths[r] = depths[i] + 1 }
+        }
+    }
+    return depths
+}
+
+function msd207_tree_n_leaves(t: DecisionTreeClassifier) -> i32 {
+    let mut n: i32 = 0
+    for i in 0 to t.n_nodes {
+        if t.nodes[i].is_leaf { n = n + 1 }
+    }
+    return n
+}
+
+function msd207_tree_max_depth(t: DecisionTreeClassifier) -> i32 {
+    let depths: ptr<i32> = msd207_tree_depths(t)
+    let mut best: i32 = 0
+    for i in 0 to t.n_nodes {
+        if depths[i] > best { best = depths[i] }
+    }
+    free(depths as ptr<void>)
+    return best
+}
+
+function msd207_tree_root_feature(t: DecisionTreeClassifier) -> i32 {
+    let mut f: i32 = -1
+    if t.n_nodes > 0 {
+        if not t.nodes[0].is_leaf { f = t.nodes[0].feature }
+    }
+    return f
+}
+
+function msd207_tree_root_threshold(t: DecisionTreeClassifier) -> f32 {
+    let mut v: f32 = 0.0
+    if t.n_nodes > 0 {
+        if not t.nodes[0].is_leaf { v = t.nodes[0].threshold }
+    }
+    return v
+}
+
+function msd207_tree_state(dataset: string, t: DecisionTreeClassifier, n_features: i32, depth_cap: i32) -> void {
+    let depths: ptr<i32> = msd207_tree_depths(t)
+    let hist: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    for i in 0 to n_features { hist[i] = 0 }
+    let per_depth: ptr<i32> = malloc(((depth_cap + 1) as i64) * 4) as ptr<i32>
+    for i in 0 to depth_cap + 1 { per_depth[i] = 0 }
+
+    let mut n_leaves: i32 = 0
+    let mut max_depth_seen: i32 = 0
+    let mut weighted_depth: f64 = 0.0
+    let mut leaf_samples: f64 = 0.0
+    for i in 0 to t.n_nodes {
+        let d: i32 = depths[i]
+        if d >= 0 && d <= depth_cap { per_depth[d] = per_depth[d] + 1 }
+        if d > max_depth_seen { max_depth_seen = d }
+        if t.nodes[i].is_leaf {
+            n_leaves = n_leaves + 1
+            let ns: f64 = (t.nodes[i].n_samples) as f64
+            weighted_depth = weighted_depth + (d as f64) * ns
+            leaf_samples = leaf_samples + ns
+        } else {
+            let f: i32 = t.nodes[i].feature
+            if f >= 0 && f < n_features { hist[f] = hist[f] + 1 }
+        }
+    }
+
+    let child_split: ptr<f32> = array_new_f32(4)
+    child_split[0] = -1.0
+    child_split[1] = 0.0
+    child_split[2] = -1.0
+    child_split[3] = 0.0
+    if t.n_nodes > 0 {
+        if not t.nodes[0].is_leaf {
+            let l: i32 = t.nodes[0].left
+            let r: i32 = t.nodes[0].right
+            if l > 0 && l < t.n_nodes {
+                if not t.nodes[l].is_leaf {
+                    child_split[0] = (t.nodes[l].feature) as f32
+                    child_split[1] = t.nodes[l].threshold
+                }
+            }
+            if r > 0 && r < t.n_nodes {
+                if not t.nodes[r].is_leaf {
+                    child_split[2] = (t.nodes[r].feature) as f32
+                    child_split[3] = t.nodes[r].threshold
+                }
+            }
+        }
+    }
+
+    let mut mean_leaf_depth: f32 = 0.0
+    if leaf_samples > 0.0 { mean_leaf_depth = (weighted_depth / leaf_samples) as f32 }
+    let mut root_impurity: f32 = 0.0
+    if t.n_nodes > 0 { root_impurity = t.nodes[0].impurity }
+
+    msd207_detail_i32("DecisionTree", dataset, "n_nodes", t.n_nodes)
+    msd207_detail_i32("DecisionTree", dataset, "n_leaves", n_leaves)
+    msd207_detail_i32("DecisionTree", dataset, "max_depth_reached", max_depth_seen)
+    msd207_detail_i32("DecisionTree", dataset, "root_split_feature", msd207_tree_root_feature(t))
+    msd207_detail_f32("DecisionTree", dataset, "root_split_threshold", msd207_tree_root_threshold(t))
+    msd207_detail_f32("DecisionTree", dataset, "root_impurity", root_impurity)
+    msd207_detail_list_f32("DecisionTree", dataset, "depth1_splits", child_split, 4)
+    msd207_detail_list_i32("DecisionTree", dataset, "nodes_per_depth", per_depth, depth_cap + 1)
+    msd207_detail_list_i32("DecisionTree", dataset, "split_feature_histogram", hist, n_features)
+    msd207_detail_f32("DecisionTree", dataset, "mean_leaf_depth", mean_leaf_depth)
+
+    free(depths as ptr<void>)
+    free(hist as ptr<void>)
+    free(per_depth as ptr<void>)
+    array_free_f32(child_split)
+}
+
+# ---- random forest -------------------------------------------------------
+
+function msd207_xorshift32(s: u32) -> u32 {
+    let mut x: u32 = s
+    x = x ^ (x << 13)
+    x = x ^ (x >> 17)
+    x = x ^ (x << 5)
+    return x
+}
+
+# Mirrors the draw order in lib/scikit/ensemble.flow random_forest_classifier_fit:
+# n_train draws of prng_int(state, n_train) build one tree's bootstrap sample,
+# then one further draw whose resulting state seeds that tree's feature
+# subsampling. Replayed here because the fitted model retains neither.
+function msd207_forest_bootstrap(n_train: i32, n_trees: i32, seed: i32, sums: ptr<f32>, unique_frac: ptr<f32>, seeds: ptr<i32>) -> void {
+    let mut s: u32 = (seed as u32)
+    if s == 0 { s = 1 }
+    let hit: ptr<i32> = malloc((n_train as i64) * 4) as ptr<i32>
+    for t in 0 to n_trees {
+        for i in 0 to n_train { hit[i] = 0 }
+        let mut total: f64 = 0.0
+        for i in 0 to n_train {
+            s = msd207_xorshift32(s)
+            let v: i32 = ((s & 0x7FFFFFFF) as i32) % n_train
+            total = total + (v as f64)
+            hit[v] = 1
+        }
+        let mut uniq_count: i32 = 0
+        for i in 0 to n_train {
+            if hit[i] == 1 { uniq_count = uniq_count + 1 }
+        }
+        sums[t] = total as f32
+        unique_frac[t] = (uniq_count as f32) / (n_train as f32)
+        s = msd207_xorshift32(s)
+        seeds[t] = (s & 0x7FFFFFFF) as i32
+    }
+    free(hit as ptr<void>)
+}
+
+function msd207_forest_state(dataset: string, m: RandomForestClassifier, X_test: Matrix, n_train: i32, seed: i32, n_features: i32) -> void {
+    let node_counts: ptr<i32> = malloc((m.n_trees as i64) * 4) as ptr<i32>
+    let leaf_counts: ptr<i32> = malloc((m.n_trees as i64) * 4) as ptr<i32>
+    let tree_depths: ptr<i32> = malloc((m.n_trees as i64) * 4) as ptr<i32>
+    let root_features: ptr<i32> = malloc((m.n_trees as i64) * 4) as ptr<i32>
+    let root_thresholds: ptr<f32> = array_new_f32(m.n_trees)
+    let root_impurities: ptr<f32> = array_new_f32(m.n_trees)
+    for t in 0 to m.n_trees {
+        node_counts[t] = m.trees[t].n_nodes
+        leaf_counts[t] = msd207_tree_n_leaves(m.trees[t])
+        tree_depths[t] = msd207_tree_max_depth(m.trees[t])
+        root_features[t] = msd207_tree_root_feature(m.trees[t])
+        root_thresholds[t] = msd207_tree_root_threshold(m.trees[t])
+        root_impurities[t] = 0.0
+        if m.trees[t].n_nodes > 0 { root_impurities[t] = m.trees[t].nodes[0].impurity }
+    }
+
+    let boot_sums: ptr<f32> = array_new_f32(m.n_trees)
+    let boot_unique: ptr<f32> = array_new_f32(m.n_trees)
+    let boot_seeds: ptr<i32> = malloc((m.n_trees as i64) * 4) as ptr<i32>
+    msd207_forest_bootstrap(n_train, m.n_trees, seed, boot_sums, boot_unique, boot_seeds)
+
+    let votes: Matrix = random_forest_classifier_predict_proba(m, X_test)
+    let mut margin_total: f64 = 0.0
+    let mut top_total: f64 = 0.0
+    let mut unanimous: i32 = 0
+    for i in 0 to votes.rows {
+        let mut best: f32 = 0.0
+        let mut second: f32 = 0.0
+        for c in 0 to votes.cols {
+            let v: f32 = matrix_at(votes, i, c)
+            if v > best {
+                second = best
+                best = v
+            } else {
+                if v > second { second = v }
+            }
+        }
+        margin_total = margin_total + ((best - second) as f64)
+        top_total = top_total + (best as f64)
+        if best >= 0.999999 { unanimous = unanimous + 1 }
+    }
+    let mut mean_margin: f32 = 0.0
+    let mut mean_top: f32 = 0.0
+    let mut unanimous_frac: f32 = 0.0
+    if votes.rows > 0 {
+        mean_margin = (margin_total / (votes.rows as f64)) as f32
+        mean_top = (top_total / (votes.rows as f64)) as f32
+        unanimous_frac = (unanimous as f32) / (votes.rows as f32)
+    }
+
+    let mut max_features: i32 = (sqrt((n_features as f64)) as i32)
+    if max_features < 1 { max_features = 1 }
+
+    msd207_detail_i32("RandomForest", dataset, "n_trees", m.n_trees)
+    msd207_detail_i32("RandomForest", dataset, "max_features_per_split", max_features)
+    msd207_detail_list_i32("RandomForest", dataset, "tree_node_counts", node_counts, m.n_trees)
+    msd207_detail_list_i32("RandomForest", dataset, "tree_leaf_counts", leaf_counts, m.n_trees)
+    msd207_detail_list_i32("RandomForest", dataset, "tree_max_depths", tree_depths, m.n_trees)
+    msd207_detail_list_i32("RandomForest", dataset, "tree_root_features", root_features, m.n_trees)
+    msd207_detail_list_f32("RandomForest", dataset, "tree_root_thresholds", root_thresholds, m.n_trees)
+    msd207_detail_list_f32("RandomForest", dataset, "tree_root_impurities", root_impurities, m.n_trees)
+    msd207_detail_list_f32("RandomForest", dataset, "bootstrap_index_sums", boot_sums, m.n_trees)
+    msd207_detail_list_f32("RandomForest", dataset, "bootstrap_unique_fractions", boot_unique, m.n_trees)
+    msd207_detail_list_i32("RandomForest", dataset, "tree_feature_seeds", boot_seeds, m.n_trees)
+    msd207_detail_f32("RandomForest", dataset, "mean_vote_margin", mean_margin)
+    msd207_detail_f32("RandomForest", dataset, "mean_top_vote_fraction", mean_top)
+    msd207_detail_f32("RandomForest", dataset, "unanimous_vote_fraction", unanimous_frac)
+
+    matrix_free(votes)
+    free(node_counts as ptr<void>)
+    free(leaf_counts as ptr<void>)
+    free(tree_depths as ptr<void>)
+    free(root_features as ptr<void>)
+    array_free_f32(root_thresholds)
+    array_free_f32(root_impurities)
+    array_free_f32(boot_sums)
+    array_free_f32(boot_unique)
+    free(boot_seeds as ptr<void>)
+}
+
+# ---- kernel SVC ----------------------------------------------------------
+
+# Pairs are emitted in ascending (class_a, class_b) label order so they line up
+# with libsvm's one-vs-one ordering regardless of Flow's class discovery order.
+function msd207_ksvc_pair_order(m: KernelSVCMulti) -> ptr<i32> {
+    let order: ptr<i32> = malloc((m.n_pairs as i64) * 4) as ptr<i32>
+    let key: ptr<f32> = array_new_f32(m.n_pairs)
+    for p in 0 to m.n_pairs {
+        order[p] = p
+        let la: f32 = m.classes[m.pair_a[p]]
+        let lb: f32 = m.classes[m.pair_b[p]]
+        let mut lo: f32 = la
+        let mut hi: f32 = lb
+        if lb < la {
+            lo = lb
+            hi = la
+        }
+        key[p] = lo * 100000.0 + hi
+    }
+    for i in 1 to m.n_pairs {
+        let carried: i32 = order[i]
+        let carried_key: f32 = key[carried]
+        let mut j: i32 = i - 1
+        while j >= 0 && key[order[j]] > carried_key {
+            order[j + 1] = order[j]
+            j = j - 1
+        }
+        order[j + 1] = carried
+    }
+    array_free_f32(key)
+    return order
+}
+
+function msd207_ksvc_state(dataset: string, m: KernelSVCMulti) -> void {
+    let order: ptr<i32> = msd207_ksvc_pair_order(m)
+    let class_a: ptr<f32> = array_new_f32(m.n_pairs)
+    let class_b: ptr<f32> = array_new_f32(m.n_pairs)
+    let n_support: ptr<i32> = malloc((m.n_pairs as i64) * 4) as ptr<i32>
+    let n_bounded: ptr<i32> = malloc((m.n_pairs as i64) * 4) as ptr<i32>
+    let pair_size: ptr<i32> = malloc((m.n_pairs as i64) * 4) as ptr<i32>
+    let dual_abs_sum: ptr<f32> = array_new_f32(m.n_pairs)
+    let intercepts: ptr<f32> = array_new_f32(m.n_pairs)
+    let mut total_support: i32 = 0
+    let bound: f32 = m.C - 0.000001
+
+    for k in 0 to m.n_pairs {
+        let p: i32 = order[k]
+        let la: f32 = m.classes[m.pair_a[p]]
+        let lb: f32 = m.classes[m.pair_b[p]]
+        let mut lo: f32 = la
+        let mut hi: f32 = lb
+        if lb < la {
+            lo = lb
+            hi = la
+        }
+        class_a[k] = lo
+        class_b[k] = hi
+        let ns: i32 = m.models[p].n_samples
+        pair_size[k] = ns
+        let mut sv: i32 = 0
+        let mut bounded: i32 = 0
+        let mut total: f64 = 0.0
+        for i in 0 to ns {
+            let a: f32 = m.models[p].alphas[i]
+            if a > 0.000001 {
+                sv = sv + 1
+                total = total + (a as f64)
+                if a >= bound { bounded = bounded + 1 }
+            }
+        }
+        n_support[k] = sv
+        n_bounded[k] = bounded
+        dual_abs_sum[k] = total as f32
+        intercepts[k] = m.models[p].b
+        total_support = total_support + sv
+    }
+
+    msd207_detail_f32("KernelSVC_RBF", dataset, "gamma", m.gamma)
+    msd207_detail_f32("KernelSVC_RBF", dataset, "C", m.C)
+    msd207_detail_i32("KernelSVC_RBF", dataset, "n_pairs", m.n_pairs)
+    msd207_detail_i32("KernelSVC_RBF", dataset, "n_support_total", total_support)
+    msd207_detail_list_f32("KernelSVC_RBF", dataset, "pair_class_a", class_a, m.n_pairs)
+    msd207_detail_list_f32("KernelSVC_RBF", dataset, "pair_class_b", class_b, m.n_pairs)
+    msd207_detail_list_i32("KernelSVC_RBF", dataset, "pair_train_sizes", pair_size, m.n_pairs)
+    msd207_detail_list_i32("KernelSVC_RBF", dataset, "n_support_per_pair", n_support, m.n_pairs)
+    msd207_detail_list_i32("KernelSVC_RBF", dataset, "n_bounded_support_per_pair", n_bounded, m.n_pairs)
+    msd207_detail_list_f32("KernelSVC_RBF", dataset, "dual_coef_abs_sum_per_pair", dual_abs_sum, m.n_pairs)
+    msd207_detail_list_f32("KernelSVC_RBF", dataset, "intercept_per_pair", intercepts, m.n_pairs)
+
+    free(order as ptr<void>)
+    array_free_f32(class_a)
+    array_free_f32(class_b)
+    free(n_support as ptr<void>)
+    free(n_bounded as ptr<void>)
+    free(pair_size as ptr<void>)
+    array_free_f32(dual_abs_sum)
+    array_free_f32(intercepts)
+}
+
+# ---- kernel ridge --------------------------------------------------------
+
+function msd207_krr_state(dataset: string, m: KernelRidge) -> void {
+    let n: i32 = m.n_samples
+    let mut lo: f32 = 0.0
+    let mut hi: f32 = 0.0
+    let mut total: f64 = 0.0
+    for i in 0 to n {
+        let v: f32 = m.dual_coef[i]
+        if i == 0 {
+            lo = v
+            hi = v
+        }
+        if v < lo { lo = v }
+        if v > hi { hi = v }
+        total = total + (v as f64)
+    }
+    let mut mean: f32 = 0.0
+    if n > 0 { mean = (total / (n as f64)) as f32 }
+    msd207_detail_f32("KernelRidge_RBF", dataset, "alpha", m.alpha)
+    msd207_detail_f32("KernelRidge_RBF", dataset, "gamma", m.gamma)
+    msd207_detail_i32("KernelRidge_RBF", dataset, "n_train_samples", n)
+    msd207_detail_f32("KernelRidge_RBF", dataset, "dual_coef_l2_norm", msd207_l2_norm(m.dual_coef, n))
+    msd207_detail_f32("KernelRidge_RBF", dataset, "dual_coef_abs_sum", msd207_abs_sum(m.dual_coef, n))
+    msd207_detail_f32("KernelRidge_RBF", dataset, "dual_coef_min", lo)
+    msd207_detail_f32("KernelRidge_RBF", dataset, "dual_coef_max", hi)
+    msd207_detail_f32("KernelRidge_RBF", dataset, "dual_coef_mean", mean)
+}
+
+# ---- k-means -------------------------------------------------------------
+
+function msd207_kmeans_state(dataset: string, m: KMeans, n_train: i32) -> void {
+    let norms: ptr<f32> = array_new_f32(m.n_clusters)
+    for c in 0 to m.n_clusters {
+        norms[c] = msd207_l2_norm(m.centroids[c], m.n_features)
+    }
+    msd207_sort_f32_ascending(norms, m.n_clusters)
+
+    let sizes: ptr<i32> = malloc((m.n_clusters as i64) * 4) as ptr<i32>
+    for c in 0 to m.n_clusters { sizes[c] = 0 }
+    for i in 0 to n_train {
+        let k: i32 = m.labels[i]
+        if k >= 0 && k < m.n_clusters { sizes[k] = sizes[k] + 1 }
+    }
+    msd207_sort_i32_descending(sizes, m.n_clusters)
+
+    msd207_detail_list_f32("KMeans", dataset, "center_l2_norms_sorted", norms, m.n_clusters)
+    msd207_detail_list_i32("KMeans", dataset, "train_cluster_sizes_sorted", sizes, m.n_clusters)
+    array_free_f32(norms)
+    free(sizes as ptr<void>)
+}
+
 function main() -> i32 {
     printf("TIMING_UNIT|ms\n")
     printf("BENCHMARK_MODE|end_to_end\n")
@@ -184,6 +779,7 @@ function main() -> i32 {
     let lr_i_pred: ptr<f32> = logistic_decide(lr_i, lr_i_probs, si.n_test, 0.5)
     t2 = now_ns()
     printf("RESULT|LogisticRegression|iris|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(si.y_test, lr_i_pred, si.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    msd207_logreg_state("iris", lr_i)
     array_free_f32(lr_i_probs); array_free_f32(lr_i_pred); logistic_regression_free(lr_i)
 
     t0 = now_ns()
@@ -192,6 +788,7 @@ function main() -> i32 {
     let lsvc_i_pred: ptr<f32> = linear_svc_multi_predict(lsvc_i, Xi_te)
     t2 = now_ns()
     printf("RESULT|LinearSVC|iris|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(si.y_test, lsvc_i_pred, si.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    msd207_linsvc_state("iris", lsvc_i)
     array_free_f32(lsvc_i_pred); linear_svc_multi_free(lsvc_i)
 
     t0 = now_ns()
@@ -200,6 +797,7 @@ function main() -> i32 {
     let ksvc_i_pred: ptr<f32> = kernel_svc_multi_predict(ksvc_i, Xi_te)
     t2 = now_ns()
     printf("RESULT|KernelSVC_RBF|iris|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(si.y_test, ksvc_i_pred, si.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    msd207_ksvc_state("iris", ksvc_i)
     array_free_f32(ksvc_i_pred); kernel_svc_multi_free(ksvc_i)
 
     t0 = now_ns()
@@ -208,6 +806,7 @@ function main() -> i32 {
     let dt_i_pred: ptr<f32> = decision_tree_classifier_predict(dt_i, Xi_te)
     t2 = now_ns()
     printf("RESULT|DecisionTree|iris|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(si.y_test, dt_i_pred, si.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    msd207_tree_state("iris", dt_i, Xi_tr.cols, 5)
     array_free_f32(dt_i_pred); decision_tree_classifier_free(dt_i)
 
     t0 = now_ns()
@@ -216,6 +815,7 @@ function main() -> i32 {
     let rf_i_pred: ptr<f32> = random_forest_classifier_predict(rf_i, Xi_te)
     t2 = now_ns()
     printf("RESULT|RandomForest|iris|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(si.y_test, rf_i_pred, si.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    msd207_forest_state("iris", rf_i, Xi_te, si.n_train, 42, Xi_tr.cols)
     array_free_f32(rf_i_pred); random_forest_classifier_free(rf_i)
 
     t0 = now_ns()
@@ -224,6 +824,7 @@ function main() -> i32 {
     let gnb_i_pred: ptr<f32> = gaussian_nb_predict(gnb_i, Xi_te)
     t2 = now_ns()
     printf("RESULT|GaussianNB|iris|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(si.y_test, gnb_i_pred, si.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    msd207_gnb_state("iris", gnb_i)
     array_free_f32(gnb_i_pred); gaussian_nb_free(gnb_i)
 
     t0 = now_ns()
@@ -235,6 +836,7 @@ function main() -> i32 {
     printf("RESULT|KMeans|iris|adjusted_rand_index|%.9f|%.9f|%.9f\n", ari_i, elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
     printf("DETAIL|KMeans|iris|inertia|%.9f\n", km_i.inertia)
     printf("DETAIL|KMeans|iris|n_iter|%d\n", km_i.n_iter)
+    msd207_kmeans_state("iris", km_i, si.n_train)
     free(km_i_pred as ptr<void>); kmeans_free(km_i)
 
     t0 = now_ns()
@@ -266,37 +868,44 @@ function main() -> i32 {
     t0 = now_ns(); let lr_d: LogisticRegression = logistic_regression_fit(Xd_tr, sd.y_train, 10, 200, 0.1, l2_penalty); t1 = now_ns()
     let lr_d_probs: ptr<f32> = logistic_predict(lr_d, Xd_te); let lr_d_pred: ptr<f32> = logistic_decide(lr_d, lr_d_probs, sd.n_test, 0.5); t2 = now_ns()
     printf("RESULT|LogisticRegression|digits|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(sd.y_test, lr_d_pred, sd.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    msd207_logreg_state("digits", lr_d)
     array_free_f32(lr_d_probs); array_free_f32(lr_d_pred); logistic_regression_free(lr_d)
 
     t0 = now_ns(); let lsvc_d: LinearSVCMulti = linear_svc_multi_fit(Xd_tr, sd.y_train, 10, 1.0, 1000); t1 = now_ns()
     let lsvc_d_pred: ptr<f32> = linear_svc_multi_predict(lsvc_d, Xd_te); t2 = now_ns()
     printf("RESULT|LinearSVC|digits|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(sd.y_test, lsvc_d_pred, sd.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    msd207_linsvc_state("digits", lsvc_d)
     array_free_f32(lsvc_d_pred); linear_svc_multi_free(lsvc_d)
 
     t0 = now_ns(); let ksvc_d: KernelSVCMulti = kernel_svc_multi_fit(Xd_tr, sd.y_train, 10, 0.001, 1.0, 1000); t1 = now_ns()
     let ksvc_d_pred: ptr<f32> = kernel_svc_multi_predict(ksvc_d, Xd_te); t2 = now_ns()
     printf("RESULT|KernelSVC_RBF|digits|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(sd.y_test, ksvc_d_pred, sd.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    msd207_ksvc_state("digits", ksvc_d)
     array_free_f32(ksvc_d_pred); kernel_svc_multi_free(ksvc_d)
 
     t0 = now_ns(); let dt_d: DecisionTreeClassifier = decision_tree_classifier_fit(Xd_tr, sd.y_train, 10, 10, 0); t1 = now_ns()
     let dt_d_pred: ptr<f32> = decision_tree_classifier_predict(dt_d, Xd_te); t2 = now_ns()
     printf("RESULT|DecisionTree|digits|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(sd.y_test, dt_d_pred, sd.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    msd207_tree_state("digits", dt_d, Xd_tr.cols, 10)
     array_free_f32(dt_d_pred); decision_tree_classifier_free(dt_d)
 
     t0 = now_ns(); let rf_d: RandomForestClassifier = random_forest_classifier_fit(Xd_tr, sd.y_train, 10, 10, 10, 42); t1 = now_ns()
     let rf_d_pred: ptr<f32> = random_forest_classifier_predict(rf_d, Xd_te); t2 = now_ns()
     printf("RESULT|RandomForest|digits|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(sd.y_test, rf_d_pred, sd.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    msd207_forest_state("digits", rf_d, Xd_te, sd.n_train, 42, Xd_tr.cols)
     array_free_f32(rf_d_pred); random_forest_classifier_free(rf_d)
 
     t0 = now_ns(); let gnb_d: GaussianNB = gaussian_nb_fit(Xd_tr, sd.y_train, 10, 0.000000001); t1 = now_ns()
     let gnb_d_pred: ptr<f32> = gaussian_nb_predict(gnb_d, Xd_te); t2 = now_ns()
     printf("RESULT|GaussianNB|digits|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(sd.y_test, gnb_d_pred, sd.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    msd207_gnb_state("digits", gnb_d)
     array_free_f32(gnb_d_pred); gaussian_nb_free(gnb_d)
 
     t0 = now_ns(); let km_d: KMeans = kmeans_fit_plus_plus(Xd_tr, 10, 100, 0.001, 42, 10); t1 = now_ns()
     let km_d_pred: ptr<i32> = kmeans_predict(km_d, Xd_te); t2 = now_ns()
     printf("RESULT|KMeans|digits|adjusted_rand_index|%.9f|%.9f|%.9f\n", adjusted_rand_index(sd.y_test, km_d_pred, sd.n_test, 10, 10), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
     printf("DETAIL|KMeans|digits|inertia|%.9f\n", km_d.inertia); printf("DETAIL|KMeans|digits|n_iter|%d\n", km_d.n_iter)
+    msd207_kmeans_state("digits", km_d, sd.n_train)
     free(km_d_pred as ptr<void>); kmeans_free(km_d)
 
     standard_scaler_free(scd); matrix_free(Xd_tr); matrix_free(Xd_te); free_fixture_split(sd); dataset_free(digits)
@@ -311,21 +920,25 @@ function main() -> i32 {
     t0 = now_ns(); let ridge: Ridge = ridge_fit(Xr_tr, sr.y_train, 1.0, 1000, 0.01); t1 = now_ns()
     let ridge_pred: ptr<f32> = ridge_predict(ridge, Xr_te); t2 = now_ns()
     printf("RESULT|Ridge|diabetes|r2|%.9f|%.9f|%.9f\n", r2_score(sr.y_test, ridge_pred, sr.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    msd207_linear_state("Ridge", "diabetes", ridge.weights, ridge.n_features, ridge.bias)
     array_free_f32(ridge_pred); ridge_free(ridge)
 
     t0 = now_ns(); let lasso: Lasso = lasso_fit(Xr_tr, sr.y_train, 0.1, 1000, 0.01); t1 = now_ns()
     let lasso_pred: ptr<f32> = lasso_predict(lasso, Xr_te); t2 = now_ns()
     printf("RESULT|Lasso|diabetes|r2|%.9f|%.9f|%.9f\n", r2_score(sr.y_test, lasso_pred, sr.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    msd207_linear_state("Lasso", "diabetes", lasso.weights, lasso.n_features, lasso.bias)
     array_free_f32(lasso_pred); lasso_free(lasso)
 
     t0 = now_ns(); let linreg: LinearRegression = linear_regression_fit(Xr_tr, sr.y_train, no_penalty); t1 = now_ns()
     let linreg_pred: ptr<f32> = linear_regression_predict(linreg, Xr_te); t2 = now_ns()
     printf("RESULT|LinearRegression|diabetes|r2|%.9f|%.9f|%.9f\n", r2_score(sr.y_test, linreg_pred, sr.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    msd207_linear_state("LinearRegression", "diabetes", linreg.weights, linreg.n_features, linreg.bias)
     array_free_f32(linreg_pred); linear_regression_free(linreg)
 
     t0 = now_ns(); let kr: KernelRidge = kernel_ridge_fit(Xr_tr, sr.y_train, 1.0, KERNEL_TYPE_RBF, 0.1, 3, 0.0); t1 = now_ns()
     let kr_pred: ptr<f32> = kernel_ridge_predict(kr, Xr_te); t2 = now_ns()
     printf("RESULT|KernelRidge_RBF|diabetes|r2|%.9f|%.9f|%.9f\n", r2_score(sr.y_test, kr_pred, sr.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
+    msd207_krr_state("diabetes", kr)
     array_free_f32(kr_pred); kernel_ridge_free(kr)
 
     standard_scaler_free(scr); matrix_free(Xr_tr); matrix_free(Xr_te); free_fixture_split(sr); dataset_free(diabetes)
