@@ -1,9 +1,23 @@
 name: Remaining issue implementation
 
 on:
+  # Restricted to main. An unrestricted `push` plus `pull_request` ran the whole
+  # 9-minute job twice for every commit on a PR branch and put two independent
+  # marks on the same commit. Only the main-branch push can freeze evidence, so
+  # nothing is lost by dropping the branch pushes.
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      force_refreeze:
+        description: >-
+          Re-freeze the committed benchmark evidence on main even if the
+          disparity gate failed. Use this only after reading the gate output and
+          deciding the new numbers are correct; it overwrites the baseline the
+          gate compares against.
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -40,7 +54,14 @@ jobs:
           FLOW_HOST: python
           FLOW_OPT_LEVEL: "0"
           FLOW_LDFLAGS: "-lm -lopenblas"
-        run: python benchmarks/run_headline.py --repeats 3
+          # Both sides call into OpenBLAS. Its default thread count follows the
+          # runner's core count, which changes the reduction order (so float32
+          # scores move by a few ulps) and the wall-clock of every small kernel.
+          # Pin it so a rerun measures the same thing.
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+        run: python benchmarks/run_headline.py --repeats 5
       - name: Apply evidence-backed KMeans equivalence gate
         run: python benchmarks/finalize_kmeans_parity.py
       - name: Generate persistent disparity report
@@ -73,7 +94,10 @@ jobs:
           assert history['snapshots'], history
           print({'headline': c, 'disparity': disparity['counts'], 'history_snapshots': len(history['snapshots'])})
           PY
+      # Uploaded even when the gate fails: a failing run is the one worth
+      # reading, and without this its evidence was thrown away.
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: canonical-19of19-${{ github.run_id }}
           path: |
@@ -150,11 +174,32 @@ jobs:
 
   freeze-results:
     name: Freeze validated evidence on main
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # A failing gate does not re-freeze. The baseline is what the gate compares
+    # against, so refreezing on failure would absorb any real regression into
+    # the baseline within one push and the gate could never fire on it twice.
+    # The escape hatch for an intentional change is the workflow_dispatch
+    # force_refreeze input, which puts a human on the record instead.
+    if: |
+      !cancelled()
+      && github.ref == 'refs/heads/main'
+      && needs.architecture-map.result == 'success'
+      && (
+        (github.event_name == 'push' && needs.kmeans-parity.result == 'success')
+        || (github.event_name == 'workflow_dispatch' && inputs.force_refreeze)
+      )
     needs: [kmeans-parity, architecture-map]
+    # Concurrent pushes to main raced here and lost: the loser's `git push` was
+    # rejected with `fetch first` and the whole workflow went red on main
+    # without any gate having failed. Serialize the job and rebase before push.
+    concurrency:
+      group: freeze-benchmark-evidence
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so the push retry below can rebase onto origin/main.
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           name: canonical-19of19-${{ github.run_id }}
@@ -175,4 +220,13 @@ jobs:
             exit 0
           fi
           git commit -m "Freeze validated benchmark, disparity history, and architecture evidence [skip ci]"
-          git push origin HEAD:main
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "push rejected (attempt ${attempt}); rebasing onto origin/main and retrying"
+            git fetch origin main
+            git rebase origin/main
+          done
+          echo 'Could not push frozen evidence after 3 attempts.'
+          exit 1
