@@ -702,55 +702,105 @@ export struct CategoricalNB {
     fitted: bool
 }
 
+# One smoothed category cell.  Extracted so the normalisation pass keeps log()
+# out of a triply nested loop body.
+function _categorical_nb_log_ratio(smoothed: f32, denom: f32) -> f32 {
+    if denom > 0 {
+        return log((smoothed / denom) as f64) as f32
+    }
+    return 0.0
+}
+
 export function categorical_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_categories: ptr<i32>, alpha: f32) -> CategoricalNB {
     let n: i32 = X.rows
     let p: i32 = X.cols
 
     let classes: ptr<f32> = array_new_f32(n_classes)
     let class_log_prior: ptr<f32> = array_new_f32(n_classes)
+    let class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
     for c in 0 to n_classes {
         classes[c] = c as f32
-        let mut count: i32 = 0
-        for i in 0 to n {
-            if y[i] as i32 == c { count = count + 1 }
+        class_counts[c] = 0
+    }
+
+    # Resolve each sample's class once.  The previous implementation rescanned
+    # the whole label vector for every (feature, class) pair, so the count pass
+    # cost n_features * n_classes * n_samples instead of n_samples * n_features.
+    let sample_class: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        let c: i32 = y[i] as i32
+        sample_class[i] = c
+        if c >= 0 && c < n_classes {
+            class_counts[c] = class_counts[c] + 1
         }
-        if count > 0 {
-            class_log_prior[c] = log((count as f64) as f32 as f64) as f32
+    }
+
+    for c in 0 to n_classes {
+        if class_counts[c] > 0 {
+            class_log_prior[c] = log((class_counts[c] as f64) as f32 as f64) as f32
         } else {
             class_log_prior[c] = -10000000000.0
         }
     }
 
-    let category_log_prob: ptr<ptr<ptr<f32> > > = malloc((p as i64) * 8) as ptr<ptr<ptr<f32> > >
+    # Flat count table addressed as feature_offset[j] + c * n_categories[j] + cat,
+    # so the gather pass walks X row-major instead of striding down a column
+    # once per class.
+    let feature_offset: ptr<i32> = malloc((p as i64) * 4) as ptr<i32>
+    let mut slot_count: i32 = 0
     for j in 0 to p {
-        category_log_prob[j] = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
-        for c in 0 to n_classes {
-            let nc: i32 = n_categories[j]
-            category_log_prob[j][c] = array_new_f32(nc)
-            let counts: ptr<i32> = malloc((nc as i64) * 4) as ptr<i32>
-            for cat in 0 to nc { counts[cat] = 0 }
-            let mut total: i32 = 0
-            for i in 0 to n {
-                if y[i] as i32 == c {
-                    let cat: i32 = matrix_at(X, i, j) as i32
-                    if cat >= 0 && cat < nc {
-                        counts[cat] = counts[cat] + 1
-                        total = total + 1
-                    }
+        feature_offset[j] = slot_count
+        slot_count = slot_count + n_categories[j] * n_classes
+    }
+
+    let category_counts: ptr<i32> = malloc((slot_count as i64) * 4) as ptr<i32>
+    for s in 0 to slot_count {
+        category_counts[s] = 0
+    }
+    let cell_totals: ptr<i32> = malloc(((p * n_classes) as i64) * 4) as ptr<i32>
+    for s in 0 to p * n_classes {
+        cell_totals[s] = 0
+    }
+
+    for i in 0 to n {
+        let c: i32 = sample_class[i]
+        if c >= 0 && c < n_classes {
+            let row_base: i32 = i * p
+            for j in 0 to p {
+                let nc: i32 = n_categories[j]
+                let cat: i32 = X.data[row_base + j] as i32
+                if cat >= 0 && cat < nc {
+                    let slot: i32 = feature_offset[j] + c * nc + cat
+                    category_counts[slot] = category_counts[slot] + 1
+                    let cell: i32 = j * n_classes + c
+                    cell_totals[cell] = cell_totals[cell] + 1
                 }
             }
-            for cat in 0 to nc {
-                let smoothed: f32 = (counts[cat] as f32) + alpha
-                let denom: f32 = (total as f32) + alpha * (nc as f32)
-                if denom > 0 {
-                    category_log_prob[j][c][cat] = log((smoothed / denom) as f64) as f32
-                } else {
-                    category_log_prob[j][c][cat] = 0.0
-                }
-            }
-            free(counts as ptr<void>)
         }
     }
+
+    let category_log_prob: ptr<ptr<ptr<f32> > > = malloc((p as i64) * 8) as ptr<ptr<ptr<f32> > >
+    for j in 0 to p {
+        let nc: i32 = n_categories[j]
+        category_log_prob[j] = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
+        for c in 0 to n_classes {
+            let probs: ptr<f32> = array_new_f32(nc)
+            category_log_prob[j][c] = probs
+            let base: i32 = feature_offset[j] + c * nc
+            let total: i32 = cell_totals[j * n_classes + c]
+            let denom: f32 = (total as f32) + alpha * (nc as f32)
+            for cat in 0 to nc {
+                let smoothed: f32 = (category_counts[base + cat] as f32) + alpha
+                probs[cat] = _categorical_nb_log_ratio(smoothed, denom)
+            }
+        }
+    }
+
+    free(class_counts as ptr<void>)
+    free(sample_class as ptr<void>)
+    free(feature_offset as ptr<void>)
+    free(category_counts as ptr<void>)
+    free(cell_totals as ptr<void>)
 
     return CategoricalNB {
         category_log_prob: category_log_prob,
