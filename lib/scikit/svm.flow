@@ -937,8 +937,38 @@ function _smo_examine(
         let mut k2: i32 = 0
         while k2 < n {
             let j: i32 = (start + k2) % n
-            if _smo_step(j, i2, n, alphas, y, G, Q, C) {
-                return true
+            if alphas[j] <= 0.0 || alphas[j] >= C {
+                let alpha1: f64 = alphas[j]
+                let y1: f64 = y[j]
+
+                let mut L: f64 = 0.0
+                let mut H: f64 = C
+                if y1 == y2 {
+                    L = alpha1 + alpha2 - C
+                    H = alpha1 + alpha2
+                    if L < 0.0 { L = 0.0 }
+                    if H > C { H = C }
+                } else {
+                    L = alpha2 - alpha1
+                    H = alpha2 - alpha1 + C
+                    if L < 0.0 { L = 0.0 }
+                    if H > C { H = C }
+                }
+
+                let step_dir: f64 = y1 * y2 * G[j] - G[i2]
+                let mut feasible: bool = true
+                if step_dir > 0.0 && alpha2 >= H {
+                    feasible = false
+                }
+                if step_dir < 0.0 && alpha2 <= L {
+                    feasible = false
+                }
+
+                if feasible {
+                    if _smo_step(j, i2, n, alphas, y, G, Q, C) {
+                        return true
+                    }
+                }
             }
             k2 = k2 + 1
         }
