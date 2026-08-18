@@ -141,8 +141,23 @@ function _mean_val(y: ptr<f32>, n: i32) -> f32 {
 }
 
 # Shell sort: sort values array, keeping companion i32 array in sync.
+#
+# Gaps follow Knuth's 1, 4, 13, 40, 121, ... sequence instead of repeated
+# halving. Halving gives every gap a common factor of two, so early passes
+# only ever compare positions of the same parity and leave most inversions for
+# the final gap-1 pass to walk one step at a time. The 3h+1 gaps are coprime,
+# so each pass makes progress the next one keeps.
+#
+# The final pass always runs at gap 1, so the output is fully sorted either
+# way. The split scan that consumes this only reads counts at boundaries where
+# consecutive values differ, and those counts depend on the sorted value
+# sequence rather than on the order among equal values, so the chosen split and
+# threshold are unchanged.
 function _sort_pairs(values: ptr<f32>, companions: ptr<i32>, n: i32) -> void {
-    let mut gap: i32 = n / 2
+    let mut gap: i32 = 1
+    while gap < n / 3 {
+        gap = 3 * gap + 1
+    }
     while gap > 0 {
         let mut i: i32 = gap
         while i < n {
@@ -158,7 +173,7 @@ function _sort_pairs(values: ptr<f32>, companions: ptr<i32>, n: i32) -> void {
             companions[j] = key_c
             i = i + 1
         }
-        gap = gap / 2
+        gap = (gap - 1) / 3
     }
 }
 
@@ -191,6 +206,28 @@ function _gini_from_counts(counts: ptr<i32>, n_classes: i32, n: i32) -> f32 {
     let nf: f32 = n as f32
     for c in 0 to n_classes {
         let p: f32 = (counts[c] as f32) / nf
+        sum_sq = sum_sq + p * p
+    }
+    return 1.0 - sum_sq
+}
+
+# Gini impurity over a precomputed ascending list of the classes present at a
+# node. Classes absent from the node are absent from both sides of every split
+# below it, so their term is 0.0 either way and dropping it is exact. The
+# surviving terms are still summed in ascending class order.
+#
+# This is the same computation as _gini_from_counts, restricted to the classes
+# that can be non-empty. In a forest the split scan calls it twice per
+# candidate threshold, and below the first couple of levels a node typically
+# holds a small fraction of the label set.
+function _tree_gini_present(counts: ptr<i32>, present: ptr<i32>, n_present: i32, n: i32) -> f32 {
+    if n <= 0 { return 0.0 }
+    let mut sum_sq: f32 = 0.0
+    let nf: f32 = n as f32
+    for pi in 0 to n_present {
+        let k: i32 = counts[present[pi]]
+        if k == 0 { continue }
+        let p: f32 = (k as f32) / nf
         sum_sq = sum_sq + p * p
     }
     return 1.0 - sum_sq
@@ -438,11 +475,23 @@ function _build_classifier_tree_rf(
     let mut best_threshold: f32 = 0.0
     let mut best_impurity: f32 = 9999999999.0
 
+    # Row offsets into X.data, computed once per node and reused by every
+    # candidate feature and by the final partition, instead of recomputing
+    # indices[i] * X.cols inside matrix_at on every element touch.
+    let x_data: ptr<f32> = X.data
+    let x_cols: i32 = X.cols
+    let class_bytes: i64 = (n_indices as i64) * 4
+    let row_base: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
+    for i in 0 to n_indices {
+        row_base[i] = indices[i] * x_cols
+    }
+
     let class_idx: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
     for i in 0 to n_indices {
         let mut ci: i32 = 0
+        let yi: f32 = y[indices[i]]
         for c in 0 to n_classes {
-            if y[indices[i]] == classes[c] { ci = c }
+            if yi == classes[c] { ci = c }
         }
         class_idx[i] = ci
     }
@@ -450,8 +499,21 @@ function _build_classifier_tree_rf(
     let total_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
     for c in 0 to n_classes { total_counts[c] = 0 }
     for i in 0 to n_indices { total_counts[class_idx[i]] = total_counts[class_idx[i]] + 1 }
-    let parent_impurity: f32 = _gini_from_counts(total_counts, n_classes, n_indices)
-    free(total_counts as ptr<void>)
+
+    # Ascending list of the classes that actually occur at this node. A class
+    # with no samples here has no samples on either side of any split below,
+    # so its impurity term is 0.0 and dropping it is exact. Every count loop in
+    # the split scan walks this list instead of the whole label set.
+    let present: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    let mut n_present: i32 = 0
+    for c in 0 to n_classes {
+        if total_counts[c] > 0 {
+            present[n_present] = c
+            n_present = n_present + 1
+        }
+    }
+
+    let parent_impurity: f32 = _tree_gini_present(total_counts, present, n_present, n_indices)
 
     let sort_values: ptr<f32> = array_new_f32(n_indices)
     let sort_classes: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
@@ -482,18 +544,31 @@ function _build_classifier_tree_rf(
     for f in 0 to n_features {
         if feature_mask[f] == 0 { continue }
 
+        # Gather and check for a constant column in one pass. If every sample
+        # shares a value, the scan below hits `sort_values[i] == sort_values[i+1]`
+        # at every position and evaluates no candidate at all, so skipping the
+        # sort and the scan changes nothing. Constant columns are common in a
+        # forest: pixel-style features are constant over most nodes, and deeper
+        # nodes make more of them constant.
+        let first_value: f32 = x_data[row_base[0] + f]
+        let mut is_constant: bool = true
         for i in 0 to n_indices {
-            sort_values[i] = matrix_at(X, indices[i], f)
-            sort_classes[i] = class_idx[i]
+            let v: f32 = x_data[row_base[i] + f]
+            sort_values[i] = v
+            if v != first_value { is_constant = false }
         }
+        if is_constant { continue }
+
+        memcpy(sort_classes as ptr<void>, class_idx as ptr<void>, class_bytes)
         _sort_pairs(sort_values, sort_classes, n_indices)
 
-        for c in 0 to n_classes {
+        # right_counts starts as the node's full class histogram, which is
+        # exactly total_counts; left_counts starts empty. Seeding from the
+        # histogram replaces a second pass over every sample.
+        for pi in 0 to n_present {
+            let c: i32 = present[pi]
             left_counts[c] = 0
-            right_counts[c] = 0
-        }
-        for i in 0 to n_indices {
-            right_counts[sort_classes[i]] = right_counts[sort_classes[i]] + 1
+            right_counts[c] = total_counts[c]
         }
 
         for i in 0 to n_indices - 1 {
@@ -506,8 +581,8 @@ function _build_classifier_tree_rf(
             let n_right: i32 = n_indices - n_left
             if n_left < 1 || n_right < 1 { continue }
 
-            let gini_left: f32 = _gini_from_counts(left_counts, n_classes, n_left)
-            let gini_right: f32 = _gini_from_counts(right_counts, n_classes, n_right)
+            let gini_left: f32 = _tree_gini_present(left_counts, present, n_present, n_left)
+            let gini_right: f32 = _tree_gini_present(right_counts, present, n_present, n_right)
             let nf: f32 = n_indices as f32
             let weighted: f32 = (n_left as f32) / nf * gini_left + (n_right as f32) / nf * gini_right
 
@@ -525,6 +600,8 @@ function _build_classifier_tree_rf(
     free(left_counts as ptr<void>)
     free(right_counts as ptr<void>)
     free(class_idx as ptr<void>)
+    free(present as ptr<void>)
+    free(total_counts as ptr<void>)
 
     if best_feature < 0 || best_impurity >= parent_impurity - 0.0000000001 {
         let y_sub: ptr<f32> = array_new_f32(n_indices)
@@ -538,6 +615,7 @@ function _build_classifier_tree_rf(
         nodes[node_idx].right = -1
         nodes[node_idx].impurity = parent_impurity
         array_free_f32(y_sub)
+        free(row_base as ptr<void>)
         return node_idx
     }
 
@@ -547,7 +625,7 @@ function _build_classifier_tree_rf(
     let mut right_n: i32 = 0
 
     for i in 0 to n_indices {
-        if matrix_at(X, indices[i], best_feature) <= best_threshold {
+        if x_data[row_base[i] + best_feature] <= best_threshold {
             left_indices[left_n] = indices[i]
             left_n = left_n + 1
         } else {
@@ -555,6 +633,8 @@ function _build_classifier_tree_rf(
             right_n = right_n + 1
         }
     }
+
+    free(row_base as ptr<void>)
 
     nodes[node_idx].is_leaf = false
     nodes[node_idx].feature = best_feature
