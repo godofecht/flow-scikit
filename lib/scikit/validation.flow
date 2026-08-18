@@ -11,6 +11,7 @@ export const ENSURE_ERR_TOO_FEW_SAMPLES: i32 = 3
 export const ENSURE_ERR_EMPTY: i32 = 4
 export const ENSURE_ERR_NEGATIVE: i32 = 5
 export const ENSURE_ERR_NAN: i32 = 6
+export const ENSURE_ERR_TOO_MANY_CLASSES: i32 = 7
 
 export struct ValidationResult {
     ok: bool,
@@ -136,4 +137,28 @@ export function check_validated(result: ValidationResult) -> bool {
         return false
     }
     return true
+}
+
+# Issue #398. Every classifier fit in the library takes n_classes as a caller
+# supplied parameter and derives its class vector from y. Nothing tied the two
+# together, and the fits used to write one entry per distinct label into a
+# buffer holding exactly n_classes entries.
+#
+# The buffers now grow to hold every distinct label, so no class is dropped and
+# nothing is written out of bounds. The caller's n_classes is still wrong in
+# that case, and consumers that iterate to n_classes will read a short class
+# vector. A Flow fit function returns a fitted struct by value and cannot also
+# return a ValidationResult, so the mismatch is surfaced here: call this before
+# fit to get a real error instead of a quietly disagreeing model.
+export function ensure_n_classes(y: ptr<f32>, n: i32, n_classes: i32) -> ValidationResult {
+    if n_classes < 1 {
+        return ValidationResult { ok: false, code: ENSURE_ERR_TOO_MANY_CLASSES, message: "n_classes must be at least 1" }
+    }
+    let found: DistinctF32 = distinct_f32(y, n, n_classes)
+    let count: i32 = found.count
+    array_free_f32(found.values)
+    if count > n_classes {
+        return ValidationResult { ok: false, code: ENSURE_ERR_TOO_MANY_CLASSES, message: "y contains more distinct labels than n_classes" }
+    }
+    return ValidationResult { ok: true, code: ENSURE_OK, message: "" }
 }

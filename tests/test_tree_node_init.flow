@@ -1,0 +1,165 @@
+# Regression for issue #359: every field of every TreeNode must be defined.
+#
+# The tree builders write only the fields a node kind needs. A leaf never
+# assigns feature or threshold, an internal node never assigns value, and the
+# ExtraTree builders also skip n_samples and impurity. When the node array came
+# from malloc those fields held whatever the allocator handed back, so fitting
+# the same tree on the same data twice produced different bytes and any
+# per-node comparison against sklearn read noise.
+#
+# This test dirties the heap with a known byte pattern, frees it so the
+# allocator hands the same bytes to the next request, then fits a tree and
+# checks the fields the builder never touches. On malloc the leaves come back
+# holding the pattern. On calloc they are zero.
+
+import "lib/scikit/matrix.flow"
+import "lib/scikit/tree.flow"
+
+extern {
+    function memset(dst: ptr<void>, c: i32, n: i64) -> ptr<void>
+}
+
+# Fill the allocator's free list for the size the tree is about to request with
+# blocks holding a known byte pattern, so the next request of that size gets one
+# of them back rather than a fresh zero page.
+function _t359_dirty(n_rows: i32, pattern: i32) -> void {
+    let nbytes: i64 = ((2 * n_rows + 1) as i64) * 36
+    let blocks: ptr<ptr<void> > = malloc(64 * 8) as ptr<ptr<void> >
+    for i in 0 to 64 {
+        let p: ptr<void> = malloc(nbytes)
+        memset(p, pattern, nbytes)
+        blocks[i] = p
+    }
+    for i in 0 to 64 {
+        free(blocks[i])
+    }
+    free(blocks as ptr<void>)
+}
+
+# Separable two-class problem, deep enough to produce internal nodes and leaves.
+function _t359_make_x(n: i32) -> Matrix {
+    let X: Matrix = matrix_new(n, 3)
+    for i in 0 to n {
+        let f: f32 = (i % 20) as f32
+        matrix_set(X, i, 0, f)
+        matrix_set(X, i, 1, (i % 7) as f32)
+        matrix_set(X, i, 2, ((i * 3) % 11) as f32)
+    }
+    return X
+}
+
+function _t359_make_y(n: i32) -> ptr<f32> {
+    let y: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        if (i % 20) < 7 {
+            y[i] = 0.0
+        } else {
+            if (i % 20) < 14 {
+                y[i] = 1.0
+            } else {
+                y[i] = 2.0
+            }
+        }
+    }
+    return y
+}
+
+function main() -> i32 {
+    let n: i32 = 1400
+    let X: Matrix = _t359_make_x(n)
+    let y: ptr<f32> = _t359_make_y(n)
+
+    # Fit and discard once so a block of exactly the node-array size is on the
+    # free list, then poison blocks of that size.
+    let warm: DecisionTreeClassifier = decision_tree_classifier_fit(X, y, 3, 6, 0)
+    decision_tree_classifier_free(warm)
+    _t359_dirty(n, 90)
+
+    let clf: DecisionTreeClassifier = decision_tree_classifier_fit(X, y, 3, 6, 0)
+    let mut bad_leaf_feature: i32 = 0
+    let mut bad_leaf_threshold: i32 = 0
+    let mut bad_internal_value: i32 = 0
+    let mut n_leaf: i32 = 0
+    let mut n_internal: i32 = 0
+    for i in 0 to clf.n_nodes {
+        let nd: ptr<TreeNode> = clf.nodes + i
+        if nd.is_leaf {
+            n_leaf = n_leaf + 1
+            if nd.feature != 0 { bad_leaf_feature = bad_leaf_feature + 1 }
+            if nd.threshold != 0.0 { bad_leaf_threshold = bad_leaf_threshold + 1 }
+        } else {
+            n_internal = n_internal + 1
+            if nd.value != 0.0 { bad_internal_value = bad_internal_value + 1 }
+        }
+    }
+    decision_tree_classifier_free(clf)
+
+    let warm_reg: DecisionTreeRegressor = decision_tree_regressor_fit(X, y, 6, 2)
+    decision_tree_regressor_free(warm_reg)
+    _t359_dirty(n, 163)
+
+    let reg: DecisionTreeRegressor = decision_tree_regressor_fit(X, y, 6, 2)
+    let mut bad_reg_leaf_feature: i32 = 0
+    let mut bad_reg_leaf_threshold: i32 = 0
+    let mut bad_reg_internal_value: i32 = 0
+    let mut n_reg_leaf: i32 = 0
+    let mut n_reg_internal: i32 = 0
+    for i in 0 to reg.n_nodes {
+        let nd: ptr<TreeNode> = reg.nodes + i
+        if nd.is_leaf {
+            n_reg_leaf = n_reg_leaf + 1
+            if nd.feature != 0 { bad_reg_leaf_feature = bad_reg_leaf_feature + 1 }
+            if nd.threshold != 0.0 { bad_reg_leaf_threshold = bad_reg_leaf_threshold + 1 }
+        } else {
+            n_reg_internal = n_reg_internal + 1
+            if nd.value != 0.0 { bad_reg_internal_value = bad_reg_internal_value + 1 }
+        }
+    }
+    decision_tree_regressor_free(reg)
+
+    matrix_free(X)
+    array_free_f32(y)
+
+    if n_leaf < 2 || n_internal < 2 || n_reg_leaf < 2 || n_reg_internal < 2 {
+        println("FAIL: test tree is too shallow to exercise both node kinds")
+        return 1
+    }
+
+    let mut failed: i32 = 0
+    if bad_leaf_feature != 0 {
+        print("FAIL: classifier leaves with undefined feature: ")
+        println(bad_leaf_feature)
+        failed = 1
+    }
+    if bad_leaf_threshold != 0 {
+        print("FAIL: classifier leaves with undefined threshold: ")
+        println(bad_leaf_threshold)
+        failed = 1
+    }
+    if bad_internal_value != 0 {
+        print("FAIL: classifier internal nodes with undefined value: ")
+        println(bad_internal_value)
+        failed = 1
+    }
+    if bad_reg_leaf_feature != 0 {
+        print("FAIL: regressor leaves with undefined feature: ")
+        println(bad_reg_leaf_feature)
+        failed = 1
+    }
+    if bad_reg_leaf_threshold != 0 {
+        print("FAIL: regressor leaves with undefined threshold: ")
+        println(bad_reg_leaf_threshold)
+        failed = 1
+    }
+    if bad_reg_internal_value != 0 {
+        print("FAIL: regressor internal nodes with undefined value: ")
+        println(bad_reg_internal_value)
+        failed = 1
+    }
+    if failed == 1 {
+        return 1
+    }
+
+    println("PASS: every TreeNode field is defined after fit")
+    return 0
+}
