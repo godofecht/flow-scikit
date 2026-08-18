@@ -3,6 +3,7 @@
 
 import "lib/scikit/matrix.flow"
 import "lib/scikit/prng.flow"
+import "lib/scikit/blas.flow"
 
 export struct KMeans {
     centroids: ptr<ptr<f32> >,
@@ -395,18 +396,106 @@ export function kmeans_predict(model: KMeans, X: Matrix) -> ptr<i32> {
     return preds
 }
 
+# Distance from every sample to every centroid.
+#
+# Uses the squared-euclidean expansion
+#   ||x - c||^2 = ||x||^2 + ||c||^2 - 2 * (x . c)
+# so each sample norm and each centroid norm is computed once instead of once
+# per (sample, centroid) pair, and the whole cross term is a single row-major
+# sgemm. The centroid rows are packed into one contiguous k x d block first,
+# because the model stores them as separate allocations. Sample reads go
+# straight to X.data instead of through matrix_at.
+#
+# The expansion can produce a small negative value for a sample sitting on top
+# of a centroid, so the squared distance is clamped at zero before the sqrt.
+#
+# A sgemm call is not free. OpenBLAS in particular spends on the order of a
+# tenth of a millisecond dispatching threads before it multiplies anything,
+# which is more than the entire scalar loop costs on a small problem. So the
+# expansion is only used once there is enough distance work to pay for it;
+# below that the direct per-pair loop runs, which is also what the previous
+# implementation computed, bit for bit.
+function _kmeans_use_blas(n: i32, n_clusters: i32, n_features: i32) -> bool {
+    let work: i64 = (n as i64) * (n_clusters as i64) * (n_features as i64)
+    return work >= 65536
+}
+
 export function kmeans_transform(model: KMeans, X: Matrix) -> Matrix {
-    let result: Matrix = matrix_new(X.rows, model.n_clusters)
-    for i in 0 to X.rows {
-        for k in 0 to model.n_clusters {
-            let mut dist: f32 = 0.0
-            for j in 0 to model.n_features {
-                let d: f32 = matrix_at(X, i, j) - model.centroids[k][j]
-                dist = dist + d * d
+    let n: i32 = X.rows
+    let n_clusters: i32 = model.n_clusters
+    let n_features: i32 = model.n_features
+    let result: Matrix = matrix_new(n, n_clusters)
+    if n <= 0 || n_clusters <= 0 || n_features <= 0 {
+        return result
+    }
+
+    let x_data: ptr<f32> = X.data
+    let x_stride: i32 = X.cols
+
+    if not _kmeans_use_blas(n, n_clusters, n_features) {
+        let rd_small: ptr<f32> = result.data
+        for i in 0 to n {
+            let xbase: i32 = i * x_stride
+            let rbase: i32 = i * n_clusters
+            for k in 0 to n_clusters {
+                let crow: ptr<f32> = model.centroids[k]
+                let mut dist: f32 = 0.0
+                for j in 0 to n_features {
+                    let d: f32 = x_data[xbase + j] - crow[j]
+                    dist = dist + d * d
+                }
+                rd_small[rbase + k] = sqrt(dist as f64) as f32
             }
-            matrix_set(result, i, k, sqrt(dist as f64) as f32)
+        }
+        return result
+    }
+
+    # Pack centroids contiguously and take their norms in the same pass.
+    let cbuf: ptr<f32> = array_new_f32(n_clusters * n_features)
+    let cnorm: ptr<f32> = array_new_f32(n_clusters)
+    for k in 0 to n_clusters {
+        let crow: ptr<f32> = model.centroids[k]
+        let cbase: i32 = k * n_features
+        let mut cs: f32 = 0.0
+        for j in 0 to n_features {
+            let v: f32 = crow[j]
+            cbuf[cbase + j] = v
+            cs = cs + v * v
+        }
+        cnorm[k] = cs
+    }
+
+    let xnorm: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let xbase: i32 = i * x_stride
+        let mut xs: f32 = 0.0
+        for j in 0 to n_features {
+            let v: f32 = x_data[xbase + j]
+            xs = xs + v * v
+        }
+        xnorm[i] = xs
+    }
+
+    # result = -2 * X * C^T (beta = 0 overwrites the calloc-backed buffer).
+    let r_data: ptr<f32> = result.data
+    blas_matmat_nt(x_data, cbuf, r_data, n, n_clusters, n_features, x_stride, n_features, -2.0, 0.0)
+
+    for i in 0 to n {
+        let rbase: i32 = i * n_clusters
+        let xn: f32 = xnorm[i]
+        for k in 0 to n_clusters {
+            let idx: i32 = rbase + k
+            let mut sq: f32 = xn + cnorm[k] + r_data[idx]
+            if sq < 0.0 {
+                sq = 0.0
+            }
+            r_data[idx] = sqrt(sq as f64) as f32
         }
     }
+
+    array_free_f32(cbuf)
+    array_free_f32(cnorm)
+    array_free_f32(xnorm)
     return result
 }
 
