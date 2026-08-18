@@ -1,0 +1,196 @@
+# Regression test for logistic_predict after the per-class argmax was moved
+# onto cblas_sgemv. Checks hand-picked class assignments, the lowest-index
+# tie-break, the wide-X row stride path, and a realistic fitted multiclass
+# workload against an independent scalar reference.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+}
+
+# Independent scalar reference for the one-vs-rest argmax, written the long way
+# on purpose so it does not share code with the implementation under test.
+function optpr_reference(model: LogisticRegression, X: Matrix, out: ptr<f32>) -> void {
+    for i in 0 to X.rows {
+        let mut best_score: f32 = -1000000.0
+        let mut best_class: i32 = 0
+        for c in 0 to model.n_classes {
+            let mut z: f32 = model.biases[c]
+            for j in 0 to model.n_features {
+                z = z + model.weights[c * model.n_features + j] * matrix_at(X, i, j)
+            }
+            if z > best_score {
+                best_score = z
+                best_class = c
+            }
+        }
+        out[i] = model.classes[best_class]
+    }
+}
+
+function main() -> i32 {
+    let pen: Penalty = penalty_l2(0.0)
+
+    # ---- Case 1: three classes, two features, hand-picked winners ----
+    # class 0: w = ( 1,  0), b = 0
+    # class 1: w = ( 0,  1), b = 0
+    # class 2: w = (-1, -1), b = 0
+    let w1: ptr<f32> = array_new_f32(6)
+    w1[0] = 1.0;  w1[1] = 0.0
+    w1[2] = 0.0;  w1[3] = 1.0
+    w1[4] = -1.0; w1[5] = -1.0
+    let b1: ptr<f32> = array_new_f32(3)
+    b1[0] = 0.0; b1[1] = 0.0; b1[2] = 0.0
+    let cls1: ptr<f32> = array_new_f32(3)
+    cls1[0] = 10.0; cls1[1] = 20.0; cls1[2] = 30.0
+
+    let m1: LogisticRegression = LogisticRegression {
+        weights: w1,
+        bias: 0.0,
+        biases: b1,
+        n_features: 2,
+        classes: cls1,
+        n_classes: 3,
+        penalty: pen,
+        fitted: true
+    }
+
+    let X1: Matrix = matrix_new(4, 2)
+    matrix_set(X1, 0, 0, 5.0);  matrix_set(X1, 0, 1, 1.0)   # scores 5, 1, -6  -> class 0
+    matrix_set(X1, 1, 0, 1.0);  matrix_set(X1, 1, 1, 5.0)   # scores 1, 5, -6  -> class 1
+    matrix_set(X1, 2, 0, -4.0); matrix_set(X1, 2, 1, -3.0)  # scores -4, -3, 7 -> class 2
+    matrix_set(X1, 3, 0, 0.0);  matrix_set(X1, 3, 1, 0.0)   # scores 0, 0, 0   -> tie, class 0
+
+    let p1: ptr<f32> = logistic_predict(m1, X1)
+    if p1[0] != 10.0 {
+        println("FAIL: predict row 0 class changed")
+        return 1
+    }
+    if p1[1] != 20.0 {
+        println("FAIL: predict row 1 class changed")
+        return 1
+    }
+    if p1[2] != 30.0 {
+        println("FAIL: predict row 2 class changed")
+        return 1
+    }
+    if p1[3] != 10.0 {
+        println("FAIL: predict must break an exact tie toward the lowest class index")
+        return 1
+    }
+    array_free_f32(p1)
+    matrix_free(X1)
+
+    # ---- Case 2: biases must decide when the dot products agree ----
+    b1[0] = 0.0; b1[1] = 2.5; b1[2] = 0.0
+    let m2: LogisticRegression = LogisticRegression {
+        weights: w1,
+        bias: 0.0,
+        biases: b1,
+        n_features: 2,
+        classes: cls1,
+        n_classes: 3,
+        penalty: pen,
+        fitted: true
+    }
+    let X2: Matrix = matrix_new(1, 2)
+    matrix_set(X2, 0, 0, 0.0); matrix_set(X2, 0, 1, 0.0)
+    let p2: ptr<f32> = logistic_predict(m2, X2)
+    if p2[0] != 20.0 {
+        println("FAIL: predict ignored the per-class bias")
+        return 1
+    }
+    array_free_f32(p2)
+    matrix_free(X2)
+    b1[0] = 0.0; b1[1] = 0.0; b1[2] = 0.0
+
+    # ---- Case 3: X wider than the model, exercising the row-stride path ----
+    let X3: Matrix = matrix_new(2, 4)
+    matrix_set(X3, 0, 0, 5.0); matrix_set(X3, 0, 1, 1.0)
+    matrix_set(X3, 0, 2, 900.0); matrix_set(X3, 0, 3, -900.0)
+    matrix_set(X3, 1, 0, -4.0); matrix_set(X3, 1, 1, -3.0)
+    matrix_set(X3, 1, 2, -900.0); matrix_set(X3, 1, 3, 900.0)
+    let p3: ptr<f32> = logistic_predict(m1, X3)
+    if p3[0] != 10.0 || p3[1] != 30.0 {
+        println("FAIL: predict read past the model feature count")
+        return 1
+    }
+    array_free_f32(p3)
+    matrix_free(X3)
+
+    array_free_f32(w1)
+    array_free_f32(b1)
+    array_free_f32(cls1)
+
+    # ---- Case 4: realistic fitted 4-class workload, 500 x 16 ----
+    let n_rows: i32 = 500
+    let n_cols: i32 = 16
+    let X4: Matrix = matrix_new(n_rows, n_cols)
+    let y4: ptr<f32> = array_new_f32(n_rows)
+    let mut seed: i32 = 987654321
+    for i in 0 to n_rows {
+        let mut a: f32 = 0.0
+        let mut b: f32 = 0.0
+        for j in 0 to n_cols {
+            seed = (seed * 1103515245 + 12345) % 2147483647
+            if seed < 0 { seed = -seed }
+            let v: f32 = ((seed % 2000) as f32) / 1000.0 - 1.0
+            matrix_set(X4, i, j, v)
+            if j < 4 { a = a + v }
+            if j >= 4 && j < 8 { b = b + v }
+        }
+        let mut label: f32 = 0.0
+        if a > 0.0 { label = label + 1.0 }
+        if b > 0.0 { label = label + 2.0 }
+        y4[i] = label
+    }
+
+    let model4: LogisticRegression = logistic_regression_fit(X4, y4, 4, 200, 0.1, pen)
+    if model4.n_classes != 4 {
+        println("FAIL: the 4-class fixture did not produce 4 classes")
+        return 1
+    }
+
+    let pred4: ptr<f32> = logistic_predict(model4, X4)
+    let expect4: ptr<f32> = array_new_f32(n_rows)
+    optpr_reference(model4, X4, expect4)
+
+    let mut mismatched: i32 = 0
+    for i in 0 to n_rows {
+        if pred4[i] != expect4[i] { mismatched = mismatched + 1 }
+    }
+    if mismatched != 0 {
+        println("FAIL: predict disagrees with the scalar argmax reference")
+        printf("  mismatched rows: %d of %d\n", mismatched, n_rows)
+        return 1
+    }
+
+    # Every prediction must be one of the fitted class labels.
+    for i in 0 to n_rows {
+        let mut known: bool = false
+        for c in 0 to model4.n_classes {
+            if pred4[i] == model4.classes[c] { known = true }
+        }
+        if not known {
+            println("FAIL: predict returned a label outside classes_")
+            return 1
+        }
+    }
+
+    let acc: f32 = accuracy_score(y4, pred4, n_rows)
+    if acc < 0.5 {
+        println("FAIL: predict accuracy collapsed on the separable fixture")
+        printf("  accuracy: %.6f\n", acc)
+        return 1
+    }
+
+    array_free_f32(expect4)
+    array_free_f32(pred4)
+    logistic_regression_free(model4)
+    array_free_f32(y4)
+    matrix_free(X4)
+
+    println("OK: logistic_predict class assignments unchanged after the BLAS rewrite")
+    return 0
+}
