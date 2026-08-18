@@ -1492,12 +1492,41 @@ export function elastic_net_fit(X: Matrix, y: ptr<f32>, alpha: f32, l1_ratio: f3
     }
 }
 
+# Predictions are y = X * w + b over a contiguous row-major X. The old loop
+# called matrix_at once per element, and matrix_at takes the Matrix struct by
+# value, so every element access copied the struct.
+#
+# Above a work threshold the whole batch is one cblas_sgemv with the row stride
+# passed as lda, then an add of the bias. Below it the scalar kernel runs, with
+# matrix_at replaced by the identical row-major index it computes, so small
+# batches stay bit-identical to the previous code and avoid the ~0.1 ms OpenBLAS
+# thread dispatch. 65536 is the same rows * features product KMeans uses; at
+# that size the scalar kernel is already ~0.08 ms per call, so the dispatch no
+# longer dominates.
 export function elastic_net_predict(model: ElasticNet, X: Matrix) -> ptr<f32> {
-    let preds: ptr<f32> = array_new_f32(X.rows)
-    for i in 0 to X.rows {
-        let mut pred: f32 = model.bias
-        for j in 0 to model.n_features {
-            pred = pred + model.weights[j] * matrix_at(X, i, j)
+    let rows: i32 = X.rows
+    let preds: ptr<f32> = array_new_f32(rows)
+    if rows <= 0 { return preds }
+
+    let nf: i32 = model.n_features
+    let bias: f32 = model.bias
+    let w: ptr<f32> = model.weights
+    let data: ptr<f32> = X.data
+    let stride: i32 = X.cols
+
+    if nf > 0 && nf <= stride && rows * nf >= 65536 {
+        blas_matvec_ld(data, rows, nf, stride, w, preds, 1.0, 0.0)
+        for i in 0 to rows {
+            preds[i] = preds[i] + bias
+        }
+        return preds
+    }
+
+    for i in 0 to rows {
+        let base: i32 = i * stride
+        let mut pred: f32 = bias
+        for j in 0 to nf {
+            pred = pred + w[j] * data[base + j]
         }
         preds[i] = pred
     }
