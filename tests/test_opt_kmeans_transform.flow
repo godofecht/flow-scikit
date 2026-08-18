@@ -113,10 +113,50 @@ function opt_km_tf_single_cluster() -> i32 {
     return failed
 }
 
+# Below the BLAS work threshold kmeans_transform runs the direct per-pair loop,
+# so it must reproduce the previous implementation exactly, not approximately.
+function opt_km_tf_small_exact() -> i32 {
+    let n: i32 = 50
+    let d: i32 = 8
+    let k: i32 = 4
+    let X: Matrix = matrix_new(n, d)
+    let mut state: i64 = 777001
+    for i in 0 to n {
+        for j in 0 to d {
+            state = (state * 1103515245 + 12345) % 2147483648
+            X.data[i * d + j] = ((i % k) as f32) + ((state % 1000) as f32) / 700.0
+        }
+    }
+
+    let model: KMeans = kmeans_fit(X, k, 50, 0.0001, 3)
+    let D: Matrix = kmeans_transform(model, X)
+    let R: Matrix = opt_km_tf_reference(model, X)
+
+    let mut failed: i32 = 0
+    let mut diffs: i32 = 0
+    for i in 0 to n * k {
+        if D.data[i] != R.data[i] {
+            diffs = diffs + 1
+        }
+    }
+    if diffs != 0 {
+        failed = 1
+        printf("FAIL: small kmeans_transform differs from the direct formula in %d entries\n", diffs)
+    } else {
+        println("  OK: 50x8 into 4 clusters, bit-identical to the direct formula")
+    }
+
+    matrix_free(R)
+    matrix_free(D)
+    kmeans_free(model)
+    matrix_free(X)
+    return failed
+}
+
 function opt_km_tf_workload() -> i32 {
-    let n: i32 = 400
+    let n: i32 = 900
     let d: i32 = 16
-    let k: i32 = 5
+    let k: i32 = 6
     let X: Matrix = matrix_new(n, d)
     let mut state: i64 = 20240517
     for i in 0 to n {
@@ -174,7 +214,7 @@ function opt_km_tf_workload() -> i32 {
     if failed != 0 {
         println("FAIL: kmeans_transform realistic workload changed")
     } else {
-        printf("  OK: 400x16 into 5 clusters, max abs diff %.9f\n", max_diff)
+        printf("  OK: 900x16 into 6 clusters, max abs diff %.9f\n", max_diff)
     }
 
     free(preds as ptr<void>)
@@ -190,6 +230,7 @@ function main() -> i32 {
     let mut failed: i32 = 0
     failed = failed + opt_km_tf_known_values()
     failed = failed + opt_km_tf_single_cluster()
+    failed = failed + opt_km_tf_small_exact()
     failed = failed + opt_km_tf_workload()
     if failed != 0 {
         println("FAILED")
