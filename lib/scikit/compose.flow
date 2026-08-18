@@ -385,6 +385,28 @@ export function feature_union_fit(fu: FeatureUnion, X: Matrix) -> FeatureUnion {
     return fu
 }
 
+# Copy every row of `src` into the column block of `dst` starting at `dst_col`.
+# Both matrices are row-major, so each row is one contiguous run of f32 in both
+# buffers and the copy is a single memcpy per row instead of a per-element
+# accessor call. Module-unique name (compiler bug #465).
+function compose_copy_block_rows(dst: Matrix, src: Matrix, dst_col: i32, n_cols: i32) -> void {
+    let n: i32 = src.rows
+    let bytes: i64 = (n_cols as i64) * 4
+    let dst_stride: i32 = dst.cols
+    let src_stride: i32 = src.cols
+    let dst_data: ptr<f32> = dst.data
+    let src_data: ptr<f32> = src.data
+    let mut dst_off: i32 = dst_col
+    let mut src_off: i32 = 0
+    let mut i: i32 = 0
+    while i < n {
+        memcpy((dst_data + dst_off) as ptr<void>, (src_data + src_off) as ptr<void>, bytes)
+        dst_off = dst_off + dst_stride
+        src_off = src_off + src_stride
+        i = i + 1
+    }
+}
+
 export function feature_union_transform(fu: FeatureUnion, X: Matrix) -> Matrix {
     let n: i32 = X.rows
     let p: i32 = X.cols
@@ -394,62 +416,79 @@ export function feature_union_transform(fu: FeatureUnion, X: Matrix) -> Matrix {
     let mut s: i32 = 0
     while s < fu.n_transformers {
         if fu.transformer_types[s] == FU_TRANSFORMER_STANDARD_SCALER {
-            let transformed: Matrix = standard_scaler_transform(fu.scalers[s], X)
+            let sc: StandardScaler = fu.scalers[s]
+            let out_stride: i32 = fu.n_output_features
+            let out_data: ptr<f32> = result.data
+            let x_data: ptr<f32> = X.data
+            let mut out_row: i32 = out_col
+            let mut x_row: i32 = 0
             let mut i: i32 = 0
             while i < n {
                 let mut j: i32 = 0
                 while j < p {
-                    matrix_set(result, i, out_col + j, matrix_at(transformed, i, j))
+                    let v: f64 = ((x_data[x_row + j] as f64) - (sc.mean[j] as f64)) / (sc.std[j] as f64)
+                    out_data[out_row + j] = v as f32
                     j = j + 1
                 }
+                out_row = out_row + out_stride
+                x_row = x_row + p
                 i = i + 1
             }
-            matrix_free(transformed)
             out_col = out_col + p
         } elif fu.transformer_types[s] == FU_TRANSFORMER_MINMAX_SCALER {
-            let transformed: Matrix = minmax_scaler_transform(fu.minmax_scalers[s], X)
+            let mm: MinMaxScaler = fu.minmax_scalers[s]
+            let out_stride: i32 = fu.n_output_features
+            let out_data: ptr<f32> = result.data
+            let x_data: ptr<f32> = X.data
+            let mut out_row: i32 = out_col
+            let mut x_row: i32 = 0
             let mut i: i32 = 0
             while i < n {
                 let mut j: i32 = 0
                 while j < p {
-                    matrix_set(result, i, out_col + j, matrix_at(transformed, i, j))
+                    let range: f32 = mm.max_vals[j] - mm.min_vals[j]
+                    if range < 0.0000000001 {
+                        out_data[out_row + j] = 0.0
+                    } else {
+                        out_data[out_row + j] = (x_data[x_row + j] - mm.min_vals[j]) / range
+                    }
                     j = j + 1
                 }
+                out_row = out_row + out_stride
+                x_row = x_row + p
                 i = i + 1
             }
-            matrix_free(transformed)
             out_col = out_col + p
         } elif fu.transformer_types[s] == FU_TRANSFORMER_PASSTHROUGH {
-            let mut i: i32 = 0
-            while i < n {
-                let mut j: i32 = 0
-                while j < p {
-                    matrix_set(result, i, out_col + j, matrix_at(X, i, j))
-                    j = j + 1
-                }
-                i = i + 1
-            }
+            compose_copy_block_rows(result, X, out_col, p)
             out_col = out_col + p
         } elif fu.transformer_types[s] == FU_TRANSFORMER_POLYNOMIAL {
             let deg: i32 = fu.poly_degrees[s]
+            let out_stride: i32 = fu.n_output_features
+            let out_data: ptr<f32> = result.data
+            let x_data: ptr<f32> = X.data
+            let mut out_row: i32 = out_col
+            let mut x_row: i32 = 0
             let mut i: i32 = 0
             while i < n {
                 let mut j: i32 = 0
                 while j < p {
-                    let val: f32 = matrix_at(X, i, j)
-                    let mut d: i32 = 1
-                    while d <= deg {
-                        let mut powered: f32 = 1.0
-                        let mut k: i32 = 0
-                        while k < d {
-                            powered = powered * val
-                            k = k + 1
-                        }
-                        matrix_set(result, i, out_col + j * deg + (d - 1), powered)
+                    let val: f32 = x_data[x_row + j]
+                    # Carry the running power instead of recomputing val^d from
+                    # scratch for every d. Same multiply order, same rounding.
+                    let mut powered: f32 = 1.0
+                    let mut o: i32 = out_row + j * deg
+                    let mut d: i32 = 0
+                    while d < deg {
+                        powered = powered * val
+                        out_data[o] = powered
+                        o = o + 1
                         d = d + 1
                     }
                     j = j + 1
                 }
+                out_row = out_row + out_stride
+                x_row = x_row + p
                 i = i + 1
             }
             out_col = out_col + p * deg
