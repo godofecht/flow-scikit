@@ -2289,22 +2289,52 @@ export function bagging_regressor_fit(X: Matrix, y: ptr<f32>, n_estimators: i32,
     return result
 }
 
+# Mean prediction over the bagged trees.
+#
+# The old loop was row-major over an estimator-major kernel: for every row i it
+# called decision_tree_regressor_predict once per tree, and that call predicts
+# every row of X, allocates an n-element buffer and a scratch row buffer, then
+# the caller read element i and threw the rest away. So a batch of n rows over
+# m trees did n * m full passes, n * n * m traversals, and 2 * n * m
+# allocations, to produce n * m useful numbers.
+#
+# Running tree-major instead does each tree once over all rows, keeps that
+# tree's node array hot for the whole pass, reads X.data in place instead of
+# copying a scratch row, and allocates nothing inside the loop. The work drops
+# from O(n^2 * m) traversals to O(n * m).
+#
+# The accumulation order is unchanged: row i still sums tree 0 through
+# tree m-1 in that order before the single divide, so the f32 result is
+# bit-identical to the old one. result comes from array_new_f32, which is
+# calloc-backed, so the zero it starts from is already there.
 export function bagging_regressor_predict(model: BaggingRegressor, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
+    let n_cols: i32 = X.cols
     let result: ptr<f32> = array_new_f32(n)
+    let xd: ptr<f32> = X.data
 
-    let mut i: i32 = 0
-    while i < n {
-        let mut sum: f32 = 0.0
-        let mut j: i32 = 0
-        while j < model.n_estimators {
-            let preds: ptr<f32> = decision_tree_regressor_predict(model.trees[j], X)
-            sum = sum + preds[i]
-            array_free_f32(preds)
-            j = j + 1
+    for t in 0 to model.n_estimators {
+        let tree: DecisionTreeRegressor = model.trees[t]
+        let nodes: ptr<TreeNode> = tree.nodes
+        let mut row_base: i32 = 0
+        for i in 0 to n {
+            let mut node_idx: i32 = 0
+            while not nodes[node_idx].is_leaf {
+                let node: ptr<TreeNode> = nodes + node_idx
+                if xd[row_base + node.feature] <= node.threshold {
+                    node_idx = node.left
+                } else {
+                    node_idx = node.right
+                }
+            }
+            result[i] = result[i] + nodes[node_idx].value
+            row_base = row_base + n_cols
         }
-        result[i] = sum / (model.n_estimators as f32)
-        i = i + 1
+    }
+
+    let denom: f32 = model.n_estimators as f32
+    for i in 0 to n {
+        result[i] = result[i] / denom
     }
     return result
 }
