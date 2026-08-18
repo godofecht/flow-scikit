@@ -1,0 +1,279 @@
+# Regression test for the optimized birch_fit.
+# Checks hand-computed subcluster formation, the strict threshold boundary,
+# the 1e10 guard the original scan carried, feature counts either side of the
+# 8-wide bail-out block, and a realistic workload whose labels and centroids
+# are compared element-wise against the previous implementation.
+# Run: FLOW_HOST=python flow run tests/test_opt_birch_fit.flow
+
+import "lib/scikit/scikit.flow"
+
+# The pre-optimization kernel, kept here as the parity reference.
+function opt_bf_reference(X: Matrix, threshold: f32, branching_factor: i32) -> Birch {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    let max_clusters: i32 = n
+    let centroids: ptr<ptr<f32> > = malloc((max_clusters as i64) * 8) as ptr<ptr<f32> >
+    let cluster_counts: ptr<i32> = malloc((max_clusters as i64) * 4) as ptr<i32>
+    let n_clusters: i32 = 0
+
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+
+    for i in 0 to n {
+        let mut best_c: i32 = -1
+        let mut best_dist: f32 = 10000000000.0
+
+        for c in 0 to n_clusters {
+            let mut dist_sq: f32 = 0.0
+            for k in 0 to n_features {
+                let d: f32 = matrix_at(X, i, k) - centroids[c][k]
+                dist_sq = dist_sq + d * d
+            }
+            if dist_sq < best_dist {
+                best_dist = dist_sq
+                best_c = c
+            }
+        }
+
+        if best_c >= 0 && best_dist < threshold * threshold {
+            let count: f32 = (cluster_counts[best_c] as f32)
+            for k in 0 to n_features {
+                let new_val: f32 = (centroids[best_c][k] * count + matrix_at(X, i, k)) / (count + 1.0)
+                centroids[best_c][k] = new_val
+            }
+            cluster_counts[best_c] = cluster_counts[best_c] + 1
+            labels[i] = best_c
+        } else {
+            centroids[n_clusters] = array_new_f32(n_features)
+            for k in 0 to n_features {
+                centroids[n_clusters][k] = matrix_at(X, i, k)
+            }
+            cluster_counts[n_clusters] = 1
+            labels[i] = n_clusters
+            n_clusters = n_clusters + 1
+        }
+    }
+
+    free(cluster_counts as ptr<void>)
+
+    return Birch {
+        centroids: centroids, n_clusters: n_clusters,
+        n_features: n_features, labels: labels,
+        threshold: threshold,
+        branching_factor: branching_factor,
+        fitted: true
+    }
+}
+
+# Fits both implementations on the same matrix and compares subcluster count,
+# every label, and every centroid element for exact equality.
+function opt_bf_compare(X: Matrix, threshold: f32, name: string) -> i32 {
+    let m: Birch = birch_fit(X, threshold, 50)
+    let r: Birch = opt_bf_reference(X, threshold, 50)
+
+    let mut failed: i32 = 0
+    if m.n_clusters != r.n_clusters {
+        failed = 1
+        printf("FAIL: %s subcluster count %d, expected %d\n", name, m.n_clusters, r.n_clusters)
+    } else {
+        let mut ldiff: i32 = 0
+        for i in 0 to X.rows {
+            if m.labels[i] != r.labels[i] { ldiff = ldiff + 1 }
+        }
+        let mut cdiff: i32 = 0
+        for c in 0 to m.n_clusters {
+            for j in 0 to X.cols {
+                if m.centroids[c][j] != r.centroids[c][j] { cdiff = cdiff + 1 }
+            }
+        }
+        if ldiff != 0 || cdiff != 0 {
+            failed = 1
+            printf("FAIL: %s %d labels and %d centroid elements differ\n", name, ldiff, cdiff)
+        }
+    }
+
+    birch_free(r)
+    birch_free(m)
+    return failed
+}
+
+function opt_bf_known_values() -> i32 {
+    # Two tight groups far apart. With threshold 1.0 the first sample opens
+    # subcluster 0, the second joins it, and the third opens subcluster 1.
+    let X: Matrix = matrix_new(4, 2)
+    matrix_set(X, 0, 0, 0.0); matrix_set(X, 0, 1, 0.0)
+    matrix_set(X, 1, 0, 0.5); matrix_set(X, 1, 1, 0.0)
+    matrix_set(X, 2, 0, 8.0); matrix_set(X, 2, 1, 0.0)
+    matrix_set(X, 3, 0, 8.5); matrix_set(X, 3, 1, 0.0)
+
+    let m: Birch = birch_fit(X, 1.0, 50)
+    let mut failed: i32 = 0
+    if m.n_clusters != 2 { failed = 1 }
+    if m.labels[0] != 0 { failed = 1 }
+    if m.labels[1] != 0 { failed = 1 }
+    if m.labels[2] != 1 { failed = 1 }
+    if m.labels[3] != 1 { failed = 1 }
+    # Running mean of 0.0 and 0.5 is 0.25, of 8.0 and 8.5 is 8.25.
+    if m.centroids[0][0] != 0.25 { failed = 1 }
+    if m.centroids[1][0] != 8.25 { failed = 1 }
+    if failed != 0 {
+        println("FAIL: birch_fit known subclusters changed")
+        printf("  n_clusters %d labels %d %d %d %d centroids %.6f %.6f\n",
+            m.n_clusters, m.labels[0], m.labels[1], m.labels[2], m.labels[3],
+            m.centroids[0][0], m.centroids[1][0])
+    }
+    birch_free(m)
+    matrix_free(X)
+    return failed
+}
+
+# The absorb test is strict: a squared distance exactly equal to the squared
+# threshold opens a new subcluster. The bounded scan must not turn that into
+# an absorb.
+function opt_bf_threshold_boundary() -> i32 {
+    let X: Matrix = matrix_new(2, 1)
+    matrix_set(X, 0, 0, 0.0)
+    matrix_set(X, 1, 0, 2.0)
+
+    let mut failed: i32 = 0
+
+    let exact: Birch = birch_fit(X, 2.0, 50)
+    if exact.n_clusters != 2 {
+        failed = 1
+        printf("FAIL: birch_fit absorbed a sample exactly on the threshold, %d subclusters\n", exact.n_clusters)
+    }
+    birch_free(exact)
+
+    let inside: Birch = birch_fit(X, 2.5, 50)
+    if inside.n_clusters != 1 {
+        failed = 1
+        printf("FAIL: birch_fit did not absorb a sample inside the threshold, %d subclusters\n", inside.n_clusters)
+    }
+    birch_free(inside)
+
+    matrix_free(X)
+    return failed
+}
+
+# The original scan seeded its running best at 1e10, so a subcluster further
+# than that was rejected even when the threshold was larger still. The bound
+# is clamped at the same value to keep that behaviour.
+function opt_bf_far_guard() -> i32 {
+    let X: Matrix = matrix_new(3, 1)
+    matrix_set(X, 0, 0, 0.0)
+    matrix_set(X, 1, 0, 200000.0)
+    matrix_set(X, 2, 0, 200000.0)
+
+    let mut failed: i32 = opt_bf_compare(X, 1000000.0, "1e10 guard")
+    let m: Birch = birch_fit(X, 1000000.0, 50)
+    if m.n_clusters != 2 {
+        failed = 1
+        printf("FAIL: birch_fit far-sample guard gave %d subclusters, expected 2\n", m.n_clusters)
+    }
+    if m.labels[2] != 1 { failed = 1 }
+    birch_free(m)
+    matrix_free(X)
+    return failed
+}
+
+# The bail-out checks the running sum once every 8 features, so widths below,
+# on, and either side of that boundary all have to agree with the direct loop.
+function opt_bf_block_boundaries() -> i32 {
+    let mut failed: i32 = 0
+    let widths: ptr<i32> = malloc(128) as ptr<i32>
+    widths[0] = 1
+    widths[1] = 3
+    widths[2] = 7
+    widths[3] = 8
+    widths[4] = 9
+    widths[5] = 16
+    widths[6] = 17
+
+    for wi in 0 to 7 {
+        let d: i32 = widths[wi]
+        let n: i32 = 150
+        let X: Matrix = matrix_new(n, d)
+        let mut state: i64 = 8181 + (d as i64)
+        for i in 0 to n {
+            for j in 0 to d {
+                state = (state * 1103515245 + 12345) % 2147483648
+                X.data[i * d + j] = ((i % 6) as f32) * 2.0 + ((state % 800) as f32) / 400.0
+            }
+        }
+        failed = failed + opt_bf_compare(X, 1.5, "block width")
+        failed = failed + opt_bf_compare(X, 4.0, "block width wide")
+        matrix_free(X)
+    }
+
+    free(widths as ptr<void>)
+    if failed == 0 {
+        println("  OK: identical fits at n_features 1, 3, 7, 8, 9, 16, 17")
+    }
+    return failed
+}
+
+# Every sample opens its own subcluster: the worst case for the bounded scan,
+# because nothing is ever absorbed.
+function opt_bf_all_singletons() -> i32 {
+    let n: i32 = 200
+    let d: i32 = 4
+    let X: Matrix = matrix_new(n, d)
+    let mut state: i64 = 3131
+    for i in 0 to n {
+        for j in 0 to d {
+            state = (state * 1103515245 + 12345) % 2147483648
+            X.data[i * d + j] = ((i * 17 + j) as f32) + ((state % 100) as f32) / 100.0
+        }
+    }
+    let mut failed: i32 = opt_bf_compare(X, 0.0, "zero threshold")
+    let m: Birch = birch_fit(X, 0.0, 50)
+    if m.n_clusters != n {
+        failed = 1
+        printf("FAIL: zero threshold gave %d subclusters, expected %d\n", m.n_clusters, n)
+    }
+    birch_free(m)
+    matrix_free(X)
+    return failed
+}
+
+function opt_bf_workload() -> i32 {
+    let n: i32 = 1200
+    let d: i32 = 16
+    let k: i32 = 10
+    let X: Matrix = matrix_new(n, d)
+    let mut state: i64 = 20240519
+    for i in 0 to n {
+        for j in 0 to d {
+            state = (state * 1103515245 + 12345) % 2147483648
+            X.data[i * d + j] = ((i % k) as f32) * 3.0 + ((state % 1000) as f32) / 400.0
+        }
+    }
+
+    let mut failed: i32 = opt_bf_compare(X, 3.0, "workload thr=3")
+    failed = failed + opt_bf_compare(X, 8.0, "workload thr=8")
+
+    let m: Birch = birch_fit(X, 3.0, 50)
+    if failed == 0 {
+        printf("  OK: 1200x16 into %d subclusters, labels and centroids identical\n", m.n_clusters)
+    }
+    birch_free(m)
+    matrix_free(X)
+    return failed
+}
+
+function main() -> i32 {
+    println("Test: optimized Birch.fit")
+    let mut failed: i32 = 0
+    failed = failed + opt_bf_known_values()
+    failed = failed + opt_bf_threshold_boundary()
+    failed = failed + opt_bf_far_guard()
+    failed = failed + opt_bf_block_boundaries()
+    failed = failed + opt_bf_all_singletons()
+    failed = failed + opt_bf_workload()
+    if failed != 0 {
+        println("FAILED")
+        return 1
+    }
+    println("OK: Birch.fit optimization preserves subclusters, labels, and centroids")
+    return 0
+}
