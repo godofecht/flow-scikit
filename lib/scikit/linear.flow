@@ -444,18 +444,12 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
     let n: i32 = X.cols
     let m: i32 = X.rows
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to m {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] { found = true }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # n_classes, which wrote past the allocation whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, m, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
     let nc: i32 = n_found
 
     let all_weights: ptr<f32> = array_new_f32(nc * n)
@@ -700,18 +694,12 @@ export function logistic_regression_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_c
     let n: i32 = S.n_cols
     let n_samples: i32 = S.n_rows
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to n_samples {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] { found = true }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # n_classes, which wrote past the allocation whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, n_samples, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
     let nc: i32 = n_found
 
     let all_weights: ptr<f32> = array_new_f32(nc * n)
@@ -1151,20 +1139,12 @@ export function sgd_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, loss:
     let weights: ptr<f32> = array_new_f32(n)
     let bias: f32 = 0.0
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to X.rows {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] {
-                found = true
-            }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # n_classes, which wrote past the allocation whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, X.rows, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     for epoch in 0 to epochs {
         for i in 0 to X.rows {
@@ -1347,20 +1327,12 @@ export struct MultiClassLogisticRegression {
 export function multiclass_logistic_fit(X: Matrix, y: ptr<f32>, n_classes: i32, epochs: i32, lr: f32, penalty: Penalty) -> MultiClassLogisticRegression {
     let n: i32 = X.cols
 
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to X.rows {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] {
-                found = true
-            }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # n_classes, which wrote past the allocation whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, X.rows, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     let weights: ptr<ptr<f32> > = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
     let bias: ptr<f32> = array_new_f32(n_classes)
