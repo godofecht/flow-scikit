@@ -1,0 +1,304 @@
+# Regression test for the AdaBoostRegressor.predict optimization
+# (roadmap rank 21, issue #230).
+#
+# Locks the rewritten weighted-median kernel against the pre-#230
+# implementation element-wise, checks the structural invariants of a weighted
+# median, and covers the small edge cases alongside a realistic diabetes
+# workload.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+    function printf(fmt: string, ...) -> i32
+}
+
+const ABRP_TIME_UTC: i32 = 1
+
+function abrp_now_ns() -> i64 {
+    let ts: ptr<i64> = malloc(16) as ptr<i64>
+    timespec_get(ts, ABRP_TIME_UTC)
+    let value: i64 = ts[0] * 1000000000 + ts[1]
+    free(ts as ptr<void>)
+    return value
+}
+
+function abrp_abs(x: f32) -> f32 {
+    if x < 0.0 { return -x }
+    return x
+}
+
+# Pre-#230 reference implementation, kept only for A/B parity and timing.
+function abrp_reference_predict(model: AdaBoostRegressor, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    let tree_preds: ptr<ptr<f32> > = malloc((model.n_trees as i64) * 8) as ptr<ptr<f32> >
+
+    for t in 0 to model.n_trees {
+        tree_preds[t] = decision_tree_regressor_predict(model.trees[t], X)
+    }
+
+    for i in 0 to X.rows {
+        let sorted_preds: ptr<f32> = array_new_f32(model.n_trees)
+        let sorted_weights: ptr<f32> = array_new_f32(model.n_trees)
+        let order: ptr<i32> = malloc((model.n_trees as i64) * 4) as ptr<i32>
+        for t in 0 to model.n_trees {
+            order[t] = t
+        }
+
+        for t in 1 to model.n_trees {
+            let key: i32 = order[t]
+            let key_val: f32 = tree_preds[key][i]
+            let mut j: i32 = t - 1
+            while j >= 0 && tree_preds[order[j]][i] > key_val {
+                order[j + 1] = order[j]
+                j = j - 1
+            }
+            order[j + 1] = key
+        }
+
+        for t in 0 to model.n_trees {
+            sorted_preds[t] = tree_preds[order[t]][i]
+            sorted_weights[t] = model.alphas[order[t]]
+        }
+
+        let mut total_w: f32 = 0.0
+        for t in 0 to model.n_trees {
+            total_w = total_w + sorted_weights[t]
+        }
+
+        let mut cum_w: f32 = 0.0
+        let mut median_idx: i32 = model.n_trees - 1
+        if total_w > 0.0 {
+            for t in 0 to model.n_trees {
+                cum_w = cum_w + sorted_weights[t] / total_w
+                if cum_w >= 0.5 {
+                    median_idx = t
+                    break
+                }
+            }
+        }
+
+        preds[i] = sorted_preds[median_idx]
+
+        array_free_f32(sorted_preds)
+        array_free_f32(sorted_weights)
+        free(order as ptr<void>)
+    }
+
+    for t in 0 to model.n_trees {
+        array_free_f32(tree_preds[t])
+    }
+    free(tree_preds as ptr<void>)
+
+    return preds
+}
+
+# The optimized kernel selects the same f32 leaf value the old code selected,
+# so parity must be bit-for-bit.
+function abrp_exact_match(a: ptr<f32>, b: ptr<f32>, n: i32) -> bool {
+    for i in 0 to n {
+        if a[i] != b[i] { return false }
+    }
+    return true
+}
+
+# A weighted median is one of the per-tree predictions, so every output must
+# equal some tree's prediction for that row exactly.
+function abrp_is_a_tree_prediction(model: AdaBoostRegressor, X: Matrix, preds: ptr<f32>) -> bool {
+    let row: ptr<f32> = array_new_f32(X.cols)
+    for i in 0 to X.rows {
+        matrix_row(X, i, row)
+        let mut seen: bool = false
+        for t in 0 to model.n_trees {
+            if decision_tree_regressor_predict_one(model.trees[t], row) == preds[i] { seen = true }
+        }
+        if not seen {
+            array_free_f32(row)
+            return false
+        }
+    }
+    array_free_f32(row)
+    return true
+}
+
+function main() -> i32 {
+    # ---------------------------------------------------------------
+    # 1. Realistic workload: diabetes, 20 trees, depth 4, seed 42.
+    # ---------------------------------------------------------------
+    let d: Dataset = load_diabetes()
+    let n: i32 = d.X.rows
+    let model: AdaBoostRegressor = adaboost_regressor_fit(d.X, d.y, 20, 4, 42)
+
+    let reference: ptr<f32> = abrp_reference_predict(model, d.X)
+    let optimized: ptr<f32> = adaboost_regressor_predict(model, d.X)
+
+    if not abrp_exact_match(reference, optimized, n) {
+        println("FAIL: optimized AdaBoostRegressor predict changed values on diabetes")
+        return 1
+    }
+    if not abrp_is_a_tree_prediction(model, d.X, optimized) {
+        println("FAIL: a diabetes prediction is not any tree's prediction")
+        return 1
+    }
+
+    # ---------------------------------------------------------------
+    # 2. Edge case: a single query row must agree with the batched result.
+    # ---------------------------------------------------------------
+    let one_row: Matrix = matrix_new(1, d.X.cols)
+    for j in 0 to d.X.cols { matrix_set(one_row, 0, j, matrix_at(d.X, 0, j)) }
+    let opt_one: ptr<f32> = adaboost_regressor_predict(model, one_row)
+    if opt_one[0] != optimized[0] {
+        println("FAIL: single-row predict disagrees with the batched result")
+        return 1
+    }
+    array_free_f32(opt_one)
+    matrix_free(one_row)
+
+    # ---------------------------------------------------------------
+    # 3. Edge case: reversed batch. Rows are independent, so a permuted
+    #    batch must produce the same permuted predictions.
+    # ---------------------------------------------------------------
+    let rev: Matrix = matrix_new(n, d.X.cols)
+    for i in 0 to n {
+        for j in 0 to d.X.cols { matrix_set(rev, i, j, matrix_at(d.X, n - 1 - i, j)) }
+    }
+    let opt_rev: ptr<f32> = adaboost_regressor_predict(model, rev)
+    for i in 0 to n {
+        if opt_rev[i] != optimized[n - 1 - i] {
+            println("FAIL: reversed batch predictions do not match the forward batch")
+            return 1
+        }
+    }
+    array_free_f32(opt_rev)
+    matrix_free(rev)
+
+    # ---------------------------------------------------------------
+    # 4. A/B timing on the diabetes workload.
+    # ---------------------------------------------------------------
+    let repeats: i32 = 20
+    let start_reference: i64 = abrp_now_ns()
+    for r in 0 to repeats {
+        let output: ptr<f32> = abrp_reference_predict(model, d.X)
+        array_free_f32(output)
+    }
+    let end_reference: i64 = abrp_now_ns()
+
+    let start_optimized: i64 = abrp_now_ns()
+    for r in 0 to repeats {
+        let output: ptr<f32> = adaboost_regressor_predict(model, d.X)
+        array_free_f32(output)
+    }
+    let end_optimized: i64 = abrp_now_ns()
+
+    let reference_ms: f64 = ((end_reference - start_reference) as f64) / 1000000.0
+    let optimized_ms: f64 = ((end_optimized - start_optimized) as f64) / 1000000.0
+    printf("AdaBoostRegressor predict A/B: reference=%.3f ms optimized=%.3f ms speedup=%.2fx\n", reference_ms, optimized_ms, reference_ms / optimized_ms)
+
+    array_free_f32(reference)
+    array_free_f32(optimized)
+    adaboost_regressor_free(model)
+
+    # ---------------------------------------------------------------
+    # 5. Edge case: a single estimator. The weighted median of one value is
+    #    that value, so the output is exactly the base tree's prediction.
+    # ---------------------------------------------------------------
+    let small_X: Matrix = matrix_new(16, 3)
+    let small_y: ptr<f32> = array_new_f32(16)
+    for i in 0 to 16 {
+        matrix_set(small_X, i, 0, (i as f32) * 0.5)
+        matrix_set(small_X, i, 1, ((i % 4) as f32) * 2.0)
+        matrix_set(small_X, i, 2, 7.0)
+        small_y[i] = (i as f32) * 1.5 - 3.0
+    }
+    let one_tree: AdaBoostRegressor = adaboost_regressor_fit(small_X, small_y, 1, 4, 7)
+    let ref_one_tree: ptr<f32> = abrp_reference_predict(one_tree, small_X)
+    let opt_one_tree: ptr<f32> = adaboost_regressor_predict(one_tree, small_X)
+    if not abrp_exact_match(ref_one_tree, opt_one_tree, 16) {
+        println("FAIL: single-estimator predict diverged")
+        return 1
+    }
+    let direct: ptr<f32> = decision_tree_regressor_predict(one_tree.trees[0], small_X)
+    for i in 0 to 16 {
+        if opt_one_tree[i] != direct[i] {
+            println("FAIL: single-estimator AdaBoost does not reproduce the base tree")
+            return 1
+        }
+    }
+    array_free_f32(direct)
+    array_free_f32(ref_one_tree)
+    array_free_f32(opt_one_tree)
+    adaboost_regressor_free(one_tree)
+
+    # ---------------------------------------------------------------
+    # 6. Edge case: a constant target. Every tree fits perfectly, max_err is
+    #    zero, so every alpha takes the 1.0 shortcut and every prediction is
+    #    the constant. This exercises equal predictions across all trees,
+    #    where the sort must stay stable.
+    # ---------------------------------------------------------------
+    let flat_y: ptr<f32> = array_new_f32(16)
+    for i in 0 to 16 { flat_y[i] = 4.25 }
+    let flat: AdaBoostRegressor = adaboost_regressor_fit(small_X, flat_y, 8, 4, 11)
+    let ref_flat: ptr<f32> = abrp_reference_predict(flat, small_X)
+    let opt_flat: ptr<f32> = adaboost_regressor_predict(flat, small_X)
+    if not abrp_exact_match(ref_flat, opt_flat, 16) {
+        println("FAIL: constant-target predict diverged")
+        return 1
+    }
+    for i in 0 to 16 {
+        if abrp_abs(opt_flat[i] - 4.25) > 0.0001 {
+            println("FAIL: constant-target AdaBoost did not return the constant")
+            return 1
+        }
+    }
+    array_free_f32(ref_flat)
+    array_free_f32(opt_flat)
+    array_free_f32(flat_y)
+    adaboost_regressor_free(flat)
+
+    # ---------------------------------------------------------------
+    # 7. Edge case: depth 0, so every tree is a single leaf. Exercises the
+    #    traversal loop that never iterates, and a batch where the sort sees
+    #    many ties.
+    # ---------------------------------------------------------------
+    let stump: AdaBoostRegressor = adaboost_regressor_fit(small_X, small_y, 6, 0, 3)
+    let ref_stump: ptr<f32> = abrp_reference_predict(stump, small_X)
+    let opt_stump: ptr<f32> = adaboost_regressor_predict(stump, small_X)
+    if not abrp_exact_match(ref_stump, opt_stump, 16) {
+        println("FAIL: depth-0 predict diverged")
+        return 1
+    }
+    for i in 1 to 16 {
+        if opt_stump[i] != opt_stump[0] {
+            println("FAIL: depth-0 AdaBoost returned differing predictions")
+            return 1
+        }
+    }
+    array_free_f32(ref_stump)
+    array_free_f32(opt_stump)
+    adaboost_regressor_free(stump)
+
+    # ---------------------------------------------------------------
+    # 8. Edge case: a larger ensemble on the same tiny data, to push the
+    #    sort past the point where several trees share a prediction.
+    # ---------------------------------------------------------------
+    let many: AdaBoostRegressor = adaboost_regressor_fit(small_X, small_y, 25, 2, 17)
+    let ref_many: ptr<f32> = abrp_reference_predict(many, small_X)
+    let opt_many: ptr<f32> = adaboost_regressor_predict(many, small_X)
+    if not abrp_exact_match(ref_many, opt_many, 16) {
+        println("FAIL: 25-estimator predict diverged")
+        return 1
+    }
+    if not abrp_is_a_tree_prediction(many, small_X, opt_many) {
+        println("FAIL: a 25-estimator prediction is not any tree's prediction")
+        return 1
+    }
+    array_free_f32(ref_many)
+    array_free_f32(opt_many)
+    adaboost_regressor_free(many)
+
+    matrix_free(small_X)
+    array_free_f32(small_y)
+
+    println("PASS: test_opt_adaboostregressor_predict")
+    return 0
+}

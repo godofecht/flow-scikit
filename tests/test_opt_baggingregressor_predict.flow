@@ -1,0 +1,246 @@
+# Regression test for the BaggingRegressor.predict optimization
+# (roadmap rank 29, issue #238).
+#
+# Locks the tree-major kernel against the pre-#238 row-major implementation
+# element-wise, checks the structural invariants of a bagged mean, and covers
+# the small edge cases alongside a realistic diabetes workload.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+    function printf(fmt: string, ...) -> i32
+}
+
+const BRP_TIME_UTC: i32 = 1
+
+function brp_now_ns() -> i64 {
+    let ts: ptr<i64> = malloc(16) as ptr<i64>
+    timespec_get(ts, BRP_TIME_UTC)
+    let value: i64 = ts[0] * 1000000000 + ts[1]
+    free(ts as ptr<void>)
+    return value
+}
+
+function brp_abs(x: f32) -> f32 {
+    if x < 0.0 { return -x }
+    return x
+}
+
+# Pre-#238 reference implementation, kept only for A/B parity and timing.
+function brp_reference_predict(model: BaggingRegressor, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+
+    let mut i: i32 = 0
+    while i < n {
+        let mut sum: f32 = 0.0
+        let mut j: i32 = 0
+        while j < model.n_estimators {
+            let preds: ptr<f32> = decision_tree_regressor_predict(model.trees[j], X)
+            sum = sum + preds[i]
+            array_free_f32(preds)
+            j = j + 1
+        }
+        result[i] = sum / (model.n_estimators as f32)
+        i = i + 1
+    }
+    return result
+}
+
+# Element-wise exact comparison. The optimized kernel sums the same f32 leaf
+# values in the same tree order, so parity here must be bit-for-bit.
+function brp_exact_match(a: ptr<f32>, b: ptr<f32>, n: i32) -> bool {
+    for i in 0 to n {
+        if a[i] != b[i] { return false }
+    }
+    return true
+}
+
+# Every bagged prediction must lie between the smallest and largest single-tree
+# prediction for that row, because it is their arithmetic mean.
+function brp_within_tree_range(model: BaggingRegressor, X: Matrix, preds: ptr<f32>) -> bool {
+    let row: ptr<f32> = array_new_f32(X.cols)
+    for i in 0 to X.rows {
+        matrix_row(X, i, row)
+        let mut lo: f32 = decision_tree_regressor_predict_one(model.trees[0], row)
+        let mut hi: f32 = lo
+        for t in 1 to model.n_estimators {
+            let v: f32 = decision_tree_regressor_predict_one(model.trees[t], row)
+            if v < lo { lo = v }
+            if v > hi { hi = v }
+        }
+        let tol: f32 = 0.001 + brp_abs(hi) * 0.0001
+        if preds[i] < lo - tol {
+            array_free_f32(row)
+            return false
+        }
+        if preds[i] > hi + tol {
+            array_free_f32(row)
+            return false
+        }
+    }
+    array_free_f32(row)
+    return true
+}
+
+function main() -> i32 {
+    # ---------------------------------------------------------------
+    # 1. Realistic workload: diabetes, 10 trees, depth 6, seed 42.
+    # ---------------------------------------------------------------
+    let d: Dataset = load_diabetes()
+    let n: i32 = d.X.rows
+    let model: BaggingRegressor = bagging_regressor_fit(d.X, d.y, 10, 6, 42)
+
+    let reference: ptr<f32> = brp_reference_predict(model, d.X)
+    let optimized: ptr<f32> = bagging_regressor_predict(model, d.X)
+
+    if not brp_exact_match(reference, optimized, n) {
+        println("FAIL: optimized BaggingRegressor predict changed values on diabetes")
+        return 1
+    }
+    if not brp_within_tree_range(model, d.X, optimized) {
+        println("FAIL: diabetes predictions fall outside the per-tree range")
+        return 1
+    }
+
+    # ---------------------------------------------------------------
+    # 2. Edge case: a single query row must agree with the batched result.
+    # ---------------------------------------------------------------
+    let one_row: Matrix = matrix_new(1, d.X.cols)
+    for j in 0 to d.X.cols { matrix_set(one_row, 0, j, matrix_at(d.X, 0, j)) }
+    let opt_one: ptr<f32> = bagging_regressor_predict(model, one_row)
+    if opt_one[0] != optimized[0] {
+        println("FAIL: single-row predict disagrees with the batched result")
+        return 1
+    }
+    array_free_f32(opt_one)
+    matrix_free(one_row)
+
+    # ---------------------------------------------------------------
+    # 3. Edge case: a query batch whose row order is reversed. The kernel
+    #    walks rows in order inside each tree, so a permuted batch must
+    #    produce the same permuted predictions.
+    # ---------------------------------------------------------------
+    let rev: Matrix = matrix_new(n, d.X.cols)
+    for i in 0 to n {
+        for j in 0 to d.X.cols { matrix_set(rev, i, j, matrix_at(d.X, n - 1 - i, j)) }
+    }
+    let opt_rev: ptr<f32> = bagging_regressor_predict(model, rev)
+    for i in 0 to n {
+        if opt_rev[i] != optimized[n - 1 - i] {
+            println("FAIL: reversed batch predictions do not match the forward batch")
+            return 1
+        }
+    }
+    array_free_f32(opt_rev)
+    matrix_free(rev)
+
+    # ---------------------------------------------------------------
+    # 4. A/B timing on the diabetes workload.
+    # ---------------------------------------------------------------
+    let repeats: i32 = 5
+    let start_reference: i64 = brp_now_ns()
+    for r in 0 to repeats {
+        let output: ptr<f32> = brp_reference_predict(model, d.X)
+        array_free_f32(output)
+    }
+    let end_reference: i64 = brp_now_ns()
+
+    let start_optimized: i64 = brp_now_ns()
+    for r in 0 to repeats {
+        let output: ptr<f32> = bagging_regressor_predict(model, d.X)
+        array_free_f32(output)
+    }
+    let end_optimized: i64 = brp_now_ns()
+
+    let reference_ms: f64 = ((end_reference - start_reference) as f64) / 1000000.0
+    let optimized_ms: f64 = ((end_optimized - start_optimized) as f64) / 1000000.0
+    printf("BaggingRegressor predict A/B: reference=%.3f ms optimized=%.3f ms speedup=%.1fx\n", reference_ms, optimized_ms, reference_ms / optimized_ms)
+
+    array_free_f32(reference)
+    array_free_f32(optimized)
+    bagging_regressor_free(model)
+
+    # ---------------------------------------------------------------
+    # 5. Edge case: a single estimator. The bagged mean is then exactly that
+    #    tree's own prediction.
+    # ---------------------------------------------------------------
+    let small_X: Matrix = matrix_new(12, 3)
+    let small_y: ptr<f32> = array_new_f32(12)
+    for i in 0 to 12 {
+        matrix_set(small_X, i, 0, (i as f32) * 0.5)
+        matrix_set(small_X, i, 1, ((i % 3) as f32) * 2.0)
+        matrix_set(small_X, i, 2, 7.0)
+        small_y[i] = (i as f32) * 1.5 - 3.0
+    }
+    let one_tree: BaggingRegressor = bagging_regressor_fit(small_X, small_y, 1, 4, 7)
+    let ref_one_tree: ptr<f32> = brp_reference_predict(one_tree, small_X)
+    let opt_one_tree: ptr<f32> = bagging_regressor_predict(one_tree, small_X)
+    if not brp_exact_match(ref_one_tree, opt_one_tree, 12) {
+        println("FAIL: single-estimator predict diverged")
+        return 1
+    }
+    let direct: ptr<f32> = decision_tree_regressor_predict(one_tree.trees[0], small_X)
+    for i in 0 to 12 {
+        if opt_one_tree[i] != direct[i] {
+            println("FAIL: single-estimator bagging does not reproduce the base tree")
+            return 1
+        }
+    }
+    array_free_f32(direct)
+    array_free_f32(ref_one_tree)
+    array_free_f32(opt_one_tree)
+    bagging_regressor_free(one_tree)
+
+    # ---------------------------------------------------------------
+    # 6. Edge case: a constant target. Every leaf holds the same value, so
+    #    every prediction must be that constant.
+    # ---------------------------------------------------------------
+    let flat_y: ptr<f32> = array_new_f32(12)
+    for i in 0 to 12 { flat_y[i] = 4.25 }
+    let flat: BaggingRegressor = bagging_regressor_fit(small_X, flat_y, 6, 4, 11)
+    let ref_flat: ptr<f32> = brp_reference_predict(flat, small_X)
+    let opt_flat: ptr<f32> = bagging_regressor_predict(flat, small_X)
+    if not brp_exact_match(ref_flat, opt_flat, 12) {
+        println("FAIL: constant-target predict diverged")
+        return 1
+    }
+    for i in 0 to 12 {
+        if brp_abs(opt_flat[i] - 4.25) > 0.0001 {
+            println("FAIL: constant-target bagging did not return the constant")
+            return 1
+        }
+    }
+    array_free_f32(ref_flat)
+    array_free_f32(opt_flat)
+    array_free_f32(flat_y)
+    bagging_regressor_free(flat)
+
+    # ---------------------------------------------------------------
+    # 7. Edge case: depth 0, so every tree is a single leaf holding the
+    #    bootstrap mean. Exercises the traversal loop that never iterates.
+    # ---------------------------------------------------------------
+    let stump: BaggingRegressor = bagging_regressor_fit(small_X, small_y, 5, 0, 3)
+    let ref_stump: ptr<f32> = brp_reference_predict(stump, small_X)
+    let opt_stump: ptr<f32> = bagging_regressor_predict(stump, small_X)
+    if not brp_exact_match(ref_stump, opt_stump, 12) {
+        println("FAIL: depth-0 predict diverged")
+        return 1
+    }
+    for i in 1 to 12 {
+        if opt_stump[i] != opt_stump[0] {
+            println("FAIL: depth-0 bagging returned differing predictions")
+            return 1
+        }
+    }
+    array_free_f32(ref_stump)
+    array_free_f32(opt_stump)
+    bagging_regressor_free(stump)
+
+    matrix_free(small_X)
+    array_free_f32(small_y)
+
+    println("PASS: test_opt_baggingregressor_predict")
+    return 0
+}

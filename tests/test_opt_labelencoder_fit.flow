@@ -1,0 +1,263 @@
+# Regression test for the optimized LabelEncoder.fit (roadmap rank 91, issue #300).
+#
+# label_encoder_fit now collects distinct labels into an array that is kept
+# sorted as it goes, instead of doing a full linear membership scan per sample
+# followed by a separate insertion sort. The class vector must come out
+# byte-identical to the old algorithm: ascending, deduplicated, and with
+# n_classes unchanged, because downstream estimators index into it.
+
+import "lib/scikit/scikit.flow"
+
+# Literal reimplementation of the pre-optimization algorithm, kept here as the
+# oracle for the randomized workload check.
+function tolef_reference_fit(y: ptr<f32>, n: i32, out: ptr<f32>) -> i32 {
+    let mut c: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for k in 0 to c {
+            if out[k] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            out[c] = y[i]
+            c = c + 1
+        }
+    }
+    for i in 1 to c {
+        let key: f32 = out[i]
+        let mut j: i32 = i - 1
+        while j >= 0 && out[j] > key {
+            out[j + 1] = out[j]
+            j = j - 1
+        }
+        out[j + 1] = key
+    }
+    return c
+}
+
+function tolef_check_classes(name: string, y: ptr<f32>, n: i32, want: ptr<f32>, n_expect: i32) -> i32 {
+    let enc: LabelEncoder = label_encoder_fit(y, n)
+    if enc.n_classes != n_expect {
+        print("  FAIL ")
+        print(name)
+        print(": n_classes ")
+        print(enc.n_classes)
+        print(" expected ")
+        println(n_expect)
+        label_encoder_free(enc)
+        return 1
+    }
+    for k in 0 to n_expect {
+        if enc.classes[k] != want[k] {
+            print("  FAIL ")
+            print(name)
+            print(": classes[")
+            print(k)
+            print("] = ")
+            print(enc.classes[k])
+            print(" expected ")
+            println(want[k])
+            label_encoder_free(enc)
+            return 1
+        }
+    }
+    print("  OK ")
+    println(name)
+    label_encoder_free(enc)
+    return 0
+}
+
+function tolef_known_values() -> i32 {
+    let mut failures: i32 = 0
+
+    # Unsorted input with duplicates.
+    let a: ptr<f32> = array_new_f32(6)
+    a[0] = 2.0
+    a[1] = 0.0
+    a[2] = 1.0
+    a[3] = 2.0
+    a[4] = 0.0
+    a[5] = 1.0
+    let ea: ptr<f32> = array_new_f32(3)
+    ea[0] = 0.0
+    ea[1] = 1.0
+    ea[2] = 2.0
+    failures = failures + tolef_check_classes("unsorted with duplicates", a, 6, ea, 3)
+
+    # Single sample.
+    let b: ptr<f32> = array_new_f32(1)
+    b[0] = 7.5
+    let eb: ptr<f32> = array_new_f32(1)
+    eb[0] = 7.5
+    failures = failures + tolef_check_classes("single sample", b, 1, eb, 1)
+
+    # All labels identical.
+    let c: ptr<f32> = array_new_f32(5)
+    for i in 0 to 5 {
+        c[i] = 3.0
+    }
+    let ec: ptr<f32> = array_new_f32(1)
+    ec[0] = 3.0
+    failures = failures + tolef_check_classes("all identical", c, 5, ec, 1)
+
+    # Strictly descending input, negatives included.
+    let d: ptr<f32> = array_new_f32(5)
+    d[0] = 4.0
+    d[1] = 1.0
+    d[2] = 0.0
+    d[3] = -1.5
+    d[4] = -9.0
+    let ed: ptr<f32> = array_new_f32(5)
+    ed[0] = -9.0
+    ed[1] = -1.5
+    ed[2] = 0.0
+    ed[3] = 1.0
+    ed[4] = 4.0
+    failures = failures + tolef_check_classes("descending with negatives", d, 5, ed, 5)
+
+    # Already ascending, all distinct.
+    let e: ptr<f32> = array_new_f32(4)
+    e[0] = -2.0
+    e[1] = 0.5
+    e[2] = 0.75
+    e[3] = 10.0
+    let ee: ptr<f32> = array_new_f32(4)
+    ee[0] = -2.0
+    ee[1] = 0.5
+    ee[2] = 0.75
+    ee[3] = 10.0
+    failures = failures + tolef_check_classes("already ascending", e, 4, ee, 4)
+
+    # New minimum arrives last: exercises the insert-at-front path.
+    let f: ptr<f32> = array_new_f32(4)
+    f[0] = 5.0
+    f[1] = 6.0
+    f[2] = 7.0
+    f[3] = 1.0
+    let ef: ptr<f32> = array_new_f32(4)
+    ef[0] = 1.0
+    ef[1] = 5.0
+    ef[2] = 6.0
+    ef[3] = 7.0
+    failures = failures + tolef_check_classes("new minimum last", f, 4, ef, 4)
+
+    array_free_f32(a)
+    array_free_f32(ea)
+    array_free_f32(b)
+    array_free_f32(eb)
+    array_free_f32(c)
+    array_free_f32(ec)
+    array_free_f32(d)
+    array_free_f32(ed)
+    array_free_f32(e)
+    array_free_f32(ee)
+    array_free_f32(f)
+    array_free_f32(ef)
+    return failures
+}
+
+function tolef_round_trip() -> i32 {
+    # transform / inverse_transform must still round-trip on the fitted classes.
+    let y: ptr<f32> = array_new_f32(6)
+    y[0] = 30.0
+    y[1] = 10.0
+    y[2] = 20.0
+    y[3] = 10.0
+    y[4] = 30.0
+    y[5] = 20.0
+    let enc: LabelEncoder = label_encoder_fit(y, 6)
+    let coded: ptr<f32> = label_encoder_transform(enc, y, 6)
+    let back: ptr<f32> = label_encoder_inverse_transform(enc, coded, 6)
+    let mut failures: i32 = 0
+    for i in 0 to 6 {
+        if back[i] != y[i] {
+            print("  FAIL round trip at ")
+            print(i)
+            print(": got ")
+            print(back[i])
+            print(" expected ")
+            println(y[i])
+            failures = 1
+        }
+    }
+    if coded[0] != 2.0 || coded[1] != 0.0 || coded[2] != 1.0 {
+        println("  FAIL round trip: unexpected codes")
+        failures = 1
+    }
+    if failures == 0 {
+        println("  OK round trip through transform and inverse_transform")
+    }
+    array_free_f32(back)
+    array_free_f32(coded)
+    label_encoder_free(enc)
+    array_free_f32(y)
+    return failures
+}
+
+function tolef_workload(n: i32, n_classes: i32, seed: i32) -> i32 {
+    let y: ptr<f32> = array_new_f32(n)
+    let mut s: i32 = seed
+    for i in 0 to n {
+        s = (s * 1103515245 + 12345) % 2147483647
+        if s < 0 {
+            s = 0 - s
+        }
+        y[i] = ((s % n_classes) as f32) * 0.25 - 4.0
+    }
+
+    let want: ptr<f32> = array_new_f32(n)
+    let n_expect: i32 = tolef_reference_fit(y, n, want)
+
+    let enc: LabelEncoder = label_encoder_fit(y, n)
+    let mut failures: i32 = 0
+    if enc.n_classes != n_expect {
+        print("  FAIL workload: n_classes ")
+        print(enc.n_classes)
+        print(" expected ")
+        println(n_expect)
+        failures = 1
+    } else {
+        for k in 0 to n_expect {
+            if enc.classes[k] != want[k] {
+                print("  FAIL workload: classes[")
+                print(k)
+                print("] = ")
+                print(enc.classes[k])
+                print(" expected ")
+                println(want[k])
+                failures = 1
+            }
+        }
+    }
+    if failures == 0 {
+        print("  OK workload n=")
+        print(n)
+        print(" classes=")
+        print(n_expect)
+        println("")
+    }
+    label_encoder_free(enc)
+    array_free_f32(want)
+    array_free_f32(y)
+    return failures
+}
+
+function main() -> i32 {
+    println("LabelEncoder.fit optimization regression test")
+    println("============================================")
+    let mut failures: i32 = 0
+    failures = failures + tolef_known_values()
+    failures = failures + tolef_round_trip()
+    failures = failures + tolef_workload(5000, 12, 3)
+    failures = failures + tolef_workload(5000, 137, 11)
+    failures = failures + tolef_workload(2000, 2000, 29)
+
+    if failures != 0 {
+        print("FAILURES: ")
+        println(failures)
+        return 1
+    }
+    println("All LabelEncoder.fit optimization tests passed!")
+    return 0
+}
