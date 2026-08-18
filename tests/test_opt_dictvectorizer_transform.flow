@@ -1,0 +1,301 @@
+# Regression test for the DictVectorizer.transform lookup path.
+# Roadmap rank 54 / issue #263.
+#
+# transform used to zero a calloc-backed matrix and then rescan the whole
+# vocabulary for every key of every sample. It now drops the zeroing pass and
+# resolves keys through a sorted (key, column) index, falling back to the
+# original scan below a work threshold and when the vocabulary carries
+# duplicate keys.
+#
+# The tests below check the optimized output against a verbatim copy of the
+# previous implementation element by element, and against hand-computed values
+# for the small cases.
+#
+# Run: ./flow run tests/test_opt_dictvectorizer_transform.flow
+
+import "lib/scikit/matrix.flow"
+import "lib/scikit/feature_extraction_extra.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+}
+
+# Verbatim copy of dict_vectorizer_transform as it stood before the change.
+function opt_dv_tr_reference(model: DictVectorizer, X_keys: ptr<ptr<i32> >, X_vals: ptr<ptr<f32> >, n_samples: i32, n_keys_per_sample: ptr<i32>) -> Matrix {
+    let result: Matrix = matrix_new(n_samples, model.n_features)
+    for i in 0 to n_samples {
+        for j in 0 to model.n_features {
+            matrix_set(result, i, j, 0.0)
+        }
+        for k in 0 to n_keys_per_sample[i] {
+            let key: i32 = X_keys[i][k]
+            for j in 0 to model.n_features {
+                if model.feature_names[j][0] == key {
+                    matrix_set(result, i, j, X_vals[i][k])
+                }
+            }
+        }
+    }
+    return result
+}
+
+function opt_dv_tr_expect_i32(label: string, got: i32, want: i32) -> i32 {
+    if got == want {
+        return 0
+    }
+    print("  FAIL ")
+    print(label)
+    print(": got ")
+    print(got)
+    print(" want ")
+    println(want)
+    return 1
+}
+
+# Element-wise comparison. Exact equality, since the optimization only changes
+# which column is visited, never the arithmetic.
+function opt_dv_tr_compare(label: string, a: Matrix, b: Matrix) -> i32 {
+    if a.rows != b.rows || a.cols != b.cols {
+        print("  FAIL ")
+        print(label)
+        println(": shape mismatch")
+        return 1
+    }
+    let mut diffs: i32 = 0
+    for i in 0 to a.rows {
+        for j in 0 to a.cols {
+            if matrix_at(a, i, j) != matrix_at(b, i, j) { diffs = diffs + 1 }
+        }
+    }
+    return opt_dv_tr_expect_i32(label, diffs, 0)
+}
+
+function opt_dv_tr_release(keys: ptr<ptr<i32> >, vals: ptr<ptr<f32> >, n_samples: i32) -> void {
+    for i in 0 to n_samples {
+        array_free_f32(keys[i] as ptr<f32>)
+        array_free_f32(vals[i])
+    }
+    free(keys as ptr<void>)
+    free(vals as ptr<void>)
+}
+
+# Generates a corpus, fits, and checks optimized transform against the
+# reference element by element. Exercises the index path and, at small shapes,
+# the scan path below the work threshold.
+function opt_dv_tr_random_case(label: string, n_samples: i32, k_per: i32, vocab: i32, seed0: i32) -> i32 {
+    let keys: ptr<ptr<i32> > = malloc((n_samples as i64) * 8 + 64) as ptr<ptr<i32> >
+    let vals: ptr<ptr<f32> > = malloc((n_samples as i64) * 8 + 64) as ptr<ptr<f32> >
+    let nk: ptr<i32> = array_new_f32(n_samples + 8) as ptr<i32>
+
+    let mut seed: i32 = seed0
+    for i in 0 to n_samples {
+        let kk: ptr<i32> = array_new_f32(k_per + 1) as ptr<i32>
+        let vv: ptr<f32> = array_new_f32(k_per + 1)
+        for k in 0 to k_per {
+            seed = (seed * 1103515) % 2147483647
+            if seed < 0 { seed = 0 - seed }
+            seed = (seed + 12345) % 2147483647
+            kk[k] = seed % vocab
+            vv[k] = ((seed % 97) as f32) * 0.125
+        }
+        keys[i] = kk
+        vals[i] = vv
+        nk[i] = k_per
+    }
+
+    let model: DictVectorizer = dict_vectorizer_fit(keys, vals, n_samples, nk)
+    let ref_m: Matrix = opt_dv_tr_reference(model, keys, vals, n_samples, nk)
+    let opt_m: Matrix = dict_vectorizer_transform(model, keys, vals, n_samples, nk)
+
+    let failures: i32 = opt_dv_tr_compare(label, ref_m, opt_m)
+
+    matrix_free(ref_m)
+    matrix_free(opt_m)
+    dict_vectorizer_free(model)
+    opt_dv_tr_release(keys, vals, n_samples)
+    array_free_f32(nk as ptr<f32>)
+    return failures
+}
+
+# Hand-checked small case, including a key not in the vocabulary, a repeated
+# key inside one sample where the later value must win, and an empty sample.
+function opt_dv_tr_test_explicit() -> i32 {
+    let n: i32 = 3
+    let keys: ptr<ptr<i32> > = malloc((n as i64) * 8 + 64) as ptr<ptr<i32> >
+    let vals: ptr<ptr<f32> > = malloc((n as i64) * 8 + 64) as ptr<ptr<f32> >
+    let nk: ptr<i32> = array_new_f32(n + 8) as ptr<i32>
+
+    # Sample 0 fixes the vocabulary as [5, 2, 9] in first-seen order.
+    let k0: ptr<i32> = array_new_f32(8) as ptr<i32>
+    let v0: ptr<f32> = array_new_f32(8)
+    k0[0] = 5
+    k0[1] = 2
+    k0[2] = 9
+    v0[0] = 1.5
+    v0[1] = 2.5
+    v0[2] = 3.5
+    keys[0] = k0
+    vals[0] = v0
+    nk[0] = 3
+
+    # Sample 1 repeats key 2. The later value must overwrite the earlier one.
+    let k1: ptr<i32> = array_new_f32(8) as ptr<i32>
+    let v1: ptr<f32> = array_new_f32(8)
+    k1[0] = 2
+    k1[1] = 2
+    v1[0] = 7.0
+    v1[1] = 8.0
+    keys[1] = k1
+    vals[1] = v1
+    nk[1] = 2
+
+    # Sample 2 is empty, so its row must stay all zeros.
+    let k2: ptr<i32> = array_new_f32(8) as ptr<i32>
+    let v2: ptr<f32> = array_new_f32(8)
+    keys[2] = k2
+    vals[2] = v2
+    nk[2] = 0
+
+    let model: DictVectorizer = dict_vectorizer_fit(keys, vals, n, nk)
+
+    let mut failures: i32 = 0
+    failures = failures + opt_dv_tr_expect_i32("explicit vocab size", model.n_features, 3)
+    failures = failures + opt_dv_tr_expect_i32("explicit col0 key", model.feature_names[0][0], 5)
+    failures = failures + opt_dv_tr_expect_i32("explicit col1 key", model.feature_names[1][0], 2)
+    failures = failures + opt_dv_tr_expect_i32("explicit col2 key", model.feature_names[2][0], 9)
+
+    let m: Matrix = dict_vectorizer_transform(model, keys, vals, n, nk)
+    failures = failures + opt_dv_tr_expect_i32("explicit rows", m.rows, 3)
+    failures = failures + opt_dv_tr_expect_i32("explicit cols", m.cols, 3)
+
+    let want: ptr<f32> = array_new_f32(16)
+    want[0] = 1.5
+    want[1] = 2.5
+    want[2] = 3.5
+    want[3] = 0.0
+    want[4] = 8.0
+    want[5] = 0.0
+    want[6] = 0.0
+    want[7] = 0.0
+    want[8] = 0.0
+
+    let mut bad: i32 = 0
+    for i in 0 to 3 {
+        for j in 0 to 3 {
+            if matrix_at(m, i, j) != want[i * 3 + j] { bad = bad + 1 }
+        }
+    }
+    failures = failures + opt_dv_tr_expect_i32("explicit values", bad, 0)
+
+    let ref_m: Matrix = opt_dv_tr_reference(model, keys, vals, n, nk)
+    failures = failures + opt_dv_tr_compare("explicit vs reference", ref_m, m)
+
+    array_free_f32(want)
+    matrix_free(m)
+    matrix_free(ref_m)
+    dict_vectorizer_free(model)
+    opt_dv_tr_release(keys, vals, n)
+    array_free_f32(nk as ptr<f32>)
+    return failures
+}
+
+# A model assembled by hand with duplicate keys, sized so the call sits ABOVE
+# the work threshold and would otherwise take the index path. The old scan wrote
+# the value into every matching column; a single-column index cannot reproduce
+# that, so transform must notice the duplicates and fall back to the scan.
+#
+# The corpus is deliberately large (400 samples x 8 keys against a 32-column
+# vocabulary, scan_ops = 102400 vs index_ops = 78768) so that removing the
+# duplicate check makes this test fail rather than silently passing through the
+# threshold fallback.
+function opt_dv_tr_test_duplicate_vocab() -> i32 {
+    let n_feat: i32 = 32
+    let feature_names: ptr<ptr<i32> > = malloc((n_feat as i64) * 8 + 64) as ptr<ptr<i32> >
+    for j in 0 to n_feat {
+        feature_names[j] = array_new_f32(2) as ptr<i32>
+        # Keys 0..15, each appearing in two columns.
+        feature_names[j][0] = j / 2
+    }
+
+    let model: DictVectorizer = DictVectorizer { feature_names: feature_names, n_features: n_feat, fitted: true }
+
+    let n: i32 = 400
+    let per: i32 = 8
+    let keys: ptr<ptr<i32> > = malloc((n as i64) * 8 + 64) as ptr<ptr<i32> >
+    let vals: ptr<ptr<f32> > = malloc((n as i64) * 8 + 64) as ptr<ptr<f32> >
+    let nk: ptr<i32> = array_new_f32(n + 8) as ptr<i32>
+
+    let mut seed: i32 = 4242
+    for i in 0 to n {
+        let kk: ptr<i32> = array_new_f32(per + 1) as ptr<i32>
+        let vv: ptr<f32> = array_new_f32(per + 1)
+        for k in 0 to per {
+            seed = (seed * 1103515) % 2147483647
+            if seed < 0 { seed = 0 - seed }
+            seed = (seed + 12345) % 2147483647
+            kk[k] = seed % 16
+            vv[k] = ((seed % 89) as f32) * 0.25 + 0.5
+        }
+        keys[i] = kk
+        vals[i] = vv
+        nk[i] = per
+    }
+
+    let m: Matrix = dict_vectorizer_transform(model, keys, vals, n, nk)
+    let ref_m: Matrix = opt_dv_tr_reference(model, keys, vals, n, nk)
+
+    let mut failures: i32 = 0
+    failures = failures + opt_dv_tr_compare("duplicate vocab vs reference", ref_m, m)
+
+    # Both columns carrying the same key must hold the same value, and at least
+    # one pair must be non-zero, which only the fallback scan achieves.
+    let mut pair_bad: i32 = 0
+    let mut pair_nonzero: i32 = 0
+    for i in 0 to n {
+        for j in 0 to 16 {
+            let a: f32 = matrix_at(m, i, j * 2)
+            let b: f32 = matrix_at(m, i, j * 2 + 1)
+            if a != b { pair_bad = pair_bad + 1 }
+            if a != 0.0 { pair_nonzero = pair_nonzero + 1 }
+        }
+    }
+    failures = failures + opt_dv_tr_expect_i32("duplicate vocab paired columns agree", pair_bad, 0)
+    if pair_nonzero <= 0 {
+        println("  FAIL duplicate vocab: no column was written")
+        failures = failures + 1
+    }
+
+    matrix_free(m)
+    matrix_free(ref_m)
+    dict_vectorizer_free(model)
+    opt_dv_tr_release(keys, vals, n)
+    array_free_f32(nk as ptr<f32>)
+    return failures
+}
+
+function main() -> i32 {
+    println("=== DictVectorizer.transform optimization regression (#263) ===")
+
+    let mut failures: i32 = 0
+    failures = failures + opt_dv_tr_test_explicit()
+    failures = failures + opt_dv_tr_test_duplicate_vocab()
+
+    # Below the work threshold, so the scan path runs.
+    failures = failures + opt_dv_tr_random_case("tiny corpus wide vocab", 4, 2, 400, 991)
+    # Above it, so the sorted index runs. Small and large vocabularies cover
+    # both sides of the linear/binary crossover inside _fe_extra_dv_find.
+    failures = failures + opt_dv_tr_random_case("small vocab", 120, 6, 8, 13)
+    failures = failures + opt_dv_tr_random_case("crossover vocab", 200, 8, 13, 271)
+    failures = failures + opt_dv_tr_random_case("realistic workload", 800, 12, 250, 20250818)
+    # Every key present in every sample, so no column is left at zero.
+    failures = failures + opt_dv_tr_random_case("dense keys", 60, 40, 20, 55)
+
+    if failures == 0 {
+        println("All DictVectorizer.transform optimization tests passed!")
+        return 0
+    }
+    print("FAILED checks: ")
+    println(failures)
+    return 1
+}
