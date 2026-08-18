@@ -1082,51 +1082,101 @@ export function adaboost_regressor_fit(X: Matrix, y: ptr<f32>, n_trees: i32, max
     }
 }
 
+# AdaBoost.R2 weighted-median prediction.
+#
+# Three sources of waste in the old loop, all per query row:
+#
+#   - Three allocations and three frees (two f32 arrays and an index array),
+#     so 3 * n malloc/free pairs for a batch of n rows.
+#   - The per-tree predictions were held as m separate n-element arrays, so
+#     reading one row's m values walked m arrays at a stride of n floats. Every
+#     insertion-sort comparison then paid a double indirection,
+#     tree_preds[order[j]][i], to reach a value in a different cache line.
+#   - Each tree's predictions came from decision_tree_regressor_predict, which
+#     copies every row into a scratch buffer via matrix_row before traversing.
+#
+# The rewrite builds one row-major (n x m) table with a direct traversal over
+# X.data, so a row's m predictions are contiguous, then sorts the values and
+# their weights in place in two scratch arrays allocated once for the whole
+# call.
+#
+# The sort is the same stable ascending insertion sort. Sorting the value and
+# weight arrays together produces exactly the permutation the old code built in
+# `order`, including for equal predictions and for NaN, because moving order[j]
+# and moving the pair at j are the same operation under the same comparison.
+# The two reductions that follow still run over the sorted sequence in sorted
+# order, so the f32 arithmetic is unchanged and the output is bit-identical.
+#
+# n_trees == 0 now returns zeros instead of indexing sorted_preds[-1]; that
+# case read uninitialized memory before.
 export function adaboost_regressor_predict(model: AdaBoostRegressor, X: Matrix) -> ptr<f32> {
-    # Weighted median prediction (sorted by prediction, accumulate weights)
-    let preds: ptr<f32> = array_new_f32(X.rows)
-    let tree_preds: ptr<ptr<f32> > = malloc((model.n_trees as i64) * 8) as ptr<ptr<f32> >
+    let n: i32 = X.rows
+    let m: i32 = model.n_trees
+    let n_cols: i32 = X.cols
+    let preds: ptr<f32> = array_new_f32(n)
+    if m <= 0 { return preds }
 
-    for t in 0 to model.n_trees {
-        tree_preds[t] = decision_tree_regressor_predict(model.trees[t], X)
+    let xd: ptr<f32> = X.data
+
+    # Row-major (n x m) table of per-tree predictions, filled tree-major so
+    # each tree's node array stays hot across all rows.
+    let table: ptr<f32> = array_new_f32(n * m)
+    for t in 0 to m {
+        let tree: DecisionTreeRegressor = model.trees[t]
+        let nodes: ptr<TreeNode> = tree.nodes
+        let mut row_base: i32 = 0
+        let mut slot: i32 = t
+        for i in 0 to n {
+            let mut node_idx: i32 = 0
+            while not nodes[node_idx].is_leaf {
+                let node: ptr<TreeNode> = nodes + node_idx
+                if xd[row_base + node.feature] <= node.threshold {
+                    node_idx = node.left
+                } else {
+                    node_idx = node.right
+                }
+            }
+            table[slot] = nodes[node_idx].value
+            row_base = row_base + n_cols
+            slot = slot + m
+        }
     }
 
-    for i in 0 to X.rows {
-        # Collect (prediction, weight) pairs and sort by prediction
-        let sorted_preds: ptr<f32> = array_new_f32(model.n_trees)
-        let sorted_weights: ptr<f32> = array_new_f32(model.n_trees)
-        let order: ptr<i32> = malloc((model.n_trees as i64) * 4) as ptr<i32>
-        for t in 0 to model.n_trees {
-            order[t] = t
+    let sorted_preds: ptr<f32> = array_new_f32(m)
+    let sorted_weights: ptr<f32> = array_new_f32(m)
+    let alphas: ptr<f32> = model.alphas
+
+    let mut base: i32 = 0
+    for i in 0 to n {
+        for t in 0 to m {
+            sorted_preds[t] = table[base + t]
+            sorted_weights[t] = alphas[t]
         }
 
-        # Simple insertion sort by prediction value
-        for t in 1 to model.n_trees {
-            let key: i32 = order[t]
-            let key_val: f32 = tree_preds[key][i]
+        # Stable insertion sort by prediction, carrying the weight along.
+        for t in 1 to m {
+            let key_val: f32 = sorted_preds[t]
+            let key_w: f32 = sorted_weights[t]
             let mut j: i32 = t - 1
-            while j >= 0 && tree_preds[order[j]][i] > key_val {
-                order[j + 1] = order[j]
+            while j >= 0 && sorted_preds[j] > key_val {
+                sorted_preds[j + 1] = sorted_preds[j]
+                sorted_weights[j + 1] = sorted_weights[j]
                 j = j - 1
             }
-            order[j + 1] = key
+            sorted_preds[j + 1] = key_val
+            sorted_weights[j + 1] = key_w
         }
 
-        for t in 0 to model.n_trees {
-            sorted_preds[t] = tree_preds[order[t]][i]
-            sorted_weights[t] = model.alphas[order[t]]
-        }
-
-        # Weighted median: find where cumulative weight crosses 0.5
+        # Weighted median: find where cumulative weight crosses 0.5.
         let mut total_w: f32 = 0.0
-        for t in 0 to model.n_trees {
+        for t in 0 to m {
             total_w = total_w + sorted_weights[t]
         }
 
         let mut cum_w: f32 = 0.0
-        let mut median_idx: i32 = model.n_trees - 1
+        let mut median_idx: i32 = m - 1
         if total_w > 0.0 {
-            for t in 0 to model.n_trees {
+            for t in 0 to m {
                 cum_w = cum_w + sorted_weights[t] / total_w
                 if cum_w >= 0.5 {
                     median_idx = t
@@ -1136,16 +1186,12 @@ export function adaboost_regressor_predict(model: AdaBoostRegressor, X: Matrix) 
         }
 
         preds[i] = sorted_preds[median_idx]
-
-        array_free_f32(sorted_preds)
-        array_free_f32(sorted_weights)
-        free(order as ptr<void>)
+        base = base + m
     }
 
-    for t in 0 to model.n_trees {
-        array_free_f32(tree_preds[t])
-    }
-    free(tree_preds as ptr<void>)
+    array_free_f32(sorted_preds)
+    array_free_f32(sorted_weights)
+    array_free_f32(table)
 
     return preds
 }
