@@ -120,7 +120,10 @@ function main() -> i32 {
 
     # 6. VotingClassifier (requires pre-fitted estimators)
     println("--- VotingClassifier ---")
-    let estimators: ptr<DecisionTreeClassifier> = malloc(3 * 64) as ptr<DecisionTreeClassifier>
+    # sizeof<T>(), not a guessed 64. The struct is 40 bytes today, so this
+    # over-allocated rather than under-allocating, but the magic number becomes
+    # a heap overflow the moment a field is added.
+    let estimators: ptr<DecisionTreeClassifier> = malloc(3 * sizeof<DecisionTreeClassifier>()) as ptr<DecisionTreeClassifier>
     estimators[0] = decision_tree_classifier_fit(split.X_train, split.y_train, 2, 5, CRITERION_GINI)
     estimators[1] = decision_tree_classifier_fit(split.X_train, split.y_train, 2, 7, CRITERION_GINI)
     estimators[2] = decision_tree_classifier_fit(split.X_train, split.y_train, 2, 3, CRITERION_GINI)
