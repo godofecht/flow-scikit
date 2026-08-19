@@ -2,14 +2,14 @@
 
 | Estimator | Operation | Class | Owner | Disposition | Priority |
 |---|---|---|---|---|---:|
-| `LogisticRegression` | `fit` | mixed | external | retain-native | 71.8 |
-| `KMeans` | `fit` | mixed | sklearn | already-equivalent | 69.6 |
-| `LinearRegression` | `fit` | mixed | sklearn | already-equivalent | 67.7 |
+| `KMeans` | `fit` | mixed | sklearn | already-equivalent | 72.1 |
+| `LogisticRegression` | `fit` | mixed | external | retain-native | 72.0 |
+| `LinearRegression` | `fit` | mixed | sklearn | already-equivalent | 68.6 |
 | `RandomForestClassifier` | `fit` | mixed | sklearn | already-equivalent | 48.0 |
 | `RandomForestClassifier` | `predict` | mixed | sklearn | already-equivalent | 48.0 |
 | `RandomForestClassifier` | `predict_proba` | mixed | sklearn | already-equivalent | 48.0 |
-| `DecisionTreeClassifier` | `fit` | mixed | sklearn | already-equivalent | 42.6 |
-| `DecisionTreeClassifier` | `predict` | mixed | sklearn | already-equivalent | 42.6 |
+| `DecisionTreeClassifier` | `fit` | mixed | sklearn | already-equivalent | 43.5 |
+| `DecisionTreeClassifier` | `predict` | mixed | sklearn | already-equivalent | 43.5 |
 | `ARDRegression` | `fit` | mixed | sklearn | already-equivalent | 40.5 |
 | `AdaBoostClassifier` | `fit` | mixed | sklearn | already-equivalent | 40.5 |
 | `AdaBoostRegressor` | `fit` | mixed | sklearn | already-equivalent | 40.5 |
@@ -136,10 +136,10 @@
 | `NeighborhoodComponentsAnalysis` | `fit` | cython-bound | sklearn | already-equivalent | 34.5 |
 | `PoissonRegressor` | `predict` | cython-bound | sklearn | already-equivalent | 34.5 |
 | `TweedieRegressor` | `predict` | cython-bound | sklearn | already-equivalent | 34.5 |
-| `KernelRidge` | `fit` | mixed | sklearn | already-equivalent | 34.2 |
 | `TfidfTransformer` | `fit` | mixed | sklearn | low-value | 34.0 |
+| `KernelRidge` | `fit` | mixed | sklearn | already-equivalent | 33.6 |
 | `Lasso` | `fit` | mixed | sklearn | already-equivalent | 33.1 |
-| `SVC` | `fit` | external-native-bound | external | retain-native | 29.9 |
+| `SVC` | `fit` | external-native-bound | external | retain-native | 30.2 |
 | `MiniBatchSparsePCA` | `transform` | blas-lapack-bound | sklearn | retain-native | 17.0 |
 | `Nystroem` | `fit` | blas-lapack-bound | sklearn | retain-native | 17.0 |
 | `SparsePCA` | `transform` | blas-lapack-bound | sklearn | retain-native | 17.0 |
@@ -147,4 +147,4 @@
 | `NuSVC` | `fit` | external-native-bound | external | retain-native | 12.5 |
 | `NuSVR` | `fit` | external-native-bound | external | retain-native | 12.5 |
 | `SVR` | `fit` | external-native-bound | external | retain-native | 12.5 |
-| `LinearSVC` | `fit` | external-native-bound | external | retain-native | 7.5 |
+| `LinearSVC` | `fit` | external-native-bound | external | retain-native | 7.0 |

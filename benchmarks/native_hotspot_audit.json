@@ -2,12 +2,28 @@
   "schema_version": 1,
   "rows": [
     {
+      "module": "sklearn.cluster._kmeans",
+      "estimator": "KMeans",
+      "operation": "fit",
+      "execution_class": "mixed",
+      "ownership": "sklearn",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/cluster/_kmeans.py",
+      "evidence": [
+        "numpy-bound:np.",
+        "python-control-loops:4"
+      ],
+      "flow_scikit_status": "present",
+      "priority_score": 72.139,
+      "disposition": "already-equivalent",
+      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
+    },
+    {
       "module": "sklearn.linear_model._logistic",
       "estimator": "LogisticRegression",
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "external",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_logistic.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_logistic.py",
       "evidence": [
         "external-native-bound:liblinear",
         "scipy-bound:optimize.",
@@ -16,25 +32,9 @@
         "python-control-loops:2"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 71.77,
+      "priority_score": 72.0,
       "disposition": "retain-native",
       "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
-    },
-    {
-      "module": "sklearn.cluster._kmeans",
-      "estimator": "KMeans",
-      "operation": "fit",
-      "execution_class": "mixed",
-      "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/cluster/_kmeans.py",
-      "evidence": [
-        "numpy-bound:np.",
-        "python-control-loops:4"
-      ],
-      "flow_scikit_status": "present",
-      "priority_score": 69.613,
-      "disposition": "already-equivalent",
-      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
     {
       "module": "sklearn.linear_model._base",
@@ -42,7 +42,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_base.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_base.py",
       "evidence": [
         "scipy-bound:optimize.",
         "scipy-bound:scipy.",
@@ -52,7 +52,7 @@
         "python-control-loops:5"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 67.716,
+      "priority_score": 68.592,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -62,7 +62,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
       "evidence": [
         "cython-bound:_forest",
         "cython-bound:_tree",
@@ -80,7 +80,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
       "evidence": [
         "cython-bound:_forest",
         "numpy-bound:np.",
@@ -97,7 +97,7 @@
       "operation": "predict_proba",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
       "evidence": [
         "cython-bound:_forest",
         "numpy-bound:np.",
@@ -114,13 +114,13 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 42.554,
+      "priority_score": 43.459,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -130,13 +130,13 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 42.554,
+      "priority_score": 43.459,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -146,7 +146,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_bayes.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_bayes.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -162,7 +162,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_weight_boosting.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_weight_boosting.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -178,7 +178,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_weight_boosting.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_weight_boosting.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -194,7 +194,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_bagging.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_bagging.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -210,7 +210,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_bayes.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_bayes.py",
       "evidence": [
         "blas-lapack-bound:linalg.svd",
         "numpy-bound:np.",
@@ -227,7 +227,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/neural_network/_rbm.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/neural_network/_rbm.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -243,7 +243,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/cluster/_bisect_k_means.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/cluster/_bisect_k_means.py",
       "evidence": [
         "cython-bound:_tree",
         "numpy-bound:np.",
@@ -260,7 +260,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/cross_decomposition/_pls.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/cross_decomposition/_pls.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -276,7 +276,7 @@
       "operation": "transform",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/compose/_column_transformer.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/compose/_column_transformer.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -292,7 +292,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/cluster/_dbscan.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/cluster/_dbscan.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:5"
@@ -308,7 +308,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -324,7 +324,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -340,7 +340,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/dummy.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/dummy.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -356,7 +356,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/dummy.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/dummy.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:7"
@@ -372,7 +372,7 @@
       "operation": "predict_proba",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/dummy.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/dummy.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:5"
@@ -388,7 +388,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_coordinate_descent.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_coordinate_descent.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:4"
@@ -404,7 +404,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/covariance/_elliptic_envelope.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/covariance/_elliptic_envelope.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -420,7 +420,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -436,7 +436,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -452,7 +452,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -468,7 +468,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -484,7 +484,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
       "evidence": [
         "cython-bound:_forest",
         "cython-bound:_tree",
@@ -502,7 +502,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
       "evidence": [
         "cython-bound:_forest",
         "numpy-bound:np.",
@@ -519,7 +519,7 @@
       "operation": "predict_proba",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
       "evidence": [
         "cython-bound:_forest",
         "numpy-bound:np.",
@@ -536,7 +536,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
       "evidence": [
         "cython-bound:_forest",
         "cython-bound:_tree",
@@ -554,7 +554,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
       "evidence": [
         "cython-bound:_forest",
         "numpy-bound:np.",
@@ -571,7 +571,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/decomposition/_factor_analysis.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/decomposition/_factor_analysis.py",
       "evidence": [
         "blas-lapack-bound:lapack",
         "blas-lapack-bound:linalg.svd",
@@ -589,7 +589,7 @@
       "operation": "transform",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/cluster/_feature_agglomeration.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/cluster/_feature_agglomeration.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -605,7 +605,7 @@
       "operation": "transform",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/feature_extraction/_hash.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/feature_extraction/_hash.py",
       "evidence": [
         "scipy-bound:scipy.",
         "python-control-loops:4"
@@ -621,7 +621,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_glm/glm.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_glm/glm.py",
       "evidence": [
         "cython-bound:_loss",
         "scipy-bound:optimize.",
@@ -641,7 +641,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/gaussian_process/_gpr.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/gaussian_process/_gpr.py",
       "evidence": [
         "blas-lapack-bound:cho_solve",
         "blas-lapack-bound:cholesky",
@@ -659,7 +659,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/gaussian_process/_gpr.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/gaussian_process/_gpr.py",
       "evidence": [
         "blas-lapack-bound:cholesky",
         "numpy-bound:np."
@@ -675,7 +675,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_gb.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_gb.py",
       "evidence": [
         "cython-bound:_loss",
         "cython-bound:_tree",
@@ -693,7 +693,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_gb.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_gb.py",
       "evidence": [
         "cython-bound:_loss",
         "cython-bound:_tree",
@@ -711,7 +711,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/covariance/_graph_lasso.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/covariance/_graph_lasso.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -727,7 +727,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/covariance/_graph_lasso.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/covariance/_graph_lasso.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:9"
@@ -743,7 +743,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/cluster/_hdbscan/hdbscan.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/cluster/_hdbscan/hdbscan.py",
       "evidence": [
         "cython-bound:_tree",
         "numpy-bound:np.",
@@ -761,7 +761,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py",
       "evidence": [
         "cython-bound:_hist_gradient_boosting",
         "cython-bound:_loss",
@@ -780,7 +780,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py",
       "evidence": [
         "cython-bound:_hist_gradient_boosting",
         "cython-bound:_loss",
@@ -799,7 +799,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/decomposition/_incremental_pca.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/decomposition/_incremental_pca.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -815,7 +815,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_iforest.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_iforest.py",
       "evidence": [
         "cython-bound:_tree",
         "numpy-bound:np.",
@@ -832,7 +832,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_iforest.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_iforest.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -848,7 +848,7 @@
       "operation": "decision_function",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_iforest.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_iforest.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -864,7 +864,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/isotonic.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/isotonic.py",
       "evidence": [
         "scipy-bound:scipy.",
         "numpy-bound:np."
@@ -880,7 +880,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/preprocessing/_discretization.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/preprocessing/_discretization.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:9"
@@ -896,7 +896,7 @@
       "operation": "transform",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/impute/_knn.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/impute/_knn.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:4"
@@ -912,7 +912,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/neighbors/_classification.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/neighbors/_classification.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:5"
@@ -928,7 +928,7 @@
       "operation": "predict_proba",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/neighbors/_classification.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/neighbors/_classification.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:7"
@@ -944,7 +944,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/neighbors/_regression.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/neighbors/_regression.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -960,7 +960,7 @@
       "operation": "transform",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/decomposition/_kernel_pca.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/decomposition/_kernel_pca.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -976,7 +976,7 @@
       "operation": "predict_proba",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/semi_supervised/_label_propagation.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/semi_supervised/_label_propagation.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -992,7 +992,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/semi_supervised/_label_propagation.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/semi_supervised/_label_propagation.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -1008,7 +1008,7 @@
       "operation": "predict_proba",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/semi_supervised/_label_propagation.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/semi_supervised/_label_propagation.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -1024,7 +1024,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_least_angle.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_least_angle.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -1040,7 +1040,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_least_angle.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_least_angle.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -1056,7 +1056,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/neighbors/_lof.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/neighbors/_lof.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -1072,7 +1072,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "external",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_logistic.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_logistic.py",
       "evidence": [
         "external-native-bound:liblinear",
         "cython-bound:_loss",
@@ -1090,7 +1090,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/cluster/_mean_shift.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/cluster/_mean_shift.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:8"
@@ -1106,7 +1106,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/covariance/_robust_covariance.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/covariance/_robust_covariance.py",
       "evidence": [
         "blas-lapack-bound:linalg.svd",
         "numpy-bound:np."
@@ -1122,7 +1122,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/decomposition/_dict_learning.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/decomposition/_dict_learning.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -1138,7 +1138,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/cluster/_kmeans.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/cluster/_kmeans.py",
       "evidence": [
         "blas-lapack-bound:blas",
         "numpy-bound:np.",
@@ -1155,7 +1155,7 @@
       "operation": "transform",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/impute/_base.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/impute/_base.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -1171,7 +1171,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/preprocessing/_label.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/preprocessing/_label.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -1187,7 +1187,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/multioutput.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/multioutput.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -1203,7 +1203,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/multioutput.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/multioutput.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -1219,7 +1219,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_coordinate_descent.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_coordinate_descent.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -1235,7 +1235,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_coordinate_descent.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_coordinate_descent.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:12"
@@ -1251,7 +1251,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_coordinate_descent.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_coordinate_descent.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -1267,7 +1267,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_coordinate_descent.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_coordinate_descent.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:12"
@@ -1283,7 +1283,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/neighbors/_nearest_centroid.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/neighbors/_nearest_centroid.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -1299,7 +1299,7 @@
       "operation": "transform",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/preprocessing/_encoders.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/preprocessing/_encoders.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -1315,7 +1315,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/multiclass.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/multiclass.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -1331,7 +1331,7 @@
       "operation": "decision_function",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/multiclass.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/multiclass.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:7"
@@ -1347,7 +1347,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/multiclass.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/multiclass.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -1363,7 +1363,7 @@
       "operation": "predict_proba",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/multiclass.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/multiclass.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:4"
@@ -1379,7 +1379,7 @@
       "operation": "decision_function",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/multiclass.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/multiclass.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:5"
@@ -1395,7 +1395,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/preprocessing/_encoders.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/preprocessing/_encoders.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:8"
@@ -1411,7 +1411,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_omp.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_omp.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:4"
@@ -1427,7 +1427,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/multiclass.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/multiclass.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:4"
@@ -1443,7 +1443,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/cross_decomposition/_pls.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/cross_decomposition/_pls.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -1459,7 +1459,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_glm/glm.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_glm/glm.py",
       "evidence": [
         "cython-bound:_loss",
         "scipy-bound:optimize.",
@@ -1479,7 +1479,7 @@
       "operation": "transform",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/kernel_approximation.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/kernel_approximation.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:5"
@@ -1495,7 +1495,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/preprocessing/_polynomial.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/preprocessing/_polynomial.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -1511,7 +1511,7 @@
       "operation": "transform",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/preprocessing/_polynomial.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/preprocessing/_polynomial.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:11"
@@ -1527,7 +1527,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/discriminant_analysis.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/discriminant_analysis.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -1543,7 +1543,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_quantile.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_quantile.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:5"
@@ -1559,7 +1559,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_ransac.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_ransac.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:10"
@@ -1575,7 +1575,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/feature_selection/_rfe.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/feature_selection/_rfe.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:8"
@@ -1591,7 +1591,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/neighbors/_classification.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/neighbors/_classification.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:4"
@@ -1607,7 +1607,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/neighbors/_classification.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/neighbors/_classification.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:4"
@@ -1623,7 +1623,7 @@
       "operation": "predict_proba",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/neighbors/_classification.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/neighbors/_classification.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:9"
@@ -1639,7 +1639,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/neighbors/_regression.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/neighbors/_regression.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:4"
@@ -1655,7 +1655,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
       "evidence": [
         "cython-bound:_forest",
         "cython-bound:_tree",
@@ -1673,7 +1673,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
       "evidence": [
         "cython-bound:_forest",
         "numpy-bound:np.",
@@ -1690,7 +1690,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
       "evidence": [
         "cython-bound:_forest",
         "numpy-bound:np.",
@@ -1707,7 +1707,7 @@
       "operation": "transform",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
       "evidence": [
         "cython-bound:_forest",
         "numpy-bound:np.",
@@ -1724,7 +1724,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/preprocessing/_data.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/preprocessing/_data.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:6"
@@ -1740,7 +1740,7 @@
       "operation": "predict_proba",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_stochastic_gradient.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_stochastic_gradient.py",
       "evidence": [
         "cython-bound:_loss",
         "numpy-bound:np.",
@@ -1757,7 +1757,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/semi_supervised/_self_training.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/semi_supervised/_self_training.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:4"
@@ -1773,7 +1773,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/feature_selection/_sequential.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/feature_selection/_sequential.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -1789,7 +1789,7 @@
       "operation": "transform",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/impute/_base.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/impute/_base.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -1805,7 +1805,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/cluster/_bicluster.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/cluster/_bicluster.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -1821,7 +1821,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/cluster/_spectral.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/cluster/_spectral.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
@@ -1837,7 +1837,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/cluster/_bicluster.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/cluster/_bicluster.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -1853,7 +1853,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/preprocessing/_polynomial.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/preprocessing/_polynomial.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:4"
@@ -1869,7 +1869,7 @@
       "operation": "transform",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/preprocessing/_polynomial.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/preprocessing/_polynomial.py",
       "evidence": [
         "scipy-bound:scipy.",
         "numpy-bound:np.",
@@ -1886,7 +1886,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_stacking.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_stacking.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:5"
@@ -1902,7 +1902,7 @@
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_stacking.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_stacking.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:4"
@@ -1918,7 +1918,7 @@
       "operation": "predict_proba",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_stacking.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_stacking.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -1934,7 +1934,7 @@
       "operation": "transform",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/preprocessing/_target_encoder.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/preprocessing/_target_encoder.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -1950,7 +1950,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_theil_sen.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_theil_sen.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -1966,7 +1966,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_glm/glm.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_glm/glm.py",
       "evidence": [
         "cython-bound:_loss",
         "scipy-bound:optimize.",
@@ -1986,7 +1986,7 @@
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/feature_selection/_variance_threshold.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/feature_selection/_variance_threshold.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -2002,7 +2002,7 @@
       "operation": "predict_proba",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_voting.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_voting.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -2018,7 +2018,7 @@
       "operation": "transform",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_voting.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_voting.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -2034,7 +2034,7 @@
       "operation": "predict",
       "execution_class": "cython-bound",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/cluster/_bisect_k_means.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/cluster/_bisect_k_means.py",
       "evidence": [
         "cython-bound:_tree",
         "numpy-bound:np."
@@ -2050,7 +2050,7 @@
       "operation": "predict",
       "execution_class": "cython-bound",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_glm/glm.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_glm/glm.py",
       "evidence": [
         "cython-bound:_loss"
       ],
@@ -2065,7 +2065,7 @@
       "operation": "predict_proba",
       "execution_class": "cython-bound",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_gb.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_gb.py",
       "evidence": [
         "cython-bound:_loss",
         "numpy-bound:np."
@@ -2081,7 +2081,7 @@
       "operation": "predict",
       "execution_class": "cython-bound",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py",
       "evidence": [
         "cython-bound:_hist_gradient_boosting",
         "numpy-bound:np."
@@ -2097,7 +2097,7 @@
       "operation": "predict_proba",
       "execution_class": "cython-bound",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py",
       "evidence": [
         "cython-bound:_hist_gradient_boosting",
         "cython-bound:_loss"
@@ -2113,7 +2113,7 @@
       "operation": "decision_function",
       "execution_class": "cython-bound",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py",
       "evidence": [
         "cython-bound:_hist_gradient_boosting",
         "cython-bound:_tree"
@@ -2129,7 +2129,7 @@
       "operation": "predict",
       "execution_class": "cython-bound",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py",
       "evidence": [
         "cython-bound:_hist_gradient_boosting",
         "cython-bound:_loss"
@@ -2145,7 +2145,7 @@
       "operation": "fit",
       "execution_class": "cython-bound",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_huber.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_huber.py",
       "evidence": [
         "cython-bound:_loss",
         "scipy-bound:optimize.",
@@ -2162,7 +2162,7 @@
       "operation": "fit",
       "execution_class": "cython-bound",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/neighbors/_nca.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/neighbors/_nca.py",
       "evidence": [
         "cython-bound:_loss",
         "numpy-bound:np."
@@ -2178,7 +2178,7 @@
       "operation": "predict",
       "execution_class": "cython-bound",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_glm/glm.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_glm/glm.py",
       "evidence": [
         "cython-bound:_loss"
       ],
@@ -2193,7 +2193,7 @@
       "operation": "predict",
       "execution_class": "cython-bound",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_glm/glm.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_glm/glm.py",
       "evidence": [
         "cython-bound:_loss"
       ],
@@ -2203,28 +2203,12 @@
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
     {
-      "module": "sklearn.kernel_ridge",
-      "estimator": "KernelRidge",
-      "operation": "fit",
-      "execution_class": "mixed",
-      "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/kernel_ridge.py",
-      "evidence": [
-        "blas-lapack-bound:cholesky",
-        "numpy-bound:np."
-      ],
-      "flow_scikit_status": "present",
-      "priority_score": 34.227,
-      "disposition": "already-equivalent",
-      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
-    },
-    {
       "module": "sklearn.feature_extraction.text",
       "estimator": "TfidfTransformer",
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/feature_extraction/text.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/feature_extraction/text.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:2"
@@ -2235,18 +2219,34 @@
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
     {
+      "module": "sklearn.kernel_ridge",
+      "estimator": "KernelRidge",
+      "operation": "fit",
+      "execution_class": "mixed",
+      "ownership": "sklearn",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/kernel_ridge.py",
+      "evidence": [
+        "blas-lapack-bound:cholesky",
+        "numpy-bound:np."
+      ],
+      "flow_scikit_status": "present",
+      "priority_score": 33.558,
+      "disposition": "already-equivalent",
+      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
+    },
+    {
       "module": "sklearn.linear_model._coordinate_descent",
       "estimator": "Lasso",
       "operation": "fit",
       "execution_class": "mixed",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/linear_model/_coordinate_descent.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_coordinate_descent.py",
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:4"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 33.117,
+      "priority_score": 33.061,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -2256,13 +2256,13 @@
       "operation": "fit",
       "execution_class": "external-native-bound",
       "ownership": "external",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/svm/_base.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/svm/_base.py",
       "evidence": [
         "external-native-bound:libsvm",
         "numpy-bound:np."
       ],
       "flow_scikit_status": "present",
-      "priority_score": 29.919,
+      "priority_score": 30.192,
       "disposition": "retain-native",
       "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
     },
@@ -2272,7 +2272,7 @@
       "operation": "transform",
       "execution_class": "blas-lapack-bound",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/decomposition/_sparse_pca.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/decomposition/_sparse_pca.py",
       "evidence": [
         "blas-lapack-bound:cholesky"
       ],
@@ -2287,7 +2287,7 @@
       "operation": "fit",
       "execution_class": "blas-lapack-bound",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/kernel_approximation.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/kernel_approximation.py",
       "evidence": [
         "blas-lapack-bound:linalg.svd"
       ],
@@ -2302,7 +2302,7 @@
       "operation": "transform",
       "execution_class": "blas-lapack-bound",
       "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/decomposition/_sparse_pca.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/decomposition/_sparse_pca.py",
       "evidence": [
         "blas-lapack-bound:cholesky"
       ],
@@ -2317,7 +2317,7 @@
       "operation": "fit",
       "execution_class": "external-native-bound",
       "ownership": "external",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/svm/_classes.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/svm/_classes.py",
       "evidence": [
         "external-native-bound:liblinear",
         "numpy-bound:np."
@@ -2333,7 +2333,7 @@
       "operation": "fit",
       "execution_class": "external-native-bound",
       "ownership": "external",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/svm/_base.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/svm/_base.py",
       "evidence": [
         "external-native-bound:libsvm",
         "numpy-bound:np."
@@ -2349,7 +2349,7 @@
       "operation": "fit",
       "execution_class": "external-native-bound",
       "ownership": "external",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/svm/_base.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/svm/_base.py",
       "evidence": [
         "external-native-bound:libsvm",
         "numpy-bound:np."
@@ -2365,7 +2365,7 @@
       "operation": "fit",
       "execution_class": "external-native-bound",
       "ownership": "external",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/svm/_base.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/svm/_base.py",
       "evidence": [
         "external-native-bound:libsvm",
         "numpy-bound:np."
@@ -2381,13 +2381,13 @@
       "operation": "fit",
       "execution_class": "external-native-bound",
       "ownership": "external",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.13/x64/lib/python3.12/site-packages/sklearn/svm/_classes.py",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/svm/_classes.py",
       "evidence": [
         "external-native-bound:liblinear",
         "numpy-bound:np."
       ],
       "flow_scikit_status": "present",
-      "priority_score": 7.472,
+      "priority_score": 7.049,
       "disposition": "retain-native",
       "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
     }
