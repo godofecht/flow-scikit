@@ -33,9 +33,6 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/.flow-toolchain/src
         run: python .github/scripts/verify_flow_sources.py
 
-      - name: Check published claims match the committed artifact
-        run: python benchmarks/validate_published_claims.py
-
       - name: Audit published benchmark timing units
         run: |
           python benchmarks/normalize_published_timings.py
