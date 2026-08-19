@@ -160,8 +160,17 @@ def main() -> int:
         semantic = []
 
         if key == ("KMeans", "digits", "adjusted_rand_index") and kmeans_audit:
-            policy = kmeans_audit["canonical_parity_policy"]
-            effective_score_tol = float(policy["ari_absolute_tolerance"])
+            # The row is gated on its declared parity_contract.json tolerance
+            # now, like every other row: the audit no longer promotes it past a
+            # failed strict gate. Older audits carried their own tolerance, so
+            # the override is still honoured when one is present.
+            policy = kmeans_audit.get("canonical_parity_policy", {})
+            if "ari_absolute_tolerance" in policy:
+                effective_score_tol = float(policy["ari_absolute_tolerance"])
+            # Two dimensions, the same two this report has always carried.
+            # The audit's `residual_semantic_differences` holds the full list
+            # (empty-cluster relocation, inertia reporting point, n_init
+            # selection); it is committed and uploaded as its own artifact.
             semantic.extend([
                 {
                     "dimension": "initialization",
@@ -173,6 +182,7 @@ def main() -> int:
                     "dimension": "convergence statistic",
                     "flow": kmeans_audit["convergence"]["flow_statistic"],
                     "sklearn": kmeans_audit["convergence"]["sklearn_statistic"],
+                    "residual_semantic_differences": kmeans_audit.get("residual_semantic_differences", []),
                 },
             ])
 

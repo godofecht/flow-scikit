@@ -298,79 +298,117 @@ function _kmeans_run(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, max_
     }
 }
 
-# K-means++ initialization: picks initial centroids with probability
-# proportional to squared distance from nearest existing centroid.
-function _kmeans_plus_plus_init(X: Matrix, n_clusters: i32, prng_state: u32) -> ptr<ptr<f32> > {
+# Number of candidate centres sampled per step, sklearn's 2 + int(log(k)).
+function _kmeans_sk_pp_trials(n_clusters: i32) -> i32 {
+    if n_clusters < 2 {
+        return 1
+    }
+    let extra: i32 = log((n_clusters as f64)) as i32
+    return 2 + extra
+}
+
+# K-means++ initialization, matching sklearn's _kmeans_plusplus.
+#
+# Two things separate this from a textbook k-means++ and both are load bearing
+# for reproducing a scikit-learn trajectory:
+#
+#   1. Greedy local trials. Every centre after the first is the best of
+#      2 + int(log(k)) sampled candidates, scored by the potential each would
+#      leave behind, rather than a single D^2 draw. One draw per centre has
+#      much higher variance, which on standardized digits is the whole
+#      difference between the two implementations' final partitions.
+#   2. Draw order. The candidates come from MT19937 seeded exactly as numpy's
+#      RandomState, consumed in numpy's order: one random_sample() through the
+#      uniform-weight choice() path for the first centre, then n_local_trials
+#      uniform() draws per subsequent centre. The generator is owned by the
+#      caller and shared across every n_init restart, as sklearn does.
+#
+# The potential and the cumulative weights are accumulated in float32 in index
+# order, which is what numpy's cumsum over the float32 distance array does.
+function _kmeans_sk_pp_init(X: Matrix, n_clusters: i32, rng: ptr<u32>, n_local_trials: i32) -> ptr<ptr<f32> > {
     let n: i32 = X.rows
     let n_features: i32 = X.cols
+    let x_data: ptr<f32> = X.data
     let centroids: ptr<ptr<f32> > = malloc((n_clusters as i64) * 8) as ptr<ptr<f32> >
     for k in 0 to n_clusters {
         centroids[k] = array_new_f32(n_features)
     }
 
-    let mut prng: PRNG = PRNG { state: prng_state }
+    let closest: ptr<f32> = array_new_f32(n)
+    let cand_dist: ptr<f32> = array_new_f32(n)
+    let best_dist: ptr<f32> = array_new_f32(n)
 
-    # Pick first centroid randomly
-    let res0: PRNGResult = prng_int(prng, n)
-    prng = PRNG { state: res0.state }
+    let first: i32 = mt19937_choice_uniform(rng, n)
+    let fbase: i32 = first * n_features
     for j in 0 to n_features {
-        centroids[0][j] = matrix_at(X, res0.value, j)
+        centroids[0][j] = x_data[fbase + j]
     }
 
-    # Squared distances to nearest centroid
-    let dist_sq: ptr<f32> = array_new_f32(n)
+    let mut pot: f32 = 0.0
     for i in 0 to n {
-        let mut d: f32 = 0.0
-        for j in 0 to n_features {
-            let diff: f32 = matrix_at(X, i, j) - centroids[0][j]
-            d = d + diff * diff
-        }
-        dist_sq[i] = d
+        let d: f32 = _kmeans_sqdist(x_data, i * n_features, centroids[0], n_features)
+        closest[i] = d
+        pot = pot + d
     }
 
     for k in 1 to n_clusters {
-        # Sum of squared distances
-        let mut total: f32 = 0.0
-        for i in 0 to n {
-            total = total + dist_sq[i]
-        }
-        if total <= 0.0 {
-            # All points are identical to centroids, pick random
-            let res: PRNGResult = prng_int(prng, n)
-            prng = PRNG { state: res.state }
-            for j in 0 to n_features {
-                centroids[k][j] = matrix_at(X, res.value, j)
-            }
-        } else {
-            # Pick next centroid with probability proportional to dist_sq
-            let res: PRNGResult = prng_int(prng, 2147483647)
-            prng = PRNG { state: res.state }
-            let threshold: f32 = (res.value as f32) / 2147483647.0 * total
-            let mut cumsum: f32 = 0.0
-            let mut chosen: i32 = n - 1
+        let mut best_pot: f32 = 0.0
+        let mut best_idx: i32 = 0 - 1
+
+        for t in 0 to n_local_trials {
+            let u: f64 = mt19937_next_double(rng)
+            let rv: f64 = u * (pot as f64)
+
+            # np.searchsorted(cumsum(closest), rv), side left: the first index
+            # whose cumulative weight reaches rv. Falls back to the last index,
+            # which is what sklearn's clip of an out-of-range id produces.
+            let mut cum: f32 = 0.0
+            let mut cand: i32 = n - 1
             for i in 0 to n {
-                cumsum = cumsum + dist_sq[i]
-                if cumsum >= threshold {
-                    chosen = i
+                cum = cum + closest[i]
+                if (cum as f64) >= rv {
+                    cand = i
                     break
                 }
             }
-            for j in 0 to n_features {
-                centroids[k][j] = matrix_at(X, chosen, j)
+
+            let cbase: i32 = cand * n_features
+            let crow: ptr<f32> = x_data + cbase
+            let mut cand_pot: f32 = 0.0
+            for i in 0 to n {
+                let d: f32 = _kmeans_sqdist(x_data, i * n_features, crow, n_features)
+                let mut v: f32 = d
+                if closest[i] < v {
+                    v = closest[i]
+                }
+                cand_dist[i] = v
+                cand_pot = cand_pot + v
+            }
+
+            # np.argmin keeps the first minimum, so only a strict improvement
+            # displaces the incumbent.
+            if best_idx < 0 || cand_pot < best_pot {
+                best_pot = cand_pot
+                best_idx = cand
+                for i in 0 to n {
+                    best_dist[i] = cand_dist[i]
+                }
             }
         }
-        # Update distances
+
+        let bbase: i32 = best_idx * n_features
+        for j in 0 to n_features {
+            centroids[k][j] = x_data[bbase + j]
+        }
         for i in 0 to n {
-            let mut d: f32 = 0.0
-            for j in 0 to n_features {
-                let diff: f32 = matrix_at(X, i, j) - centroids[k][j]
-                d = d + diff * diff
-            }
-            if d < dist_sq[i] { dist_sq[i] = d }
+            closest[i] = best_dist[i]
         }
+        pot = best_pot
     }
 
-    array_free_f32(dist_sq)
+    array_free_f32(closest)
+    array_free_f32(cand_dist)
+    array_free_f32(best_dist)
     return centroids
 }
 
@@ -446,7 +484,9 @@ function _kmeans_lloyd(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, ma
 }
 
 # KMeans with k-means++ initialization and n_init restarts.
-# Matches sklearn's default init='k-means++', n_init=10.
+# Matches sklearn's init='k-means++' with the given n_init: one MT19937 stream
+# seeded from `seed` is consumed across all restarts, exactly as sklearn's
+# single RandomState is.
 export function kmeans_fit_plus_plus(X: Matrix, n_clusters: i32, max_iter: i32, tol: f32, seed: i32, n_init: i32) -> KMeans {
     let n_features: i32 = X.cols
     let mut best_inertia: f32 = 9999999999.0
@@ -457,9 +497,11 @@ export function kmeans_fit_plus_plus(X: Matrix, n_clusters: i32, max_iter: i32, 
     let best_labels: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
     let mut best_n_iter: i32 = 0
 
+    let rng: ptr<u32> = mt19937_new(seed)
+    let n_local_trials: i32 = _kmeans_sk_pp_trials(n_clusters)
+
     for init in 0 to n_init {
-        let init_seed: u32 = ((seed + init * 17) as u32)
-        let centroids: ptr<ptr<f32> > = _kmeans_plus_plus_init(X, n_clusters, init_seed)
+        let centroids: ptr<ptr<f32> > = _kmeans_sk_pp_init(X, n_clusters, rng, n_local_trials)
         let result: KMeans = _kmeans_lloyd(X, centroids, n_clusters, max_iter, tol)
 
         if result.inertia < best_inertia {
@@ -482,6 +524,8 @@ export function kmeans_fit_plus_plus(X: Matrix, n_clusters: i32, max_iter: i32, 
         free(result.centroids as ptr<void>)
         free(result.labels as ptr<void>)
     }
+
+    mt19937_free(rng)
 
     return KMeans {
         centroids: best_centroids,
