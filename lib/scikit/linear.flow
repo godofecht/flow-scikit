@@ -492,8 +492,27 @@ export struct LogisticRegression {
     classes: ptr<f32>,
     n_classes: i32,
     penalty: Penalty,
-    fitted: bool
+    fitted: bool,
+    n_iter: i32
 }
+
+# Issue #357: which optimizer logistic_regression_fit_solver runs.
+#
+# LBFGS is the default and its behaviour is unchanged. It needs only O(m*d) per
+# iteration, which is why it is the right default for wide data: Newton forms
+# the d x d Hessian at O(m*d^2) and solves it at O(d^3) every iteration.
+#
+# On a low-dimensional problem that cost is small and Newton pays for itself.
+# It converges in far fewer iterations and lands on the same coefficients the
+# textbook update produces, which is what R's glm reports. That matters when a
+# model is being ported between languages.
+#
+# For a binary target Newton's method and iteratively reweighted least squares
+# are the same update written two ways, so LOGISTIC_SOLVER_IRLS names the same
+# solver rather than a second implementation.
+export const LOGISTIC_SOLVER_LBFGS: i32 = 0
+export const LOGISTIC_SOLVER_NEWTON: i32 = 1
+export const LOGISTIC_SOLVER_IRLS: i32 = 1
 
 # Issue #433: turns one row of logits into softmax probabilities in place.
 #
@@ -774,6 +793,7 @@ function lin433_multinomial_fit(X: Matrix, y: ptr<f32>, classes: ptr<f32>, nc: i
     array_free_f32(alpha_lb)
 
     let first_bias: f32 = all_biases[0]
+    let iters_used: i32 = iter
     return LogisticRegression {
         weights: all_weights,
         bias: first_bias,
@@ -782,10 +802,347 @@ function lin433_multinomial_fit(X: Matrix, y: ptr<f32>, classes: ptr<f32>, nc: i
         classes: classes,
         n_classes: nc,
         penalty: penalty,
-        fitted: true
+        fitted: true,
+        n_iter: iters_used
     }
 }
 
+# ============================================================================
+# Issue #357: Newton / IRLS solver for binary logistic regression.
+#
+# Same objective as the LBFGS path: the MEAN log loss over the m training
+# samples plus 0.5 * alpha * ||w||^2, with the intercept left unpenalized. The
+# penalty convention is unchanged, so penalty_l2_from_c(C, m) maps
+# scikit-learn's C onto this solver exactly as it does onto LBFGS (issue #408).
+#
+# The update is the textbook one. With p the fitted probabilities and
+# W = diag(p * (1 - p)),
+#
+#     g = (1/m) X^T (p - y) + alpha * [w; 0]
+#     H = (1/m) X^T W X     + alpha * diag([1..1, 0])
+#     theta <- theta - H^-1 g
+#
+# which is the same step iteratively reweighted least squares takes, written
+# without the working response. The gradient, the Hessian and the solve are all
+# f64; only the iterate itself is f32.
+#
+# Cost is O(m*d^2) to build H and O(d^3) to solve it, every iteration, against
+# O(m*d) for LBFGS. That is why LBFGS remains the default. On a
+# low-dimensional problem the d^2 and d^3 terms are small, Newton converges in
+# a handful of iterations, and it reaches the coefficients R's glm reports.
+#
+# The Hessian this builds is the observed Fisher information. Its inverse,
+# divided by m, is the coefficient covariance matrix, which is what issue #353
+# needs for standard errors. This function does not expose it; #353 is not
+# implemented here.
+#
+# Helper names carry lin357 because non-exported functions sharing a name
+# across modules collide in the generated C (compiler bug #465).
+# ============================================================================
+
+# Log loss for one sample, in the form that cannot overflow:
+#
+#     log(1 + exp(z)) - label * z  =  max(z, 0) + log(1 + exp(-|z|)) - label * z
+#
+# exp() and log() live in this helper rather than at the call site because the
+# transpiler miscompiles them inside a nested while loop (compiler bug #421).
+function lin357_logloss_term(z: f32, label: f32) -> f32 {
+    let mut az: f32 = z
+    if az < 0.0 { az = 0.0 - z }
+    let mut mz: f32 = 0.0
+    if z > 0.0 { mz = z }
+    let one: f64 = 1.0
+    let e: f64 = exp((0.0 - az) as f64)
+    let soft: f32 = log(one + e) as f32
+    return mz + soft - label * z
+}
+
+# Penalized mean log loss at theta. Leaves the logits in z_arr, which the
+# caller reuses for the next iteration's probabilities.
+function lin357_objective(X_aug: ptr<f32>, m: i32, d: i32, n: i32, theta: ptr<f32>, label: ptr<f32>, z_arr: ptr<f32>, l2_coeff: f32) -> f32 {
+    blas_matvec(X_aug, m, d, theta, z_arr, 1.0, 0.0)
+    let mut total: f32 = 0.0
+    for i in 0 to m {
+        total = total + lin357_logloss_term(z_arr[i], label[i])
+    }
+    let mut reg: f32 = 0.0
+    for j in 0 to n {
+        reg = reg + theta[j] * theta[j]
+    }
+    return total / (m as f32) + 0.5 * l2_coeff * reg
+}
+
+# Solves (H + ridge*I) delta = -g, raising ridge until the step is usable.
+#
+# A perfectly collinear design makes H singular. That system is still
+# consistent: the gradient is X^T r, which lies in the row space of the design,
+# and the row space is exactly the orthogonal complement of the null space of a
+# symmetric H. _solve_f64 meets the zero pivot, puts a zero in that coordinate
+# and solves the rest, which is a genuine Newton step for the reduced problem
+# and leaves the fitted linear predictor unchanged. The residual check below
+# confirms that: for the consistent singular case it is zero and no ridge is
+# added.
+#
+# Two things can still go wrong, and both are caught here.
+#
+#   - The pivot lands just above the zero threshold instead of just below it.
+#     The solve then returns a step with an enormous component along the
+#     near-null direction. That component does not change any prediction, so
+#     the objective cannot reject it, and the coefficients would wander off
+#     while the fit stayed still. A step far larger than the current iterate is
+#     treated as a failed solve.
+#   - The solve returns a NaN.
+#
+# On either failure a ridge is added to the diagonal and the solve is retried,
+# starting at 1e-8 of the mean diagonal and multiplying by 100 each attempt.
+# That is Levenberg damping: the damped system is positive definite, so the
+# step exists, is finite and is a descent direction.
+#
+# Returns the ridge that was accepted, or -1.0 if no attempt gave a usable
+# step, in which case the caller falls back to a gradient step.
+function lin357_damped_solve(H: ptr<f64>, g: ptr<f64>, delta: ptr<f64>, A: ptr<f64>, d: i32, theta_scale: f64) -> f64 {
+    let mut gnorm: f64 = 0.0
+    for j in 0 to d { gnorm = gnorm + g[j] * g[j] }
+    gnorm = sqrt(gnorm)
+
+    let mut trace: f64 = 0.0
+    for j in 0 to d { trace = trace + H[j * d + j] }
+    let mut scale: f64 = trace / (d as f64)
+    if scale < 0.000000000001 { scale = 0.000000000001 }
+
+    let mut ridge: f64 = 0.0
+    let mut attempt: i32 = 0
+    while attempt < 8 {
+        for j in 0 to d {
+            for k in 0 to d { A[j * d + k] = H[j * d + k] }
+            A[j * d + j] = A[j * d + j] + ridge
+            delta[j] = 0.0 - g[j]
+        }
+        _solve_f64(A, delta, d)
+
+        let mut finite: bool = true
+        let mut resid: f64 = 0.0
+        let mut dmax: f64 = 0.0
+        for j in 0 to d {
+            if delta[j] != delta[j] { finite = false }
+            let ad: f64 = fabs(delta[j])
+            if ad > dmax { dmax = ad }
+            let mut s: f64 = g[j] + ridge * delta[j]
+            for k in 0 to d { s = s + H[j * d + k] * delta[k] }
+            resid = resid + s * s
+        }
+        resid = sqrt(resid)
+
+        let bounded: bool = dmax <= 1000000.0 * (theta_scale + 1.0)
+        if finite && bounded && resid <= 0.0001 * gnorm + 0.000000000000001 {
+            return ridge
+        }
+
+        if ridge == 0.0 {
+            ridge = 0.00000001 * scale
+        } else {
+            ridge = ridge * 100.0
+        }
+        attempt = attempt + 1
+    }
+    return -1.0
+}
+
+# Newton / IRLS fit for one or two classes, one binary model per class.
+# Returns the same layout logistic_regression_fit returns.
+function lin357_newton_fit(X: Matrix, y: ptr<f32>, classes: ptr<f32>, nc: i32, epochs: i32, penalty: Penalty) -> LogisticRegression {
+    let n: i32 = X.cols
+    let m: i32 = X.rows
+    let d: i32 = n + 1
+
+    let all_weights: ptr<f32> = array_new_f32(nc * n)
+    let all_biases: ptr<f32> = array_new_f32(nc)
+    for i in 0 to nc * n { all_weights[i] = 0.0 }
+    for i in 0 to nc { all_biases[i] = 0.0 }
+
+    # X_aug = [X | 1], row-major m x d, exactly as the LBFGS path builds it.
+    let X_aug: ptr<f32> = malloc((m as i64) * (d as i64) * 4 + 128) as ptr<f32>
+    let x_data: ptr<f32> = X.data
+    let x_stride: i32 = X.cols
+    for i in 0 to m {
+        let src: i32 = i * x_stride
+        let dst: i32 = i * d
+        for j in 0 to n {
+            X_aug[dst + j] = x_data[src + j]
+        }
+        X_aug[dst + n] = 1.0
+    }
+
+    let theta: ptr<f32> = array_new_f32(d)
+    let theta_prev: ptr<f32> = array_new_f32(d)
+    let label_arr: ptr<f32> = array_new_f32(m)
+    let z_arr: ptr<f32> = array_new_f32(m)
+    let err_arr: ptr<f32> = array_new_f32(m)
+    let wt_arr: ptr<f32> = array_new_f32(m)
+
+    let grad: ptr<f64> = malloc((d as i64) * 8 + 128) as ptr<f64>
+    let delta: ptr<f64> = malloc((d as i64) * 8 + 128) as ptr<f64>
+    let hess: ptr<f64> = malloc((d as i64) * (d as i64) * 8 + 128) as ptr<f64>
+    let hcopy: ptr<f64> = malloc((d as i64) * (d as i64) * 8 + 128) as ptr<f64>
+
+    let l2_coeff: f32 = 0.0
+    if penalty.kind == PENALTY_L2 || penalty.kind == PENALTY_ELASTICNET {
+        l2_coeff = penalty.alpha * (1.0 - penalty.l1_ratio)
+    }
+
+    # Newton needs far fewer iterations than LBFGS, so epochs is honoured down
+    # to 1 rather than being floored at 10.
+    let mut max_iter: i32 = epochs
+    if max_iter > 100 { max_iter = 100 }
+    if max_iter < 1 { max_iter = 1 }
+
+    let inv_m: f64 = 1.0 / (m as f64)
+    let l2_f64: f64 = l2_coeff as f64
+    let mut iters_used: i32 = 0
+
+    for c in 0 to nc {
+        for j in 0 to d { theta[j] = 0.0 }
+
+        let target: f32 = classes[c]
+        for i in 0 to m {
+            label_arr[i] = 0.0
+            if y[i] == target { label_arr[i] = 1.0 }
+        }
+
+        let mut fobj: f32 = lin357_objective(X_aug, m, d, n, theta, label_arr, z_arr, l2_coeff)
+        let mut iter: i32 = 0
+        let mut converged: bool = false
+
+        while iter < max_iter && not converged {
+            # z_arr already holds the logits at theta.
+            for i in 0 to m {
+                let pi: f32 = sigmoid(z_arr[i])
+                err_arr[i] = pi - label_arr[i]
+                let mut wi: f32 = pi * (1.0 - pi)
+                # A saturated probability drives the weight to zero and takes a
+                # row out of the Hessian entirely. Flooring it keeps H positive
+                # definite without moving a converged fit.
+                if wi < 0.0000001 { wi = 0.0000001 }
+                wt_arr[i] = wi
+            }
+
+            for j in 0 to d { grad[j] = 0.0 }
+            for i in 0 to m {
+                let base: i32 = i * d
+                let e: f64 = err_arr[i] as f64
+                for j in 0 to d {
+                    grad[j] = grad[j] + (X_aug[base + j] as f64) * e
+                }
+            }
+            for j in 0 to d { grad[j] = grad[j] * inv_m }
+            for j in 0 to n { grad[j] = grad[j] + l2_f64 * (theta[j] as f64) }
+
+            let mut gnorm: f64 = 0.0
+            for j in 0 to d { gnorm = gnorm + grad[j] * grad[j] }
+            gnorm = sqrt(gnorm)
+            if gnorm < 0.000001 { converged = true; break }
+
+            for j in 0 to d * d { hess[j] = 0.0 }
+            for i in 0 to m {
+                let base: i32 = i * d
+                let wi: f64 = wt_arr[i] as f64
+                for j in 0 to d {
+                    let xw: f64 = (X_aug[base + j] as f64) * wi
+                    for k in j to d {
+                        hess[j * d + k] = hess[j * d + k] + xw * (X_aug[base + k] as f64)
+                    }
+                }
+            }
+            for j in 0 to d {
+                for k in j to d {
+                    let v: f64 = hess[j * d + k] * inv_m
+                    hess[j * d + k] = v
+                    hess[k * d + j] = v
+                }
+            }
+            for j in 0 to n { hess[j * d + j] = hess[j * d + j] + l2_f64 }
+
+            let mut theta_scale: f64 = 0.0
+            for j in 0 to d {
+                let at: f32 = theta[j]
+                let mut aat: f64 = at as f64
+                if aat < 0.0 { aat = 0.0 - aat }
+                if aat > theta_scale { theta_scale = aat }
+            }
+            let ridge: f64 = lin357_damped_solve(hess, grad, delta, hcopy, d, theta_scale)
+            if ridge < 0.0 {
+                # No usable Newton step. Fall back to a scaled gradient step so
+                # the fit still moves downhill instead of stopping on garbage.
+                for j in 0 to d { delta[j] = (0.0 - grad[j]) / (gnorm + 0.000000001) }
+            }
+
+            for j in 0 to d { theta_prev[j] = theta[j] }
+
+            # Backtracking guard. A full Newton step is the common case; a step
+            # that raises the objective is halved until it does not.
+            let mut step: f32 = 1.0
+            let mut accepted: bool = false
+            let mut bt: i32 = 0
+            while bt < 12 && not accepted {
+                for j in 0 to d { theta[j] = theta_prev[j] + step * (delta[j] as f32) }
+                let f_new: f32 = lin357_objective(X_aug, m, d, n, theta, label_arr, z_arr, l2_coeff)
+                if f_new == f_new && f_new <= fobj {
+                    fobj = f_new
+                    accepted = true
+                } else {
+                    step = step * 0.5
+                }
+                bt = bt + 1
+            }
+
+            if accepted {
+                let mut dn: f32 = 0.0
+                for j in 0 to d {
+                    let dj: f32 = theta[j] - theta_prev[j]
+                    dn = dn + dj * dj
+                }
+                if sqrt_f32(dn) < 0.0000001 { converged = true }
+            } else {
+                for j in 0 to d { theta[j] = theta_prev[j] }
+                converged = true
+            }
+
+            iter = iter + 1
+        }
+
+        if iter > iters_used { iters_used = iter }
+
+        for j in 0 to n {
+            all_weights[c * n + j] = theta[j]
+        }
+        all_biases[c] = theta[n]
+    }
+
+    free(X_aug as ptr<void>)
+    array_free_f32(theta)
+    array_free_f32(theta_prev)
+    array_free_f32(label_arr)
+    array_free_f32(z_arr)
+    array_free_f32(err_arr)
+    array_free_f32(wt_arr)
+    free(grad as ptr<void>)
+    free(delta as ptr<void>)
+    free(hess as ptr<void>)
+    free(hcopy as ptr<void>)
+
+    let first_bias: f32 = all_biases[0]
+    return LogisticRegression {
+        weights: all_weights,
+        bias: first_bias,
+        biases: all_biases,
+        n_features: n,
+        classes: classes,
+        n_classes: nc,
+        penalty: penalty,
+        fitted: true,
+        n_iter: iters_used
+    }
+}
 # Fits a logistic regression classifier.
 #
 # Two or fewer classes: one binary model per class, one-vs-rest. The objective
@@ -800,7 +1157,28 @@ function lin433_multinomial_fit(X: Matrix, y: ptr<f32>, classes: ptr<f32>, nc: i
 # To match scikit-learn's C on the same data, build the penalty with
 # penalty_l2_from_c(C, m) rather than passing C or 1/C as alpha directly. See
 # issue #408.
+#
+# The solver is LBFGS. Issue #357: call logistic_regression_fit_solver to ask
+# for Newton / IRLS instead.
 export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, epochs: i32, lr: f32, penalty: Penalty) -> LogisticRegression {
+    return logistic_regression_fit_solver(X, y, n_classes, epochs, lr, penalty, 0)
+}
+
+# Issue #357: logistic_regression_fit with the solver named explicitly.
+#
+# solver is LOGISTIC_SOLVER_LBFGS (0) or LOGISTIC_SOLVER_NEWTON (1).
+# LOGISTIC_SOLVER_IRLS is the same value as LOGISTIC_SOLVER_NEWTON: for a
+# binary target the two are the same update. Anything else is treated as
+# LBFGS. Pass the literal rather than the constant when calling through the
+# scikit.flow umbrella, because an export const is not transitively visible
+# through imports.
+#
+# The Newton solver covers the one-and-two-class case, which is the case the
+# textbook update and R's glm describe. With more than two classes the fit is
+# the joint multinomial softmax of issue #433 and runs LBFGS whichever solver
+# was asked for; a one-vs-rest Newton fit there would optimise a different
+# objective and disagree with scikit-learn.
+export function logistic_regression_fit_solver(X: Matrix, y: ptr<f32>, n_classes: i32, epochs: i32, lr: f32, penalty: Penalty, solver: i32) -> LogisticRegression {
     let n: i32 = X.cols
     let m: i32 = X.rows
 
@@ -818,6 +1196,11 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
     # scikit-learn also fits a single binary model.
     if nc > 2 {
         return lin433_multinomial_fit(X, y, classes, nc, epochs, penalty)
+    }
+
+    # Issue #357.
+    if solver == LOGISTIC_SOLVER_NEWTON {
+        return lin357_newton_fit(X, y, classes, nc, epochs, penalty)
     }
 
     let all_weights: ptr<f32> = array_new_f32(nc * n)
@@ -875,6 +1258,10 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
     if max_iter < 10 { max_iter = 10 }
 
     let inv_m: f32 = 1.0 / (m as f32)
+
+    # Issue #357: reported as n_iter, the worst case over the one-vs-rest
+    # subproblems. It is read only after the fit and changes no arithmetic.
+    let mut iters_used: i32 = 0
 
     for c in 0 to nc {
         for j in 0 to d { theta[j] = 0.0 }
@@ -1021,6 +1408,8 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
             iter = iter + 1
         }
 
+        if iter > iters_used { iters_used = iter }
+
         for j in 0 to n {
             all_weights[c * n + j] = theta[j]
         }
@@ -1052,7 +1441,8 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
         classes: classes,
         n_classes: nc,
         penalty: penalty,
-        fitted: true
+        fitted: true,
+        n_iter: iters_used
     }
 }
 
@@ -1126,6 +1516,8 @@ export function logistic_regression_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_c
         array_free_f32(w)
     }
 
+    # Fixed-length gradient descent: it runs every epoch and never tests for
+    # convergence, so the iteration count is the epoch count it was given.
     return LogisticRegression {
         weights: all_weights,
         bias: all_biases[0],
@@ -1134,7 +1526,8 @@ export function logistic_regression_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_c
         classes: classes,
         n_classes: nc,
         penalty: penalty,
-        fitted: true
+        fitted: true,
+        n_iter: epochs
     }
 }
 
