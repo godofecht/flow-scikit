@@ -1,7 +1,33 @@
-# Regression test for the optimized DictionaryLearning.transform (issue #265).
+# Regression test for the optimized DictionaryLearning.transform
+# (issues #265 and #397).
+#
 # Checks exact hand-computed sparse codes, soft-threshold edge cases, a wider
-# than n_features input, and bit-exact element-wise parity against the original
-# naive triple-loop formulation across several workload sizes.
+# than n_features input, and parity against the original naive triple-loop
+# formulation across several workload sizes.
+#
+# Parity comes in two grades because the implementation has two paths.
+#
+# Below the n * n_components * n_features work threshold the scalar kernel runs
+# and parity is bit-exact, element for element.
+#
+# Above it the projection is one cblas_sgemm. BLAS reassociates the inner sums,
+# so coefficient values can differ by a few f32 ulps from the scalar loop, and
+# cross-BLAS bit identity is not a valid contract (PR #377). What matters for
+# this estimator is the SPARSITY PATTERN, since a soft threshold against alpha
+# turns a last-ulp difference into a discrete zero/non-zero change. So the gemm
+# path is checked three ways:
+#
+#   1. the set of exactly-zero coefficients must match the reference element for
+#      element, with no tolerance,
+#   2. non-zero coefficients must agree to 1e-5 absolute and 1e-4 relative,
+#      the tolerance PR #377 established,
+#   3. the fixture itself must keep every coefficient at least 1e-5 away from
+#      alpha. That margin is what makes check 1 safe on a BLAS this machine
+#      cannot run: the largest drift any accumulation-order perturbation
+#      produced on these shapes was 1.5e-6, so the fixture has at least a 7x
+#      margin over it. If a future fixture edit drifts a coefficient onto the
+#      threshold, check 3 fails and says so rather than letting check 1 turn
+#      into a coin flip that depends on which BLAS built the binary.
 
 import "lib/scikit/scikit.flow"
 
@@ -63,8 +89,30 @@ function opt_dl_tf_fill(X: Matrix, seed: i32) -> void {
     }
 }
 
-# Element-wise exact comparison against the reference implementation.
-function opt_dl_tf_parity(n: i32, p: i32, k: i32, alpha: f32, seed: i32) -> i32 {
+# Smallest distance any coefficient's raw projection sits from the threshold.
+# If this is comfortably larger than the drift a BLAS can introduce, the
+# sparsity pattern cannot depend on which BLAS is linked.
+function opt_dl_tf_min_margin(model: DictionaryLearning, X: Matrix) -> f32 {
+    let mut best: f32 = 1000000.0
+    for i in 0 to X.rows {
+        for c in 0 to model.n_components {
+            let mut dot: f32 = 0.0
+            for j in 0 to model.n_features {
+                dot = dot + matrix_at(X, i, j) * model.dictionary[c][j]
+            }
+            let mut gap: f32 = (fabs((dot) as f64) as f32) - model.alpha
+            if gap < 0.0 { gap = -gap }
+            if gap < best { best = gap }
+        }
+    }
+    return best
+}
+
+# Compare against the reference implementation. require_exact selects the
+# below-threshold contract (bit-exact) or the gemm contract (identical sparsity
+# pattern, values within tolerance, fixture clear of the threshold).
+# Returns 0 on success, otherwise a code naming the check that failed.
+function opt_dl_tf_parity(n: i32, p: i32, k: i32, alpha: f32, seed: i32, require_exact: bool) -> i32 {
     let X: Matrix = matrix_new(n, p)
     opt_dl_tf_fill(X, seed)
 
@@ -86,23 +134,39 @@ function opt_dl_tf_parity(n: i32, p: i32, k: i32, alpha: f32, seed: i32) -> i32 
     let got: Matrix = dictionary_learning_transform(model, X)
     let want: Matrix = opt_dl_tf_reference(model, X)
 
-    let mut bad: i32 = 0
-    if got.rows != want.rows || got.cols != want.cols { bad = 1 }
-    if bad == 0 {
+    let mut code: i32 = 0
+    if got.rows != want.rows || got.cols != want.cols { code = 1 }
+
+    if code == 0 {
         for i in 0 to n {
             for c in 0 to k {
-                if matrix_at(got, i, c) != matrix_at(want, i, c) {
-                    bad = bad + 1
+                let g: f32 = matrix_at(got, i, c)
+                let w: f32 = matrix_at(want, i, c)
+                # 2: sparsity pattern must match exactly, on both paths.
+                if (g == 0.0) != (w == 0.0) { code = 2 }
+                if require_exact {
+                    # 3: below the work threshold the scalar kernel is unchanged.
+                    if g != w { code = 3 }
+                } else {
+                    # 4: value tolerance, 1e-5 absolute plus 1e-4 relative.
+                    let tol: f32 = 0.00001 + 0.0001 * (fabs((w) as f64) as f32)
+                    if not opt_dl_tf_close(g, w, tol) { code = 4 }
                 }
             }
         }
+    }
+
+    # 5: the fixture must not park a coefficient on the threshold, or check 2
+    # would be asserting something the arithmetic cannot guarantee.
+    if code == 0 {
+        if opt_dl_tf_min_margin(model, X) <= 0.00001 { code = 5 }
     }
 
     matrix_free(got)
     matrix_free(want)
     dictionary_learning_free(model)
     matrix_free(X)
-    return bad
+    return code
 }
 
 function main() -> i32 {
@@ -184,29 +248,39 @@ function main() -> i32 {
     matrix_free(X1)
     dictionary_learning_free(m1)
 
-    # --- 4. Element-wise parity with the reference implementation ----------
-    # Small workload.
-    if opt_dl_tf_parity(100, 8, 4, 0.1, 3) != 0 {
+    # --- 4. Parity with the reference implementation -----------------------
+    # The work threshold is n * n_components * n_features >= 65536.
+    #
+    # Below it, bit-exact. 100 * 4 * 8 = 3200.
+    if opt_dl_tf_parity(100, 8, 4, 0.1, 3, true) != 0 {
         println("FAIL: parity mismatch on small workload")
         return 1
     }
-    # Realistic workload.
-    if opt_dl_tf_parity(600, 16, 8, 0.1, 11) != 0 {
+    # 400 * 8 * 16 = 51200, still the scalar kernel, and alpha large enough
+    # that most codes are thresholded to zero.
+    if opt_dl_tf_parity(400, 16, 8, 0.9, 5, true) != 0 {
+        println("FAIL: parity mismatch under heavy thresholding")
+        return 1
+    }
+    # Above it, the gemm path: identical sparsity pattern, values within
+    # tolerance, fixture clear of the threshold. 600 * 8 * 16 = 76800.
+    if opt_dl_tf_parity(600, 16, 8, 0.1, 11, false) != 0 {
         println("FAIL: parity mismatch on realistic workload")
         return 1
     }
-    # Wide features.
-    if opt_dl_tf_parity(500, 64, 10, 0.05, 29) != 0 {
+    # Wide features. 500 * 10 * 64 = 320000.
+    if opt_dl_tf_parity(500, 64, 10, 0.05, 29, false) != 0 {
         println("FAIL: parity mismatch on wide-feature workload")
         return 1
     }
-    # alpha large enough that most codes are thresholded to zero.
-    if opt_dl_tf_parity(400, 16, 8, 0.9, 5) != 0 {
-        println("FAIL: parity mismatch under heavy thresholding")
+    # Larger projection. 1000 * 16 * 32 = 512000.
+    if opt_dl_tf_parity(1000, 32, 16, 0.08, 13, false) != 0 {
+        println("FAIL: parity mismatch on large workload")
         return 1
     }
 
     # --- 5. End-to-end with a fitted model ---------------------------------
+    # 300 * 6 * 12 = 21600, below the threshold, so bit-exact.
     let X5: Matrix = matrix_new(300, 12)
     opt_dl_tf_fill(X5, 17)
     let fitted: DictionaryLearning = dictionary_learning_fit(X5, 6, 0.1, 5, 0.0001, 42)
@@ -224,6 +298,46 @@ function main() -> i32 {
     matrix_free(want5)
     dictionary_learning_free(fitted)
     matrix_free(X5)
+
+    # --- 6. End-to-end with a fitted model on the gemm path ----------------
+    # 800 * 10 * 20 = 160000. n_zero_coefs is the reported quantity, so the
+    # count and the pattern behind it are both asserted.
+    let X6: Matrix = matrix_new(800, 20)
+    opt_dl_tf_fill(X6, 23)
+    let fitted6: DictionaryLearning = dictionary_learning_fit(X6, 10, 0.05, 5, 0.0001, 42)
+    let got6: Matrix = dictionary_learning_transform(fitted6, X6)
+    let want6: Matrix = opt_dl_tf_reference(fitted6, X6)
+    let mut zeros_got: i32 = 0
+    let mut zeros_want: i32 = 0
+    for i in 0 to 800 {
+        for c in 0 to 10 {
+            let g: f32 = matrix_at(got6, i, c)
+            let w: f32 = matrix_at(want6, i, c)
+            if g == 0.0 { zeros_got = zeros_got + 1 }
+            if w == 0.0 { zeros_want = zeros_want + 1 }
+            if (g == 0.0) != (w == 0.0) {
+                println("FAIL: sparsity pattern differs on fitted model, gemm path")
+                return 1
+            }
+            let tol6: f32 = 0.00001 + 0.0001 * (fabs((w) as f64) as f32)
+            if not opt_dl_tf_close(g, w, tol6) {
+                println("FAIL: coefficient value out of tolerance on fitted model")
+                return 1
+            }
+        }
+    }
+    if zeros_got != zeros_want {
+        println("FAIL: n_zero_coefs differs on fitted model, gemm path")
+        return 1
+    }
+    if opt_dl_tf_min_margin(fitted6, X6) <= 0.00001 {
+        println("FAIL: fitted fixture parks a coefficient on the alpha threshold")
+        return 1
+    }
+    matrix_free(got6)
+    matrix_free(want6)
+    dictionary_learning_free(fitted6)
+    matrix_free(X6)
 
     println("PASS: DictionaryLearning.transform optimization")
     return 0

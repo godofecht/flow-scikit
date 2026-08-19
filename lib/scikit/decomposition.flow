@@ -1729,6 +1729,72 @@ export function dictionary_learning_transform(model: DictionaryLearning, X: Matr
     let xstride: i32 = X.cols
     let out: ptr<f32> = result.data
 
+    # The projection is X * D^T, which above a work threshold is one
+    # cblas_sgemm on a d x k packed dictionary. That is issue #397.
+    #
+    # BLAS reassociates the inner sums, so a coefficient can land a few f32 ulps
+    # away from the scalar dot product. Cross-BLAS bit identity is not a valid
+    # contract (PR #377). What is specific to this estimator is that the result
+    # then meets a soft threshold against alpha, so drift can in principle move
+    # a coefficient across the threshold and change the sparsity pattern rather
+    # than only its digits.
+    #
+    # That was measured on #397 before this landed. Under Accelerate the gemm is
+    # bit-identical to the scalar loop, so the accumulation order was perturbed
+    # deliberately (reverse sum, four SIMD lanes, f64 accumulation) to stand in
+    # for what a different BLAS does. Across 366k coefficients on eleven shape
+    # and data combinations: zero sparsity flips, largest drift 1.5e-6
+    # absolute, and 73 to 91 percent of coefficient values differing at the
+    # same time, which is what the old exact test was catching. A sweep
+    # of 20000 alphas over 128000 coefficients found 190 flips in 2.56e9
+    # coefficient-threshold pairs, 0.074 per million, never more than 2 at any
+    # single alpha. A flip needs alpha to lie between the two magnitudes, so
+    # every flip is confined to a coefficient already within the dot product's
+    # own rounding error of the threshold, where the scalar answer was arbitrary
+    # too. tests/test_opt_dictionarylearning_transform.flow asserts the sparsity
+    # pattern element for element and asserts the fixtures keep a margin from
+    # alpha that is far wider than that drift.
+    #
+    # Below the threshold the scalar kernel runs unchanged and stays
+    # bit-identical to the previous code, and skips the ~0.1 ms OpenBLAS thread
+    # dispatch that would otherwise cost more than the loop it replaced. The
+    # gate is n * k * d, the projection work, in the same product form KMeans
+    # uses in cluster.flow.
+    let work: i64 = (n as i64) * (k as i64) * (d as i64)
+    if work >= 65536 {
+        # Pack the dictionary into a contiguous d x k row-major buffer.
+        let W: Matrix = matrix_new(d, k)
+        let wdata: ptr<f32> = W.data
+        for c in 0 to k {
+            let atom: ptr<f32> = model.dictionary[c]
+            for j in 0 to d {
+                wdata[j * k + c] = atom[j]
+            }
+        }
+        # 101 = CblasRowMajor, 111 = CblasNoTrans. Literals because an
+        # export const is not transitively visible through imports. lda is
+        # X.cols, so a wider X still contributes only its first d columns.
+        cblas_sgemm(101, 111, 111, n, k, d, 1.0, xdata, xstride, wdata, k, 0.0, out, k)
+        matrix_free(W)
+
+        for i in 0 to n {
+            let obase: i32 = i * k
+            for c in 0 to k {
+                let dot: f32 = out[obase + c]
+                if (fabs((dot) as f64) as f32) > alpha {
+                    if dot > 0 {
+                        out[obase + c] = dot - alpha
+                    } else {
+                        out[obase + c] = dot + alpha
+                    }
+                } else {
+                    out[obase + c] = 0.0
+                }
+            }
+        }
+        return result
+    }
+
     for i in 0 to n {
         let xbase: i32 = i * xstride
         let obase: i32 = i * k
