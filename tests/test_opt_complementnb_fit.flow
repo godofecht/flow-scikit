@@ -1,0 +1,175 @@
+import "lib/scikit/scikit.flow"
+
+extern {
+    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+    function printf(fmt: string, ...) -> i32
+}
+
+const TIME_UTC: i32 = 1
+
+function cnb_now_ns() -> i64 {
+    let ts: ptr<i64> = malloc(16) as ptr<i64>
+    timespec_get(ts, TIME_UTC)
+    let value: i64 = ts[0] * 1000000000 + ts[1]
+    free(ts as ptr<void>)
+    return value
+}
+
+function cnb_reference_fit_loop(X: Matrix, y: ptr<f32>, n_classes: i32, alpha: f32) -> ptr<ptr<f32> > {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    let class_feature_counts: ptr<ptr<f32> > = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
+    for c in 0 to n_classes {
+        class_feature_counts[c] = array_new_f32(p)
+        for j in 0 to p { class_feature_counts[c][j] = 0.0 }
+    }
+
+    for i in 0 to n {
+        let c: i32 = y[i] as i32
+        for j in 0 to p {
+            class_feature_counts[c][j] = class_feature_counts[c][j] + matrix_at(X, i, j)
+        }
+    }
+
+    let total_counts: ptr<f32> = array_new_f32(p)
+    for j in 0 to p {
+        for c in 0 to n_classes {
+            total_counts[j] = total_counts[j] + class_feature_counts[c][j]
+        }
+    }
+
+    let feature_log_prob: ptr<ptr<f32> > = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
+
+    for c in 0 to n_classes {
+        feature_log_prob[c] = array_new_f32(p)
+        for j in 0 to p {
+            let complement_count: f32 = total_counts[j] - class_feature_counts[c][j]
+            let smoothed: f32 = complement_count + alpha
+            let mut total_complement: f32 = 0.0
+            for k in 0 to p {
+                total_complement = total_complement + (total_counts[k] - class_feature_counts[c][k]) + alpha
+            }
+            if total_complement > 0 {
+                feature_log_prob[c][j] = -log((smoothed / total_complement) as f64) as f32
+            } else {
+                feature_log_prob[c][j] = 0.0
+            }
+        }
+    }
+
+    for c in 0 to n_classes { array_free_f32(class_feature_counts[c]) }
+    free(class_feature_counts as ptr<void>)
+    array_free_f32(total_counts)
+
+    return feature_log_prob
+}
+
+function cnb_check_exact_parity() -> i32 {
+    let n_train: i32 = 400
+    let p: i32 = 120
+    let n_classes: i32 = 5
+    let alpha: f32 = 1.0
+
+    let train: Matrix = matrix_new(n_train, p)
+    let labels: ptr<f32> = array_new_f32(n_train)
+    for i in 0 to n_train {
+        let cls: i32 = i % n_classes
+        labels[i] = cls as f32
+        for j in 0 to p {
+            let count: i32 = (i * 37 + j * 19 + cls * 23) % 5
+            matrix_set(train, i, j, count as f32)
+        }
+    }
+
+    let model: ComplementNB = complement_nb_fit(train, labels, n_classes, alpha)
+    let ref_log_prob: ptr<ptr<f32> > = cnb_reference_fit_loop(train, labels, n_classes, alpha)
+
+    let mut status: i32 = 0
+    for c in 0 to n_classes {
+        for j in 0 to p {
+            if model.feature_log_prob[c][j] != ref_log_prob[c][j] {
+                println("FAIL: optimized ComplementNB fit changed a feature_log_prob element")
+                status = 1
+            }
+        }
+    }
+
+    if status == 0 {
+        println("OK: ComplementNB fit feature_log_prob exact match")
+    }
+
+    for c in 0 to n_classes { array_free_f32(ref_log_prob[c]) }
+    free(ref_log_prob as ptr<void>)
+    complement_nb_free(model)
+    matrix_free(train)
+    array_free_f32(labels)
+
+    return status
+}
+
+function main() -> i32 {
+    let mut failures: i32 = 0
+    if cnb_check_exact_parity() != 0 {
+        failures = failures + 1
+    }
+
+    if failures != 0 {
+        return 1
+    }
+
+    let n_train: i32 = 800
+    let p: i32 = 128
+    let n_classes: i32 = 10
+    let repeats: i32 = 5
+    let alpha: f32 = 1.0
+
+    let train: Matrix = matrix_new(n_train, p)
+    let labels: ptr<f32> = array_new_f32(n_train)
+    for i in 0 to n_train {
+        let cls: i32 = i % n_classes
+        labels[i] = cls as f32
+        for j in 0 to p {
+            let count: i32 = (i * 37 + j * 19 + cls * 23) % 5
+            matrix_set(train, i, j, count as f32)
+        }
+    }
+
+    for r in 0 to 2 {
+        let warm_model: ComplementNB = complement_nb_fit(train, labels, n_classes, alpha)
+        let warm_ref: ptr<ptr<f32> > = cnb_reference_fit_loop(train, labels, n_classes, alpha)
+        for c in 0 to n_classes { array_free_f32(warm_ref[c]) }
+        free(warm_ref as ptr<void>)
+        complement_nb_free(warm_model)
+    }
+
+    let mut reference_ns: i64 = 0
+    let mut optimized_ns: i64 = 0
+
+    for r in 0 to repeats {
+        let t0: i64 = cnb_now_ns()
+        let ref_output: ptr<ptr<f32> > = cnb_reference_fit_loop(train, labels, n_classes, alpha)
+        let t1: i64 = cnb_now_ns()
+
+        for c in 0 to n_classes { array_free_f32(ref_output[c]) }
+        free(ref_output as ptr<void>)
+
+        let t2: i64 = cnb_now_ns()
+        let opt_model: ComplementNB = complement_nb_fit(train, labels, n_classes, alpha)
+        let t3: i64 = cnb_now_ns()
+
+        complement_nb_free(opt_model)
+
+        reference_ns = reference_ns + (t1 - t0)
+        optimized_ns = optimized_ns + (t3 - t2)
+    }
+
+    let reference_ms: f64 = (reference_ns as f64) / 1000000.0
+    let optimized_ms: f64 = (optimized_ns as f64) / 1000000.0
+    printf("ComplementNB fit A/B: reference=%.6f ms optimized=%.6f ms speedup=%.3fx\n", reference_ms, optimized_ms, reference_ms / optimized_ms)
+
+    matrix_free(train)
+    array_free_f32(labels)
+
+    return 0
+}

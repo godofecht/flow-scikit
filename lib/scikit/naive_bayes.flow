@@ -620,13 +620,13 @@ export function complement_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, alpha:
 
     for c in 0 to n_classes {
         feature_log_prob[c] = array_new_f32(p)
+        let mut total_complement: f32 = 0.0
+        for k in 0 to p {
+            total_complement = total_complement + (total_counts[k] - class_feature_counts[c][k]) + alpha
+        }
         for j in 0 to p {
             let complement_count: f32 = total_counts[j] - class_feature_counts[c][j]
             let smoothed: f32 = complement_count + alpha
-            let total_complement: f32 = 0.0
-            for k in 0 to p {
-                total_complement = total_complement + (total_counts[k] - class_feature_counts[c][k]) + alpha
-            }
             if total_complement > 0 {
                 feature_log_prob[c][j] = -log((smoothed / total_complement) as f64) as f32
             } else {
