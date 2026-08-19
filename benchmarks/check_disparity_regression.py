@@ -150,6 +150,8 @@ def main() -> int:
             "score_abs_diff": row.get("score_abs_diff"),
             "score_tolerance_fraction": row.get("score_tolerance_fraction"),
             "runtime_log2_ratio": row.get("runtime_log2_ratio"),
+            "flow_total_ms": row.get("flow_total_ms"),
+            "sklearn_total_ms": row.get("sklearn_total_ms"),
             "configuration_difference_count": len(row.get("configuration_differences", [])),
             "semantic_difference_count": len(row.get("semantic_differences", [])),
             "strict_diagnostic_status": row.get("strict_diagnostic_status"),
