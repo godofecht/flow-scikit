@@ -1,0 +1,465 @@
+# Regression test for the gemm-backed covariance in pca_fit (issue #361).
+#
+# The check that matters is tight numerical equivalence against the previous
+# scalar covariance loop, kept verbatim below as an independent reference.
+# BLAS implementations are allowed to reassociate floating-point operations
+# internally, so cross-backend bit identity is not a valid contract. That is
+# the rule PR #377 established for the Ridge Gram matrix, and issue #361 was
+# originally shelved for asserting it. What is asserted here instead is the
+# four things benchmarks/parity_contract.json actually governs for PCA:
+# explained variance and its ratios, singular values, reconstruction error
+# through pca_transform / pca_inverse_transform, and sign-aligned components.
+#
+# Component signs get their own explicit check. A different accumulation order
+# can in principle flip an eigenvector, which would break the contract outright
+# rather than drift inside it, and the least stable place for that is a design
+# whose leading eigenvalues are nearly equal. Three of the cases below are
+# built that way: equal column scales, a deliberately near-degenerate leading
+# pair, and exactly duplicated columns.
+#
+# The cases below the covariance work threshold assert exact equality, because
+# there the original scalar kernel still runs and nothing may move at all.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+}
+
+# Reference: the pre-change pca_fit body copied verbatim from the commit before
+# the gemm covariance landed. Same means, same scalar upper-triangle covariance
+# accumulation, same power iteration, same deflation, same ratios.
+function optpg_reference_fit(X: Matrix, n_components: i32) -> PCA {
+    let n_features: i32 = X.cols
+    let n_samples: i32 = X.rows
+    let mean: ptr<f32> = array_new_f32(n_features)
+    let xdata: ptr<f32> = X.data
+
+    # Column sums straight off the row-major buffer. The previous version
+    # allocated, filled and freed an f32[n_samples] column per feature.
+    # Accumulation order per column is unchanged, so the means are identical.
+    for i in 0 to n_samples {
+        let row_base: i32 = i * n_features
+        for j in 0 to n_features {
+            mean[j] = mean[j] + xdata[row_base + j]
+        }
+    }
+    let n_samples_f: f32 = n_samples as f32
+    for j in 0 to n_features {
+        mean[j] = mean[j] / n_samples_f
+    }
+
+    # Covariance is symmetric, so only the upper triangle is accumulated and
+    # then mirrored. Multiplication is commutative, so the mirrored entry is
+    # the same value the old loop computed for (j2, j1).
+    let cov: Matrix = matrix_new(n_features, n_features)
+    let cov_data: ptr<f32> = cov.data
+    let ddof_denom: f32 = (n_samples as f32) - 1.0
+    for j1 in 0 to n_features {
+        for j2 in j1 to n_features {
+            let mut sum: f32 = 0.0
+            for i in 0 to n_samples {
+                let row_base: i32 = i * n_features
+                let d1: f32 = xdata[row_base + j1] - mean[j1]
+                let d2: f32 = xdata[row_base + j2] - mean[j2]
+                sum = sum + d1 * d2
+            }
+            let val: f32 = sum / ddof_denom
+            cov_data[j1 * n_features + j2] = val
+            cov_data[j2 * n_features + j1] = val
+        }
+    }
+
+    let components: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+    let explained_variance: ptr<f32> = array_new_f32(n_components)
+
+    let cov_copy: Matrix = matrix_copy(cov)
+    let cc_data: ptr<f32> = cov_copy.data
+
+    # One reusable work vector for every power iteration and every Rayleigh
+    # quotient, instead of an allocate/free pair per iteration.
+    let work: ptr<f32> = array_new_f32(n_features)
+    let init_component: f32 = 1.0 / sqrt((n_features as f64) as f32)
+
+    for c in 0 to n_components {
+        let eigvec: ptr<f32> = array_new_f32(n_features)
+        for j in 0 to n_features {
+            eigvec[j] = init_component
+        }
+
+        for _ in 0 to 100 {
+            for j1 in 0 to n_features {
+                let cov_row: i32 = j1 * n_features
+                let mut sum: f32 = 0.0
+                for j2 in 0 to n_features {
+                    sum = sum + cc_data[cov_row + j2] * eigvec[j2]
+                }
+                work[j1] = sum
+            }
+
+            let mut norm: f32 = 0.0
+            for j in 0 to n_features {
+                norm = norm + work[j] * work[j]
+            }
+            norm = sqrt(norm as f64) as f32
+            if norm < 0.0000000001 {
+                norm = 1.0
+            }
+            for j in 0 to n_features {
+                eigvec[j] = work[j] / norm
+            }
+        }
+
+        let mut eigval: f32 = 0.0
+        for j1 in 0 to n_features {
+            let cov_row: i32 = j1 * n_features
+            let mut sum: f32 = 0.0
+            for j2 in 0 to n_features {
+                sum = sum + cc_data[cov_row + j2] * eigvec[j2]
+            }
+            work[j1] = sum
+        }
+        for j in 0 to n_features {
+            eigval = eigval + eigvec[j] * work[j]
+        }
+
+        for j1 in 0 to n_features {
+            let cov_row: i32 = j1 * n_features
+            let scaled: f32 = eigval * eigvec[j1]
+            for j2 in 0 to n_features {
+                cc_data[cov_row + j2] = cc_data[cov_row + j2] - scaled * eigvec[j2]
+            }
+        }
+
+        components[c] = eigvec
+        explained_variance[c] = eigval
+    }
+
+    array_free_f32(work)
+
+    let mut total_var: f32 = 0.0
+    for j in 0 to n_features {
+        total_var = total_var + cov_data[j * n_features + j]
+    }
+
+    let explained_variance_ratio: ptr<f32> = array_new_f32(n_components)
+    for c in 0 to n_components {
+        if total_var > 0.0000000001 {
+            explained_variance_ratio[c] = explained_variance[c] / total_var
+        } else {
+            explained_variance_ratio[c] = 0.0
+        }
+    }
+
+    matrix_free(cov)
+    matrix_free(cov_copy)
+
+    let model: PCA = PCA {
+        components: components,
+        n_components: n_components,
+        n_features: n_features,
+        mean: mean,
+        explained_variance: explained_variance,
+        explained_variance_ratio: explained_variance_ratio,
+        total_variance: total_var,
+        fitted: true
+    }
+    return model
+}
+
+
+# The cross-BLAS rule from PR #377: 1e-5 absolute or 1e-4 relative. The
+# absolute term protects quantities near zero, the relative term scales with
+# ordinary magnitudes. Worst drift observed on this corpus was 1.6e-5 relative
+# on an eigenvalue and 7.9e-6 relative on a singular value.
+function optpg_equivalent(a: f32, b: f32) -> bool {
+    let mut d: f32 = a - b
+    if d < 0.0 { d = -d }
+    let mut aa: f32 = a
+    if aa < 0.0 { aa = -aa }
+    let mut bb: f32 = b
+    if bb < 0.0 { bb = -bb }
+    let mut scale: f32 = aa
+    if bb > scale { scale = bb }
+    let rel: f32 = scale * 0.0001
+    let mut tol: f32 = 0.00001
+    if rel > tol { tol = rel }
+    return d <= tol
+}
+
+# Eigenvectors are conditioned by the gap between neighbouring eigenvalues, so
+# a covariance perturbation of a few ulps rotates a component out of a
+# clustered subspace by more than the plain equivalence rule allows. 0.002 is
+# six times the worst drift measured across the cases below and ten times
+# inside the 0.02 component_abs_tolerance_after_sign_alignment that
+# benchmarks/parity_contract.json declares for PCA.
+function optpg_component_close(a: f32, b: f32) -> bool {
+    let mut d: f32 = a - b
+    if d < 0.0 { d = -d }
+    return d <= 0.002
+}
+
+# Sign convention: flip so the largest-magnitude entry is positive.
+function optpg_align(v: ptr<f32>, n: i32) -> void {
+    let mut best: i32 = 0
+    let mut best_abs: f32 = 0.0
+    for j in 0 to n {
+        let mut a: f32 = v[j]
+        if a < 0.0 { a = -a }
+        if a > best_abs {
+            best_abs = a
+            best = j
+        }
+    }
+    if v[best] < 0.0 {
+        for j in 0 to n {
+            v[j] = -v[j]
+        }
+    }
+}
+
+# Mean squared reconstruction error through the public projection round trip.
+function optpg_reconstruction_mse(model: PCA, X: Matrix) -> f32 {
+    let Z: Matrix = pca_transform(model, X)
+    let R: Matrix = pca_inverse_transform(model, Z)
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let xd: ptr<f32> = X.data
+    let rd: ptr<f32> = R.data
+    let mut acc: f64 = 0.0
+    for i in 0 to n {
+        let base: i32 = i * p
+        for j in 0 to p {
+            let d: f64 = (xd[base + j] - rd[base + j]) as f64
+            acc = acc + d * d
+        }
+    }
+    matrix_free(Z)
+    matrix_free(R)
+    return (acc / ((n as f64) * (p as f64))) as f32
+}
+
+# mode 0: geometrically decaying column scales, well separated eigenvalues.
+# mode 1: every column on the same scale, so the eigenvalues cluster.
+# mode 2: the two leading directions deliberately within 5e-5 of each other.
+# mode 3: two columns duplicated exactly, so the spectrum is degenerate.
+function optpg_make(rows: i32, cols: i32, mode: i32, seed: i32) -> Matrix {
+    let m: Matrix = matrix_new(rows, cols)
+    let scales: ptr<f32> = array_new_f32(cols)
+    let mut s: f32 = 40.0
+    for j in 0 to cols {
+        if mode == 1 {
+            scales[j] = 1.0
+        } else {
+            if mode == 2 {
+                if j == 0 { scales[j] = 10.0 }
+                if j == 1 { scales[j] = 10.0005 }
+                if j > 1 { scales[j] = 0.5 }
+            } else {
+                if s < 0.05 { s = 0.05 }
+                scales[j] = s
+                s = s * 0.6
+            }
+        }
+    }
+    let mut state: i32 = seed
+    for i in 0 to rows {
+        let base: i32 = i * cols
+        for j in 0 to cols {
+            state = (state * 1103515 + 12345) % 2147483
+            if state < 0 { state = -state }
+            let r: f32 = ((state % 10000) as f32) / 10000.0
+            m.data[base + j] = (r * 2.0 - 1.0) * scales[j] + ((j % 5) as f32)
+        }
+    }
+    if mode == 3 {
+        for i in 0 to rows {
+            let base: i32 = i * cols
+            m.data[base + 1] = m.data[base]
+            if cols > 4 {
+                m.data[base + 4] = m.data[base + 3]
+            }
+        }
+    }
+    array_free_f32(scales)
+    return m
+}
+
+# exact_required is set for shapes under the covariance work threshold, where
+# the original scalar kernel still runs and nothing may move at all.
+function optpg_case(rows: i32, cols: i32, k: i32, mode: i32, seed: i32, exact_required: bool) -> i32 {
+    let X: Matrix = optpg_make(rows, cols, mode, seed)
+    let got: PCA = pca_fit(X, k)
+    let want: PCA = optpg_reference_fit(X, k)
+    let mut bad: i32 = 0
+
+    for j in 0 to cols {
+        if got.mean[j] != want.mean[j] {
+            bad = bad + 1
+            printf("  mean j=%d reference=%.9g got=%.9g\n", j, want.mean[j] as f64, got.mean[j] as f64)
+        }
+    }
+
+    # 1. explained variance and its ratios, plus the total variance they divide by
+    if not optpg_equivalent(got.total_variance, want.total_variance) {
+        bad = bad + 1
+        printf("  total_variance reference=%.9g got=%.9g\n", want.total_variance as f64, got.total_variance as f64)
+    }
+    for c in 0 to k {
+        if not optpg_equivalent(got.explained_variance[c], want.explained_variance[c]) {
+            bad = bad + 1
+            printf("  explained_variance c=%d reference=%.9g got=%.9g\n", c, want.explained_variance[c] as f64, got.explained_variance[c] as f64)
+        }
+        if not optpg_equivalent(got.explained_variance_ratio[c], want.explained_variance_ratio[c]) {
+            bad = bad + 1
+            printf("  explained_variance_ratio c=%d reference=%.9g got=%.9g\n", c, want.explained_variance_ratio[c] as f64, got.explained_variance_ratio[c] as f64)
+        }
+    }
+
+    # 2. singular values, the scale the parity contract compares: sqrt(eigenvalue * (n - 1))
+    let ddof: f32 = (rows as f32) - 1.0
+    for c in 0 to k {
+        let mut va: f32 = got.explained_variance[c] * ddof
+        if va < 0.0 { va = 0.0 }
+        let mut vb: f32 = want.explained_variance[c] * ddof
+        if vb < 0.0 { vb = 0.0 }
+        let sa: f32 = sqrt(va as f64) as f32
+        let sb: f32 = sqrt(vb as f64) as f32
+        if not optpg_equivalent(sa, sb) {
+            bad = bad + 1
+            printf("  singular_value c=%d reference=%.9g got=%.9g\n", c, sb as f64, sa as f64)
+        }
+    }
+
+    # 3. reconstruction error through the public transform round trip
+    let mse_got: f32 = optpg_reconstruction_mse(got, X)
+    let mse_want: f32 = optpg_reconstruction_mse(want, X)
+    if not optpg_equivalent(mse_got, mse_want) {
+        bad = bad + 1
+        printf("  reconstruction_mse reference=%.9g got=%.9g\n", mse_want as f64, mse_got as f64)
+    }
+
+    # 4. component signs, checked before any alignment. A negative overlap with
+    # the reference eigenvector is a flip, which breaks the contract outright.
+    for c in 0 to k {
+        let mut dot: f64 = 0.0
+        for j in 0 to cols {
+            dot = dot + (got.components[c][j] as f64) * (want.components[c][j] as f64)
+        }
+        if dot <= 0.0 {
+            bad = bad + 1
+            printf("  component sign flipped c=%d overlap=%.9g\n", c, dot)
+        }
+    }
+
+    if exact_required {
+        for c in 0 to k {
+            if got.explained_variance[c] != want.explained_variance[c] {
+                bad = bad + 1
+                printf("  below-threshold explained_variance c=%d is not bit-identical\n", c)
+            }
+            for j in 0 to cols {
+                if got.components[c][j] != want.components[c][j] {
+                    bad = bad + 1
+                    printf("  below-threshold component c=%d j=%d is not bit-identical\n", c, j)
+                }
+            }
+        }
+    }
+
+    # Component agreement after sign alignment, the same comparison the parity
+    # contract applies.
+    for c in 0 to k {
+        optpg_align(got.components[c], cols)
+        optpg_align(want.components[c], cols)
+        for j in 0 to cols {
+            if not optpg_component_close(got.components[c][j], want.components[c][j]) {
+                bad = bad + 1
+                if bad < 12 {
+                    printf("  component c=%d j=%d reference=%.9g got=%.9g\n", c, j, want.components[c][j] as f64, got.components[c][j] as f64)
+                }
+            }
+        }
+    }
+
+    if bad > 0 {
+        printf("FAIL: pca_fit moved (rows=%d cols=%d k=%d mode=%d)\n", rows, cols, k, mode)
+    }
+    pca_free(got)
+    pca_free(want)
+    matrix_free(X)
+    return bad
+}
+
+function main() -> i32 {
+    let mut bad: i32 = 0
+
+    # Below the covariance work threshold: the scalar kernel still runs, so
+    # these must be bit-identical, not merely equivalent.
+    bad = bad + optpg_case(100, 8, 4, 0, 424242, true)
+    bad = bad + optpg_case(1000, 8, 4, 0, 424242, true)
+    bad = bad + optpg_case(200, 20, 8, 0, 13579, true)
+
+    # Above the threshold, where the gemm covariance runs.
+    bad = bad + optpg_case(20000, 8, 4, 0, 424242, false)
+    bad = bad + optpg_case(4000, 64, 16, 0, 90210, false)
+    bad = bad + optpg_case(400, 200, 8, 0, 13579, false)
+
+    # Above the threshold with an unstable spectrum, where a sign flip or a
+    # component swap would show up first.
+    bad = bad + optpg_case(20000, 8, 4, 1, 31337, false)
+    bad = bad + optpg_case(12000, 12, 6, 1, 555, false)
+    bad = bad + optpg_case(20000, 8, 4, 2, 555, false)
+    bad = bad + optpg_case(4000, 32, 8, 2, 8675309, false)
+    bad = bad + optpg_case(12000, 12, 6, 3, 555, false)
+
+    if bad > 0 {
+        printf("  total quantities outside tolerance: %d\n", bad)
+        return 1
+    }
+
+    # A hand-checkable case that also runs the gemm path. Column 0 alternates
+    # +3 / -3 and column 1 alternates +1 / -1, so the two columns are perfectly
+    # correlated, the mean is zero, and PC0 carries the whole variance:
+    # (9 + 1) * 4096 / 4095 = 10.00244, along (3, 1) / sqrt(10).
+    let rows: i32 = 4096
+    let Xa: Matrix = matrix_new(rows, 2)
+    for i in 0 to rows {
+        let base: i32 = i * 2
+        if i % 2 == 0 {
+            Xa.data[base] = 3.0
+            Xa.data[base + 1] = 1.0
+        } else {
+            Xa.data[base] = -3.0
+            Xa.data[base + 1] = -1.0
+        }
+    }
+    let ma: PCA = pca_fit(Xa, 2)
+    let m0: f32 = fabs((ma.mean[0]) as f64) as f32
+    let m1: f32 = fabs((ma.mean[1]) as f64) as f32
+    if m0 > 0.000001 || m1 > 0.000001 {
+        println("FAIL: analytic mean on the gemm path")
+        return 1
+    }
+    let ev0: f32 = ma.explained_variance[0]
+    if ev0 < 10.0 || ev0 > 10.005 {
+        printf("FAIL: analytic explained variance on the gemm path, got %.9g\n", ev0 as f64)
+        return 1
+    }
+    if ma.explained_variance_ratio[0] < 0.9999 {
+        printf("FAIL: analytic explained variance ratio on the gemm path, got %.9g\n", ma.explained_variance_ratio[0] as f64)
+        return 1
+    }
+    optpg_align(ma.components[0], 2)
+    let c0: f32 = ma.components[0][0]
+    let c1: f32 = ma.components[0][1]
+    if c0 < 0.9486 || c0 > 0.9488 || c1 < 0.3161 || c1 > 0.3163 {
+        printf("FAIL: analytic component on the gemm path, got %.9g %.9g\n", c0 as f64, c1 as f64)
+        return 1
+    }
+    pca_free(ma)
+    matrix_free(Xa)
+
+    println("OK: pca_fit stays numerically equivalent and sign stable after the gemm covariance")
+    return 0
+}
