@@ -44,7 +44,9 @@ export function column_transformer_init(n_specs: i32) -> ColumnTransformer {
     let minmax_scalers: ptr<MinMaxScaler> = malloc((n_specs as i64) * 32) as ptr<MinMaxScaler>
     let robust_scalers: ptr<RobustScaler> = malloc((n_specs as i64) * 32) as ptr<RobustScaler>
     let maxabs_scalers: ptr<MaxAbsScaler> = malloc((n_specs as i64) * 32) as ptr<MaxAbsScaler>
-    let onehot_encoders: ptr<OneHotEncoder> = malloc((n_specs as i64) * 32) as ptr<OneHotEncoder>
+    # OneHotEncoder is two pointers, four i32 and a bool: 33 bytes, padded to
+    # 40 on arm64. The previous 32 wrote 8 bytes past the end of every element.
+    let onehot_encoders: ptr<OneHotEncoder> = malloc((n_specs as i64) * 64) as ptr<OneHotEncoder>
 
     return ColumnTransformer {
         specs: specs, n_specs: n_specs,
