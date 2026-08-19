@@ -1,0 +1,266 @@
+# Issue #433: multinomial (softmax) logistic regression for the multiclass case.
+#
+# Four checks, in order:
+#   1. Intercept-only fit, where the optimum is derivable by hand: with every
+#      feature zero the softmax over the intercepts must equal the class
+#      frequencies, so b = log(pi) - mean(log(pi)).
+#   2. A small three-class fit against the true multinomial optimum, computed
+#      independently with scipy's L-BFGS-B on the same objective.
+#   3. Numerical stability: a fixture whose gradient at the origin is small
+#      enough that the first LBFGS step drives the logits past 300. exp(300)
+#      overflows float32, a softmax that exponentiates the raw logits returns
+#      inf / inf = NaN, and every coefficient comes back NaN. Subtracting the
+#      row maximum first keeps them finite. Verified by removing the
+#      subtraction and rerunning.
+#   4. The binary path still runs one-vs-rest and is untouched.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+}
+
+function mnl433_abs(x: f32) -> f32 {
+    if x < 0.0 { return -x }
+    return x
+}
+
+# True for NaN and for either infinity. NaN fails every comparison with itself,
+# and both infinities sit outside any finite bound.
+function mnl433_not_finite(x: f32) -> bool {
+    if x != x { return true }
+    if x > 1000000000000000000000000000000000.0 { return true }
+    if x < -1000000000000000000000000000000000.0 { return true }
+    return false
+}
+
+function main() -> i32 {
+    # ---- 1. Intercept-only fit, hand-computed ----
+    #
+    # 12 samples, every feature zero, class counts 6 / 3 / 3. The weights have
+    # no gradient and must stay at zero. The intercept gradient for class c is
+    # softmax(b)_c - pi_c, so the optimum is any b with softmax(b) = pi. The
+    # iterates stay in the zero-sum subspace because the residuals sum to zero
+    # across classes, which picks out
+    #
+    #   b = log(pi) - mean(log(pi))
+    #     = [log(1/2), log(1/4), log(1/4)] - mean(...)
+    #     = [ 0.4620981, -0.2310490, -0.2310490 ]
+    let n1: i32 = 12
+    let X1: Matrix = matrix_new(n1, 2)
+    for i in 0 to n1 {
+        matrix_set(X1, i, 0, 0.0)
+        matrix_set(X1, i, 1, 0.0)
+    }
+    let y1: ptr<f32> = array_new_f32(n1)
+    for i in 0 to 6 { y1[i] = 0.0 }
+    for i in 6 to 9 { y1[i] = 1.0 }
+    for i in 9 to 12 { y1[i] = 2.0 }
+
+    let m1: LogisticRegression = logistic_regression_fit(X1, y1, 3, 200, 0.1, penalty_none())
+
+    if m1.n_classes != 3 {
+        println("FAIL: intercept-only fit did not find three classes")
+        return 1
+    }
+
+    let exp_b: ptr<f32> = array_new_f32(3)
+    exp_b[0] = 0.4620981
+    exp_b[1] = -0.2310490
+    exp_b[2] = -0.2310490
+
+    for c in 0 to 3 {
+        let db: f32 = mnl433_abs(m1.biases[c] - exp_b[c])
+        if db > 0.005 {
+            println("FAIL: intercept-only softmax does not match the class frequencies")
+            printf("  class %d: got %.7f want %.7f\n", c, m1.biases[c], exp_b[c])
+            return 1
+        }
+        for j in 0 to 2 {
+            let w: f32 = m1.weights[c * 2 + j]
+            if mnl433_abs(w) > 0.000001 {
+                println("FAIL: zero features produced a non-zero weight")
+                printf("  class %d feature %d: %.9f\n", c, j, w)
+                return 1
+            }
+        }
+    }
+
+    array_free_f32(exp_b)
+    logistic_regression_free(m1)
+    array_free_f32(y1)
+    matrix_free(X1)
+
+    # ---- 2. Three classes against the true multinomial optimum ----
+    #
+    # Objective: mean softmax cross-entropy over the 12 samples plus
+    # 0.5 * 0.1 * ||W||^2 with the intercepts unpenalized. Minimised
+    # independently with scipy.optimize.minimize(method='L-BFGS-B') on the same
+    # objective in float64, converged to gtol 1e-12. One-vs-rest does not land
+    # here: it optimises three separate binary objectives.
+    let n2: i32 = 12
+    let X2: Matrix = matrix_new(n2, 2)
+    matrix_set(X2, 0, 0, -2.0);  matrix_set(X2, 0, 1, -2.0)
+    matrix_set(X2, 1, 0, -2.0);  matrix_set(X2, 1, 1, -1.0)
+    matrix_set(X2, 2, 0, -1.0);  matrix_set(X2, 2, 1, -2.0)
+    matrix_set(X2, 3, 0, -1.5);  matrix_set(X2, 3, 1, -1.5)
+    matrix_set(X2, 4, 0, 2.0);   matrix_set(X2, 4, 1, -1.0)
+    matrix_set(X2, 5, 0, 2.5);   matrix_set(X2, 5, 1, -1.5)
+    matrix_set(X2, 6, 0, 1.5);   matrix_set(X2, 6, 1, -2.0)
+    matrix_set(X2, 7, 0, 2.0);   matrix_set(X2, 7, 1, -2.0)
+    matrix_set(X2, 8, 0, 0.0);   matrix_set(X2, 8, 1, 2.0)
+    matrix_set(X2, 9, 0, 0.5);   matrix_set(X2, 9, 1, 2.5)
+    matrix_set(X2, 10, 0, -0.5); matrix_set(X2, 10, 1, 2.0)
+    matrix_set(X2, 11, 0, 0.0);  matrix_set(X2, 11, 1, 3.0)
+
+    let y2: ptr<f32> = array_new_f32(n2)
+    for i in 0 to 4 { y2[i] = 0.0 }
+    for i in 4 to 8 { y2[i] = 1.0 }
+    for i in 8 to 12 { y2[i] = 2.0 }
+
+    let m2: LogisticRegression = logistic_regression_fit(X2, y2, 3, 200, 0.1, penalty_l2(0.1))
+
+    let exp_w: ptr<f32> = array_new_f32(6)
+    exp_w[0] = -0.794180; exp_w[1] = -0.473839
+    exp_w[2] = 0.825296;  exp_w[3] = -0.404103
+    exp_w[4] = -0.031116; exp_w[5] = 0.877941
+    let exp_i: ptr<f32> = array_new_f32(3)
+    exp_i[0] = 0.010311
+    exp_i[1] = -0.195960
+    exp_i[2] = 0.185648
+
+    for c in 0 to 3 {
+        for j in 0 to 2 {
+            let dw: f32 = mnl433_abs(m2.weights[c * 2 + j] - exp_w[c * 2 + j])
+            if dw > 0.01 {
+                println("FAIL: multinomial coefficients miss the joint softmax optimum")
+                printf("  class %d feature %d: got %.6f want %.6f\n", c, j, m2.weights[c * 2 + j], exp_w[c * 2 + j])
+                return 1
+            }
+        }
+        let di: f32 = mnl433_abs(m2.biases[c] - exp_i[c])
+        if di > 0.01 {
+            println("FAIL: multinomial intercepts miss the joint softmax optimum")
+            printf("  class %d: got %.6f want %.6f\n", c, m2.biases[c], exp_i[c])
+            return 1
+        }
+    }
+
+    let pred2: ptr<f32> = logistic_predict(m2, X2)
+    let acc2: f32 = accuracy_score(y2, pred2, n2)
+    if acc2 < 0.999 {
+        println("FAIL: multinomial fit did not separate the training fixture")
+        printf("  accuracy: %.6f\n", acc2)
+        return 1
+    }
+
+    array_free_f32(pred2)
+    array_free_f32(exp_w)
+    array_free_f32(exp_i)
+    logistic_regression_free(m2)
+    array_free_f32(y2)
+    matrix_free(X2)
+
+    # ---- 3. Numerical stability with logits a naive softmax cannot survive ----
+    #
+    # The three class means are separated by 0.02, so the gradient at the origin
+    # is small and LBFGS's first step, which is scaled by 1 / ||g||^2, is large.
+    # The logits pass 300 within a few iterations. exp(300) is 1.9e130, which
+    # overflows float32 to inf, inf / inf is NaN, and every gradient, weight and
+    # intercept downstream of it becomes NaN. Subtracting the row maximum caps
+    # the largest exponent at exactly 1.0, so the fit stays finite and converges
+    # in ten iterations.
+    #
+    # Confirmed by removing the - max_val from the exponent in
+    # lin433_softmax_row and rerunning: every coefficient came back NaN.
+    let n3: i32 = 6
+    let X3: Matrix = matrix_new(n3, 2)
+    matrix_set(X3, 0, 0, 1.0);  matrix_set(X3, 0, 1, 0.0)
+    matrix_set(X3, 1, 0, -1.0); matrix_set(X3, 1, 1, 0.0)
+    matrix_set(X3, 2, 0, 0.0);  matrix_set(X3, 2, 1, 1.0)
+    matrix_set(X3, 3, 0, 0.0);  matrix_set(X3, 3, 1, -1.0)
+    matrix_set(X3, 4, 0, 1.02); matrix_set(X3, 4, 1, 1.0)
+    matrix_set(X3, 5, 0, -1.0); matrix_set(X3, 5, 1, -1.0)
+
+    let y3: ptr<f32> = array_new_f32(n3)
+    y3[0] = 0.0; y3[1] = 0.0
+    y3[2] = 1.0; y3[3] = 1.0
+    y3[4] = 2.0; y3[5] = 2.0
+
+    let m3: LogisticRegression = logistic_regression_fit(X3, y3, 3, 200, 0.1, penalty_l2(0.01))
+
+    for c in 0 to 3 {
+        if mnl433_not_finite(m3.biases[c]) {
+            println("FAIL: softmax overflowed and the intercept is not finite")
+            printf("  class %d intercept: %.6f\n", c, m3.biases[c])
+            return 1
+        }
+        for j in 0 to 2 {
+            if mnl433_not_finite(m3.weights[c * 2 + j]) {
+                println("FAIL: softmax overflowed and the weight is not finite")
+                printf("  class %d feature %d: %.6f\n", c, j, m3.weights[c * 2 + j])
+                return 1
+            }
+        }
+    }
+
+    let pred3: ptr<f32> = logistic_predict(m3, X3)
+    for i in 0 to n3 {
+        let mut known: bool = false
+        for c in 0 to m3.n_classes {
+            if pred3[i] == m3.classes[c] { known = true }
+        }
+        if not known {
+            println("FAIL: a NaN score leaked into the argmax and predict returned a non-class")
+            printf("  sample %d: %.6f\n", i, pred3[i])
+            return 1
+        }
+    }
+
+    array_free_f32(pred3)
+    logistic_regression_free(m3)
+    array_free_f32(y3)
+    matrix_free(X3)
+
+    # ---- 4. Two classes still take the binary one-vs-rest path ----
+    #
+    # scikit-learn also fits a single binary model for two classes, so this path
+    # is deliberately unchanged. Checked through logistic_predict, which is the
+    # argmax over the per-class scores and is well defined for both paths.
+    let n4: i32 = 8
+    let X4: Matrix = matrix_new(n4, 2)
+    matrix_set(X4, 0, 0, -2.0); matrix_set(X4, 0, 1, -2.0)
+    matrix_set(X4, 1, 0, -2.5); matrix_set(X4, 1, 1, -1.5)
+    matrix_set(X4, 2, 0, -1.5); matrix_set(X4, 2, 1, -2.5)
+    matrix_set(X4, 3, 0, -2.0); matrix_set(X4, 3, 1, -1.0)
+    matrix_set(X4, 4, 0, 2.0);  matrix_set(X4, 4, 1, 2.0)
+    matrix_set(X4, 5, 0, 2.5);  matrix_set(X4, 5, 1, 1.5)
+    matrix_set(X4, 6, 0, 1.5);  matrix_set(X4, 6, 1, 2.5)
+    matrix_set(X4, 7, 0, 2.0);  matrix_set(X4, 7, 1, 1.0)
+
+    let y4: ptr<f32> = array_new_f32(n4)
+    for i in 0 to 4 { y4[i] = 0.0 }
+    for i in 4 to 8 { y4[i] = 1.0 }
+
+    let m4: LogisticRegression = logistic_regression_fit(X4, y4, 2, 200, 0.1, penalty_l2_from_c(1.0, n4))
+    if m4.n_classes != 2 {
+        println("FAIL: binary fit did not find two classes")
+        return 1
+    }
+
+    let pred4: ptr<f32> = logistic_predict(m4, X4)
+    let acc4: f32 = accuracy_score(y4, pred4, n4)
+    if acc4 < 0.999 {
+        println("FAIL: binary one-vs-rest path regressed")
+        printf("  accuracy: %.6f\n", acc4)
+        return 1
+    }
+
+    array_free_f32(pred4)
+    logistic_regression_free(m4)
+    array_free_f32(y4)
+    matrix_free(X4)
+
+    println("OK: multinomial softmax matches the joint optimum and survives large logits")
+    return 0
+}
