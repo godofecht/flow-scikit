@@ -89,9 +89,15 @@ CI performs syntax/import validation and runs the Flow test/example suite. The b
 
 Benchmark claims should be treated as reproducible measurements rather than constants: compiler revisions, optimization settings, BLAS implementations, hardware and estimator implementations can all move the numbers.
 
+BLAS implementations differ in more than speed. Results verified bit-identical under one BLAS have been observed to differ in the last float32 digit under another, which matters wherever a threshold turns that difference into a different answer. Parity work should be verified on the platform CI runs on.
+
+To build locally, `FLOW_LDFLAGS` must name a BLAS: `-framework Accelerate` on macOS, `-lm -lopenblas` on Linux. `python tools/run_all.py` runs the suite the way CI does. See [`AGENTS.md`](AGENTS.md) for the full build, measurement and concurrency notes.
+
 ## Relationship to scikit-learn
 
 flow-scikit is an independent project. It takes substantial inspiration from scikit-learn's estimator vocabulary and public API discussions, but it is not an official port, fork or subproject.
+
+Where the two libraries differ deliberately in API design, the reasoning is recorded in [`docs/design-rationale.md`](docs/design-rationale.md), along with the gaps that remain open.
 
 During development, an automated coding agent that was intended to submit work to the upstream Flow repository mis-targeted submissions to a scikit-related upstream repository. Those submissions were unintended automation output. The incident led to stronger repository allow-lists, publication checks, bounded automation and explicit human-visible CI/review gates in this project.
 
