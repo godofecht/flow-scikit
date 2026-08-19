@@ -781,7 +781,6 @@ function main() -> i32 {
     printf("BENCHMARK_ENV|{\"impl\":\"flow\",\"timer\":\"timespec_get\"}\n")
 
     let no_penalty: Penalty = penalty_none()
-    let l2_penalty: Penalty = penalty_l2(0.001)
     let mut t0: i64 = 0
     let mut t1: i64 = 0
     let mut t2: i64 = 0
@@ -793,8 +792,15 @@ function main() -> i32 {
     let Xi_tr: Matrix = standard_scaler_transform(sci, si.X_train)
     let Xi_te: Matrix = standard_scaler_transform(sci, si.X_test)
 
+    # Issue #408: the sklearn side runs LogisticRegression(C=1.0). This library
+    # minimises the mean loss, so the equivalent strength is 1 / (C * n_train),
+    # which depends on the split. The benchmark used a flat 0.001 for both
+    # datasets, which is 8.3x weaker than C=1.0 on iris and 1.4x stronger on
+    # digits, and that showed up as a coefficient norm roughly twice sklearn's.
+    let l2_penalty_iris: Penalty = penalty_l2_from_c(1.0, si.n_train)
+
     t0 = now_ns()
-    let lr_i: LogisticRegression = logistic_regression_fit(Xi_tr, si.y_train, 3, 200, 0.1, l2_penalty)
+    let lr_i: LogisticRegression = logistic_regression_fit(Xi_tr, si.y_train, 3, 200, 0.1, l2_penalty_iris)
     t1 = now_ns()
     let lr_i_probs: ptr<f32> = logistic_predict(lr_i, Xi_te)
     let lr_i_pred: ptr<f32> = logistic_decide(lr_i, lr_i_probs, si.n_test, 0.5)
@@ -886,7 +892,8 @@ function main() -> i32 {
     let Xd_tr: Matrix = standard_scaler_transform(scd, sd.X_train)
     let Xd_te: Matrix = standard_scaler_transform(scd, sd.X_test)
 
-    t0 = now_ns(); let lr_d: LogisticRegression = logistic_regression_fit(Xd_tr, sd.y_train, 10, 200, 0.1, l2_penalty); t1 = now_ns()
+    let l2_penalty_digits: Penalty = penalty_l2_from_c(1.0, sd.n_train)
+    t0 = now_ns(); let lr_d: LogisticRegression = logistic_regression_fit(Xd_tr, sd.y_train, 10, 200, 0.1, l2_penalty_digits); t1 = now_ns()
     let lr_d_probs: ptr<f32> = logistic_predict(lr_d, Xd_te); let lr_d_pred: ptr<f32> = logistic_decide(lr_d, lr_d_probs, sd.n_test, 0.5); t2 = now_ns()
     printf("RESULT|LogisticRegression|digits|accuracy|%.9f|%.9f|%.9f\n", accuracy_score(sd.y_test, lr_d_pred, sd.n_test), elapsed_ms_ns(t0,t1), elapsed_ms_ns(t1,t2))
     msd207_logreg_state("digits", lr_d)

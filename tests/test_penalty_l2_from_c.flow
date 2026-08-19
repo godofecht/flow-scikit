@@ -1,0 +1,152 @@
+# Issue #408: penalty_l2_from_c converts scikit-learn's C into the alpha this
+# library's mean-loss objective needs, and the conversion actually changes the
+# fitted coefficient magnitude in the direction it claims.
+#
+# The canonical benchmark passed a flat penalty_l2(0.001) against sklearn's
+# C=1.0 and published a coefficient Frobenius norm roughly twice sklearn's. The
+# mapping is alpha = 1 / (C * n_samples), so the sample count is part of it.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+}
+
+function p408c_close(a: f32, b: f32, tolerance: f32) -> bool {
+    let d: f32 = a - b
+    if d < 0.0 { d = -d }
+    return d <= tolerance
+}
+
+function p408c_frobenius(m: LogisticRegression) -> f32 {
+    let mut total: f64 = 0.0
+    for c in 0 to m.n_classes {
+        let base: i32 = c * m.n_features
+        for j in 0 to m.n_features {
+            let v: f64 = m.weights[base + j] as f64
+            total = total + v * v
+        }
+    }
+    return sqrt((total) as f64) as f32
+}
+
+function main() -> i32 {
+    # ---- The conversion itself ----
+    let p120: Penalty = penalty_l2_from_c(1.0, 120)
+    if p120.kind != PENALTY_L2 {
+        println("FAIL: penalty_l2_from_c must produce an L2 penalty")
+        return 1
+    }
+    if not p408c_close(p120.alpha, 0.008333333, 0.0000001) {
+        println("FAIL: penalty_l2_from_c(1.0, 120) should be 1/120")
+        printf("  alpha: %.9f\n", p120.alpha)
+        return 1
+    }
+    if p120.l1_ratio != 0.0 {
+        println("FAIL: an L2 penalty must carry l1_ratio 0")
+        return 1
+    }
+
+    # C scales the strength inversely.
+    let p_halfC: Penalty = penalty_l2_from_c(0.5, 120)
+    if not p408c_close(p_halfC.alpha, 2.0 * p120.alpha, 0.0000001) {
+        println("FAIL: halving C should double alpha")
+        printf("  alpha: %.9f\n", p_halfC.alpha)
+        return 1
+    }
+
+    # The sample count scales it inversely too. This is the part that is easy
+    # to drop, and dropping it is what issue #408 was about.
+    let p1437: Penalty = penalty_l2_from_c(1.0, 1437)
+    if not p408c_close(p1437.alpha, 0.000695894, 0.0000001) {
+        println("FAIL: penalty_l2_from_c(1.0, 1437) should be 1/1437")
+        printf("  alpha: %.9f\n", p1437.alpha)
+        return 1
+    }
+    if p1437.alpha >= p120.alpha {
+        println("FAIL: more samples must mean a smaller alpha at the same C")
+        return 1
+    }
+
+    # ---- Degenerate inputs ----
+    let p_zero_c: Penalty = penalty_l2_from_c(0.0, 120)
+    if p_zero_c.alpha != 0.0 {
+        println("FAIL: a non-positive C must give zero strength, not a division")
+        return 1
+    }
+    let p_neg_c: Penalty = penalty_l2_from_c(-1.0, 120)
+    if p_neg_c.alpha != 0.0 {
+        println("FAIL: a negative C must give zero strength")
+        return 1
+    }
+    let p_zero_n: Penalty = penalty_l2_from_c(1.0, 0)
+    if p_zero_n.alpha != 0.0 {
+        println("FAIL: a zero sample count must give zero strength")
+        return 1
+    }
+
+    # ---- The conversion shrinks a real fit ----
+    # Two classes separated along feature 0 with a second noise feature. The
+    # weakly regularized fit must carry a strictly larger coefficient norm than
+    # the sklearn-equivalent one on the same data.
+    let n_rows: i32 = 40
+    let X: Matrix = matrix_new(n_rows, 2)
+    let y: ptr<f32> = array_new_f32(n_rows)
+    for i in 0 to n_rows {
+        let t: f32 = (i as f32) / 10.0
+        if i < 20 {
+            matrix_set(X, i, 0, -1.0 - t)
+            matrix_set(X, i, 1, t)
+            y[i] = 0.0
+        } else {
+            matrix_set(X, i, 0, 1.0 + t)
+            matrix_set(X, i, 1, 0.0 - t)
+            y[i] = 1.0
+        }
+    }
+
+    let weak: Penalty = penalty_l2(0.001)
+    let matched: Penalty = penalty_l2_from_c(1.0, n_rows)
+    if matched.alpha <= weak.alpha {
+        println("FAIL: fixture chosen so the matched penalty is the stronger one")
+        return 1
+    }
+
+    let m_weak: LogisticRegression = logistic_regression_fit(X, y, 2, 200, 0.1, weak)
+    let m_matched: LogisticRegression = logistic_regression_fit(X, y, 2, 200, 0.1, matched)
+    let fro_weak: f32 = p408c_frobenius(m_weak)
+    let fro_matched: f32 = p408c_frobenius(m_matched)
+    if fro_matched >= fro_weak {
+        println("FAIL: the stronger penalty must shrink the coefficient norm")
+        printf("  weak: %.6f  matched: %.6f\n", fro_weak, fro_matched)
+        return 1
+    }
+
+    # Both fits still separate the training data, so the shrinkage is not
+    # coming from a collapsed model.
+    let pred: ptr<f32> = logistic_predict(m_matched, X)
+    let decided: ptr<f32> = logistic_decide(m_matched, pred, n_rows, 0.5)
+    let acc: f32 = accuracy_score(y, decided, n_rows)
+    if acc < 0.95 {
+        println("FAIL: the matched-penalty fit lost the separable fixture")
+        printf("  accuracy: %.6f\n", acc)
+        return 1
+    }
+
+    # The intercept is outside the penalty, so it is free to stay large while
+    # the weights shrink.
+    if m_matched.n_features != 2 {
+        println("FAIL: unexpected feature count")
+        return 1
+    }
+
+    array_free_f32(pred)
+    array_free_f32(decided)
+    logistic_regression_free(m_weak)
+    logistic_regression_free(m_matched)
+    matrix_free(X)
+    array_free_f32(y)
+
+    printf("OK: penalty_l2_from_c maps C to alpha; norm %.6f -> %.6f\n", fro_weak, fro_matched)
+    return 0
+}

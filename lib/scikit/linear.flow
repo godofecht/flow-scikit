@@ -240,6 +240,29 @@ export function penalty_l1(alpha: f32) -> Penalty {
     return Penalty { kind: PENALTY_L1, alpha: alpha, l1_ratio: 1.0 }
 }
 
+# Issue #408: the L2 strength that reproduces scikit-learn's C on this library's
+# objective.
+#
+# scikit-learn's LogisticRegression minimises the SUM of the per-sample losses
+# plus 0.5 * ||w||^2 / C. The fitters here minimise the MEAN loss plus
+# 0.5 * alpha * ||w||^2. Dividing scikit-learn's objective by n_samples puts the
+# two in the same units and leaves
+#
+#     alpha = 1 / (C * n_samples)
+#
+# so alpha and C are not interchangeable and the sample count is part of the
+# conversion. Passing scikit-learn's C straight through as alpha regularizes by
+# a factor of n_samples too little.
+#
+# Returns a zero-strength L2 penalty for a non-positive C or sample count.
+export function penalty_l2_from_c(c: f32, n_samples: i32) -> Penalty {
+    let mut alpha: f32 = 0.0
+    if c > 0.0 && n_samples > 0 {
+        alpha = 1.0 / (c * (n_samples as f32))
+    }
+    return Penalty { kind: PENALTY_L2, alpha: alpha, l1_ratio: 0.0 }
+}
+
 export function penalty_elasticnet(alpha: f32, l1_ratio: f32) -> Penalty {
     return Penalty { kind: PENALTY_ELASTICNET, alpha: alpha, l1_ratio: l1_ratio }
 }
@@ -472,6 +495,13 @@ export struct LogisticRegression {
     fitted: bool
 }
 
+# Fits one binary logistic model per class, one-vs-rest.
+#
+# The objective for each subproblem is the MEAN log loss over the m training
+# samples plus 0.5 * alpha * ||w||^2, with the intercept left unpenalized. To
+# match scikit-learn's C on the same data, build the penalty with
+# penalty_l2_from_c(C, m) rather than passing C or 1/C as alpha directly. See
+# issue #408.
 export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, epochs: i32, lr: f32, penalty: Penalty) -> LogisticRegression {
     let n: i32 = X.cols
     let m: i32 = X.rows
