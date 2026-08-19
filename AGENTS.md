@@ -39,17 +39,21 @@ Filed issues so far:
   code generation for regression and clustering. Ridge R2 jumps from 0.33
   to 0.61, KMeans iris drops from 0.80 to 0.47. Workaround: import prng.flow
   directly from cluster.flow and ensemble.flow instead of through scikit.flow.
-- #547: Follow-up to #469, which is closed. Dead code in a module the program
-  never calls decides whether that program corrupts its heap. Growing
-  mixture.flow makes examples/regression_demo.flow SIGBUS inside malloc
-  (mfm_alloc, reached from linear_regression_predict) after printing all of
-  its output, 10 runs out of 10 on macOS arm64. Appending one never-called
-  6-line function to mixture.flow makes it exit 0, 12 runs out of 12.
-  regression_demo never calls anything in mixture.flow. Linux is unaffected;
-  CI run-all is green. No workaround applied, since a dead function added to
-  nudge codegen breaks again on the next edit. When an unrelated example
-  starts crashing after you grow a library file, check this before assuming
-  your change is wrong.
+- #547: RETRACTED, closed as invalid. This was reported as dead code in an
+  uncalled module deciding whether an unrelated program corrupts its heap.
+  It was not a compiler bug. `examples/regression_demo.flow` hardcoded
+  `malloc(16)` for `TermSpec`, which is a pointer plus three `i32`s, so 20
+  bytes padded to 24. Writing the fourth field went 8 bytes past the end
+  into allocator metadata, and a later allocation tripped over it and
+  raised SIGBUS inside `mfm_alloc`. Adding dead code to `mixture.flow`
+  only shifted the heap so the overwrite landed somewhere harmless.
+  AddressSanitizer found it in one run.
+
+  Keep the general lesson. A short allocation for a struct array produces
+  a crash arbitrarily far from its cause, varies run to run, and responds
+  to unrelated edits, so it imitates miscompilation closely. Before
+  blaming codegen for a heap crash, size every struct allocation from the
+  struct rather than a literal, and run ASan.
 
 ## Flow transpiler constraints (workarounds)
 
