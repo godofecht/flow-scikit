@@ -73,9 +73,15 @@ jobs:
       - name: Gate disparity regressions and append history
         run: |
           if [ -f /tmp/disparity_report.baseline.json ]; then
-            python benchmarks/check_disparity_regression.py --baseline /tmp/disparity_report.baseline.json
+            python benchmarks/check_disparity_regression.py \
+              --baseline /tmp/disparity_report.baseline.json \
+              --baseline-contract benchmarks/parity_contract.baseline.json \
+              --current-contract benchmarks/parity_contract.json
           else
-            python benchmarks/check_disparity_regression.py --baseline /tmp/no-disparity-baseline.json
+            python benchmarks/check_disparity_regression.py \
+              --baseline /tmp/no-disparity-baseline.json \
+              --baseline-contract benchmarks/parity_contract.baseline.json \
+              --current-contract benchmarks/parity_contract.json
           fi
       - name: Require all 19 rows parity eligible and disparities retained
         run: |
@@ -101,6 +107,8 @@ jobs:
           assert history['snapshots'], history
           print({'headline': c, 'disparity': disparity['counts'], 'history_snapshots': len(history['snapshots'])})
           PY
+      - name: Advance parity contract baseline after successful gates
+        run: cp benchmarks/parity_contract.json benchmarks/parity_contract.baseline.json
       # Uploaded even when the gate fails: a failing run is the one worth
       # reading, and without this its evidence was thrown away.
       - uses: actions/upload-artifact@v4
@@ -118,6 +126,7 @@ jobs:
             benchmarks/disparity_report.json
             benchmarks/disparity_history.json
             benchmarks/headline_environment.json
+            benchmarks/parity_contract.baseline.json
 
   architecture-map:
     name: sklearn execution architecture map

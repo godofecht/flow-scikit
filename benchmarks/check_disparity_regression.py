@@ -14,6 +14,14 @@ Runtime is wall-clock, so it is only comparable within one measurement host.
 `runtime_environment_id` in the report covers CPU and BLAS thread configuration
 as well as the software stack; `environment_id` covers only the software stack
 and cannot tell two runner machines apart.
+
+A row whose declared implementation contract (`flow` or `sklearn`) changes is
+not comparable to its old disparity numbers: the new implementation is expected
+to move score, model state and runtime. Such a row gets one baseline reset only
+when every gate-defining contract field outside `flow`/`sklearn` is unchanged.
+The workflow advances the contract baseline only after this gate and the 19/19
+parity gate succeed, so unrelated rows remain protected and tolerance changes do
+not create an automatic escape hatch.
 """
 from __future__ import annotations
 
@@ -30,14 +38,7 @@ def key(row: dict) -> tuple[str, str, str]:
 
 
 def score_noise_floor(policy: dict, row: dict) -> float:
-    """Smallest score delta worth gating for this row.
-
-    Two terms. The absolute term covers float32 rounding: the canonical scores
-    live near 0.5, where one float32 ulp is 3e-8, and identical code has been
-    observed to move a delta by ~10 ulps between runner machines. The relative
-    term keeps the floor proportional to the row's own declared tolerance, so a
-    row with a tight contract is still gated tightly.
-    """
+    """Smallest score delta worth gating for this row."""
     floor = float(policy["score_abs_diff"].get("absolute_noise_floor", 0.0))
     fraction = policy["score_abs_diff"].get("tolerance_fraction_floor")
     if fraction is not None:
@@ -59,12 +60,48 @@ def runtime_limit(policy: dict, same_software_env: bool, same_host: bool) -> tup
     return (None if limit is None else float(limit)), "different measurement host"
 
 
+def implementation_contract_resets(baseline_path: Path, current_path: Path) -> set[tuple[str, str, str]]:
+    """Rows allowed to establish a fresh disparity baseline after a real contract change.
+
+    Only `flow` and/or `sklearn` may differ. A tolerance, parity level, timing
+    comparability, dataset identity, or any other contract field change disables
+    the reset so the normal disparity gate still applies.
+    """
+    if not baseline_path.exists() or not current_path.exists():
+        return set()
+
+    baseline = json.loads(baseline_path.read_text())
+    current = json.loads(current_path.read_text())
+    old = {key(r): r for r in baseline.get("rows", [])}
+    resets: set[tuple[str, str, str]] = set()
+
+    for row in current.get("rows", []):
+        row_key = key(row)
+        previous = old.get(row_key)
+        if previous is None:
+            continue
+
+        old_impl = (previous.get("flow"), previous.get("sklearn"))
+        new_impl = (row.get("flow"), row.get("sklearn"))
+        if old_impl == new_impl:
+            continue
+
+        old_guarded = {k: v for k, v in previous.items() if k not in {"flow", "sklearn"}}
+        new_guarded = {k: v for k, v in row.items() if k not in {"flow", "sklearn"}}
+        if old_guarded == new_guarded:
+            resets.add(row_key)
+
+    return resets
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--current", type=Path, default=ROOT / "disparity_report.json")
     p.add_argument("--baseline", type=Path, default=ROOT / "disparity_report.baseline.json")
     p.add_argument("--history", type=Path, default=ROOT / "disparity_history.json")
     p.add_argument("--policy", type=Path, default=ROOT / "disparity_regression_policy.json")
+    p.add_argument("--baseline-contract", type=Path, default=ROOT / "parity_contract.baseline.json")
+    p.add_argument("--current-contract", type=Path, default=ROOT / "parity_contract.json")
     p.add_argument("--commit", default=os.environ.get("GITHUB_SHA", "unknown"))
     args = p.parse_args()
 
@@ -72,6 +109,7 @@ def main() -> int:
     policy = json.loads(args.policy.read_text())
     failures: list[str] = []
     notices: list[str] = []
+    contract_resets = implementation_contract_resets(args.baseline_contract, args.current_contract)
 
     baseline = None
     if args.baseline.exists():
@@ -96,8 +134,16 @@ def main() -> int:
             )
 
         for row in current["rows"]:
-            previous = old.get(key(row))
+            row_key = key(row)
+            previous = old.get(row_key)
             if previous is None:
+                continue
+
+            if row_key in contract_resets:
+                notices.append(
+                    f"{row_key} implementation contract changed with gate-defining fields unchanged; "
+                    "establishing a fresh disparity baseline for this row"
+                )
                 continue
 
             old_frac = previous.get("score_tolerance_fraction")
@@ -105,7 +151,7 @@ def main() -> int:
             if old_frac is not None and new_frac is not None:
                 limit = float(policy["score_tolerance_fraction"]["max_absolute_increase"])
                 if new_frac - old_frac > limit:
-                    failures.append(f"{key(row)} tolerance fraction regressed {old_frac:.6g} -> {new_frac:.6g}")
+                    failures.append(f"{row_key} tolerance fraction regressed {old_frac:.6g} -> {new_frac:.6g}")
 
             old_abs = previous.get("score_abs_diff")
             new_abs = row.get("score_abs_diff")
@@ -113,13 +159,13 @@ def main() -> int:
                 floor = score_noise_floor(policy, row)
                 rel = float(policy["score_abs_diff"]["max_relative_increase"])
                 if new_abs > max(floor, old_abs * (1.0 + rel)):
-                    failures.append(f"{key(row)} score |delta| regressed {old_abs:.6g} -> {new_abs:.6g}")
+                    failures.append(f"{row_key} score |delta| regressed {old_abs:.6g} -> {new_abs:.6g}")
 
             for field, policy_name in (("configuration_differences", "configuration_difference_count"), ("semantic_differences", "semantic_difference_count")):
                 old_n = len(previous.get(field, []))
                 new_n = len(row.get(field, []))
                 if new_n - old_n > int(policy[policy_name]["max_increase"]):
-                    failures.append(f"{key(row)} {field} increased {old_n} -> {new_n}")
+                    failures.append(f"{row_key} {field} increased {old_n} -> {new_n}")
 
             old_rt = previous.get("runtime_log2_ratio")
             new_rt = row.get("runtime_log2_ratio")
@@ -128,12 +174,12 @@ def main() -> int:
             change = new_rt - old_rt
             if limit_rt is not None and -change > limit_rt:
                 failures.append(
-                    f"{key(row)} runtime log2 ratio regressed {old_rt:.4f} -> {new_rt:.4f} "
+                    f"{row_key} runtime log2 ratio regressed {old_rt:.4f} -> {new_rt:.4f} "
                     f"({2 ** -change:.2f}x slower relative to sklearn)"
                 )
             elif improvement_notice is not None and change >= float(improvement_notice):
                 notices.append(
-                    f"{key(row)} runtime log2 ratio improved {old_rt:.4f} -> {new_rt:.4f} "
+                    f"{row_key} runtime log2 ratio improved {old_rt:.4f} -> {new_rt:.4f} "
                     f"({2 ** change:.2f}x faster relative to sklearn); "
                     "re-freeze the baseline on main to keep the gate tight"
                 )
