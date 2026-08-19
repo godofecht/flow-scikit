@@ -1,0 +1,195 @@
+# Regression test for the sklearn-compatible KMeans initialization.
+#
+# Two layers. The first pins Flow's MT19937 against values taken from NumPy's
+# legacy RandomState, including a draw past the 624-word refill boundary, so a
+# transcription error in lib/scikit/prng.flow fails here rather than silently
+# moving a canonical benchmark row. The second checks that k-means++ with
+# greedy local trials reaches scikit-learn's answer on a fixed synthetic set:
+# reference inertia and cluster sizes come from
+#   KMeans(n_clusters=4, init=k-means++, n_init=N, max_iter=100, tol=0.0001,
+#          random_state=42).fit(X)
+# on the identical float32 matrix.
+#
+# Run: FLOW_HOST=python flow run tests/test_kmeans_sklearn_init.flow
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+}
+
+function ksi_build_matrix() -> Matrix {
+    let n: i32 = 200
+    let d: i32 = 6
+    let X: Matrix = matrix_new(n, d)
+    let mut state: i64 = 13579
+    for i in 0 to n {
+        for j in 0 to d {
+            state = (state * 1103515245 + 12345) % 2147483648
+            let base: f32 = ((i % 4) as f32) * 4.0
+            X.data[i * d + j] = base + ((state % 1000) as f32) / 800.0
+        }
+    }
+    return X
+}
+
+function ksi_check_u32(label: string, got: u32, want: f64) -> i32 {
+    if (got as f64) != want {
+        printf("FAIL: %s expected %.0f\n", label, want)
+        return 1
+    }
+    return 0
+}
+
+function ksi_check_f64(label: string, got: f64, want: f64) -> i32 {
+    let diff: f64 = fabs(got - want)
+    if diff > 0.000000000001 {
+        printf("FAIL: %s expected %.17g got %.17g\n", label, want, got)
+        return 1
+    }
+    return 0
+}
+
+function ksi_check_i32(label: string, got: i32, want: i32) -> i32 {
+    if got != want {
+        printf("FAIL: %s expected %d got %d\n", label, want, got)
+        return 1
+    }
+    return 0
+}
+
+# Flow's MT19937 must reproduce numpy.random.RandomState(7) word for word.
+function ksi_test_mt19937() -> i32 {
+    let mut failed: i32 = 0
+
+    let a: ptr<u32> = mt19937_new(7)
+    let a0: u32 = mt19937_next_u32(a)
+    let a1: u32 = mt19937_next_u32(a)
+    let a2: u32 = mt19937_next_u32(a)
+    let a3: u32 = mt19937_next_u32(a)
+    failed = failed + ksi_check_u32("mt19937 u32 0", a0, 327741615.0)
+    failed = failed + ksi_check_u32("mt19937 u32 1", a1, 976413892.0)
+    failed = failed + ksi_check_u32("mt19937 u32 2", a2, 3349725721.0)
+    failed = failed + ksi_check_u32("mt19937 u32 3", a3, 1369975286.0)
+    mt19937_free(a)
+
+    let b: ptr<u32> = mt19937_new(7)
+    let d0: f64 = mt19937_next_double(b)
+    let d1: f64 = mt19937_next_double(b)
+    let d2: f64 = mt19937_next_double(b)
+    let d3: f64 = mt19937_next_double(b)
+    failed = failed + ksi_check_f64("mt19937 double 0", d0, 0.076308289373957172)
+    failed = failed + ksi_check_f64("mt19937 double 1", d1, 0.77991879224011462)
+    failed = failed + ksi_check_f64("mt19937 double 2", d2, 0.4384092314408935)
+    failed = failed + ksi_check_f64("mt19937 double 3", d3, 0.72346517783094122)
+    mt19937_free(b)
+
+    # 1300 draws crosses the 624-word refill twice.
+    let c: ptr<u32> = mt19937_new(7)
+    for i in 0 to 1300 {
+        let skip: u32 = mt19937_next_u32(c)
+    }
+    let f0: u32 = mt19937_next_u32(c)
+    let f1: u32 = mt19937_next_u32(c)
+    let f2: u32 = mt19937_next_u32(c)
+    failed = failed + ksi_check_u32("mt19937 refill 0", f0, 1928522760.0)
+    failed = failed + ksi_check_u32("mt19937 refill 1", f1, 1320486142.0)
+    failed = failed + ksi_check_u32("mt19937 refill 2", f2, 3674600427.0)
+    mt19937_free(c)
+
+    # numpy's RandomState.choice(200, p=uniform) for five successive draws.
+    let e: ptr<u32> = mt19937_new(7)
+    failed = failed + ksi_check_i32("choice 0", mt19937_choice_uniform(e, 200), 15)
+    failed = failed + ksi_check_i32("choice 1", mt19937_choice_uniform(e, 200), 155)
+    failed = failed + ksi_check_i32("choice 2", mt19937_choice_uniform(e, 200), 87)
+    failed = failed + ksi_check_i32("choice 3", mt19937_choice_uniform(e, 200), 144)
+    failed = failed + ksi_check_i32("choice 4", mt19937_choice_uniform(e, 200), 195)
+    mt19937_free(e)
+
+    if failed == 0 {
+        printf("  OK: MT19937 matches NumPy RandomState(7) including the refill boundary\n")
+    }
+    return failed
+}
+
+function ksi_check_fit(X: Matrix, n_init: i32, expect_inertia: f64) -> i32 {
+    let mut failed: i32 = 0
+    let km: KMeans = kmeans_fit_plus_plus(X, 4, 100, 0.0001, 42, n_init)
+
+    let rel: f64 = fabs((km.inertia as f64) - expect_inertia) / expect_inertia
+    if rel > 0.00001 {
+        printf("FAIL: n_init %d inertia %.6f, sklearn reference %.6f\n",
+            n_init, km.inertia as f64, expect_inertia)
+        failed = 1
+    }
+
+    # sklearn recovers the four planted groups of 50 on this matrix.
+    for k in 0 to 4 {
+        let mut count: i32 = 0
+        for i in 0 to X.rows {
+            if km.labels[i] == k { count = count + 1 }
+        }
+        if count != 50 {
+            printf("FAIL: n_init %d cluster %d has %d members, expected 50\n", n_init, k, count)
+            failed = 1
+        }
+    }
+
+    if failed == 0 {
+        printf("  OK: n_init %d reaches the sklearn partition, inertia %.6f, %d iterations\n",
+            n_init, km.inertia as f64, km.n_iter)
+    }
+    kmeans_free(km)
+    return failed
+}
+
+function ksi_test_determinism(X: Matrix) -> i32 {
+    let a: KMeans = kmeans_fit_plus_plus(X, 4, 100, 0.0001, 42, 3)
+    let b: KMeans = kmeans_fit_plus_plus(X, 4, 100, 0.0001, 42, 3)
+    let mut failed: i32 = 0
+    if a.inertia != b.inertia || a.n_iter != b.n_iter {
+        printf("FAIL: seeded fit is not reproducible\n")
+        failed = 1
+    }
+    for k in 0 to 4 {
+        for j in 0 to a.n_features {
+            if a.centroids[k][j] != b.centroids[k][j] { failed = 1 }
+        }
+    }
+    # A different seed must consume a different part of the stream.
+    let c: KMeans = kmeans_fit_plus_plus(X, 4, 100, 0.0001, 42, 3)
+    let d: KMeans = kmeans_fit_plus_plus(X, 4, 100, 0.0001, 43, 3)
+    let mut same: i32 = 1
+    for k in 0 to 4 {
+        for j in 0 to c.n_features {
+            if c.centroids[k][j] != d.centroids[k][j] { same = 0 }
+        }
+    }
+    if failed == 0 {
+        printf("  OK: seeded fit is reproducible, seed 42 and 43 draw independently (identical=%d)\n", same)
+    }
+    kmeans_free(a)
+    kmeans_free(b)
+    kmeans_free(c)
+    kmeans_free(d)
+    return failed
+}
+
+function main() -> i32 {
+    println("Test: sklearn-compatible KMeans initialization")
+    let mut failed: i32 = 0
+    failed = failed + ksi_test_mt19937()
+
+    let X: Matrix = ksi_build_matrix()
+    failed = failed + ksi_check_fit(X, 1, 154.255126953125)
+    failed = failed + ksi_check_fit(X, 5, 154.255126953125)
+    failed = failed + ksi_test_determinism(X)
+    matrix_free(X)
+
+    if failed != 0 {
+        println("FAILED: sklearn-compatible KMeans initialization")
+        return 1
+    }
+    println("OK: KMeans k-means++ matches sklearn's seeded initialization")
+    return 0
+}

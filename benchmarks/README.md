@@ -26,7 +26,7 @@ Canonical v2 consumes persisted train/test fixtures shared by Python and Flow. C
 
 [`parity_contract.json`](parity_contract.json) defines the semantic contract for all 19 rows. Supervised rows compare their declared predictive metric under explicit tolerances. KMeans uses adjusted Rand index plus inertia rather than label-mapped accuracy. PCA additionally checks explained-variance ratios, singular values, reconstruction error and sign-aligned components.
 
-Digits KMeans is classified as `approximately equivalent`. [`audit_kmeans_semantics.py`](audit_kmeans_semantics.py) records that the first trajectory divergence occurs during initialization; the final objective remains closely matched. [`finalize_kmeans_parity.py`](finalize_kmeans_parity.py) applies the explicit clustering-equivalence gate before the row becomes headline-eligible.
+Digits KMeans is classified as `approximately equivalent` under the tolerances declared in `parity_contract.json`, with no estimator-specific exception. [`audit_kmeans_semantics.py`](audit_kmeans_semantics.py) re-derives Flow's initial centre indices from a Python mirror of Flow's own MT19937 and greedy k-means++ and checks them against scikit-learn's initializer for all ten `n_init` restarts. It also records the differences that survive that alignment: the convergence statistic, the point at which inertia is reported, empty-cluster relocation and the `n_init` selection rule. Each was substituted in turn and none moves a canonical row.
 
 ## Learned-state diagnostics
 

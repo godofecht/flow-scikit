@@ -66,8 +66,6 @@ jobs:
           OMP_NUM_THREADS: "4"
           MKL_NUM_THREADS: "4"
         run: python benchmarks/run_headline.py --repeats 5
-      - name: Apply evidence-backed KMeans equivalence gate
-        run: python benchmarks/finalize_kmeans_parity.py
       - name: Generate persistent disparity report
         run: |
           cp benchmarks/headline_summary.json benchmarks/headline_result_v2.json
@@ -94,7 +92,12 @@ jobs:
           assert c['measurement_unresolved'] == 0, c
           assert disparity['counts']['rows'] == 19, disparity['counts']
           assert disparity['counts']['rows_with_tracked_disparity'] > 0, disparity['counts']
-          assert disparity['counts']['strict_final_status_disagreements'] >= 1, disparity['counts']
+          # Digits KMeans used to be promoted past a failed strict gate by
+          # finalize_kmeans_parity.py, which is why this once required a
+          # disagreement. Its seeded initialization now matches sklearn's, so
+          # every row passes strictly and the two statuses agree everywhere.
+          assert disparity['counts']['strict_final_status_disagreements'] == 0, disparity['counts']
+          assert disparity['counts']['rows_with_semantic_difference'] > 0, disparity['counts']
           assert history['snapshots'], history
           print({'headline': c, 'disparity': disparity['counts'], 'history_snapshots': len(history['snapshots'])})
           PY

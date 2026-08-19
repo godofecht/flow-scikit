@@ -1,50 +1,289 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "dataset": "digits",
   "random_state": 42,
   "n_clusters": 10,
-  "first_divergence_stage": "initialization",
-  "first_divergent_center": 0,
+  "n_init": 10,
+  "first_divergence_stage": "none",
+  "first_divergent_restart": null,
+  "first_divergent_center": null,
+  "restarts_compared": 10,
   "sklearn_initial_indices": [
-    538,
-    223,
-    1234,
-    1174,
-    267,
-    878,
-    549,
-    740,
-    112,
-    1363
-  ],
-  "sklearn_initial_indices_nearest_row_check": [
-    538,
-    223,
-    1234,
-    1174,
-    267,
-    878,
-    549,
-    740,
-    112,
-    1363
+    [
+      538,
+      223,
+      1234,
+      1174,
+      267,
+      878,
+      549,
+      740,
+      112,
+      1363
+    ],
+    [
+      140,
+      707,
+      55,
+      470,
+      1397,
+      300,
+      77,
+      442,
+      1413,
+      1091
+    ],
+    [
+      1015,
+      118,
+      1233,
+      106,
+      1271,
+      1023,
+      608,
+      901,
+      726,
+      133
+    ],
+    [
+      231,
+      1236,
+      1271,
+      1136,
+      343,
+      11,
+      191,
+      1014,
+      730,
+      59
+    ],
+    [
+      73,
+      1298,
+      366,
+      549,
+      763,
+      273,
+      732,
+      254,
+      191,
+      428
+    ],
+    [
+      948,
+      797,
+      1286,
+      1287,
+      139,
+      14,
+      171,
+      778,
+      1026,
+      935
+    ],
+    [
+      134,
+      363,
+      580,
+      281,
+      1041,
+      1372,
+      618,
+      1208,
+      1199,
+      1336
+    ],
+    [
+      139,
+      203,
+      1063,
+      525,
+      713,
+      999,
+      1273,
+      775,
+      440,
+      191
+    ],
+    [
+      1106,
+      139,
+      902,
+      1127,
+      41,
+      1001,
+      225,
+      1036,
+      884,
+      526
+    ],
+    [
+      166,
+      1210,
+      155,
+      613,
+      556,
+      715,
+      118,
+      1347,
+      572,
+      1382
+    ]
   ],
   "flow_initial_indices": [
-    258,
-    473,
-    325,
-    993,
-    1078,
-    949,
-    1043,
-    191,
-    646,
-    714
+    [
+      538,
+      223,
+      1234,
+      1174,
+      267,
+      878,
+      549,
+      740,
+      112,
+      1363
+    ],
+    [
+      140,
+      707,
+      55,
+      470,
+      1397,
+      300,
+      77,
+      442,
+      1413,
+      1091
+    ],
+    [
+      1015,
+      118,
+      1233,
+      106,
+      1271,
+      1023,
+      608,
+      901,
+      726,
+      133
+    ],
+    [
+      231,
+      1236,
+      1271,
+      1136,
+      343,
+      11,
+      191,
+      1014,
+      730,
+      59
+    ],
+    [
+      73,
+      1298,
+      366,
+      549,
+      763,
+      273,
+      732,
+      254,
+      191,
+      428
+    ],
+    [
+      948,
+      797,
+      1286,
+      1287,
+      139,
+      14,
+      171,
+      778,
+      1026,
+      935
+    ],
+    [
+      134,
+      363,
+      580,
+      281,
+      1041,
+      1372,
+      618,
+      1208,
+      1199,
+      1336
+    ],
+    [
+      139,
+      203,
+      1063,
+      525,
+      713,
+      999,
+      1273,
+      775,
+      440,
+      191
+    ],
+    [
+      1106,
+      139,
+      902,
+      1127,
+      41,
+      1001,
+      225,
+      1036,
+      884,
+      526
+    ],
+    [
+      166,
+      1210,
+      155,
+      613,
+      556,
+      715,
+      118,
+      1347,
+      572,
+      1382
+    ]
   ],
+  "mean_centering_changes_initial_indices": false,
   "initializers": {
     "sklearn": "NumPy RandomState/MT19937 + greedy k-means++ local trials",
-    "flow": "xorshift32 + one weighted candidate per center"
+    "flow": "MT19937 seeded as NumPy RandomState + greedy k-means++ local trials"
   },
+  "n_local_trials": 4,
+  "residual_semantic_differences": [
+    {
+      "dimension": "convergence statistic",
+      "sklearn": "sum of squared L2 center shifts against mean(var(X)) * tol, with a strict label-equality short circuit and a final E-step",
+      "flow": "maximum absolute coordinate shift against tol",
+      "moves_canonical_rows": false
+    },
+    {
+      "dimension": "inertia reporting point",
+      "sklearn": "final centers against final labels",
+      "flow": "the assignment made before the last centroid update",
+      "moves_canonical_rows": false
+    },
+    {
+      "dimension": "empty-cluster relocation",
+      "sklearn": "moves the n_empty distinct farthest points and debits them from their previous cluster",
+      "flow": "re-picks the single farthest point per empty cluster and leaves it in its previous cluster",
+      "moves_canonical_rows": false
+    },
+    {
+      "dimension": "n_init selection",
+      "sklearn": "strictly lower inertia and a clustering that differs from the incumbent",
+      "flow": "strictly lower inertia",
+      "moves_canonical_rows": false
+    }
+  ],
   "convergence": {
     "sklearn_parameter_tol": 0.001,
     "sklearn_effective_tol": 0.0009531264659017324,
@@ -53,9 +292,7 @@
     "flow_statistic": "maximum absolute coordinate shift"
   },
   "canonical_parity_policy": {
-    "status": "approximately equivalent",
-    "reason": "random-state and convergence trajectories are not bit-identical; compare permutation-invariant ARI and final inertia",
-    "ari_absolute_tolerance": 0.07,
-    "inertia_relative_tolerance": 0.1
+    "status": "governed by benchmarks/parity_contract.json",
+    "reason": "seeded initialization is aligned, so the row is gated on the same declared tolerances as every other clustering row"
   }
 }
