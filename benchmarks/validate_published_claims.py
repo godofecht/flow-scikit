@@ -6,8 +6,15 @@ Those numbers change on every freeze, and prose does not. This has drifted
 three times, most recently understating the project by two Flow wins.
 
 Run with no arguments to check (non-zero exit on drift). Run with --fix to
-rewrite the prose from the artifact; freeze-results does that on main so the
-claims self-heal rather than needing a human to notice.
+rewrite the prose from the artifact.
+
+This deliberately does NOT gate pull requests. The artifact refreezes on main
+whenever the benchmark runs, several times a day, so a branch's prose goes
+stale against main's newer artifact through no fault of the branch. Gating PRs
+on it fails every open PR the moment a freeze lands, which is worse than the
+drift it would catch. freeze-results runs --fix and then re-checks, so the
+claims self-heal on main and a reworded sentence still surfaces (exit 2) where
+someone can act on it.
 """
 from __future__ import annotations
 

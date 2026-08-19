@@ -227,7 +227,9 @@ jobs:
       - name: Promote canonical summary to published source of truth
         run: cp benchmarks/headline_summary.json benchmarks/headline_result_v2.json
       - name: Sync published claims to the frozen artifact
-        run: python benchmarks/validate_published_claims.py --fix
+        run: |
+          python benchmarks/validate_published_claims.py --fix
+          python benchmarks/validate_published_claims.py
       - name: Commit generated evidence if changed
         run: |
           git config user.name "github-actions[bot]"
