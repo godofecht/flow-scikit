@@ -1,0 +1,371 @@
+# Regression test for the Gram-matrix coordinate descent in lasso_fit.
+#
+# The pre-change implementation recomputed x_ij - mean_j on every visit to
+# every element and walked a row-major buffer with a stride of n_features. It
+# is kept verbatim below as an independent reference. The new code materialises
+# the centred design once in column-major f64 and, when the feature count is
+# modest, carries q = Xc^T r against a precomputed Gram matrix instead of
+# carrying the residual, so a coordinate update costs O(n_features) rather than
+# O(n_samples).
+#
+# What is checked is tight element-wise numerical equivalence to that
+# reference. The Gram formulation reaches the same rho by a different
+# summation, so bit identity is not a contract that a compiler is obliged to
+# honour; the observed result on macOS/clang at FLOW_OPT_LEVEL=0 was bit
+# identical on every case below, and the assertion carries an absolute term for
+# coefficients near zero plus a relative term for ordinary ones.
+#
+# Every branch of the path selection is exercised: the Gram path, the
+# column-major residual path reached both by a low sweep budget and by a wide
+# design, and the streaming fallback for a design too large to materialise.
+# Edge cases cover a constant column, a single feature, an all-zero response,
+# and a penalty large enough to drive every coefficient to exactly zero.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+}
+
+function optlf_close(a: f32, b: f32, tolerance: f32) -> bool {
+    let mut d: f32 = a - b
+    if d < 0.0 { d = -d }
+    return d <= tolerance
+}
+
+# Tight equivalence: the absolute term protects coefficients close to zero, the
+# relative term scales with ordinary weights.
+function optlf_equivalent(a: f32, b: f32) -> bool {
+    let mut d: f32 = a - b
+    if d < 0.0 { d = -d }
+    let mut aa: f32 = a
+    if aa < 0.0 { aa = -aa }
+    let mut bb: f32 = b
+    if bb < 0.0 { bb = -bb }
+    let mut scale: f32 = aa
+    if bb > scale { scale = bb }
+    let rel: f32 = scale * 0.0001
+    let mut tol: f32 = 0.00001
+    if rel > tol { tol = rel }
+    return d <= tol
+}
+
+# Verbatim copy of the pre-change lasso_fit body: means, then the on-the-fly
+# column squared norms, then coordinate descent recomputing every centred
+# element on both the rho pass and the residual pass.
+function optlf_reference_fit(X: Matrix, y: ptr<f32>, alpha: f32, epochs: i32) -> Lasso {
+    let n: i32 = X.cols
+    let m: i32 = X.rows
+
+    let x_mean: ptr<f64> = array_new_f64(n)
+    let mut y_mean: f64 = 0.0
+    for i in 0 to m {
+        y_mean = y_mean + (y[i] as f64)
+        for j in 0 to n {
+            x_mean[j] = x_mean[j] + (matrix_at(X, i, j) as f64)
+        }
+    }
+    y_mean = y_mean / (m as f64)
+    for j in 0 to n {
+        x_mean[j] = x_mean[j] / (m as f64)
+    }
+
+    let col_sq: ptr<f64> = array_new_f64(n)
+    for i in 0 to m {
+        for j in 0 to n {
+            let xc: f64 = (matrix_at(X, i, j) as f64) - x_mean[j]
+            col_sq[j] = col_sq[j] + xc * xc
+        }
+    }
+
+    let w_d: ptr<f64> = array_new_f64(n)
+    for j in 0 to n { w_d[j] = 0.0 }
+    let residual: ptr<f64> = array_new_f64(m)
+    for i in 0 to m {
+        residual[i] = (y[i] as f64) - y_mean
+    }
+
+    let alpha_d: f64 = alpha as f64
+    let threshold: f64 = alpha_d * (m as f64)
+    for epoch in 0 to epochs {
+        let mut max_change: f64 = 0.0
+        for j in 0 to n {
+            if col_sq[j] < 0.0000000000000001 { continue }
+
+            let mut rho: f64 = 0.0
+            for i in 0 to m {
+                let xc: f64 = (matrix_at(X, i, j) as f64) - x_mean[j]
+                rho = rho + xc * residual[i]
+            }
+            rho = rho + col_sq[j] * w_d[j]
+
+            let mut new_w: f64 = 0.0
+            if rho > threshold {
+                new_w = (rho - threshold) / col_sq[j]
+            } elif rho < -threshold {
+                new_w = (rho + threshold) / col_sq[j]
+            }
+
+            let delta: f64 = w_d[j] - new_w
+            if delta != 0.0 {
+                for i in 0 to m {
+                    let xc: f64 = (matrix_at(X, i, j) as f64) - x_mean[j]
+                    residual[i] = residual[i] + delta * xc
+                }
+            }
+
+            let change: f64 = new_w - w_d[j]
+            let abs_change: f64 = fabs(change)
+            if abs_change > max_change { max_change = abs_change }
+
+            w_d[j] = new_w
+        }
+        if max_change < 0.0000000000000001 { break }
+    }
+
+    let mut bias_d: f64 = y_mean
+    for j in 0 to n {
+        bias_d = bias_d - x_mean[j] * w_d[j]
+    }
+    let weights: ptr<f32> = array_new_f32(n)
+    for j in 0 to n {
+        weights[j] = w_d[j] as f32
+    }
+    array_free_f64(x_mean)
+    array_free_f64(col_sq)
+    array_free_f64(residual)
+    array_free_f64(w_d)
+    let b32: f32 = bias_d as f32
+    return Lasso { weights: weights, bias: b32, n_features: n, alpha: alpha, fitted: true }
+}
+
+# mode 0: well conditioned.
+# mode 1: near-collinear columns (every column is column 0 plus a whisper).
+# mode 2: column scales spanning 1e-4 to 1e4.
+# mode 3: every third column is constant, so its centred norm is zero.
+function optlf_build(X: Matrix, y: ptr<f32>, rows: i32, cols: i32, mode: i32, seed0: i32) -> void {
+    let mut seed: i32 = seed0
+    for i in 0 to rows {
+        let mut acc: f32 = 0.0
+        let mut first: f32 = 0.0
+        for j in 0 to cols {
+            seed = (seed * 1103515245 + 12345) % 2147483647
+            if seed < 0 { seed = -seed }
+            let r: f32 = ((seed % 4000) as f32) / 1000.0 - 2.0
+            let mut v: f32 = r
+            if mode == 1 {
+                if j == 0 { first = r }
+                if j > 0 { v = first + r * 0.0001 }
+            }
+            if mode == 2 {
+                let mut scale: f32 = 1.0
+                let e: i32 = j % 5
+                if e == 1 { scale = 100.0 }
+                if e == 2 { scale = 0.01 }
+                if e == 3 { scale = 10000.0 }
+                if e == 4 { scale = 0.0001 }
+                v = r * scale
+            }
+            if mode == 3 {
+                if j % 3 == 0 { v = 1.5 }
+            }
+            matrix_set(X, i, j, v)
+            acc = acc + v * (((j % 5) + 1) as f32)
+        }
+        seed = (seed * 1103515245 + 12345) % 2147483647
+        if seed < 0 { seed = -seed }
+        y[i] = acc * 0.5 + 3.25 + ((seed % 200) as f32) / 1000.0 - 0.1
+    }
+}
+
+function optlf_case(rows: i32, cols: i32, mode: i32, alpha: f32, epochs: i32, seed0: i32) -> i32 {
+    let X: Matrix = matrix_new(rows, cols)
+    let y: ptr<f32> = array_new_f32(rows)
+    optlf_build(X, y, rows, cols, mode, seed0)
+
+    let want: Lasso = optlf_reference_fit(X, y, alpha, epochs)
+    let got: Lasso = lasso_fit(X, y, alpha, epochs, 0.01)
+
+    let mut bad: i32 = 0
+    if not optlf_equivalent(got.bias, want.bias) {
+        bad = bad + 1
+        printf("  bias reference=%.9g got=%.9g\n", want.bias as f64, got.bias as f64)
+    }
+    for j in 0 to cols {
+        if not optlf_equivalent(got.weights[j], want.weights[j]) {
+            bad = bad + 1
+            if bad < 6 {
+                printf("  w%d reference=%.9g got=%.9g\n", j, want.weights[j] as f64, got.weights[j] as f64)
+            }
+        }
+    }
+    if bad > 0 {
+        printf("FAIL: lasso_fit coefficients moved (rows=%d cols=%d mode=%d alpha=%.6g epochs=%d)\n",
+               rows, cols, mode, alpha as f64, epochs)
+    }
+    lasso_free(want)
+    lasso_free(got)
+    array_free_f32(y)
+    matrix_free(X)
+    return bad
+}
+
+function main() -> i32 {
+    let mut bad: i32 = 0
+
+    # ---- Gram path: modest feature count and a real sweep budget ----
+    # The canonical benchmark shape, then the small end that bench_scaled
+    # covers, then a wide-ish sample count.
+    bad = bad + optlf_case(353, 10, 0, 0.1, 1000, 11)
+    bad = bad + optlf_case(442, 10, 0, 0.1, 1000, 4242)
+    bad = bad + optlf_case(100, 8, 0, 0.1, 1000, 12345)
+    bad = bad + optlf_case(2000, 12, 0, 0.05, 300, 99991)
+
+    # Ill-conditioned designs on the Gram path, where an incrementally carried
+    # q = Xc^T r would show drift first if it were going to.
+    bad = bad + optlf_case(300, 12, 1, 0.01, 1000, 4242)
+    bad = bad + optlf_case(300, 12, 1, 0.5, 1000, 4242)
+    bad = bad + optlf_case(500, 20, 2, 1.0, 500, 31337)
+    bad = bad + optlf_case(500, 20, 2, 0.001, 500, 31337)
+
+    # ---- Edge cases ----
+    # Single feature.
+    bad = bad + optlf_case(1000, 1, 0, 0.1, 500, 5)
+    # Constant columns, whose centred squared norm is exactly zero and which
+    # the sweep must skip rather than divide by.
+    bad = bad + optlf_case(200, 9, 3, 0.1, 500, 808)
+    # More features than samples.
+    bad = bad + optlf_case(40, 120, 0, 0.05, 400, 616)
+
+    # ---- Column-major residual path, reached two different ways ----
+    # Sweep budget too small to amortise a Gram build.
+    bad = bad + optlf_case(200, 64, 0, 0.1, 4, 777)
+    bad = bad + optlf_case(200, 64, 3, 0.1, 4, 778)
+    # Feature count above the Gram cap.
+    bad = bad + optlf_case(120, 600, 0, 0.5, 50, 4243)
+    bad = bad + optlf_case(60, 700, 2, 0.5, 30, 4244)
+
+    # ---- Streaming fallback: more than eight million cells, so no centred
+    # copy is materialised and the original on-the-fly loop runs. ----
+    bad = bad + optlf_case(2900, 2900, 0, 0.5, 2, 31337)
+
+    if bad > 0 {
+        printf("  total coefficients outside tolerance: %d\n", bad)
+        return 1
+    }
+
+    # ---- Hand-checkable case: a small penalty recovers the generator ----
+    let X1: Matrix = matrix_new(400, 2)
+    let y1: ptr<f32> = array_new_f32(400)
+    let mut seed: i32 = 1234567
+    for i in 0 to 400 {
+        seed = (seed * 1103515245 + 12345) % 2147483647
+        if seed < 0 { seed = -seed }
+        let a: f32 = ((seed % 4000) as f32) / 1000.0 - 2.0
+        seed = (seed * 1103515245 + 12345) % 2147483647
+        if seed < 0 { seed = -seed }
+        let b: f32 = ((seed % 4000) as f32) / 1000.0 - 2.0
+        matrix_set(X1, i, 0, a)
+        matrix_set(X1, i, 1, b)
+        y1[i] = 2.0 * a - 1.0 * b + 0.5
+    }
+    let m1: Lasso = lasso_fit(X1, y1, 0.0001, 2000, 0.01)
+    if not optlf_close(m1.weights[0], 2.0, 0.01) || not optlf_close(m1.weights[1], -1.0, 0.01) {
+        println("FAIL: lasso_fit with a tiny penalty no longer recovers the generator")
+        printf("  w0=%.9f w1=%.9f\n", m1.weights[0], m1.weights[1])
+        return 1
+    }
+    if not optlf_close(m1.bias, 0.5, 0.01) {
+        println("FAIL: lasso_fit intercept moved")
+        printf("  b=%.9f\n", m1.bias)
+        return 1
+    }
+
+    # ---- A penalty above the correlation of every feature zeroes them all ----
+    # Soft thresholding sets w_j to exactly zero when |rho_j| <= alpha * m, so
+    # a large alpha must give exactly zero, not merely something small, and the
+    # unpenalised intercept must land on the response mean.
+    let m2: Lasso = lasso_fit(X1, y1, 1000.0, 500, 0.01)
+    if m2.weights[0] != 0.0 || m2.weights[1] != 0.0 {
+        println("FAIL: a large alpha no longer drives the coefficients to exactly zero")
+        printf("  w0=%.9f w1=%.9f\n", m2.weights[0], m2.weights[1])
+        return 1
+    }
+    let mut ysum: f64 = 0.0
+    for i in 0 to 400 {
+        ysum = ysum + (y1[i] as f64)
+    }
+    let ybar: f32 = (ysum / 400.0) as f32
+    if not optlf_close(m2.bias, ybar, 0.0001) {
+        println("FAIL: the intercept was shrunk along with the coefficients")
+        printf("  b=%.9f response mean=%.9f\n", m2.bias, ybar)
+        return 1
+    }
+
+    lasso_free(m1)
+    lasso_free(m2)
+    array_free_f32(y1)
+    matrix_free(X1)
+
+    # ---- All-zero response: nothing to fit, everything must stay at zero ----
+    let X3: Matrix = matrix_new(120, 6)
+    let y3: ptr<f32> = array_new_f32(120)
+    optlf_build(X3, y3, 120, 6, 0, 24680)
+    for i in 0 to 120 { y3[i] = 0.0 }
+    let m3: Lasso = lasso_fit(X3, y3, 0.1, 500, 0.01)
+    for j in 0 to 6 {
+        if m3.weights[j] != 0.0 {
+            println("FAIL: an all-zero response produced a nonzero coefficient")
+            printf("  w%d=%.9f\n", j, m3.weights[j])
+            return 1
+        }
+    }
+    if not optlf_close(m3.bias, 0.0, 0.000001) {
+        println("FAIL: an all-zero response produced a nonzero intercept")
+        printf("  b=%.9f\n", m3.bias)
+        return 1
+    }
+    lasso_free(m3)
+    array_free_f32(y3)
+    matrix_free(X3)
+
+    # ---- Realistic workload end to end on the canonical diabetes shape ----
+    let diabetes: Dataset = load_diabetes()
+    let sc: StandardScaler = standard_scaler_fit(diabetes.X)
+    let Xs: Matrix = standard_scaler_transform(sc, diabetes.X)
+    let want_d: Lasso = optlf_reference_fit(Xs, diabetes.y, 0.1, 1000)
+    let got_d: Lasso = lasso_fit(Xs, diabetes.y, 0.1, 1000, 0.01)
+    let mut bad_d: i32 = 0
+    if not optlf_equivalent(got_d.bias, want_d.bias) { bad_d = bad_d + 1 }
+    for j in 0 to got_d.n_features {
+        if not optlf_equivalent(got_d.weights[j], want_d.weights[j]) {
+            bad_d = bad_d + 1
+            printf("  diabetes w%d reference=%.9g got=%.9g\n",
+                   j, want_d.weights[j] as f64, got_d.weights[j] as f64)
+        }
+    }
+    if bad_d > 0 {
+        println("FAIL: lasso_fit moved on the full diabetes design")
+        return 1
+    }
+    # Predictions must track too, not just the stored coefficients.
+    let p_want: ptr<f32> = lasso_predict(want_d, Xs)
+    let p_got: ptr<f32> = lasso_predict(got_d, Xs)
+    for i in 0 to Xs.rows {
+        if not optlf_equivalent(p_got[i], p_want[i]) {
+            println("FAIL: lasso_predict diverged on the diabetes design")
+            printf("  row %d reference=%.9g got=%.9g\n", i, p_want[i] as f64, p_got[i] as f64)
+            return 1
+        }
+    }
+    array_free_f32(p_want)
+    array_free_f32(p_got)
+    lasso_free(want_d)
+    lasso_free(got_d)
+    matrix_free(Xs)
+    standard_scaler_free(sc)
+    dataset_free(diabetes)
+
+    println("OK: lasso_fit coefficients remain numerically equivalent after the Gram rewrite")
+    return 0
+}
