@@ -950,13 +950,16 @@ export function ridge_fit(X: Matrix, y: ptr<f32>, alpha: f32, epochs: i32, lr: f
     let n: i32 = X.cols
     let m: i32 = X.rows
 
-    # Center data in f64 for precision.
+    # Center data in f64 for precision. X is contiguous row-major, so index
+    # X.data directly; matrix_at copies the Matrix struct by value per element.
+    let xdata: ptr<f32> = X.data
     let x_mean: ptr<f64> = array_new_f64(n)
     let mut y_mean: f64 = 0.0
     for i in 0 to m {
         y_mean = y_mean + (y[i] as f64)
+        let base: i32 = i * n
         for j in 0 to n {
-            x_mean[j] = x_mean[j] + (matrix_at(X, i, j) as f64)
+            x_mean[j] = x_mean[j] + (xdata[base + j] as f64)
         }
     }
     y_mean = y_mean / (m as f64)
@@ -965,18 +968,32 @@ export function ridge_fit(X: Matrix, y: ptr<f32>, alpha: f32, epochs: i32, lr: f
     }
 
     # Build XtX + alpha*I and Xty in f64 from centered data.
+    # Each sample's centred row is built once, then its contribution to the
+    # Gram matrix is one dger. The old triple loop recentred an element of X
+    # through matrix_at inside the innermost step, so every row was recentred
+    # n times over and the whole m * n * n product ran in scalar f64.
+    #
+    # dger is used per row rather than one dgemm over the whole centred design
+    # on purpose. Element (j, k) of XtX still accumulates the same products in
+    # the same ascending-i order, which keeps the coefficients bit-identical.
+    # A single dgemm reassociates the sum and, while it agrees to about 1e-15
+    # in f64, it moves the last f32 digit of a coefficient on near-collinear
+    # and badly-scaled designs.
     let XtX: ptr<f64> = array_new_f64(n * n)
     let Xty: ptr<f64> = array_new_f64(n)
+    let xrow: ptr<f64> = array_new_f64(n)
     for i in 0 to m {
+        let base: i32 = i * n
         for j in 0 to n {
-            let xj: f64 = (matrix_at(X, i, j) as f64) - x_mean[j]
-            Xty[j] = Xty[j] + xj * ((y[i] as f64) - y_mean)
-            for k in 0 to n {
-                let xk: f64 = (matrix_at(X, i, k) as f64) - x_mean[k]
-                XtX[j * n + k] = XtX[j * n + k] + xj * xk
-            }
+            xrow[j] = (xdata[base + j] as f64) - x_mean[j]
         }
+        let yi: f64 = (y[i] as f64) - y_mean
+        for j in 0 to n {
+            Xty[j] = Xty[j] + xrow[j] * yi
+        }
+        blas_ger_ld_f64(XtX, n, n, n, xrow, 1, xrow, 1.0)
     }
+    array_free_f64(xrow)
 
     # Add alpha * I (sklearn convention: alpha on diagonal, not alpha*m)
     let alpha_d: f64 = alpha as f64

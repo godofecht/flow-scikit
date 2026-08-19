@@ -41,24 +41,40 @@ export function pca_fit(X: Matrix, n_components: i32) -> PCA {
         mean[j] = mean[j] / n_samples_f
     }
 
-    # Covariance is symmetric, so only the upper triangle is accumulated and
-    # then mirrored. Multiplication is commutative, so the mirrored entry is
-    # the same value the old loop computed for (j2, j1).
     let cov: Matrix = matrix_new(n_features, n_features)
     let cov_data: ptr<f32> = cov.data
     let ddof_denom: f32 = (n_samples as f32) - 1.0
-    for j1 in 0 to n_features {
-        for j2 in j1 to n_features {
-            let mut sum: f32 = 0.0
-            for i in 0 to n_samples {
-                let row_base: i32 = i * n_features
-                let d1: f32 = xdata[row_base + j1] - mean[j1]
-                let d2: f32 = xdata[row_base + j2] - mean[j2]
-                sum = sum + d1 * d2
+
+    # OpenBLAS thread dispatch takes ~0.1 ms. We gate the BLAS gemm behind a
+    # work threshold to avoid regressing on small inputs (like iris).
+    if n_samples * n_features > 10000 {
+        let Xc: ptr<f32> = array_new_f32(n_samples * n_features)
+        for i in 0 to n_samples {
+            let row_base: i32 = i * n_features
+            for j in 0 to n_features {
+                Xc[row_base + j] = xdata[row_base + j] - mean[j]
             }
-            let val: f32 = sum / ddof_denom
-            cov_data[j1 * n_features + j2] = val
-            cov_data[j2 * n_features + j1] = val
+        }
+
+        blas_matmat_tn(Xc, Xc, cov_data, n_features, n_features, n_samples, n_features, n_features, n_features, 1.0 / ddof_denom, 0.0)
+        array_free_f32(Xc)
+    } else {
+        # Covariance is symmetric, so only the upper triangle is accumulated and
+        # then mirrored. Multiplication is commutative, so the mirrored entry is
+        # the same value the old loop computed for (j2, j1).
+        for j1 in 0 to n_features {
+            for j2 in j1 to n_features {
+                let mut sum: f32 = 0.0
+                for i in 0 to n_samples {
+                    let row_base: i32 = i * n_features
+                    let d1: f32 = xdata[row_base + j1] - mean[j1]
+                    let d2: f32 = xdata[row_base + j2] - mean[j2]
+                    sum = sum + d1 * d2
+                }
+                let val: f32 = sum / ddof_denom
+                cov_data[j1 * n_features + j2] = val
+                cov_data[j2 * n_features + j1] = val
+            }
         }
     }
 

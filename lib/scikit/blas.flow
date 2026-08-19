@@ -70,6 +70,13 @@ export function blas_matvec_ld(A: ptr<f32>, m: i32, n: i32, lda: i32, x: ptr<f32
 # A is m x k with leading dimension lda, B is n x k with leading dimension ldb,
 # C is m x n with leading dimension n. All row-major.
 # lda/ldb let the caller use the first k columns of a wider buffer.
+
+# Transposed matrix times matrix: C = alpha * A^T * B + beta * C
+# A is k x m with leading dimension lda, B is k x n with leading dimension ldb,
+# C is m x n with leading dimension ldc. All row-major.
+export function blas_matmat_tn(A: ptr<f32>, B: ptr<f32>, C: ptr<f32>, m: i32, n: i32, k: i32, lda: i32, ldb: i32, ldc: i32, alpha: f32, beta: f32) -> void {
+    cblas_sgemm(CBLAS_ROW_MAJOR, CBLAS_TRANS, CBLAS_NO_TRANS, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc)
+}
 export function blas_matmat_nt(A: ptr<f32>, B: ptr<f32>, C: ptr<f32>, m: i32, n: i32, k: i32, lda: i32, ldb: i32, alpha: f32, beta: f32) -> void {
     cblas_sgemm(CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, CBLAS_TRANS, m, n, k, alpha, A, lda, B, ldb, beta, C, n)
 }
