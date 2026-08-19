@@ -3,13 +3,13 @@
 | Estimator | Operation | Class | Owner | Disposition | Priority |
 |---|---|---|---|---|---:|
 | `KMeans` | `fit` | mixed | sklearn | already-equivalent | 72.1 |
-| `LogisticRegression` | `fit` | mixed | external | retain-native | 72.0 |
-| `LinearRegression` | `fit` | mixed | sklearn | already-equivalent | 68.6 |
+| `LogisticRegression` | `fit` | mixed | external | retain-native | 71.9 |
+| `LinearRegression` | `fit` | mixed | sklearn | already-equivalent | 68.5 |
 | `RandomForestClassifier` | `fit` | mixed | sklearn | already-equivalent | 48.0 |
 | `RandomForestClassifier` | `predict` | mixed | sklearn | already-equivalent | 48.0 |
 | `RandomForestClassifier` | `predict_proba` | mixed | sklearn | already-equivalent | 48.0 |
-| `DecisionTreeClassifier` | `fit` | mixed | sklearn | already-equivalent | 43.5 |
-| `DecisionTreeClassifier` | `predict` | mixed | sklearn | already-equivalent | 43.5 |
+| `DecisionTreeClassifier` | `fit` | mixed | sklearn | already-equivalent | 43.2 |
+| `DecisionTreeClassifier` | `predict` | mixed | sklearn | already-equivalent | 43.2 |
 | `ARDRegression` | `fit` | mixed | sklearn | already-equivalent | 40.5 |
 | `AdaBoostClassifier` | `fit` | mixed | sklearn | already-equivalent | 40.5 |
 | `AdaBoostRegressor` | `fit` | mixed | sklearn | already-equivalent | 40.5 |
@@ -139,7 +139,7 @@
 | `TfidfTransformer` | `fit` | mixed | sklearn | low-value | 34.0 |
 | `KernelRidge` | `fit` | mixed | sklearn | already-equivalent | 33.6 |
 | `Lasso` | `fit` | mixed | sklearn | already-equivalent | 33.1 |
-| `SVC` | `fit` | external-native-bound | external | retain-native | 30.2 |
+| `SVC` | `fit` | external-native-bound | external | retain-native | 29.8 |
 | `MiniBatchSparsePCA` | `transform` | blas-lapack-bound | sklearn | retain-native | 17.0 |
 | `Nystroem` | `fit` | blas-lapack-bound | sklearn | retain-native | 17.0 |
 | `SparsePCA` | `transform` | blas-lapack-bound | sklearn | retain-native | 17.0 |
@@ -147,4 +147,4 @@
 | `NuSVC` | `fit` | external-native-bound | external | retain-native | 12.5 |
 | `NuSVR` | `fit` | external-native-bound | external | retain-native | 12.5 |
 | `SVR` | `fit` | external-native-bound | external | retain-native | 12.5 |
-| `LinearSVC` | `fit` | external-native-bound | external | retain-native | 7.0 |
+| `LinearSVC` | `fit` | external-native-bound | external | retain-native | 7.3 |
