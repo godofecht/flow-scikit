@@ -11,7 +11,7 @@ import numpy as np
 import sklearn
 from sklearn.cluster import KMeans
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import Lasso, LinearRegression
 from sklearn.naive_bayes import GaussianNB
 from sklearn.svm import SVC
 
@@ -69,6 +69,10 @@ def main() -> int:
             fit_t = measure(lambda: LinearRegression().fit(Xtr, yrtr), min_window_ms=10.0, samples=5)
             pred_t = measure(lambda: fit_t.value.predict(Xte), min_window_ms=10.0, samples=5)
             record(rows, "LinearRegression", n, p, fit_t, pred_t)
+
+            fit_t = measure(lambda: Lasso(alpha=0.1, max_iter=1000).fit(Xtr, yrtr), min_window_ms=10.0, samples=5)
+            pred_t = measure(lambda: fit_t.value.predict(Xte), min_window_ms=10.0, samples=5)
+            record(rows, "Lasso", n, p, fit_t, pred_t)
 
             fit_t = measure(lambda: RandomForestClassifier(n_estimators=10, max_depth=8, random_state=42, n_jobs=1).fit(Xtr, yctr), min_window_ms=10.0, samples=5)
             pred_t = measure(lambda: fit_t.value.predict(Xte), min_window_ms=10.0, samples=5)
