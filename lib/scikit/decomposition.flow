@@ -41,24 +41,67 @@ export function pca_fit(X: Matrix, n_components: i32) -> PCA {
         mean[j] = mean[j] / n_samples_f
     }
 
-    # Covariance is symmetric, so only the upper triangle is accumulated and
-    # then mirrored. Multiplication is commutative, so the mirrored entry is
-    # the same value the old loop computed for (j2, j1).
+    # Covariance is Xc^T * Xc / (n - 1) with Xc the centred design.
+    #
+    # Above a work threshold that whole product is one cblas_sgemm on a centred
+    # copy of X, which is what issue #361 measured. BLAS reassociates the inner
+    # sums, so the covariance entries land a few f32 ulps away from the scalar
+    # triple loop. That is expected and is not a parity failure: cross-BLAS bit
+    # identity is not a valid contract (see PR #377). The scaling by n - 1 stays
+    # a separate divide rather than a gemm alpha so it matches the scalar
+    # expression term for term, and the upper triangle is mirrored so the matrix
+    # handed to the power iteration is exactly symmetric whatever blocking the
+    # BLAS chose.
+    #
+    # Below the threshold the original scalar kernel runs unchanged, so small
+    # fits stay bit-identical to the previous code and skip the ~0.1 ms OpenBLAS
+    # thread dispatch. The gate is n_samples * n_features * n_features, the
+    # covariance work, in the same product form KMeans uses. Accelerate already
+    # wins at 128k, but 262144 is where the scalar covariance being replaced
+    # costs about 0.3 ms, several times the dispatch it now has to pay for, so
+    # the gate holds on OpenBLAS too. Measured above it: 2.0x at 1000 x 32,
+    # 3.3x at 20000 x 8, 3.2x at 4000 x 64.
     let cov: Matrix = matrix_new(n_features, n_features)
     let cov_data: ptr<f32> = cov.data
     let ddof_denom: f32 = (n_samples as f32) - 1.0
-    for j1 in 0 to n_features {
-        for j2 in j1 to n_features {
-            let mut sum: f32 = 0.0
-            for i in 0 to n_samples {
-                let row_base: i32 = i * n_features
-                let d1: f32 = xdata[row_base + j1] - mean[j1]
-                let d2: f32 = xdata[row_base + j2] - mean[j2]
-                sum = sum + d1 * d2
+    let cov_work: i64 = (n_samples as i64) * (n_features as i64) * (n_features as i64)
+    if cov_work >= 262144 {
+        let centered: Matrix = matrix_new(n_samples, n_features)
+        let cdata: ptr<f32> = centered.data
+        for i in 0 to n_samples {
+            let row_base: i32 = i * n_features
+            for j in 0 to n_features {
+                cdata[row_base + j] = xdata[row_base + j] - mean[j]
             }
-            let val: f32 = sum / ddof_denom
-            cov_data[j1 * n_features + j2] = val
-            cov_data[j2 * n_features + j1] = val
+        }
+        # 101 = CblasRowMajor, 112 = CblasTrans, 111 = CblasNoTrans. Literals
+        # because an export const is not transitively visible through imports.
+        cblas_sgemm(101, 112, 111, n_features, n_features, n_samples, 1.0, cdata, n_features, cdata, n_features, 0.0, cov_data, n_features)
+        matrix_free(centered)
+        for j1 in 0 to n_features {
+            for j2 in j1 to n_features {
+                let val: f32 = cov_data[j1 * n_features + j2] / ddof_denom
+                cov_data[j1 * n_features + j2] = val
+                cov_data[j2 * n_features + j1] = val
+            }
+        }
+    } else {
+        # Covariance is symmetric, so only the upper triangle is accumulated and
+        # then mirrored. Multiplication is commutative, so the mirrored entry is
+        # the same value the old loop computed for (j2, j1).
+        for j1 in 0 to n_features {
+            for j2 in j1 to n_features {
+                let mut sum: f32 = 0.0
+                for i in 0 to n_samples {
+                    let row_base: i32 = i * n_features
+                    let d1: f32 = xdata[row_base + j1] - mean[j1]
+                    let d2: f32 = xdata[row_base + j2] - mean[j2]
+                    sum = sum + d1 * d2
+                }
+                let val: f32 = sum / ddof_denom
+                cov_data[j1 * n_features + j2] = val
+                cov_data[j2 * n_features + j1] = val
+            }
         }
     }
 
