@@ -9,6 +9,7 @@ import "lib/scikit/progress.flow"
 import "lib/scikit/linear.flow"
 import "lib/scikit/validation.flow"
 import "lib/scikit/tree.flow"
+import "lib/scikit/prng.flow"
 
 extern {
     function rand() -> i32
@@ -1132,6 +1133,80 @@ export function repeated_k_fold(X: Matrix, y: ptr<f32>, n_splits: i32, n_repeats
     return result
 }
 
+# ============================================================================
+# BootstrapOOB
+# Out-of-bag bootstrap cross-validation.
+# Draws n_samples with replacement for the training set. The out-of-bag
+# complement forms the test set.
+# Definition from Breiman 1996 "Out-of-bag estimation".
+# ============================================================================
+
+export struct BootstrapOOB {
+    n_splits: i32,
+    seed: i32
+}
+
+export function bootstrap_oob_init(n_splits: i32, seed: i32) -> BootstrapOOB {
+    let result: BootstrapOOB = BootstrapOOB {
+        n_splits: n_splits,
+        seed: seed
+    }
+    return result
+}
+
+export function bootstrap_oob_get_split(bs: BootstrapOOB, n_samples: i32, split: i32) -> FoldIndices {
+    let mut prng: PRNG = prng_seed(bs.seed + split)
+
+    let train_indices: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+    let in_bag: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+
+    let mut i: i32 = 0
+    while i < n_samples {
+        in_bag[i] = 0
+        i = i + 1
+    }
+
+    i = 0
+    while i < n_samples {
+        let res: PRNGResult = prng_int(prng, n_samples)
+        prng = PRNG { state: res.state }
+        let idx: i32 = res.value
+        train_indices[i] = idx
+        in_bag[idx] = 1
+        i = i + 1
+    }
+
+    let mut n_test: i32 = 0
+    i = 0
+    while i < n_samples {
+        if in_bag[i] == 0 {
+            n_test = n_test + 1
+        }
+        i = i + 1
+    }
+
+    let test_indices: ptr<i32> = malloc((n_test as i64) * 4) as ptr<i32>
+    let mut test_pos: i32 = 0
+    i = 0
+    while i < n_samples {
+        if in_bag[i] == 0 {
+            test_indices[test_pos] = i
+            test_pos = test_pos + 1
+        }
+        i = i + 1
+    }
+
+    free(in_bag as ptr<void>)
+
+    let result: FoldIndices = FoldIndices {
+        train_indices: train_indices,
+        n_train: n_samples,
+        test_indices: test_indices,
+        n_test: n_test
+    }
+    return result
+}
+
 export function repeated_kfold_result_free(result: RepeatedKFoldResult) -> void {
     array_free_f32(result.scores)
 }
@@ -2119,22 +2194,14 @@ export function group_shuffle_split_init(n_splits: i32, test_size: f32, seed: i3
 export function group_shuffle_split_get_split(
     gss: GroupShuffleSplit, groups: ptr<i32>, n: i32, n_groups: i32, split: i32
 ) -> TrainTestSplit {
-    let unique_groups: ptr<i32> = malloc((n_groups as i64) * 4) as ptr<i32>
-    let mut n_found: i32 = 0
+    # Issue #398: unique_groups held exactly n_groups entries and the loop
+    # appended one entry per distinct group id with no check, so a caller
+    # understating n_groups wrote past the allocation. The buffer now grows to
+    # hold every distinct group id.
+    let found_groups: DistinctI32 = distinct_i32(groups, n, n_groups)
+    let unique_groups: ptr<i32> = found_groups.values
+    let n_found: i32 = found_groups.count
     let mut i: i32 = 0
-    while i < n {
-        let mut found: bool = false
-        let mut k: i32 = 0
-        while k < n_found {
-            if unique_groups[k] == groups[i] { found = true }
-            k = k + 1
-        }
-        if not found {
-            unique_groups[n_found] = groups[i]
-            n_found = n_found + 1
-        }
-        i = i + 1
-    }
 
     let n_test_groups: i32 = ((n_found as f32) * gss.test_size) as i32
     if n_test_groups < 1 { n_test_groups = 1 }

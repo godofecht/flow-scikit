@@ -1,7 +1,10 @@
 name: Flow
 
 on:
+  # PR branches are already covered by pull_request. Restrict push to main so
+  # each PR commit gets one Flow run instead of two independent runs.
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -41,6 +44,7 @@ jobs:
           python benchmarks/fixtures.py
           python benchmarks/verify_fixtures.py
           python benchmarks/test_generate_headline_summary.py
+          python benchmarks/test_disparity_regression_policy.py
           python benchmarks/publish_headline_v2.py --check
           python benchmarks/validate_execution_substrate.py
           python -m py_compile \
@@ -55,6 +59,9 @@ jobs:
             benchmarks/scaled_flow_to_json.py \
             benchmarks/aggregate_scaled_flow.py \
             benchmarks/check_flow_regression.py \
+            benchmarks/check_disparity_regression.py \
+            benchmarks/generate_disparity_report.py \
+            benchmarks/test_disparity_regression_policy.py \
             benchmarks/publish_headline_v2.py \
             benchmarks/validate_execution_substrate.py
           python - <<'PY'
@@ -101,6 +108,15 @@ jobs:
   benchmark-contract:
     name: Canonical benchmark contract
     runs-on: ubuntu-latest
+    # Both benchmark implementations call into OpenBLAS. Leaving its thread
+    # count to runtime detection produced materially different timing regimes on
+    # identical code, including a headline win flipping solely from BLAS thread
+    # selection. Pin the same regime already used by the canonical disparity
+    # workflow so this job measures the same thing every run.
+    env:
+      OPENBLAS_NUM_THREADS: "4"
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
     steps:
       - uses: actions/checkout@v4
 
@@ -143,6 +159,10 @@ jobs:
     name: Scaled benchmark report
     runs-on: ubuntu-latest
     continue-on-error: true
+    env:
+      OPENBLAS_NUM_THREADS: "4"
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
     steps:
       - uses: actions/checkout@v4
 

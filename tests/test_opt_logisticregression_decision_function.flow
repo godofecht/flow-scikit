@@ -1,0 +1,175 @@
+# Regression test for the BLAS-backed logistic_decision_function.
+# Covers hand-computed scores, a wide feature matrix where model.n_features is
+# smaller than X.cols (the leading-dimension path), a single-row matrix, and a
+# realistic fitted workload checked against an independent scalar reference.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+}
+
+function optdf_close(a: f32, b: f32, tolerance: f32) -> bool {
+    let d: f32 = a - b
+    if d < 0.0 { d = -d }
+    return d <= tolerance
+}
+
+# Independent scalar reference for z = X * w + b, written the long way on
+# purpose so it does not share code with the implementation under test.
+function optdf_reference(w: ptr<f32>, bias: f32, nf: i32, X: Matrix, out: ptr<f32>) -> void {
+    for i in 0 to X.rows {
+        let mut z: f32 = bias
+        for j in 0 to nf {
+            z = z + w[j] * matrix_at(X, i, j)
+        }
+        out[i] = z
+    }
+}
+
+function main() -> i32 {
+    let pen: Penalty = penalty_l2(0.0)
+
+    # ---- Case 1: hand-computed scores on a square 3x3 problem ----
+    let w1: ptr<f32> = array_new_f32(3)
+    w1[0] = 2.0
+    w1[1] = -1.0
+    w1[2] = 0.5
+    let b1: ptr<f32> = array_new_f32(2)
+    b1[0] = 0.25
+    b1[1] = 0.0
+    let cls1: ptr<f32> = array_new_f32(2)
+    cls1[0] = 0.0
+    cls1[1] = 1.0
+
+    let m1: LogisticRegression = LogisticRegression {
+        weights: w1,
+        bias: 0.25,
+        biases: b1,
+        n_features: 3,
+        classes: cls1,
+        n_classes: 2,
+        penalty: pen,
+        fitted: true
+    }
+
+    let X1: Matrix = matrix_new(3, 3)
+    matrix_set(X1, 0, 0, 1.0); matrix_set(X1, 0, 1, 2.0); matrix_set(X1, 0, 2, 4.0)
+    matrix_set(X1, 1, 0, 0.0); matrix_set(X1, 1, 1, 0.0); matrix_set(X1, 1, 2, 0.0)
+    matrix_set(X1, 2, 0, -3.0); matrix_set(X1, 2, 1, 1.0); matrix_set(X1, 2, 2, 2.0)
+
+    # row 0: 2*1 + (-1)*2 + 0.5*4 + 0.25 = 2.25
+    # row 1: 0 + 0.25 = 0.25
+    # row 2: 2*(-3) + (-1)*1 + 0.5*2 + 0.25 = -5.75
+    let s1: ptr<f32> = logistic_decision_function(m1, X1)
+    if not optdf_close(s1[0], 2.25, 0.000001) {
+        println("FAIL: decision_function row 0 score changed")
+        return 1
+    }
+    if not optdf_close(s1[1], 0.25, 0.000001) {
+        println("FAIL: decision_function zero row must return the bias")
+        return 1
+    }
+    if not optdf_close(s1[2], -5.75, 0.000001) {
+        println("FAIL: decision_function row 2 score changed")
+        return 1
+    }
+    array_free_f32(s1)
+    matrix_free(X1)
+
+    # ---- Case 2: X wider than the model, exercising the row-stride path ----
+    # Only the first 3 columns must be consumed; column 3 is poisoned.
+    let X2: Matrix = matrix_new(2, 4)
+    matrix_set(X2, 0, 0, 1.0); matrix_set(X2, 0, 1, 2.0)
+    matrix_set(X2, 0, 2, 4.0); matrix_set(X2, 0, 3, 1000.0)
+    matrix_set(X2, 1, 0, -3.0); matrix_set(X2, 1, 1, 1.0)
+    matrix_set(X2, 1, 2, 2.0); matrix_set(X2, 1, 3, -1000.0)
+
+    let s2: ptr<f32> = logistic_decision_function(m1, X2)
+    if not optdf_close(s2[0], 2.25, 0.000001) || not optdf_close(s2[1], -5.75, 0.000001) {
+        println("FAIL: decision_function read past the model feature count")
+        return 1
+    }
+    array_free_f32(s2)
+    matrix_free(X2)
+
+    # ---- Case 3: single row ----
+    let X3: Matrix = matrix_new(1, 3)
+    matrix_set(X3, 0, 0, 1.0); matrix_set(X3, 0, 1, 2.0); matrix_set(X3, 0, 2, 4.0)
+    let s3: ptr<f32> = logistic_decision_function(m1, X3)
+    if not optdf_close(s3[0], 2.25, 0.000001) {
+        println("FAIL: decision_function single-row case changed")
+        return 1
+    }
+    array_free_f32(s3)
+    matrix_free(X3)
+
+    array_free_f32(w1)
+    array_free_f32(b1)
+    array_free_f32(cls1)
+
+    # ---- Case 4: realistic fitted workload, 400 x 12 ----
+    let n_rows: i32 = 400
+    let n_cols: i32 = 12
+    let X4: Matrix = matrix_new(n_rows, n_cols)
+    let y4: ptr<f32> = array_new_f32(n_rows)
+    let mut seed: i32 = 12345
+    for i in 0 to n_rows {
+        let mut acc: f32 = 0.0
+        for j in 0 to n_cols {
+            seed = (seed * 1103515245 + 12345) % 2147483647
+            if seed < 0 { seed = -seed }
+            let v: f32 = ((seed % 2000) as f32) / 1000.0 - 1.0
+            matrix_set(X4, i, j, v)
+            if j < 4 { acc = acc + v }
+        }
+        if acc > 0.0 { y4[i] = 1.0 } else { y4[i] = 0.0 }
+    }
+
+    let model4: LogisticRegression = logistic_regression_fit(X4, y4, 2, 200, 0.1, pen)
+    let scores4: ptr<f32> = logistic_decision_function(model4, X4)
+    let expect4: ptr<f32> = array_new_f32(n_rows)
+    optdf_reference(model4.weights, model4.bias, model4.n_features, X4, expect4)
+
+    let mut worst: f32 = 0.0
+    for i in 0 to n_rows {
+        let mut d: f32 = scores4[i] - expect4[i]
+        if d < 0.0 { d = -d }
+        let mut scale: f32 = expect4[i]
+        if scale < 0.0 { scale = -scale }
+        if scale < 1.0 { scale = 1.0 }
+        let rel: f32 = d / scale
+        if rel > worst { worst = rel }
+    }
+    # Single-precision reductions with different association order agree to a
+    # few ulps; past 1e-4 relative means the scores really moved.
+    if worst > 0.0001 {
+        println("FAIL: decision_function diverged from the scalar reference")
+        printf("  worst relative deviation: %.9f\n", worst)
+        return 1
+    }
+
+    # predict_proba is the sigmoid of the decision score, so the two must stay
+    # in the same order for every pair of rows.
+    let proba4: ptr<f32> = logistic_predict_proba(model4, X4)
+    for i in 0 to n_rows {
+        for k in 0 to n_rows {
+            if scores4[i] - scores4[k] > 0.001 {
+                if proba4[i] < proba4[k] {
+                    println("FAIL: decision_function no longer orders with predict_proba")
+                    return 1
+                }
+            }
+        }
+    }
+
+    array_free_f32(proba4)
+    array_free_f32(expect4)
+    array_free_f32(scores4)
+    logistic_regression_free(model4)
+    array_free_f32(y4)
+    matrix_free(X4)
+
+    println("OK: logistic_decision_function scores unchanged after the BLAS rewrite")
+    return 0
+}

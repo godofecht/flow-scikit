@@ -531,14 +531,25 @@ export function cca_fit(X: Matrix, Y: Matrix, n_components: i32, max_iter: i32, 
 }
 
 export function cca_transform(model: CCA, X: Matrix) -> Matrix {
-    let result: Matrix = matrix_new(X.rows, model.n_components)
+    let nc: i32 = model.n_components
+    let p: i32 = model.n_x_features
+    let result: Matrix = matrix_new(X.rows, nc)
+    # The projection used to call matrix_at and matrix_set once per element and
+    # to re-chase model.x_weights[c] on every step of the inner loop. Both row
+    # bases and the component weight vector are hoisted, and the row-major
+    # data arrays are indexed directly. The j loop still accumulates in the same
+    # ascending order into the same f32 scalar, so every output cell is
+    # bit-identical.
     for i in 0 to X.rows {
-        for c in 0 to model.n_components {
+        let x_base: i32 = i * X.cols
+        let out_base: i32 = i * nc
+        for c in 0 to nc {
+            let w: ptr<f32> = model.x_weights[c]
             let mut s: f32 = 0.0
-            for j in 0 to model.n_x_features {
-                s = s + matrix_at(X, i, j) * model.x_weights[c][j]
+            for j in 0 to p {
+                s = s + X.data[x_base + j] * w[j]
             }
-            matrix_set(result, i, c, s)
+            result.data[out_base + c] = s
         }
     }
     return result

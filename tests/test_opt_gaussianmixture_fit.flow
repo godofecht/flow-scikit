@@ -1,0 +1,597 @@
+# Regression test for the optimized GaussianMixture.fit (issue #277).
+#
+# The optimization only changes the cost of an EM iteration: the
+# per-component constants are built once per iteration instead of once per
+# sample, the per-sample scratch row allocation is gone, and the M-step
+# walks X row-major. Initialization, the random draw order and the
+# convergence criterion are untouched.
+#
+# The test therefore checks the trajectory, not just the endpoint: it
+# refits with max_iter = 1..6 and compares every mean, variance and weight
+# against a verbatim copy of the previous implementation after each
+# iteration count.
+#
+# Run: FLOW_HOST=python flow run tests/test_opt_gaussianmixture_fit.flow
+
+import "lib/scikit/mixture.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function exp(x: f64) -> f64
+    function log(x: f64) -> f64
+    function fabs(x: f64) -> f64
+    function rand() -> i32
+    function srand(seed: u32) -> void
+    function printf(fmt: string, ...) -> i32
+}
+
+# ---------------------------------------------------------------------------
+# Verbatim copy of the pre-optimization fit. Module-unique names
+# (Flow compiler bug #465).
+# ---------------------------------------------------------------------------
+
+function gmft_ref_log_gaussian(x: ptr<f32>, mean: ptr<f32>, var: ptr<f32>, n_features: i32) -> f32 {
+    let mut log_prob: f32 = 0.0
+    for j in 0 to n_features {
+        let d: f32 = x[j] - mean[j]
+        let v: f32 = var[j]
+        if v < 0.0000000001 { v = 0.0000000001 }
+        log_prob = log_prob - 0.5 * log((2.0 * 3.14159265 * v) as f64) as f32
+        log_prob = log_prob - 0.5 * d * d / v
+    }
+    return log_prob
+}
+
+function gmft_ref_fit(X: Matrix, n_components: i32, max_iter: i32, tol: f32, seed: i32) -> GaussianMixture {
+    let n: i32 = X.rows
+    let n_features: i32 = X.cols
+
+    srand(seed)
+
+    let means: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+    let variances: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+    let weights: ptr<f32> = array_new_f32(n_components)
+
+    for k in 0 to n_components {
+        means[k] = array_new_f32(n_features)
+        variances[k] = array_new_f32(n_features)
+        for j in 0 to n_features {
+            variances[k][j] = 1.0
+        }
+        weights[k] = 1.0 / (n_components as f32)
+    }
+
+    let first_idx: i32 = rand() % n
+    for j in 0 to n_features {
+        means[0][j] = matrix_at(X, first_idx, j)
+    }
+
+    let mut init_k: i32 = 1
+    while init_k < n_components {
+        let mut best_idx: i32 = 0
+        let mut best_dist: f32 = -1.0
+        for i in 0 to n {
+            let mut min_dist: f32 = 10000000000.0
+            let mut prev_k: i32 = 0
+            while prev_k < init_k {
+                let mut dist: f32 = 0.0
+                for j in 0 to n_features {
+                    let d: f32 = matrix_at(X, i, j) - means[prev_k][j]
+                    dist = dist + d * d
+                }
+                if dist < min_dist { min_dist = dist }
+                prev_k = prev_k + 1
+            }
+            if min_dist > best_dist {
+                best_dist = min_dist
+                best_idx = i
+            }
+        }
+        for j in 0 to n_features {
+            means[init_k][j] = matrix_at(X, best_idx, j)
+        }
+        init_k = init_k + 1
+    }
+
+    let init_counts: ptr<i32> = malloc((n_components as i64) * 4) as ptr<i32>
+    for k in 0 to n_components {
+        init_counts[k] = 0
+        for j in 0 to n_features { variances[k][j] = 0.0 }
+    }
+    for i in 0 to n {
+        let mut nearest: i32 = 0
+        let mut nearest_dist: f32 = 10000000000.0
+        for k in 0 to n_components {
+            let mut dist: f32 = 0.0
+            for j in 0 to n_features {
+                let d: f32 = matrix_at(X, i, j) - means[k][j]
+                dist = dist + d * d
+            }
+            if dist < nearest_dist {
+                nearest_dist = dist
+                nearest = k
+            }
+        }
+        init_counts[nearest] = init_counts[nearest] + 1
+        for j in 0 to n_features {
+            let d: f32 = matrix_at(X, i, j) - means[nearest][j]
+            variances[nearest][j] = variances[nearest][j] + d * d
+        }
+    }
+    for k in 0 to n_components {
+        if init_counts[k] > 0 {
+            weights[k] = (init_counts[k] as f32) / (n as f32)
+            for j in 0 to n_features {
+                variances[k][j] = variances[k][j] / (init_counts[k] as f32)
+                if variances[k][j] < 0.001 { variances[k][j] = 0.001 }
+            }
+        } else {
+            weights[k] = 1.0 / (n_components as f32)
+            for j in 0 to n_features { variances[k][j] = 1.0 }
+        }
+    }
+    free(init_counts as ptr<void>)
+
+    let resp: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        resp[i] = array_new_f32(n_components)
+    }
+
+    let mut prev_ll: f32 = -10000000000.0
+    let mut n_iter: i32 = 0
+    let mut converged: bool = false
+
+    for iter in 0 to max_iter {
+        n_iter = iter + 1
+
+        let mut total_ll: f32 = 0.0
+        for i in 0 to n {
+            let x_row: ptr<f32> = array_new_f32(n_features)
+            for j in 0 to n_features {
+                x_row[j] = matrix_at(X, i, j)
+            }
+
+            let mut max_log: f32 = -10000000000.0
+            for k in 0 to n_components {
+                let lg: f32 = log((weights[k] as f64)) as f32 + gmft_ref_log_gaussian(x_row, means[k], variances[k], n_features)
+                resp[i][k] = lg
+                if lg > max_log { max_log = lg }
+            }
+
+            let mut sum_exp: f32 = 0.0
+            for k in 0 to n_components {
+                resp[i][k] = exp((resp[i][k] - max_log) as f64) as f32
+                sum_exp = sum_exp + resp[i][k]
+            }
+            for k in 0 to n_components {
+                resp[i][k] = resp[i][k] / sum_exp
+            }
+
+            total_ll = total_ll + max_log + log((sum_exp as f64)) as f32
+            array_free_f32(x_row)
+        }
+
+        total_ll = total_ll / (n as f32)
+
+        if (fabs((prev_ll - total_ll) as f64) as f32) < tol {
+            converged = true
+            prev_ll = total_ll
+            break
+        }
+        prev_ll = total_ll
+
+        for k in 0 to n_components {
+            let mut nk: f32 = 0.0
+            for i in 0 to n {
+                nk = nk + resp[i][k]
+            }
+
+            weights[k] = nk / (n as f32)
+
+            for j in 0 to n_features {
+                let mut mean_j: f32 = 0.0
+                for i in 0 to n {
+                    mean_j = mean_j + resp[i][k] * matrix_at(X, i, j)
+                }
+                if nk > 0.0000000001 {
+                    means[k][j] = mean_j / nk
+                }
+
+                let mut var_j: f32 = 0.0
+                for i in 0 to n {
+                    let d: f32 = matrix_at(X, i, j) - means[k][j]
+                    var_j = var_j + resp[i][k] * d * d
+                }
+                if nk > 0.0000000001 {
+                    variances[k][j] = var_j / nk
+                }
+                if variances[k][j] < 0.000001 {
+                    variances[k][j] = 0.000001
+                }
+            }
+        }
+    }
+
+    for i in 0 to n {
+        array_free_f32(resp[i])
+    }
+    free(resp as ptr<void>)
+
+    return GaussianMixture {
+        means: means, variances: variances, weights: weights,
+        n_components: n_components, n_features: n_features,
+        log_likelihood: prev_ll, n_iter: n_iter,
+        converged: converged, fitted: true
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+function gmft_close(a: f32, b: f32, tol: f32) -> bool {
+    return (fabs((a - b) as f64) as f32) < tol
+}
+
+function gmft_synthetic(n: i32, d: i32, k: i32) -> Matrix {
+    let X: Matrix = matrix_new(n, d)
+    let mut s: i64 = 12345
+    for i in 0 to n {
+        let comp: i32 = i % k
+        for j in 0 to d {
+            s = (s * 1103515245 + 12345) % 2147483648
+            let u: f32 = ((s % 1000) as f32) / 1000.0 - 0.5
+            matrix_set(X, i, j, (comp as f32) * 1.7 + (j as f32) * 0.05 + u * 2.0)
+        }
+    }
+    return X
+}
+
+# Returns the number of parameters that differ bit-for-bit.
+function gmft_param_diff(a: GaussianMixture, b: GaussianMixture) -> i32 {
+    let mut diff: i32 = 0
+    if a.n_components != b.n_components { return 1000000 }
+    if a.n_features != b.n_features { return 1000000 }
+    for k in 0 to a.n_components {
+        if a.weights[k] != b.weights[k] { diff = diff + 1 }
+        for j in 0 to a.n_features {
+            if a.means[k][j] != b.means[k][j] { diff = diff + 1 }
+            if a.variances[k][j] != b.variances[k][j] { diff = diff + 1 }
+        }
+    }
+    if a.log_likelihood != b.log_likelihood { diff = diff + 1 }
+    if a.n_iter != b.n_iter { diff = diff + 1 }
+    if a.converged != b.converged { diff = diff + 1 }
+    return diff
+}
+
+# ---------------------------------------------------------------------------
+# 1. Trajectory parity. Refit at every iteration count from 1 to 6 and
+#    compare all parameters bit-for-bit. If the optimization had perturbed
+#    the EM path, the divergence would show at the first iteration where it
+#    happened rather than being masked by convergence.
+# ---------------------------------------------------------------------------
+
+function gmft_test_trajectory() -> i32 {
+    println("Test: fit EM trajectory unchanged, iteration by iteration")
+    let X: Matrix = gmft_synthetic(400, 8, 4)
+    let mut fail: i32 = 0
+
+    for it in 1 to 7 {
+        # tol = 0 so the convergence break never fires and exactly `it`
+        # iterations run
+        let a: GaussianMixture = gmft_ref_fit(X, 4, it, 0.0, 7)
+        let b: GaussianMixture = gaussian_mixture_fit(X, 4, it, 0.0, 7)
+        let d: i32 = gmft_param_diff(a, b)
+        if d != 0 {
+            printf("  iteration %d: %d parameters differ\n", it, d)
+            fail = 1
+        }
+        gaussian_mixture_free(a)
+        gaussian_mixture_free(b)
+    }
+
+    matrix_free(X)
+    if fail != 0 {
+        println("  FAIL: trajectory diverges")
+        return 1
+    }
+    println("  OK: 6 iteration counts, all parameters bit-identical")
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# 2. Natural convergence: same stopping iteration, same converged flag,
+#    same final log-likelihood, same parameters.
+# ---------------------------------------------------------------------------
+
+function gmft_test_convergence_parity() -> i32 {
+    println("Test: fit natural convergence parity")
+    let X: Matrix = gmft_synthetic(500, 10, 5)
+
+    let a: GaussianMixture = gmft_ref_fit(X, 5, 100, 0.0001, 42)
+    let b: GaussianMixture = gaussian_mixture_fit(X, 5, 100, 0.0001, 42)
+
+    let d: i32 = gmft_param_diff(a, b)
+    printf("  n_iter %d vs %d, converged %d vs %d\n", a.n_iter, b.n_iter, a.converged as i32, b.converged as i32)
+    printf("  log_likelihood %.9f vs %.9f\n", a.log_likelihood as f64, b.log_likelihood as f64)
+    printf("  differing parameters: %d\n", d)
+
+    let mut fail: i32 = 0
+    if d != 0 { fail = 1 }
+    if a.n_iter < 2 { fail = 1 }
+
+    gaussian_mixture_free(a)
+    gaussian_mixture_free(b)
+    matrix_free(X)
+
+    if fail != 0 {
+        println("  FAIL: convergence parity broken")
+        return 1
+    }
+    println("  OK")
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# 3. Known-correct values. A single component must converge to the sample
+#    mean and the population variance of the data, which is checkable in
+#    closed form.
+# ---------------------------------------------------------------------------
+
+function gmft_test_single_component_closed_form() -> i32 {
+    println("Test: fit with 1 component equals sample mean and variance")
+    let n: i32 = 200
+    let X: Matrix = matrix_new(n, 2)
+    for i in 0 to n {
+        matrix_set(X, i, 0, (i as f32) * 0.25 - 10.0)
+        matrix_set(X, i, 1, 3.0 + (i as f32) * 0.05)
+    }
+
+    let model: GaussianMixture = gaussian_mixture_fit(X, 1, 30, 0.0000001, 1)
+
+    let mut fail: i32 = 0
+    for j in 0 to 2 {
+        let mut m: f32 = 0.0
+        for i in 0 to n { m = m + matrix_at(X, i, j) }
+        m = m / (n as f32)
+        let mut v: f32 = 0.0
+        for i in 0 to n {
+            let d: f32 = matrix_at(X, i, j) - m
+            v = v + d * d
+        }
+        v = v / (n as f32)
+
+        if not gmft_close(model.means[0][j], m, 0.01) {
+            printf("  mean[%d] = %.6f, expected %.6f\n", j, model.means[0][j] as f64, m as f64)
+            fail = 1
+        }
+        if not gmft_close(model.variances[0][j], v, 0.05) {
+            printf("  var[%d] = %.6f, expected %.6f\n", j, model.variances[0][j] as f64, v as f64)
+            fail = 1
+        }
+    }
+    if not gmft_close(model.weights[0], 1.0, 0.000001) { fail = 1 }
+
+    gaussian_mixture_free(model)
+    matrix_free(X)
+
+    if fail != 0 {
+        println("  FAIL: single-component fit wrong")
+        return 1
+    }
+    println("  OK")
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# 4. Known-correct values. Two well-separated 1-D clusters at 0 and 10 with
+#    equal counts must give means near 0 and 10 and weights near 0.5.
+# ---------------------------------------------------------------------------
+
+function gmft_test_two_clusters() -> i32 {
+    println("Test: fit recovers two well-separated clusters")
+    let n: i32 = 120
+    let X: Matrix = matrix_new(n, 1)
+    let mut s: i64 = 999
+    for i in 0 to n {
+        s = (s * 1103515245 + 12345) % 2147483648
+        let u: f32 = ((s % 200) as f32) / 200.0 - 0.5
+        if i % 2 == 0 {
+            matrix_set(X, i, 0, u)
+        } else {
+            matrix_set(X, i, 0, 10.0 + u)
+        }
+    }
+
+    let model: GaussianMixture = gaussian_mixture_fit(X, 2, 60, 0.000001, 3)
+
+    let mut low: f32 = model.means[0][0]
+    let mut high: f32 = model.means[1][0]
+    if low > high {
+        low = model.means[1][0]
+        high = model.means[0][0]
+    }
+
+    let mut fail: i32 = 0
+    if not gmft_close(low, 0.0, 0.2) {
+        printf("  low mean = %.6f, expected near 0\n", low as f64)
+        fail = 1
+    }
+    if not gmft_close(high, 10.0, 0.2) {
+        printf("  high mean = %.6f, expected near 10\n", high as f64)
+        fail = 1
+    }
+    if not gmft_close(model.weights[0], 0.5, 0.02) { fail = 1 }
+    if not gmft_close(model.weights[1], 0.5, 0.02) { fail = 1 }
+    if not model.converged { fail = 1 }
+
+    gaussian_mixture_free(model)
+    matrix_free(X)
+
+    if fail != 0 {
+        println("  FAIL: two-cluster fit wrong")
+        return 1
+    }
+    println("  OK")
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# 5. Edge cases: degenerate shapes and an empty component. Each is compared
+#    against the reference so the variance floor and the nk guard are
+#    exercised on both paths.
+# ---------------------------------------------------------------------------
+
+function gmft_test_edge_cases() -> i32 {
+    println("Test: fit edge cases")
+    let mut fail: i32 = 0
+
+    # one sample, one feature, one component
+    let X1: Matrix = matrix_new(1, 1)
+    matrix_set(X1, 0, 0, 4.5)
+    let a1: GaussianMixture = gmft_ref_fit(X1, 1, 10, 0.000001, 5)
+    let b1: GaussianMixture = gaussian_mixture_fit(X1, 1, 10, 0.000001, 5)
+    if gmft_param_diff(a1, b1) != 0 { fail = 1 }
+    # a single sample has zero spread, so the M-step variance floor of
+    # 0.000001 must be what survives
+    if not gmft_close(b1.variances[0][0], 0.000001, 0.0000001) {
+        printf("  single-sample variance = %.9f, expected the 0.000001 floor\n", b1.variances[0][0] as f64)
+        fail = 1
+    }
+    gaussian_mixture_free(a1)
+    gaussian_mixture_free(b1)
+    matrix_free(X1)
+
+    # more components than distinct points: forces an empty component and
+    # the nk guard
+    let X2: Matrix = matrix_new(4, 2)
+    for i in 0 to 4 {
+        matrix_set(X2, i, 0, (i % 2) as f32)
+        matrix_set(X2, i, 1, 0.0)
+    }
+    let a2: GaussianMixture = gmft_ref_fit(X2, 4, 20, 0.000001, 11)
+    let b2: GaussianMixture = gaussian_mixture_fit(X2, 4, 20, 0.000001, 11)
+    if gmft_param_diff(a2, b2) != 0 { fail = 1 }
+    gaussian_mixture_free(a2)
+    gaussian_mixture_free(b2)
+    matrix_free(X2)
+
+    # max_iter = 0: no EM at all, parameters stay at their initialization
+    let X3: Matrix = gmft_synthetic(40, 3, 2)
+    let a3: GaussianMixture = gmft_ref_fit(X3, 2, 0, 0.001, 9)
+    let b3: GaussianMixture = gaussian_mixture_fit(X3, 2, 0, 0.001, 9)
+    if gmft_param_diff(a3, b3) != 0 { fail = 1 }
+    if b3.n_iter != 0 { fail = 1 }
+    gaussian_mixture_free(a3)
+    gaussian_mixture_free(b3)
+    matrix_free(X3)
+
+    # wide matrix, few rows
+    let X4: Matrix = gmft_synthetic(12, 40, 3)
+    let a4: GaussianMixture = gmft_ref_fit(X4, 3, 15, 0.000001, 2)
+    let b4: GaussianMixture = gaussian_mixture_fit(X4, 3, 15, 0.000001, 2)
+    if gmft_param_diff(a4, b4) != 0 { fail = 1 }
+    gaussian_mixture_free(a4)
+    gaussian_mixture_free(b4)
+    matrix_free(X4)
+
+    if fail != 0 {
+        println("  FAIL: edge cases diverge")
+        return 1
+    }
+    println("  OK")
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# 6. Realistic workload: a full fit plus the downstream predict and
+#    predict_proba, all compared against the reference model.
+# ---------------------------------------------------------------------------
+
+function gmft_test_workload() -> i32 {
+    println("Test: fit parity on 800 x 12, 6 components")
+    let n: i32 = 800
+    let d: i32 = 12
+    let k: i32 = 6
+
+    let X: Matrix = gmft_synthetic(n, d, k)
+    let a: GaussianMixture = gmft_ref_fit(X, k, 50, 0.00001, 7)
+    let b: GaussianMixture = gaussian_mixture_fit(X, k, 50, 0.00001, 7)
+
+    let param_diff: i32 = gmft_param_diff(a, b)
+
+    let la: ptr<i32> = gaussian_mixture_predict(a, X)
+    let lb: ptr<i32> = gaussian_mixture_predict(b, X)
+    let mut label_diff: i32 = 0
+    for i in 0 to n {
+        if la[i] != lb[i] { label_diff = label_diff + 1 }
+    }
+
+    let pa: Matrix = gaussian_mixture_predict_proba(a, X)
+    let pb: Matrix = gaussian_mixture_predict_proba(b, X)
+    let mut proba_diff: i32 = 0
+    for i in 0 to n {
+        for c in 0 to k {
+            if matrix_at(pa, i, c) != matrix_at(pb, i, c) { proba_diff = proba_diff + 1 }
+        }
+    }
+
+    let sa: f32 = gaussian_mixture_score(a, X)
+    let sb: f32 = gaussian_mixture_score(b, X)
+
+    printf("  n_iter %d, converged %d\n", b.n_iter, b.converged as i32)
+    printf("  parameter differences: %d\n", param_diff)
+    printf("  label differences: %d of %d\n", label_diff, n)
+    printf("  predict_proba differences: %d of %d\n", proba_diff, n * k)
+    printf("  score %.9f vs %.9f\n", sa as f64, sb as f64)
+
+    free(la as ptr<void>)
+    free(lb as ptr<void>)
+    matrix_free(pa)
+    matrix_free(pb)
+    gaussian_mixture_free(a)
+    gaussian_mixture_free(b)
+    matrix_free(X)
+
+    if param_diff != 0 {
+        println("  FAIL: fitted parameters differ")
+        return 1
+    }
+    if label_diff != 0 {
+        println("  FAIL: labels differ")
+        return 1
+    }
+    if proba_diff != 0 {
+        println("  FAIL: predict_proba differs")
+        return 1
+    }
+    if sa != sb {
+        println("  FAIL: score differs")
+        return 1
+    }
+    println("  OK")
+    return 0
+}
+
+function main() -> i32 {
+    println("=== GaussianMixture.fit optimization regression (#277) ===")
+    let mut failures: i32 = 0
+    if gmft_test_trajectory() != 0 { failures = failures + 1 }
+    if gmft_test_convergence_parity() != 0 { failures = failures + 1 }
+    if gmft_test_single_component_closed_form() != 0 { failures = failures + 1 }
+    if gmft_test_two_clusters() != 0 { failures = failures + 1 }
+    if gmft_test_edge_cases() != 0 { failures = failures + 1 }
+    if gmft_test_workload() != 0 { failures = failures + 1 }
+
+    println("")
+    if failures == 0 {
+        println("All GaussianMixture.fit optimization tests passed!")
+        return 0
+    }
+    print("FAILED: ")
+    print(failures)
+    println(" tests")
+    return 1
+}

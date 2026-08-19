@@ -654,35 +654,85 @@ export struct LabelEncoder {
     fitted: bool
 }
 
-export function label_encoder_fit(y: ptr<f32>, n: i32) -> LabelEncoder {
-    let classes: ptr<f32> = array_new_f32(n)
-    let mut n_classes: i32 = 0
-
+# Collects the distinct values of y into out, kept in ascending order at all
+# times. Membership is a search over the classes found so far (linear with an
+# early exit while the count is small, binary above) instead of a full linear
+# scan, so the pass is O(n log C + C^2) rather than O(n * C + C^2). The result
+# is identical to a linear dedupe followed by an ascending sort.
+function _preprocessing_label_sorted_unique(y: ptr<f32>, n: i32, out: ptr<f32>) -> i32 {
+    let mut count: i32 = 0
     for i in 0 to n {
-        let mut found: bool = false
-        for k in 0 to n_classes {
-            if classes[k] == y[i] {
-                found = true
+        let v: f32 = y[i]
+        let mut lo: i32 = 0
+        if count <= 12 {
+            while lo < count && out[lo] < v {
+                lo = lo + 1
+            }
+        } else {
+            let mut hi: i32 = count
+            while lo < hi {
+                let mid: i32 = (lo + hi) >> 1
+                if out[mid] < v {
+                    lo = mid + 1
+                } else {
+                    hi = mid
+                }
             }
         }
-        if not found {
-            classes[n_classes] = y[i]
-            n_classes = n_classes + 1
+        if lo < count && out[lo] == v {
+            continue
+        }
+        let mut j: i32 = count
+        while j > lo {
+            out[j] = out[j - 1]
+            j = j - 1
+        }
+        out[lo] = v
+        count = count + 1
+    }
+    return count
+}
+
+export function label_encoder_fit(y: ptr<f32>, n: i32) -> LabelEncoder {
+    let classes: ptr<f32> = array_new_f32(n)
+    let n_classes: i32 = _preprocessing_label_sorted_unique(y, n, classes)
+    return LabelEncoder { classes: classes, n_classes: n_classes, fitted: true }
+}
+
+# Index of v in an ascending, deduplicated class vector, or -1 when v is absent.
+# Small class vectors are scanned linearly with an early exit on the first class
+# that is already past v; larger ones use a binary search.
+function _preprocessing_label_class_index(classes: ptr<f32>, n_classes: i32, v: f32) -> i32 {
+    let mut lo: i32 = 0
+    if n_classes <= 12 {
+        while lo < n_classes && classes[lo] < v {
+            lo = lo + 1
+        }
+    } else {
+        let mut hi: i32 = n_classes
+        while lo < hi {
+            let mid: i32 = (lo + hi) >> 1
+            if classes[mid] < v {
+                lo = mid + 1
+            } else {
+                hi = mid
+            }
         }
     }
-
-    _insertion_sort(classes, n_classes)
-
-    return LabelEncoder { classes: classes, n_classes: n_classes, fitted: true }
+    if lo < n_classes && classes[lo] == v {
+        return lo
+    }
+    return -1
 }
 
 export function label_encoder_transform(encoder: LabelEncoder, y: ptr<f32>, n: i32) -> ptr<f32> {
     let result: ptr<f32> = array_new_f32(n)
+    let classes: ptr<f32> = encoder.classes
+    let n_classes: i32 = encoder.n_classes
     for i in 0 to n {
-        for k in 0 to encoder.n_classes {
-            if encoder.classes[k] == y[i] {
-                result[i] = (k as f32)
-            }
+        let k: i32 = _preprocessing_label_class_index(classes, n_classes, y[i])
+        if k >= 0 {
+            result[i] = (k as f32)
         }
     }
     return result
@@ -1098,35 +1148,49 @@ export function function_transformer_init(func_kind: i32, validate: bool) -> Fun
 
 export function function_transformer_transform(ft: FunctionTransformer, X: Matrix) -> Matrix {
     let result: Matrix = matrix_new(X.rows, X.cols)
-    for i in 0 to X.rows {
-        for j in 0 to X.cols {
-            let val: f32 = matrix_at(X, i, j)
-            if ft.func_kind == FUNC_LOG {
-                if val > 0.0 {
-                    matrix_set(result, i, j, log(val as f64) as f32)
-                } else {
-                    matrix_set(result, i, j, 0.0)
-                }
-            } elif ft.func_kind == FUNC_SQRT {
-                if val > 0.0 {
-                    matrix_set(result, i, j, sqrt(val as f64) as f32)
-                } else {
-                    matrix_set(result, i, j, 0.0)
-                }
-            } elif ft.func_kind == FUNC_SQUARE {
-                matrix_set(result, i, j, val * val)
-            } elif ft.func_kind == FUNC_ABS {
-                if val < 0.0 {
-                    matrix_set(result, i, j, 0.0 - val)
-                } else {
-                    matrix_set(result, i, j, val)
-                }
-            } elif ft.func_kind == FUNC_RECIPROCAL {
-                if val > 0.0000000001 || val < -0.0000000001 {
-                    matrix_set(result, i, j, 1.0 / val)
-                } else {
-                    matrix_set(result, i, j, 0.0)
-                }
+    let n: i32 = X.rows * X.cols
+    let src: ptr<f32> = X.data
+    let dst: ptr<f32> = result.data
+    let kind: i32 = ft.func_kind
+
+    # The function kind is fixed for the whole matrix, so it is selected once
+    # here instead of being re-tested for every element. Each branch walks the
+    # row-major buffers directly rather than going through matrix_at and
+    # matrix_set. Cells the old code explicitly set to 0.0 are left alone:
+    # matrix_new is calloc-backed and already holds positive zero there.
+    if kind == FUNC_LOG {
+        for i in 0 to n {
+            let val: f32 = src[i]
+            if val > 0.0 {
+                dst[i] = log(val as f64) as f32
+            }
+        }
+    } elif kind == FUNC_SQRT {
+        for i in 0 to n {
+            let val: f32 = src[i]
+            if val > 0.0 {
+                dst[i] = sqrt(val as f64) as f32
+            }
+        }
+    } elif kind == FUNC_SQUARE {
+        for i in 0 to n {
+            let val: f32 = src[i]
+            dst[i] = val * val
+        }
+    } elif kind == FUNC_ABS {
+        for i in 0 to n {
+            let val: f32 = src[i]
+            if val < 0.0 {
+                dst[i] = 0.0 - val
+            } else {
+                dst[i] = val
+            }
+        }
+    } elif kind == FUNC_RECIPROCAL {
+        for i in 0 to n {
+            let val: f32 = src[i]
+            if val > 0.0000000001 || val < -0.0000000001 {
+                dst[i] = 1.0 / val
             }
         }
     }
@@ -1746,20 +1810,7 @@ export struct LabelBinarizer {
 
 export function label_binarizer_fit(y: ptr<f32>, n: i32, neg_label: f32, pos_label: f32) -> LabelBinarizer {
     let classes: ptr<f32> = array_new_f32(n)
-    let mut n_classes: i32 = 0
-
-    for i in 0 to n {
-        let mut found: bool = false
-        for k in 0 to n_classes {
-            if classes[k] == y[i] { found = true }
-        }
-        if not found {
-            classes[n_classes] = y[i]
-            n_classes = n_classes + 1
-        }
-    }
-
-    _insertion_sort(classes, n_classes)
+    let n_classes: i32 = _preprocessing_label_sorted_unique(y, n, classes)
 
     let result: LabelBinarizer = LabelBinarizer {
         classes: classes, n_classes: n_classes,
@@ -1770,14 +1821,43 @@ export function label_binarizer_fit(y: ptr<f32>, n: i32, neg_label: f32, pos_lab
 }
 
 export function label_binarizer_transform(model: LabelBinarizer, y: ptr<f32>, n: i32) -> Matrix {
-    let result: Matrix = matrix_new(n, model.n_classes)
-    for i in 0 to n {
-        for c in 0 to model.n_classes {
-            if y[i] == model.classes[c] {
-                matrix_set(result, i, c, model.pos_label)
-            } else {
-                matrix_set(result, i, c, model.neg_label)
+    let n_classes: i32 = model.n_classes
+    let classes: ptr<f32> = model.classes
+    let neg: f32 = model.neg_label
+    let pos: f32 = model.pos_label
+    let result: Matrix = matrix_new(n, n_classes)
+    let data: ptr<f32> = result.data
+
+    # matrix_new hands back a calloc-backed buffer, so when neg_label is
+    # positive zero every negative cell already holds the right value and the
+    # fill loop can be dropped. The reciprocal test separates +0.0 from -0.0,
+    # which compare equal but print differently.
+    let mut skip_neg: bool = false
+    if neg == 0.0 {
+        if 1.0 / neg > 0.0 {
+            skip_neg = true
+        }
+    }
+
+    let mut base: i32 = 0
+    if skip_neg {
+        for i in 0 to n {
+            let k: i32 = _preprocessing_label_class_index(classes, n_classes, y[i])
+            if k >= 0 {
+                data[base + k] = pos
             }
+            base = base + n_classes
+        }
+    } else {
+        for i in 0 to n {
+            for c in 0 to n_classes {
+                data[base + c] = neg
+            }
+            let k: i32 = _preprocessing_label_class_index(classes, n_classes, y[i])
+            if k >= 0 {
+                data[base + k] = pos
+            }
+            base = base + n_classes
         }
     }
     return result

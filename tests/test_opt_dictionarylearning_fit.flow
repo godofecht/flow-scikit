@@ -1,0 +1,238 @@
+# Regression test for the optimized DictionaryLearning.fit (issue #264).
+# Re-implements the pre-optimization fit verbatim and requires the optimized
+# fit to produce a bit-identical dictionary, identical n_iter and an identical
+# early-stop decision, across several workloads plus edge cases.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function rand() -> i32
+    function srand(seed: u32) -> void
+}
+
+function opt_dl_fit_close(a: f32, b: f32, tolerance: f32) -> bool {
+    let mut d: f32 = a - b
+    if d < 0.0 { d = -d }
+    return d <= tolerance
+}
+
+# The pre-optimization implementation, kept here as the parity reference.
+# Same initialization, same random draw order, same convergence criterion.
+function opt_dl_fit_reference(X: Matrix, n_components: i32, alpha: f32, max_iter: i32, tol: f32, seed: i32) -> DictionaryLearning {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+
+    srand(seed)
+    let dictionary: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+    for c in 0 to n_components {
+        dictionary[c] = array_new_f32(p)
+        let idx: i32 = rand() % n
+        for j in 0 to p {
+            dictionary[c][j] = matrix_at(X, idx, j)
+        }
+        let mut norm: f32 = 0.0
+        for j in 0 to p { norm = norm + dictionary[c][j] * dictionary[c][j] }
+        norm = sqrt((norm as f64)) as f32
+        if norm > 0.0000000001 {
+            for j in 0 to p { dictionary[c][j] = dictionary[c][j] / norm }
+        }
+    }
+
+    let mut n_iter: i32 = 0
+    for iter in 0 to max_iter {
+        n_iter = iter + 1
+        let mut total_change: f32 = 0.0
+
+        for i in 0 to n {
+            let codes: ptr<f32> = array_new_f32(n_components)
+
+            for c in 0 to n_components {
+                let mut dot: f32 = 0.0
+                for j in 0 to p {
+                    dot = dot + matrix_at(X, i, j) * dictionary[c][j]
+                }
+                if (fabs((dot) as f64) as f32) > alpha {
+                    if dot > 0 {
+                        codes[c] = dot - alpha
+                    } else {
+                        codes[c] = dot + alpha
+                    }
+                } else {
+                    codes[c] = 0.0
+                }
+            }
+
+            for c in 0 to n_components {
+                if (fabs((codes[c]) as f64) as f32) < 0.0000000001 { continue }
+                let old: ptr<f32> = array_copy_f32(dictionary[c], p)
+                for j in 0 to p {
+                    let residual: f32 = matrix_at(X, i, j) - codes[c] * dictionary[c][j]
+                    dictionary[c][j] = dictionary[c][j] + 0.01 * codes[c] * residual
+                }
+                let mut norm: f32 = 0.0
+                for j in 0 to p { norm = norm + dictionary[c][j] * dictionary[c][j] }
+                norm = sqrt((norm as f64)) as f32
+                if norm > 0.0000000001 {
+                    for j in 0 to p { dictionary[c][j] = dictionary[c][j] / norm }
+                }
+                let mut change: f32 = 0.0
+                for j in 0 to p {
+                    change = change + fabs((dictionary[c][j] - old[j]) as f64) as f32
+                }
+                total_change = total_change + change
+                array_free_f32(old)
+            }
+
+            array_free_f32(codes)
+        }
+
+        if total_change / (n as f32) < tol { break }
+    }
+
+    let model: DictionaryLearning = DictionaryLearning {
+        dictionary: dictionary,
+        n_components: n_components,
+        n_features: p,
+        alpha: alpha,
+        n_iter: n_iter,
+        fitted: true
+    }
+    return model
+}
+
+function opt_dl_fit_fill(X: Matrix, seed: i32) -> void {
+    for i in 0 to X.rows {
+        for j in 0 to X.cols {
+            let s: i32 = (i * 37 + j * 17 + seed) % 211
+            let v: f32 = ((s as f32) / 105.0) - 1.0
+            matrix_set(X, i, j, v)
+        }
+    }
+}
+
+# Fit both implementations on the same data and compare element-wise.
+# Returns the number of differing values, or -1 on a shape/n_iter mismatch.
+function opt_dl_fit_parity(n: i32, p: i32, k: i32, alpha: f32, max_iter: i32, tol: f32, seed: i32, fill_seed: i32) -> i32 {
+    let X: Matrix = matrix_new(n, p)
+    opt_dl_fit_fill(X, fill_seed)
+
+    let got: DictionaryLearning = dictionary_learning_fit(X, k, alpha, max_iter, tol, seed)
+    let want: DictionaryLearning = opt_dl_fit_reference(X, k, alpha, max_iter, tol, seed)
+
+    let mut bad: i32 = 0
+    if got.n_iter != want.n_iter {
+        bad = -1
+    }
+    if got.n_components != want.n_components || got.n_features != want.n_features {
+        bad = -1
+    }
+    if bad == 0 {
+        for c in 0 to k {
+            for j in 0 to p {
+                if got.dictionary[c][j] != want.dictionary[c][j] {
+                    bad = bad + 1
+                }
+            }
+        }
+    }
+
+    dictionary_learning_free(got)
+    dictionary_learning_free(want)
+    matrix_free(X)
+    return bad
+}
+
+function main() -> i32 {
+    # --- 1. Known-correct properties on a tiny fit -------------------------
+    let X1: Matrix = matrix_new(6, 3)
+    matrix_set(X1, 0, 0, 3.0); matrix_set(X1, 0, 1, 0.0); matrix_set(X1, 0, 2, 0.0)
+    matrix_set(X1, 1, 0, 0.0); matrix_set(X1, 1, 1, 4.0); matrix_set(X1, 1, 2, 0.0)
+    matrix_set(X1, 2, 0, 0.0); matrix_set(X1, 2, 1, 0.0); matrix_set(X1, 2, 2, 5.0)
+    matrix_set(X1, 3, 0, 2.0); matrix_set(X1, 3, 1, 1.0); matrix_set(X1, 3, 2, 0.0)
+    matrix_set(X1, 4, 0, 0.0); matrix_set(X1, 4, 1, 2.0); matrix_set(X1, 4, 2, 1.0)
+    matrix_set(X1, 5, 0, 1.0); matrix_set(X1, 5, 1, 0.0); matrix_set(X1, 5, 2, 2.0)
+
+    let m1: DictionaryLearning = dictionary_learning_fit(X1, 2, 0.1, 20, 0.0001, 42)
+    if m1.n_components != 2 || m1.n_features != 3 {
+        println("FAIL: fitted model shape")
+        return 1
+    }
+    if not m1.fitted {
+        println("FAIL: fitted flag")
+        return 1
+    }
+    # Every atom must stay unit norm: the fit renormalizes after each update.
+    for c in 0 to 2 {
+        let mut norm: f32 = 0.0
+        for j in 0 to 3 { norm = norm + m1.dictionary[c][j] * m1.dictionary[c][j] }
+        norm = sqrt((norm as f64)) as f32
+        if not opt_dl_fit_close(norm, 1.0, 0.0001) {
+            println("FAIL: dictionary atom is not unit norm")
+            return 1
+        }
+    }
+    dictionary_learning_free(m1)
+    matrix_free(X1)
+
+    # --- 2. Element-wise parity with the original implementation -----------
+    # Small workload.
+    if opt_dl_fit_parity(60, 6, 3, 0.1, 10, 0.0001, 42, 3) != 0 {
+        println("FAIL: parity mismatch on small workload")
+        return 1
+    }
+    # Realistic workload: 400 samples, 24 features, 12 atoms, 10 iterations.
+    if opt_dl_fit_parity(400, 24, 12, 0.1, 10, 0.000001, 42, 11) != 0 {
+        println("FAIL: parity mismatch on realistic workload")
+        return 1
+    }
+    # alpha large enough that most codes threshold to zero and the atom update
+    # is skipped, exercising the continue branch.
+    if opt_dl_fit_parity(200, 16, 8, 0.9, 8, 0.000001, 7, 23) != 0 {
+        println("FAIL: parity mismatch under heavy thresholding")
+        return 1
+    }
+    # Loose tolerance so the convergence break fires: n_iter must match too.
+    if opt_dl_fit_parity(200, 16, 8, 0.1, 40, 0.05, 13, 29) != 0 {
+        println("FAIL: parity mismatch or n_iter drift with early stopping")
+        return 1
+    }
+    # Single component.
+    if opt_dl_fit_parity(120, 10, 1, 0.1, 12, 0.000001, 5, 31) != 0 {
+        println("FAIL: parity mismatch with a single component")
+        return 1
+    }
+    # Single feature column.
+    if opt_dl_fit_parity(80, 1, 3, 0.05, 10, 0.000001, 9, 37) != 0 {
+        println("FAIL: parity mismatch with a single feature")
+        return 1
+    }
+    # More atoms than features (overcomplete dictionary).
+    if opt_dl_fit_parity(150, 4, 10, 0.1, 10, 0.000001, 17, 41) != 0 {
+        println("FAIL: parity mismatch on an overcomplete dictionary")
+        return 1
+    }
+
+    # --- 3. fit -> transform still agrees end to end -----------------------
+    let X3: Matrix = matrix_new(300, 12)
+    opt_dl_fit_fill(X3, 17)
+    let got3: DictionaryLearning = dictionary_learning_fit(X3, 6, 0.1, 6, 0.000001, 42)
+    let want3: DictionaryLearning = opt_dl_fit_reference(X3, 6, 0.1, 6, 0.000001, 42)
+    let tg: Matrix = dictionary_learning_transform(got3, X3)
+    let tw: Matrix = dictionary_learning_transform(want3, X3)
+    for i in 0 to 300 {
+        for c in 0 to 6 {
+            if matrix_at(tg, i, c) != matrix_at(tw, i, c) {
+                println("FAIL: transform of the optimized fit differs")
+                return 1
+            }
+        }
+    }
+    matrix_free(tg)
+    matrix_free(tw)
+    dictionary_learning_free(got3)
+    dictionary_learning_free(want3)
+    matrix_free(X3)
+
+    println("PASS: DictionaryLearning.fit optimization")
+    return 0
+}

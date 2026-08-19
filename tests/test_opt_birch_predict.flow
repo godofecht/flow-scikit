@@ -1,0 +1,271 @@
+# Regression test for the optimized birch_predict.
+# Checks hand-computed nearest subclusters, the exact-tie tie-break, feature
+# counts that are not a multiple of the 8-wide bail-out block, a single
+# subcluster, and a realistic workload cross-checked element-wise against the
+# direct per-pair loop birch_predict used before.
+# Run: FLOW_HOST=python flow run tests/test_opt_birch_predict.flow
+
+import "lib/scikit/scikit.flow"
+
+# The pre-optimization kernel, kept here as the parity reference.
+function opt_bp_reference(model: Birch, X: Matrix) -> ptr<i32> {
+    let n: i32 = X.rows
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best_dist: f32 = 10000000000.0
+        for c in 0 to model.n_clusters {
+            let mut dist_sq: f32 = 0.0
+            for k in 0 to model.n_features {
+                let d: f32 = matrix_at(X, i, k) - model.centroids[c][k]
+                dist_sq = dist_sq + d * d
+            }
+            if dist_sq < best_dist {
+                best_dist = dist_sq
+                best_c = c
+            }
+        }
+        labels[i] = best_c
+    }
+    return labels
+}
+
+function opt_bp_model(n_clusters: i32, n_features: i32) -> Birch {
+    let centroids: ptr<ptr<f32> > = malloc((n_clusters as i64) * 8) as ptr<ptr<f32> >
+    for c in 0 to n_clusters {
+        centroids[c] = array_new_f32(n_features)
+    }
+    let labels: ptr<i32> = malloc(128) as ptr<i32>
+    let model: Birch = Birch {
+        centroids: centroids,
+        n_clusters: n_clusters,
+        n_features: n_features,
+        labels: labels,
+        threshold: 1.0,
+        branching_factor: 50,
+        fitted: true
+    }
+    return model
+}
+
+function opt_bp_known_values() -> i32 {
+    let model: Birch = opt_bp_model(3, 2)
+    model.centroids[0][0] = 0.0
+    model.centroids[0][1] = 0.0
+    model.centroids[1][0] = 5.0
+    model.centroids[1][1] = 0.0
+    model.centroids[2][0] = 0.0
+    model.centroids[2][1] = 5.0
+
+    let X: Matrix = matrix_new(4, 2)
+    matrix_set(X, 0, 0, 0.1); matrix_set(X, 0, 1, 0.1)
+    matrix_set(X, 1, 0, 4.4); matrix_set(X, 1, 1, 0.2)
+    matrix_set(X, 2, 0, 0.3); matrix_set(X, 2, 1, 4.8)
+    matrix_set(X, 3, 0, 2.4); matrix_set(X, 3, 1, 0.0)
+
+    let p: ptr<i32> = birch_predict(model, X)
+    let mut failed: i32 = 0
+    if p[0] != 0 { failed = 1 }
+    if p[1] != 1 { failed = 1 }
+    if p[2] != 2 { failed = 1 }
+    if p[3] != 0 { failed = 1 }
+    if failed != 0 {
+        println("FAIL: birch_predict known assignments changed")
+        printf("  got %d %d %d %d\n", p[0], p[1], p[2], p[3])
+    }
+
+    free(p as ptr<void>)
+    matrix_free(X)
+    birch_free(model)
+    return failed
+}
+
+# Two centroids exactly equidistant. The strict less-than comparison in the
+# original scan keeps the lowest index, and the bail-out must not change that.
+function opt_bp_exact_tie() -> i32 {
+    let model: Birch = opt_bp_model(3, 2)
+    model.centroids[0][0] = 2.0
+    model.centroids[0][1] = 0.0
+    model.centroids[1][0] = 0.0
+    model.centroids[1][1] = 2.0
+    model.centroids[2][0] = 9.0
+    model.centroids[2][1] = 9.0
+
+    let X: Matrix = matrix_new(2, 2)
+    matrix_set(X, 0, 0, 0.0); matrix_set(X, 0, 1, 0.0)
+    matrix_set(X, 1, 0, 2.0); matrix_set(X, 1, 1, 2.0)
+
+    let p: ptr<i32> = birch_predict(model, X)
+    let mut failed: i32 = 0
+    if p[0] != 0 { failed = 1 }
+    if p[1] != 0 { failed = 1 }
+    if failed != 0 {
+        println("FAIL: birch_predict tie-break changed")
+        printf("  got %d %d, expected 0 0\n", p[0], p[1])
+    }
+
+    free(p as ptr<void>)
+    matrix_free(X)
+    birch_free(model)
+    return failed
+}
+
+function opt_bp_single_cluster() -> i32 {
+    let model: Birch = opt_bp_model(1, 3)
+    model.centroids[0][0] = 1.0
+    model.centroids[0][1] = 2.0
+    model.centroids[0][2] = 3.0
+
+    let X: Matrix = matrix_new(2, 3)
+    matrix_set(X, 0, 0, 1.0); matrix_set(X, 0, 1, 2.0); matrix_set(X, 0, 2, 3.0)
+    matrix_set(X, 1, 0, 90.0); matrix_set(X, 1, 1, 0.0); matrix_set(X, 1, 2, 0.0)
+
+    let p: ptr<i32> = birch_predict(model, X)
+    let mut failed: i32 = 0
+    if p[0] != 0 { failed = 1 }
+    if p[1] != 0 { failed = 1 }
+    if failed != 0 {
+        println("FAIL: birch_predict single-subcluster case changed")
+    }
+
+    free(p as ptr<void>)
+    matrix_free(X)
+    birch_free(model)
+    return failed
+}
+
+# The bail-out checks the running sum once every 8 features. Feature counts
+# below, on, and either side of that boundary all have to give the same labels
+# as the direct loop.
+function opt_bp_block_boundaries() -> i32 {
+    let mut failed: i32 = 0
+    let widths: ptr<i32> = malloc(128) as ptr<i32>
+    widths[0] = 1
+    widths[1] = 3
+    widths[2] = 7
+    widths[3] = 8
+    widths[4] = 9
+    widths[5] = 16
+    widths[6] = 17
+
+    for wi in 0 to 7 {
+        let d: i32 = widths[wi]
+        let n: i32 = 120
+        let k: i32 = 9
+        let model: Birch = opt_bp_model(k, d)
+        let mut state: i64 = 4242 + (d as i64)
+        for c in 0 to k {
+            for j in 0 to d {
+                state = (state * 1103515245 + 12345) % 2147483648
+                model.centroids[c][j] = ((c % 4) as f32) + ((state % 500) as f32) / 250.0
+            }
+        }
+        let X: Matrix = matrix_new(n, d)
+        for i in 0 to n {
+            for j in 0 to d {
+                state = (state * 1103515245 + 12345) % 2147483648
+                X.data[i * d + j] = ((i % 5) as f32) + ((state % 500) as f32) / 250.0
+            }
+        }
+
+        let p: ptr<i32> = birch_predict(model, X)
+        let r: ptr<i32> = opt_bp_reference(model, X)
+        let mut diffs: i32 = 0
+        for i in 0 to n {
+            if p[i] != r[i] { diffs = diffs + 1 }
+        }
+        if diffs != 0 {
+            failed = 1
+            printf("FAIL: birch_predict differs from the direct loop at n_features=%d in %d labels\n", d, diffs)
+        }
+
+        free(r as ptr<void>)
+        free(p as ptr<void>)
+        matrix_free(X)
+        birch_free(model)
+    }
+
+    free(widths as ptr<void>)
+    if failed == 0 {
+        println("  OK: identical labels at n_features 1, 3, 7, 8, 9, 16, 17")
+    }
+    return failed
+}
+
+# Realistic workload: a fitted Birch model with many subclusters, which is the
+# case the bail-out is aimed at.
+function opt_bp_workload() -> i32 {
+    let n: i32 = 900
+    let d: i32 = 16
+    let k: i32 = 8
+    let X: Matrix = matrix_new(n, d)
+    let mut state: i64 = 20240518
+    for i in 0 to n {
+        for j in 0 to d {
+            state = (state * 1103515245 + 12345) % 2147483648
+            X.data[i * d + j] = ((i % k) as f32) * 3.0 + ((state % 1000) as f32) / 400.0
+        }
+    }
+
+    let model: Birch = birch_fit(X, 3.0, 50)
+    let p: ptr<i32> = birch_predict(model, X)
+    let r: ptr<i32> = opt_bp_reference(model, X)
+
+    let mut failed: i32 = 0
+    let mut diffs: i32 = 0
+    for i in 0 to n {
+        if p[i] != r[i] { diffs = diffs + 1 }
+        if p[i] < 0 { failed = 1 }
+        if p[i] >= model.n_clusters { failed = 1 }
+    }
+    if diffs != 0 {
+        failed = 1
+        printf("FAIL: birch_predict realistic workload differs in %d of %d labels\n", diffs, n)
+    }
+
+    # Predicting the training rows must reproduce the assignment the caller
+    # would get from the nearest final centroid, so the argmin is genuinely
+    # the nearest one and not just self-consistent.
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best: f32 = 10000000000.0
+        for c in 0 to model.n_clusters {
+            let mut dsq: f32 = 0.0
+            for j in 0 to d {
+                let diff: f32 = X.data[i * d + j] - model.centroids[c][j]
+                dsq = dsq + diff * diff
+            }
+            if dsq < best {
+                best = dsq
+                best_c = c
+            }
+        }
+        if best_c != p[i] { failed = 1 }
+    }
+
+    if failed == 0 {
+        printf("  OK: 900x16 into %d subclusters, labels identical to the direct loop\n", model.n_clusters)
+    }
+
+    free(r as ptr<void>)
+    free(p as ptr<void>)
+    birch_free(model)
+    matrix_free(X)
+    return failed
+}
+
+function main() -> i32 {
+    println("Test: optimized Birch.predict")
+    let mut failed: i32 = 0
+    failed = failed + opt_bp_known_values()
+    failed = failed + opt_bp_exact_tie()
+    failed = failed + opt_bp_single_cluster()
+    failed = failed + opt_bp_block_boundaries()
+    failed = failed + opt_bp_workload()
+    if failed != 0 {
+        println("FAILED")
+        return 1
+    }
+    println("OK: Birch.predict optimization preserves assignments")
+    return 0
+}
