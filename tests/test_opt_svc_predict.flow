@@ -1,0 +1,248 @@
+# Regression test for the optimized SVC prediction paths.
+#
+# Covers both estimators that carry the sklearn SVC.predict semantics:
+#   * KernelSVCMulti (one-vs-one RBF, the canonical KernelSVC_RBF benchmark row)
+#   * SVC (one-vs-rest, kernel-selectable)
+#
+# Both now evaluate the kernel once per predict call and finish with a gemm.
+# The checks below recompute the decision values independently and compare
+# element-wise, and confirm the predicted labels follow from those values.
+
+import "lib/scikit/scikit.flow"
+
+function svcopt_assert(cond: bool, msg: string) -> void {
+    if not cond {
+        printf("FAIL: %s\n", msg)
+        exit(1)
+    }
+}
+
+function svcopt_exp(v: f32) -> f32 {
+    let r: f32 = exp((v) as f64) as f32
+    return r
+}
+
+function svcopt_abs(v: f32) -> f32 {
+    let r: f32 = fabs((v) as f64) as f32
+    return r
+}
+
+# Independent scalar RBF kernel between row i of X1 and row j of X2.
+function svcopt_ref_rbf(X1: Matrix, i: i32, X2: Matrix, j: i32, nf: i32, gamma: f32) -> f32 {
+    let mut s: f32 = 0.0
+    for k in 0 to nf {
+        let d: f32 = matrix_at(X1, i, k) - matrix_at(X2, j, k)
+        s = s + d * d
+    }
+    let v: f32 = svcopt_exp(0.0 - gamma * s)
+    return v
+}
+
+function main() -> i32 {
+    let ds: Dataset = load_iris()
+    let X: Matrix = ds.X
+    let y: ptr<f32> = ds.y
+    let n: i32 = X.rows
+    let nf: i32 = X.cols
+
+    # Deterministic strided split so every class appears in both halves.
+    let mut n_train: i32 = 0
+    let mut n_test: i32 = 0
+    for i in 0 to n {
+        if i % 5 == 0 {
+            n_test = n_test + 1
+        } else {
+            n_train = n_train + 1
+        }
+    }
+
+    let X_train: Matrix = matrix_new(n_train, nf)
+    let y_train: ptr<f32> = array_new_f32(n_train)
+    let X_test: Matrix = matrix_new(n_test, nf)
+    let y_test: ptr<f32> = array_new_f32(n_test)
+    let mut tr: i32 = 0
+    let mut te: i32 = 0
+    for i in 0 to n {
+        if i % 5 == 0 {
+            for j in 0 to nf { matrix_set(X_test, te, j, matrix_at(X, i, j)) }
+            y_test[te] = y[i]
+            te = te + 1
+        } else {
+            for j in 0 to nf { matrix_set(X_train, tr, j, matrix_at(X, i, j)) }
+            y_train[tr] = y[i]
+            tr = tr + 1
+        }
+    }
+
+    let gamma: f32 = 0.5
+    let C: f32 = 1.0
+
+    # ------------------------------------------------------------------
+    # 1. KernelSVCMulti: shared kernel gemm vs the per-pair reference path.
+    # ------------------------------------------------------------------
+    let km: KernelSVCMulti = kernel_svc_multi_fit(X_train, y_train, 3, gamma, C, 200)
+    svcopt_assert(km.n_pairs == 3, "iris one-vs-one should produce 3 pairs")
+    svcopt_assert(km.n_train == n_train, "n_train must record the full training set")
+
+    let np: i32 = km.n_pairs
+    let dec: ptr<f32> = kernel_svc_multi_decision_function(km, X_test)
+
+    let mut max_pair_diff: f32 = 0.0
+    let mut p: i32 = 0
+    while p < np {
+        let ref_scores: ptr<f32> = kernel_svc_predict(km.models[p], X_test)
+        for i in 0 to n_test {
+            let d: f32 = svcopt_abs(dec[i * np + p] - ref_scores[i])
+            if d > max_pair_diff { max_pair_diff = d }
+            let same_sign: bool = (dec[i * np + p] > 0.0) == (ref_scores[i] > 0.0)
+            svcopt_assert(same_sign, "pair decision sign must match the per-pair path")
+        }
+        array_free_f32(ref_scores)
+        p = p + 1
+    }
+    printf("KernelSVCMulti max decision diff = %.9f\n", max_pair_diff)
+    svcopt_assert(max_pair_diff < 0.001, "one-vs-one decision values must match the per-pair path")
+
+    # Labels must be the argmax of the votes implied by those decision values.
+    let preds: ptr<f32> = kernel_svc_multi_predict(km, X_test)
+    let votes: ptr<i32> = malloc(((n_test * km.n_classes) as i64) * 4) as ptr<i32>
+    for i in 0 to n_test * km.n_classes { votes[i] = 0 }
+    p = 0
+    while p < np {
+        let a: i32 = km.pair_a[p]
+        let b: i32 = km.pair_b[p]
+        for i in 0 to n_test {
+            if dec[i * np + p] > 0.0 {
+                votes[i * km.n_classes + a] = votes[i * km.n_classes + a] + 1
+            } else {
+                votes[i * km.n_classes + b] = votes[i * km.n_classes + b] + 1
+            }
+        }
+        p = p + 1
+    }
+    let mut correct: i32 = 0
+    for i in 0 to n_test {
+        let mut best_c: i32 = 0
+        let mut best_v: i32 = votes[i * km.n_classes]
+        let mut c: i32 = 1
+        while c < km.n_classes {
+            let v: i32 = votes[i * km.n_classes + c]
+            if v > best_v {
+                best_v = v
+                best_c = c
+            }
+            c = c + 1
+        }
+        svcopt_assert(preds[i] == km.classes[best_c], "predicted label must be the vote argmax")
+        if preds[i] == y_test[i] { correct = correct + 1 }
+    }
+    let acc: f32 = (correct as f32) / (n_test as f32)
+    printf("KernelSVCMulti accuracy = %.4f\n", acc)
+    svcopt_assert(acc > 0.9, "iris one-vs-one RBF accuracy should stay above 0.9")
+
+    # Edge case: a single-row batch must give the same decision values.
+    let X_one: Matrix = matrix_new(1, nf)
+    for j in 0 to nf { matrix_set(X_one, 0, j, matrix_at(X_test, 0, j)) }
+    let dec_one: ptr<f32> = kernel_svc_multi_decision_function(km, X_one)
+    p = 0
+    while p < np {
+        let d1: f32 = svcopt_abs(dec_one[p] - dec[p])
+        svcopt_assert(d1 < 0.0001, "single-row batch must match the batched decision value")
+        p = p + 1
+    }
+    array_free_f32(dec_one)
+    matrix_free(X_one)
+
+    free(votes as ptr<void>)
+    array_free_f32(preds)
+    array_free_f32(dec)
+    kernel_svc_multi_free(km)
+
+    # ------------------------------------------------------------------
+    # 2. SVC (one-vs-rest): batched kernel vs an independent scalar sum.
+    # ------------------------------------------------------------------
+    # kernel 0 = RBF
+    let sm: SVC = svc_fit(X_train, y_train, 3, C, 0, gamma, 3, 0.0)
+    let ns: i32 = sm.n_samples
+    let nc: i32 = sm.n_classes
+    let scores: ptr<f32> = svc_decision_function(sm, X_test)
+
+    let mut max_svc_diff: f32 = 0.0
+    for i in 0 to n_test {
+        for c in 0 to nc {
+            let mut ref_sum: f32 = sm.b[c]
+            for j in 0 to ns {
+                let a: f32 = sm.alphas[c * ns + j]
+                if a > 0.0 {
+                    let kv: f32 = svcopt_ref_rbf(X_test, i, sm.X_train, j, nf, gamma)
+                    ref_sum = ref_sum + a * sm.y_dual[c * ns + j] * kv
+                }
+            }
+            let d: f32 = svcopt_abs(scores[i * nc + c] - ref_sum)
+            if d > max_svc_diff { max_svc_diff = d }
+        }
+    }
+    printf("SVC max decision diff = %.9f\n", max_svc_diff)
+    svcopt_assert(max_svc_diff < 0.001, "one-vs-rest decision values must match the scalar reference")
+
+    let svc_preds: ptr<f32> = svc_predict(sm, X_test)
+    let mut svc_correct: i32 = 0
+    for i in 0 to n_test {
+        let mut best_c: i32 = 0
+        let mut best_s: f32 = scores[i * nc]
+        for c in 1 to nc {
+            let s: f32 = scores[i * nc + c]
+            if s > best_s {
+                best_s = s
+                best_c = c
+            }
+        }
+        svcopt_assert(svc_preds[i] == sm.classes[best_c], "SVC label must be the score argmax")
+        if svc_preds[i] == y_test[i] { svc_correct = svc_correct + 1 }
+    }
+    let svc_acc: f32 = (svc_correct as f32) / (n_test as f32)
+    printf("SVC accuracy = %.4f\n", svc_acc)
+    svcopt_assert(svc_acc > 0.8, "iris one-vs-rest RBF accuracy should stay above 0.8")
+
+    array_free_f32(svc_preds)
+    array_free_f32(scores)
+
+    # Linear kernel keeps the non-BLAS branch honest.
+    # kernel 1 = linear
+    let lm: SVC = svc_fit(X_train, y_train, 3, C, 1, gamma, 3, 0.0)
+    let lscores: ptr<f32> = svc_decision_function(lm, X_test)
+    let lns: i32 = lm.n_samples
+    let mut max_lin_diff: f32 = 0.0
+    for i in 0 to n_test {
+        for c in 0 to nc {
+            let mut ref_sum: f32 = lm.b[c]
+            for j in 0 to lns {
+                let a: f32 = lm.alphas[c * lns + j]
+                if a > 0.0 {
+                    let mut dot: f32 = 0.0
+                    for k in 0 to nf {
+                        dot = dot + matrix_at(X_test, i, k) * matrix_at(lm.X_train, j, k)
+                    }
+                    ref_sum = ref_sum + a * lm.y_dual[c * lns + j] * dot
+                }
+            }
+            let d: f32 = svcopt_abs(lscores[i * nc + c] - ref_sum)
+            if d > max_lin_diff { max_lin_diff = d }
+        }
+    }
+    printf("SVC linear max decision diff = %.9f\n", max_lin_diff)
+    svcopt_assert(max_lin_diff < 0.01, "linear kernel decision values must match the scalar reference")
+
+    array_free_f32(lscores)
+    svc_free(lm)
+    svc_free(sm)
+
+    matrix_free(X_train)
+    array_free_f32(y_train)
+    matrix_free(X_test)
+    array_free_f32(y_test)
+    dataset_free(ds)
+
+    printf("OK: SVC predict optimization is numerically equivalent\n")
+    return 0
+}

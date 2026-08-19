@@ -1,0 +1,292 @@
+import "lib/scikit/scikit.flow"
+
+extern {
+    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+    function printf(fmt: string, ...) -> i32
+}
+
+const TIME_UTC: i32 = 1
+
+function cnb_now_ns() -> i64 {
+    let ts: ptr<i64> = malloc(16) as ptr<i64>
+    timespec_get(ts, TIME_UTC)
+    let value: i64 = ts[0] * 1000000000 + ts[1]
+    free(ts as ptr<void>)
+    return value
+}
+
+# Verbatim copy of the pre-optimization complement_nb_predict from origin/main.
+# Kept so the A/B timing and the parity check run against real reference output.
+function cnb_reference_predict(model: ComplementNB, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let result: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        let mut best_c: i32 = 0
+        let mut best_score: f32 = -9999999999.0
+        for c in 0 to model.n_classes {
+            let mut score: f32 = model.class_log_prior[c]
+            for j in 0 to model.n_features {
+                score = score + matrix_at(X, i, j) * model.feature_log_prob[c][j]
+            }
+            if score > best_score {
+                best_score = score
+                best_c = c
+            }
+        }
+        result[i] = best_c as f32
+    }
+    return result
+}
+
+# argmax hides small drift, so compare the accumulated log-scores directly.
+# The two forms differ only in how the row element is fetched, so they must
+# agree bit for bit.
+function cnb_check_score_parity(model: ComplementNB, X: Matrix) -> i32 {
+    let p: i32 = model.n_features
+    let mut status: i32 = 0
+    for i in 0 to X.rows {
+        let row_base: i32 = i * p
+        for c in 0 to model.n_classes {
+            let mut accessor_score: f32 = model.class_log_prior[c]
+            let mut direct_score: f32 = model.class_log_prior[c]
+            let weights: ptr<f32> = model.feature_log_prob[c]
+            for j in 0 to p {
+                accessor_score = accessor_score + matrix_at(X, i, j) * model.feature_log_prob[c][j]
+                direct_score = direct_score + X.data[row_base + j] * weights[j]
+            }
+            if accessor_score != direct_score {
+                status = 1
+            }
+        }
+    }
+    if status != 0 {
+        println("FAIL: ComplementNB predict log-scores are not bit-identical")
+    }
+    return status
+}
+
+function cnb_check_known_values() -> i32 {
+    # Six documents, four term counts, two classes, alpha = 1.  Expected
+    # predictions were derived independently from the ComplementNB definition
+    # this module implements.
+    let train: Matrix = matrix_new(6, 4)
+    let labels: ptr<f32> = array_new_f32(6)
+
+    matrix_set(train, 0, 0, 3.0)
+    matrix_set(train, 0, 1, 0.0)
+    matrix_set(train, 0, 2, 1.0)
+    matrix_set(train, 0, 3, 0.0)
+    matrix_set(train, 1, 0, 4.0)
+    matrix_set(train, 1, 1, 1.0)
+    matrix_set(train, 1, 2, 0.0)
+    matrix_set(train, 1, 3, 0.0)
+    matrix_set(train, 2, 0, 0.0)
+    matrix_set(train, 2, 1, 2.0)
+    matrix_set(train, 2, 2, 3.0)
+    matrix_set(train, 2, 3, 1.0)
+    matrix_set(train, 3, 0, 1.0)
+    matrix_set(train, 3, 1, 0.0)
+    matrix_set(train, 3, 2, 4.0)
+    matrix_set(train, 3, 3, 2.0)
+    matrix_set(train, 4, 0, 5.0)
+    matrix_set(train, 4, 1, 1.0)
+    matrix_set(train, 4, 2, 0.0)
+    matrix_set(train, 4, 3, 1.0)
+    matrix_set(train, 5, 0, 0.0)
+    matrix_set(train, 5, 1, 1.0)
+    matrix_set(train, 5, 2, 2.0)
+    matrix_set(train, 5, 3, 4.0)
+
+    labels[0] = 0.0
+    labels[1] = 0.0
+    labels[2] = 1.0
+    labels[3] = 1.0
+    labels[4] = 0.0
+    labels[5] = 1.0
+
+    let model: ComplementNB = complement_nb_fit(train, labels, 2, 1.0)
+
+    # Row 2 is an all-zero document: every score collapses to the class prior,
+    # so the tie must still resolve to the first class.
+    let query: Matrix = matrix_new(4, 4)
+    matrix_set(query, 0, 0, 4.0)
+    matrix_set(query, 0, 1, 0.0)
+    matrix_set(query, 0, 2, 0.0)
+    matrix_set(query, 0, 3, 0.0)
+    matrix_set(query, 1, 0, 0.0)
+    matrix_set(query, 1, 1, 0.0)
+    matrix_set(query, 1, 2, 4.0)
+    matrix_set(query, 1, 3, 2.0)
+    matrix_set(query, 2, 0, 0.0)
+    matrix_set(query, 2, 1, 0.0)
+    matrix_set(query, 2, 2, 0.0)
+    matrix_set(query, 2, 3, 0.0)
+    matrix_set(query, 3, 0, 1.0)
+    matrix_set(query, 3, 1, 1.0)
+    matrix_set(query, 3, 2, 1.0)
+    matrix_set(query, 3, 3, 1.0)
+
+    let expected: ptr<f32> = array_new_f32(4)
+    expected[0] = 0.0
+    expected[1] = 1.0
+    expected[2] = 0.0
+    expected[3] = 1.0
+
+    let preds: ptr<f32> = complement_nb_predict(model, query)
+    let mut status: i32 = 0
+    for i in 0 to 4 {
+        if preds[i] != expected[i] {
+            println("FAIL: ComplementNB predict known-value case")
+            status = 1
+        }
+    }
+    if cnb_check_score_parity(model, query) != 0 {
+        status = 1
+    }
+
+    array_free_f32(preds)
+    array_free_f32(expected)
+    matrix_free(query)
+    complement_nb_free(model)
+    matrix_free(train)
+    array_free_f32(labels)
+    return status
+}
+
+function cnb_check_single_feature() -> i32 {
+    # Degenerate width: one term, two classes.
+    let train: Matrix = matrix_new(4, 1)
+    let labels: ptr<f32> = array_new_f32(4)
+    matrix_set(train, 0, 0, 5.0)
+    labels[0] = 0.0
+    matrix_set(train, 1, 0, 4.0)
+    labels[1] = 0.0
+    matrix_set(train, 2, 0, 0.0)
+    labels[2] = 1.0
+    matrix_set(train, 3, 0, 1.0)
+    labels[3] = 1.0
+
+    let model: ComplementNB = complement_nb_fit(train, labels, 2, 1.0)
+    let query: Matrix = matrix_new(2, 1)
+    matrix_set(query, 0, 0, 6.0)
+    matrix_set(query, 1, 0, 0.0)
+
+    let preds: ptr<f32> = complement_nb_predict(model, query)
+    let reference: ptr<f32> = cnb_reference_predict(model, query)
+    let mut status: i32 = 0
+    if preds[0] != 0.0 {
+        println("FAIL: single-feature ComplementNB predict row 0")
+        status = 1
+    }
+    if preds[1] != 0.0 {
+        println("FAIL: single-feature ComplementNB predict row 1")
+        status = 1
+    }
+    for i in 0 to 2 {
+        if preds[i] != reference[i] {
+            println("FAIL: single-feature ComplementNB predict diverged from reference")
+            status = 1
+        }
+    }
+
+    array_free_f32(preds)
+    array_free_f32(reference)
+    matrix_free(query)
+    complement_nb_free(model)
+    matrix_free(train)
+    array_free_f32(labels)
+    return status
+}
+
+function main() -> i32 {
+    let mut status: i32 = 0
+    status = status + cnb_check_known_values()
+    status = status + cnb_check_single_feature()
+    if status != 0 {
+        return 1
+    }
+
+    let n_train: i32 = 800
+    let n_query: i32 = 800
+    let p: i32 = 64
+    let n_classes: i32 = 4
+    let repeats: i32 = 20
+
+    let train: Matrix = matrix_new(n_train, p)
+    let labels: ptr<f32> = array_new_f32(n_train)
+    for i in 0 to n_train {
+        let cls: i32 = i % n_classes
+        labels[i] = cls as f32
+        for j in 0 to p {
+            let count: i32 = (i * 37 + j * 19 + cls * 23) % 5
+            matrix_set(train, i, j, count as f32)
+        }
+    }
+
+    let model: ComplementNB = complement_nb_fit(train, labels, n_classes, 1.0)
+
+    let query: Matrix = matrix_new(n_query, p)
+    for i in 0 to n_query {
+        let cls: i32 = (i + 1) % n_classes
+        for j in 0 to p {
+            let count: i32 = (i * 29 + j * 13 + cls * 17) % 5
+            matrix_set(query, i, j, count as f32)
+        }
+    }
+
+    # Element-wise parity on the realistic workload before any timing.
+    let reference_once: ptr<f32> = cnb_reference_predict(model, query)
+    let optimized_once: ptr<f32> = complement_nb_predict(model, query)
+    for i in 0 to n_query {
+        if reference_once[i] != optimized_once[i] {
+            println("FAIL: optimized ComplementNB predict changed a label")
+            return 1
+        }
+    }
+    array_free_f32(reference_once)
+    array_free_f32(optimized_once)
+
+    if cnb_check_score_parity(model, query) != 0 {
+        return 1
+    }
+
+    # Warm both paths so the timed loops measure steady state, not first touch.
+    for r in 0 to 2 {
+        let warm_reference: ptr<f32> = cnb_reference_predict(model, query)
+        array_free_f32(warm_reference)
+        let warm_optimized: ptr<f32> = complement_nb_predict(model, query)
+        array_free_f32(warm_optimized)
+    }
+
+    # Interleave the two paths so scheduler drift over the run hits both
+    # equally.  Two consecutive blocks gave a bimodal optimized time here.
+    let mut reference_ns: i64 = 0
+    let mut optimized_ns: i64 = 0
+    for r in 0 to repeats {
+        let t0: i64 = cnb_now_ns()
+        let reference_output: ptr<f32> = cnb_reference_predict(model, query)
+        let t1: i64 = cnb_now_ns()
+        array_free_f32(reference_output)
+
+        let t2: i64 = cnb_now_ns()
+        let optimized_output: ptr<f32> = complement_nb_predict(model, query)
+        let t3: i64 = cnb_now_ns()
+        array_free_f32(optimized_output)
+
+        reference_ns = reference_ns + (t1 - t0)
+        optimized_ns = optimized_ns + (t3 - t2)
+    }
+
+    let reference_ms: f64 = (reference_ns as f64) / 1000000.0
+    let optimized_ms: f64 = (optimized_ns as f64) / 1000000.0
+    printf("ComplementNB predict A/B: reference=%.6f ms optimized=%.6f ms speedup=%.3fx\n", reference_ms, optimized_ms, reference_ms / optimized_ms)
+
+    matrix_free(query)
+    complement_nb_free(model)
+    matrix_free(train)
+    array_free_f32(labels)
+
+    println("OK: ComplementNB predict matches reference labels")
+    return 0
+}

@@ -1,0 +1,283 @@
+# Regression test for the RandomForestClassifier.predict_proba optimization
+# (roadmap rank 20, issue #229).
+#
+# Locks the optimized vote-count kernel against the pre-#229 per-sample
+# implementation element-wise, checks the structural invariants of the
+# returned probabilities, and covers the small edge cases (one row, one tree,
+# a single-class forest) alongside a realistic digits workload.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+    function printf(fmt: string, ...) -> i32
+}
+
+const RFPP_TIME_UTC: i32 = 1
+
+function rfpp_now_ns() -> i64 {
+    let ts: ptr<i64> = malloc(16) as ptr<i64>
+    timespec_get(ts, RFPP_TIME_UTC)
+    let value: i64 = ts[0] * 1000000000 + ts[1]
+    free(ts as ptr<void>)
+    return value
+}
+
+function rfpp_abs(x: f32) -> f32 {
+    if x < 0.0 { return -x }
+    return x
+}
+
+# Pre-#229 reference implementation, kept only for A/B parity and timing.
+function rfpp_reference_predict_proba(model: RandomForestClassifier, X: Matrix) -> Matrix {
+    let probs: Matrix = matrix_new(X.rows, model.n_classes)
+    let row: ptr<f32> = array_new_f32(X.cols)
+
+    for i in 0 to X.rows {
+        matrix_row(X, i, row)
+
+        let votes: ptr<i32> = malloc((model.n_classes as i64) * 4) as ptr<i32>
+        for c in 0 to model.n_classes {
+            votes[c] = 0
+        }
+
+        for t in 0 to model.n_trees {
+            let pred: f32 = decision_tree_classifier_predict_one(model.trees[t], row)
+            for c in 0 to model.n_classes {
+                if model.classes[c] == pred {
+                    votes[c] = votes[c] + 1
+                }
+            }
+        }
+
+        for c in 0 to model.n_classes {
+            matrix_set(probs, i, c, (votes[c] as f32) / (model.n_trees as f32))
+        }
+
+        free(votes as ptr<void>)
+    }
+
+    array_free_f32(row)
+    return probs
+}
+
+# Element-wise exact comparison. The optimized kernel accumulates small
+# integer counts in f32, so parity here must be bit-for-bit, not approximate.
+function rfpp_exact_match(a: Matrix, b: Matrix) -> bool {
+    if a.rows != b.rows { return false }
+    if a.cols != b.cols { return false }
+    for i in 0 to a.rows {
+        for c in 0 to a.cols {
+            if matrix_at(a, i, c) != matrix_at(b, i, c) { return false }
+        }
+    }
+    return true
+}
+
+function rfpp_check_invariants(probs: Matrix, n_trees: i32) -> bool {
+    let step: f32 = 1.0 / (n_trees as f32)
+    for i in 0 to probs.rows {
+        let mut total: f32 = 0.0
+        for c in 0 to probs.cols {
+            let p: f32 = matrix_at(probs, i, c)
+            if p < 0.0 { return false }
+            if p > 1.0 { return false }
+            # every probability must be an exact multiple of 1 / n_trees
+            let k: f32 = p / step
+            let rounded: f32 = ((k + 0.5) as i32) as f32
+            if rfpp_abs(k - rounded) > 0.0001 { return false }
+            total = total + p
+        }
+        if rfpp_abs(total - 1.0) > 0.0001 { return false }
+    }
+    return true
+}
+
+function main() -> i32 {
+    # ---------------------------------------------------------------
+    # 1. Realistic workload: digits, 10 trees, depth 10, seed 42.
+    # ---------------------------------------------------------------
+    let digits: Dataset = load_digits()
+    let n_train: i32 = 1437
+    let n_test: i32 = digits.X.rows - n_train
+
+    let X_train: Matrix = matrix_new(n_train, digits.X.cols)
+    let y_train: ptr<f32> = array_new_f32(n_train)
+    for i in 0 to n_train {
+        y_train[i] = digits.y[i]
+        for j in 0 to digits.X.cols { matrix_set(X_train, i, j, matrix_at(digits.X, i, j)) }
+    }
+    let X_test: Matrix = matrix_new(n_test, digits.X.cols)
+    for i in 0 to n_test {
+        for j in 0 to digits.X.cols { matrix_set(X_test, i, j, matrix_at(digits.X, n_train + i, j)) }
+    }
+
+    let model: RandomForestClassifier = random_forest_classifier_fit(X_train, y_train, 10, 10, 10, 42)
+
+    let reference: Matrix = rfpp_reference_predict_proba(model, X_test)
+    let optimized: Matrix = random_forest_classifier_predict_proba(model, X_test)
+
+    if not rfpp_exact_match(reference, optimized) {
+        println("FAIL: optimized RandomForestClassifier predict_proba changed probabilities on digits")
+        return 1
+    }
+    if not rfpp_check_invariants(optimized, model.n_trees) {
+        println("FAIL: digits probabilities are not valid vote fractions")
+        return 1
+    }
+
+    # decide() over the optimized probabilities must still agree with predict()
+    let decided: ptr<f32> = random_forest_classifier_decide(model, optimized)
+    let predicted: ptr<f32> = random_forest_classifier_predict(model, X_test)
+    for i in 0 to n_test {
+        if decided[i] != predicted[i] {
+            println("FAIL: decide over predict_proba disagrees with predict")
+            return 1
+        }
+    }
+    array_free_f32(decided)
+    array_free_f32(predicted)
+
+    # ---------------------------------------------------------------
+    # 2. Edge case: a single query row.
+    # ---------------------------------------------------------------
+    let one_row: Matrix = matrix_new(1, digits.X.cols)
+    for j in 0 to digits.X.cols { matrix_set(one_row, 0, j, matrix_at(X_test, 0, j)) }
+    let ref_one: Matrix = rfpp_reference_predict_proba(model, one_row)
+    let opt_one: Matrix = random_forest_classifier_predict_proba(model, one_row)
+    if not rfpp_exact_match(ref_one, opt_one) {
+        println("FAIL: single-row predict_proba diverged")
+        return 1
+    }
+    for c in 0 to model.n_classes {
+        if matrix_at(opt_one, 0, c) != matrix_at(optimized, 0, c) {
+            println("FAIL: single-row predict_proba disagrees with the batched result")
+            return 1
+        }
+    }
+    matrix_free(ref_one)
+    matrix_free(opt_one)
+    matrix_free(one_row)
+
+    # ---------------------------------------------------------------
+    # 3. A/B timing on the digits workload.
+    # ---------------------------------------------------------------
+    let repeats: i32 = 200
+    let start_reference: i64 = rfpp_now_ns()
+    for r in 0 to repeats {
+        let output: Matrix = rfpp_reference_predict_proba(model, X_test)
+        matrix_free(output)
+    }
+    let end_reference: i64 = rfpp_now_ns()
+
+    let start_optimized: i64 = rfpp_now_ns()
+    for r in 0 to repeats {
+        let output: Matrix = random_forest_classifier_predict_proba(model, X_test)
+        matrix_free(output)
+    }
+    let end_optimized: i64 = rfpp_now_ns()
+
+    let reference_ms: f64 = ((end_reference - start_reference) as f64) / 1000000.0
+    let optimized_ms: f64 = ((end_optimized - start_optimized) as f64) / 1000000.0
+    printf("RandomForestClassifier predict_proba A/B: reference=%.3f ms optimized=%.3f ms speedup=%.3fx\n", reference_ms, optimized_ms, reference_ms / optimized_ms)
+
+    matrix_free(reference)
+    matrix_free(optimized)
+    random_forest_classifier_free(model)
+
+    # ---------------------------------------------------------------
+    # 4. Edge case: single tree, two classes, tiny separable problem.
+    # ---------------------------------------------------------------
+    let small_X: Matrix = matrix_new(8, 2)
+    let small_y: ptr<f32> = array_new_f32(8)
+    for i in 0 to 8 {
+        let cls: i32 = i / 4
+        small_y[i] = cls as f32
+        matrix_set(small_X, i, 0, (cls as f32) * 10.0 + (i as f32) * 0.1)
+        matrix_set(small_X, i, 1, (i as f32) * 0.25)
+    }
+    let one_tree: RandomForestClassifier = random_forest_classifier_fit(small_X, small_y, 2, 1, 3, 7)
+    let ref_small: Matrix = rfpp_reference_predict_proba(one_tree, small_X)
+    let opt_small: Matrix = random_forest_classifier_predict_proba(one_tree, small_X)
+    if not rfpp_exact_match(ref_small, opt_small) {
+        println("FAIL: single-tree predict_proba diverged")
+        return 1
+    }
+    # one tree means every probability is exactly 0.0 or 1.0
+    for i in 0 to 8 {
+        for c in 0 to 2 {
+            let p: f32 = matrix_at(opt_small, i, c)
+            if p != 0.0 && p != 1.0 {
+                println("FAIL: single-tree probabilities are not 0 or 1")
+                return 1
+            }
+        }
+    }
+    matrix_free(ref_small)
+    matrix_free(opt_small)
+    random_forest_classifier_free(one_tree)
+
+    # ---------------------------------------------------------------
+    # 5. Edge case: a degenerate single-class training set.
+    # ---------------------------------------------------------------
+    let flat_y: ptr<f32> = array_new_f32(8)
+    for i in 0 to 8 { flat_y[i] = 3.0 }
+    let flat_model: RandomForestClassifier = random_forest_classifier_fit(small_X, flat_y, 1, 4, 3, 11)
+    let ref_flat: Matrix = rfpp_reference_predict_proba(flat_model, small_X)
+    let opt_flat: Matrix = random_forest_classifier_predict_proba(flat_model, small_X)
+    if not rfpp_exact_match(ref_flat, opt_flat) {
+        println("FAIL: single-class predict_proba diverged")
+        return 1
+    }
+    for i in 0 to 8 {
+        if matrix_at(opt_flat, i, 0) != 1.0 {
+            println("FAIL: single-class forest did not return probability 1")
+            return 1
+        }
+    }
+    matrix_free(ref_flat)
+    matrix_free(opt_flat)
+    random_forest_classifier_free(flat_model)
+    array_free_f32(flat_y)
+
+    # ---------------------------------------------------------------
+    # 6. Edge case: n_classes declared larger than the data contains.
+    #
+    # model.classes is calloc-backed, so the unused tail stays 0.0 and
+    # collides with the real label 0.0. The reference loop credits a vote to
+    # every matching entry, so the optimized kernel must do the same rather
+    # than quietly picking one. This is the path the leaf memo marks -2.
+    # ---------------------------------------------------------------
+    let padded: RandomForestClassifier = random_forest_classifier_fit(small_X, small_y, 3, 4, 3, 5)
+    let ref_padded: Matrix = rfpp_reference_predict_proba(padded, small_X)
+    let opt_padded: Matrix = random_forest_classifier_predict_proba(padded, small_X)
+    if not rfpp_exact_match(ref_padded, opt_padded) {
+        println("FAIL: predict_proba diverged when model.classes holds a duplicate label")
+        return 1
+    }
+    let mut duplicate_seen: bool = false
+    for c in 0 to padded.n_classes {
+        for k in 0 to padded.n_classes {
+            if k > c {
+                if padded.classes[c] == padded.classes[k] { duplicate_seen = true }
+            }
+        }
+    }
+    if not duplicate_seen {
+        println("FAIL: expected the padded fit to produce a duplicate class entry")
+        return 1
+    }
+    matrix_free(ref_padded)
+    matrix_free(opt_padded)
+    random_forest_classifier_free(padded)
+
+    matrix_free(small_X)
+    array_free_f32(small_y)
+    matrix_free(X_train)
+    matrix_free(X_test)
+    array_free_f32(y_train)
+    dataset_free(digits)
+
+    println("OK: RandomForestClassifier predict_proba matches the reference implementation exactly")
+    return 0
+}

@@ -64,7 +64,10 @@ function main() -> i32 {
     let feature_idx: ptr<i32> = malloc(4) as ptr<i32>
     feature_idx[0] = 0
 
-    let terms: ptr<TermSpec> = malloc(16) as ptr<TermSpec>
+    # sizeof<TermSpec>(), not a hardcoded byte count. TermSpec is a pointer
+    # plus three i32s, which is 20 bytes padded to 24; malloc(16) left the
+    # last field writing past the end of the allocation.
+    let terms: ptr<TermSpec> = malloc(sizeof<TermSpec>()) as ptr<TermSpec>
     terms[0].feature_indices = feature_idx
     terms[0].n_indices = 1
     terms[0].degree = 2

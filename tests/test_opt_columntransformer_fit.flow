@@ -1,0 +1,342 @@
+# Regression test for the optimized ColumnTransformer.fit (roadmap rank 48).
+#
+# ctopt_reference_fit and ctopt_reference_extract are literal copies of the
+# pre-optimization bodies: every spec extracted its columns one cell at a time
+# through matrix_at/matrix_set, including passthrough and ordinal specs that then
+# threw the copy away. Parity is checked by fitting both ways and comparing the
+# transform output of the two fitted objects element-wise with exact equality,
+# which covers all learned state and the output column ordering.
+#
+# Run: flow run tests/test_opt_columntransformer_fit.flow
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+}
+
+const CTOPT_TIME_UTC: i32 = 1
+
+function ctopt_now_ns() -> i64 {
+    let ts: ptr<i64> = malloc(16) as ptr<i64>
+    timespec_get(ts, CTOPT_TIME_UTC)
+    let value: i64 = ts[0] * 1000000000 + ts[1]
+    free(ts as ptr<void>)
+    return value
+}
+
+function ctopt_reference_extract(X: Matrix, columns: ptr<i32>, n_columns: i32) -> Matrix {
+    let sub: Matrix = matrix_new(X.rows, n_columns)
+    for i in 0 to X.rows {
+        for j in 0 to n_columns {
+            matrix_set(sub, i, j, matrix_at(X, i, columns[j]))
+        }
+    }
+    return sub
+}
+
+function ctopt_reference_fit(ct: ColumnTransformer, X: Matrix) -> ColumnTransformer {
+    let mut n_output: i32 = 0
+
+    for s in 0 to ct.n_specs {
+        let spec: ColumnTransformerSpec = ct.specs[s]
+        let sub: Matrix = ctopt_reference_extract(X, spec.columns, spec.n_columns)
+
+        if spec.transformer_type == TRANSFORMER_STANDARD_SCALER {
+            ct.scalers[s] = standard_scaler_fit(sub)
+            n_output = n_output + spec.n_columns
+        } elif spec.transformer_type == TRANSFORMER_MINMAX_SCALER {
+            ct.minmax_scalers[s] = minmax_scaler_fit(sub)
+            n_output = n_output + spec.n_columns
+        } elif spec.transformer_type == TRANSFORMER_ROBUST_SCALER {
+            ct.robust_scalers[s] = robust_scaler_fit(sub)
+            n_output = n_output + spec.n_columns
+        } elif spec.transformer_type == TRANSFORMER_MAXABS_SCALER {
+            ct.maxabs_scalers[s] = maxabs_scaler_fit(sub)
+            n_output = n_output + spec.n_columns
+        } elif spec.transformer_type == TRANSFORMER_PASSTHROUGH {
+            n_output = n_output + spec.n_columns
+        } elif spec.transformer_type == TRANSFORMER_ONEHOT_ENCODER {
+            ct.onehot_encoders[s] = onehot_encoder_fit(sub, HANDLE_UNKNOWN_WARN)
+            n_output = n_output + ct.onehot_encoders[s].total_output_cols
+        } elif spec.transformer_type == TRANSFORMER_ORDINAL_ENCODER {
+            n_output = n_output + spec.n_columns
+        }
+
+        matrix_free(sub)
+    }
+
+    ct.n_output_features = n_output
+    ct.fitted = true
+    return ct
+}
+
+function ctopt_count_diffs(a: Matrix, b: Matrix) -> i32 {
+    if a.rows != b.rows {
+        return -1
+    }
+    if a.cols != b.cols {
+        return -1
+    }
+    let mut diffs: i32 = 0
+    let total: i32 = a.rows * a.cols
+    for i in 0 to total {
+        if a.data[i] != b.data[i] {
+            diffs = diffs + 1
+        }
+    }
+    return diffs
+}
+
+function ctopt_make_matrix(n: i32, p: i32) -> Matrix {
+    let X: Matrix = matrix_new(n, p)
+    let mut s: i64 = 24681357
+    for i in 0 to n {
+        for j in 0 to p {
+            s = (s * 1103515245 + 12345) % 2147483647
+            matrix_set(X, i, j, ((s % 800) as f32) / 100.0 - 4.0)
+        }
+    }
+    return X
+}
+
+function ctopt_cols(a: i32, b: i32, c: i32, count: i32) -> ptr<i32> {
+    let out: ptr<i32> = malloc(16) as ptr<i32>
+    out[0] = a
+    if count > 1 {
+        out[1] = b
+    }
+    if count > 2 {
+        out[2] = c
+    }
+    return out
+}
+
+# Hand-checked: a StandardScaler on one column of a 4x3 input.
+function ctopt_test_known_values() -> i32 {
+    println("Test: ColumnTransformer.fit known values")
+    let X: Matrix = matrix_new(4, 3)
+    matrix_set(X, 0, 0, 9.0); matrix_set(X, 0, 1, 1.0); matrix_set(X, 0, 2, 7.0)
+    matrix_set(X, 1, 0, 9.0); matrix_set(X, 1, 1, 3.0); matrix_set(X, 1, 2, 7.0)
+    matrix_set(X, 2, 0, 9.0); matrix_set(X, 2, 1, 5.0); matrix_set(X, 2, 2, 7.0)
+    matrix_set(X, 3, 0, 9.0); matrix_set(X, 3, 1, 7.0); matrix_set(X, 3, 2, 7.0)
+
+    # Column 1 is 1,3,5,7: mean 4, population std sqrt(5) = 2.2360680.
+    let col_one: ptr<i32> = ctopt_cols(1, 0, 0, 1)
+    let col_two: ptr<i32> = ctopt_cols(2, 0, 0, 1)
+
+    let ct: ColumnTransformer = column_transformer_init(2)
+    column_transformer_set_spec(ct, 0, TRANSFORMER_STANDARD_SCALER, col_one, 1)
+    column_transformer_set_spec(ct, 1, TRANSFORMER_PASSTHROUGH, col_two, 1)
+    let fitted: ColumnTransformer = column_transformer_fit(ct, X)
+
+    let mut failures: i32 = 0
+    if fitted.n_output_features != 2 {
+        println("  FAIL: expected 2 output features")
+        failures = failures + 1
+    }
+    if fabs((fitted.scalers[0].mean[0] - 4.0) as f64) as f32 > 0.000001 {
+        println("  FAIL: fitted mean should be 4.0")
+        failures = failures + 1
+    }
+    if fabs((fitted.scalers[0].std[0] - 2.2360680) as f64) as f32 > 0.000001 {
+        println("  FAIL: fitted std should be 2.2360680")
+        failures = failures + 1
+    }
+
+    let out: Matrix = column_transformer_transform(fitted, X)
+    # Scaled column 1 then the passthrough of column 2, in that order.
+    if fabs((matrix_at(out, 0, 0) + 1.3416408) as f64) as f32 > 0.000001 {
+        println("  FAIL: first scaled value should be -1.3416408")
+        failures = failures + 1
+    }
+    if matrix_at(out, 0, 1) != 7.0 {
+        println("  FAIL: passthrough column should be 7.0")
+        failures = failures + 1
+    }
+    if matrix_at(out, 3, 1) != 7.0 {
+        println("  FAIL: passthrough column should be 7.0 on the last row")
+        failures = failures + 1
+    }
+
+    matrix_free(out)
+    column_transformer_free(fitted)
+    matrix_free(X)
+
+    if failures == 0 {
+        println("  OK: learned state and column order match")
+    }
+    return failures
+}
+
+# Contiguous, scattered, reversed and duplicated column selections, every
+# transformer type, compared against the pre-optimization fit.
+function ctopt_test_parity(n: i32, p: i32, label: string) -> i32 {
+    let X: Matrix = ctopt_make_matrix(n, p)
+
+    # Small integers so the one-hot encoder sees repeated categories.
+    let cat: Matrix = matrix_new(n, p)
+    for i in 0 to n {
+        for j in 0 to p {
+            cat.data[i * p + j] = ((i + j) % 3) as f32
+        }
+    }
+
+    let contiguous: ptr<i32> = ctopt_cols(0, 1, 2, 3)
+    let reversed: ptr<i32> = ctopt_cols(4, 3, 2, 3)
+    let scattered: ptr<i32> = ctopt_cols(5, 1, 4, 3)
+    let duplicated: ptr<i32> = ctopt_cols(2, 2, 2, 3)
+    let single: ptr<i32> = ctopt_cols(3, 0, 0, 1)
+    let onehot_cols: ptr<i32> = ctopt_cols(0, 1, 0, 2)
+
+    let ct_opt: ColumnTransformer = column_transformer_init(6)
+    column_transformer_set_spec(ct_opt, 0, TRANSFORMER_STANDARD_SCALER, contiguous, 3)
+    column_transformer_set_spec(ct_opt, 1, TRANSFORMER_MINMAX_SCALER, reversed, 3)
+    column_transformer_set_spec(ct_opt, 2, TRANSFORMER_PASSTHROUGH, scattered, 3)
+    column_transformer_set_spec(ct_opt, 3, TRANSFORMER_ROBUST_SCALER, duplicated, 3)
+    column_transformer_set_spec(ct_opt, 4, TRANSFORMER_MAXABS_SCALER, single, 1)
+    column_transformer_set_spec(ct_opt, 5, TRANSFORMER_ORDINAL_ENCODER, contiguous, 3)
+
+    let ct_ref: ColumnTransformer = column_transformer_init(6)
+    column_transformer_set_spec(ct_ref, 0, TRANSFORMER_STANDARD_SCALER, contiguous, 3)
+    column_transformer_set_spec(ct_ref, 1, TRANSFORMER_MINMAX_SCALER, reversed, 3)
+    column_transformer_set_spec(ct_ref, 2, TRANSFORMER_PASSTHROUGH, scattered, 3)
+    column_transformer_set_spec(ct_ref, 3, TRANSFORMER_ROBUST_SCALER, duplicated, 3)
+    column_transformer_set_spec(ct_ref, 4, TRANSFORMER_MAXABS_SCALER, single, 1)
+    column_transformer_set_spec(ct_ref, 5, TRANSFORMER_ORDINAL_ENCODER, contiguous, 3)
+
+    let fitted_opt: ColumnTransformer = column_transformer_fit(ct_opt, X)
+    let fitted_ref: ColumnTransformer = ctopt_reference_fit(ct_ref, X)
+
+    let mut failures: i32 = 0
+    if fitted_opt.n_output_features != fitted_ref.n_output_features {
+        print("  FAIL: output width differs for ")
+        println(label)
+        failures = failures + 1
+    }
+
+    let out_opt: Matrix = column_transformer_transform(fitted_opt, X)
+    let out_ref: Matrix = column_transformer_transform(fitted_ref, X)
+    let diffs: i32 = ctopt_count_diffs(out_opt, out_ref)
+    if diffs != 0 {
+        printf("  FAIL: %d cells differ from the reference fit\n", diffs)
+        failures = failures + 1
+    }
+    matrix_free(out_opt)
+    matrix_free(out_ref)
+    column_transformer_free(fitted_opt)
+    column_transformer_free(fitted_ref)
+
+    # One-hot encoder on a categorical block, both fit paths.
+    let ohe_opt: ColumnTransformer = column_transformer_init(2)
+    column_transformer_set_spec(ohe_opt, 0, TRANSFORMER_ONEHOT_ENCODER, onehot_cols, 2)
+    column_transformer_set_spec(ohe_opt, 1, TRANSFORMER_PASSTHROUGH, single, 1)
+    let ohe_ref: ColumnTransformer = column_transformer_init(2)
+    column_transformer_set_spec(ohe_ref, 0, TRANSFORMER_ONEHOT_ENCODER, onehot_cols, 2)
+    column_transformer_set_spec(ohe_ref, 1, TRANSFORMER_PASSTHROUGH, single, 1)
+
+    let ohe_fitted_opt: ColumnTransformer = column_transformer_fit(ohe_opt, cat)
+    let ohe_fitted_ref: ColumnTransformer = ctopt_reference_fit(ohe_ref, cat)
+    if ohe_fitted_opt.n_output_features != ohe_fitted_ref.n_output_features {
+        println("  FAIL: one-hot output width differs")
+        failures = failures + 1
+    }
+    let ohe_out_opt: Matrix = column_transformer_transform(ohe_fitted_opt, cat)
+    let ohe_out_ref: Matrix = column_transformer_transform(ohe_fitted_ref, cat)
+    if ctopt_count_diffs(ohe_out_opt, ohe_out_ref) != 0 {
+        println("  FAIL: one-hot output differs from the reference fit")
+        failures = failures + 1
+    }
+    matrix_free(ohe_out_opt)
+    matrix_free(ohe_out_ref)
+    column_transformer_free(ohe_fitted_opt)
+    column_transformer_free(ohe_fitted_ref)
+
+    matrix_free(cat)
+    matrix_free(X)
+    return failures
+}
+
+function ctopt_test_workload() -> i32 {
+    println("Test: ColumnTransformer.fit realistic workload")
+    let n: i32 = 2000
+    let p: i32 = 12
+    let X: Matrix = ctopt_make_matrix(n, p)
+
+    let block_a: ptr<i32> = ctopt_cols(0, 1, 2, 3)
+    let block_b: ptr<i32> = ctopt_cols(3, 4, 5, 3)
+    let block_c: ptr<i32> = ctopt_cols(6, 7, 8, 3)
+    let block_d: ptr<i32> = ctopt_cols(9, 10, 11, 3)
+
+    let ct: ColumnTransformer = column_transformer_init(4)
+    column_transformer_set_spec(ct, 0, TRANSFORMER_STANDARD_SCALER, block_a, 3)
+    column_transformer_set_spec(ct, 1, TRANSFORMER_MINMAX_SCALER, block_b, 3)
+    column_transformer_set_spec(ct, 2, TRANSFORMER_PASSTHROUGH, block_c, 3)
+    column_transformer_set_spec(ct, 3, TRANSFORMER_MAXABS_SCALER, block_d, 3)
+
+    let ct_ref: ColumnTransformer = column_transformer_init(4)
+    column_transformer_set_spec(ct_ref, 0, TRANSFORMER_STANDARD_SCALER, block_a, 3)
+    column_transformer_set_spec(ct_ref, 1, TRANSFORMER_MINMAX_SCALER, block_b, 3)
+    column_transformer_set_spec(ct_ref, 2, TRANSFORMER_PASSTHROUGH, block_c, 3)
+    column_transformer_set_spec(ct_ref, 3, TRANSFORMER_MAXABS_SCALER, block_d, 3)
+
+    let mut fitted_opt: ColumnTransformer = column_transformer_fit(ct, X)
+    let mut fitted_ref: ColumnTransformer = ctopt_reference_fit(ct_ref, X)
+
+    let out_opt: Matrix = column_transformer_transform(fitted_opt, X)
+    let out_ref: Matrix = column_transformer_transform(fitted_ref, X)
+    let diffs: i32 = ctopt_count_diffs(out_opt, out_ref)
+    matrix_free(out_opt)
+    matrix_free(out_ref)
+    if diffs != 0 {
+        printf("  FAIL: %d cells differ on the realistic workload\n", diffs)
+        return 1
+    }
+
+    let repeats: i32 = 50
+    let start_ref: i64 = ctopt_now_ns()
+    for r in 0 to repeats {
+        fitted_ref = ctopt_reference_fit(fitted_ref, X)
+    }
+    let end_ref: i64 = ctopt_now_ns()
+
+    let start_opt: i64 = ctopt_now_ns()
+    for r in 0 to repeats {
+        fitted_opt = column_transformer_fit(fitted_opt, X)
+    }
+    let end_opt: i64 = ctopt_now_ns()
+
+    let ref_ms: f64 = ((end_ref - start_ref) as f64) / 1000000.0
+    let opt_ms: f64 = ((end_opt - start_opt) as f64) / 1000000.0
+    let speedup: f64 = ref_ms / opt_ms
+    printf("ColumnTransformer.fit A/B: reference=%.6f ms optimized=%.6f ms speedup=%.3fx\n", ref_ms, opt_ms, speedup)
+
+    column_transformer_free(fitted_opt)
+    column_transformer_free(fitted_ref)
+    matrix_free(X)
+    println("  OK: 24000 cells identical to the reference fit")
+    return 0
+}
+
+function main() -> i32 {
+    let mut failures: i32 = 0
+    failures = failures + ctopt_test_known_values()
+
+    println("Test: ColumnTransformer.fit parity across column selections")
+    failures = failures + ctopt_test_parity(1, 6, "single row")
+    failures = failures + ctopt_test_parity(2, 6, "two rows")
+    failures = failures + ctopt_test_parity(300, 6, "300 rows")
+    if failures == 0 {
+        println("  OK: contiguous, reversed, scattered and duplicated selections all match")
+    }
+
+    failures = failures + ctopt_test_workload()
+
+    println("")
+    if failures != 0 {
+        println("FAILED: ColumnTransformer.fit optimization regression test")
+        return 1
+    }
+    println("All ColumnTransformer.fit optimization tests passed!")
+    return 0
+}

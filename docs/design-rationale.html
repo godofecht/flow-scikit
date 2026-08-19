@@ -1,0 +1,49 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Why flow-scikit's API differs from scikit-learn's: explicit penalties, no hidden thresholds, fit returning a value, and the gaps that remain open."><title>Design rationale — flow-scikit</title><link rel="stylesheet" href="styles.css"><style>.doc{max-width:820px;margin:0 auto;padding:0 28px 90px}.doc h2{margin:44px 0 14px;font:600 25px/1.25 Fraunces,serif}.doc p{color:#5d6982;line-height:1.75;margin:0 0 14px}.doc ul{margin:0 0 18px;padding-left:20px}.doc li{color:#5d6982;line-height:1.7;margin-bottom:8px}.doc code{font:12px "DM Mono",monospace;background:#f4f7f8;border:1px solid var(--line);border-radius:4px;padding:1px 5px}.doc a{color:var(--coral)}</style></head><body><header class="site-header"><a class="wordmark" href="index.html">flow<span>~</span>scikit</a><nav><a href="benchmarks.html">Benchmarks</a><a href="architecture.html">Architecture</a><a href="design-rationale.html">Design</a><a href="demos.html">Experiments</a><a href="https://github.com/godofecht/flow-scikit/tree/main/lib/scikit">API</a><a href="https://github.com/godofecht/flow-scikit">GitHub ↗</a></nav></header><main id="top"><section class="section-shell"><p class="eyebrow">api design</p><h1>Design rationale</h1><p class="lede">Where flow-scikit's API deliberately differs from scikit-learn's, why, and what is still missing.</p></section><section class="doc">
+<p>This document records the API positions flow-scikit takes. Most of the behavior documented here falls out of the Flow language having no default arguments. It is an accident of the toolchain. The language makes hidden defaults impossible, and the project keeps it that way on purpose.</p>
+<h2>1. No hidden regularization</h2>
+<p>The scikit-learn <code>LogisticRegression</code> class applies L2 regularization with C=1.0 by default. The class named after logistic regression does not perform plain logistic regression. The blog post &quot;Scikit-learn&#x27;s Defaults are Wrong&quot; by ryxcommar (2019-08-30) documents this behavior. Independent threads on Hacker News and r/datascience raise the same issue.</p>
+<p>In flow-scikit, estimators require an explicit penalty argument. The caller writes <code>penalty_none()</code> or <code>penalty_l2(alpha)</code> explicitly.</p>
+<ul>
+<li><code>linear_regression_fit</code> (lib/scikit/linear.flow, line 323):</li>
+</ul>
+<p>  <code>export function linear_regression_fit(X: Matrix, y: ptr&lt;f32&gt;, penalty: Penalty) -&gt; LinearRegression</code></p>
+<ul>
+<li><code>logistic_regression_fit</code> (lib/scikit/linear.flow, line 443):</li>
+</ul>
+<p>  <code>export function logistic_regression_fit(X: Matrix, y: ptr&lt;f32&gt;, n_classes: i32, epochs: i32, lr: f32, penalty: Penalty) -&gt; LogisticRegression</code></p>
+<h2>2. Regularization strength</h2>
+<p>The parameter for regularization strength is alpha. The scikit-learn API uses C, the inverse of the penalty. The ryxcommar post complains that C is two steps removed from the textbook lambda.</p>
+<p>The flow-scikit library uses <code>penalty_l2(alpha)</code>. This is a partial answer. As ryxcommar notes, alpha itself is one step removed from lambda.</p>
+<h2>3. Fit returns a value</h2>
+<p>Estimator fitting returns a value. Hacker News commenter zeec123 argues <code>fit</code> should return a function from input space to output space and avoid modifying internal state.</p>
+<p>Flow structs pass by value. Every estimator fit function returns a fitted struct.</p>
+<p><code>Pipeline</code> was the one exception until recently: <code>pipeline_fit</code> returned void and mutated in place, which is the single case where the criticism landed against this library rather than against scikit-learn. It now returns a fitted <code>Pipeline</code>, so the rule holds without exception.</p>
+<h2>4. No hidden threshold</h2>
+<p>The <code>predict</code> functions return probabilities. The <code>decide</code> functions take an explicit threshold.</p>
+<p>The codebase contains nine <code>*_decide</code> functions:</p>
+<ul>
+<li><code>random_forest_classifier_decide</code></li>
+<li><code>logistic_decide</code></li>
+<li><code>sgd_classifier_decide</code></li>
+<li><code>multiclass_logistic_decide</code></li>
+<li><code>knn_classifier_decide</code></li>
+<li><code>mlp_classifier_decide</code></li>
+<li><code>pipeline_decide</code></li>
+<li><code>kernel_svc_decide</code></li>
+<li><code>linear_svc_decide</code></li>
+</ul>
+<h2>5. Structured validation errors</h2>
+<p>The <code>ValidationResult</code> struct in <code>lib/scikit/validation.flow</code> carries a numeric code and a string message. The <code>ensure_*</code> validation functions share a consistent naming convention. G2 reviewers raised unhelpful error messages in both 2019 and 2024. The structured approach provides clear diagnostics.</p>
+<h2>Known gaps</h2>
+<p>Recorded here so this page is not one-sided.</p>
+<ul>
+<li><a href="https://github.com/godofecht/flow-scikit/issues/353">Issue <a href="https://github.com/godofecht/flow-scikit/issues/353">#353</a></a>: no coefficient inference. No standard errors, no p-values, no model summary.</li>
+<li><a href="https://github.com/godofecht/flow-scikit/issues/354">Issue <a href="https://github.com/godofecht/flow-scikit/issues/354">#354</a></a>: decision trees cannot handle categorical features natively. A caller must label-encode, which imposes false ordinality, or one-hot encode, which inflates cardinality.</li>
+<li><a href="https://github.com/godofecht/flow-scikit/issues/357">Issue <a href="https://github.com/godofecht/flow-scikit/issues/357">#357</a></a>: logistic regression offers LBFGS only. Newton&#x27;s method is the textbook default and is what R&#x27;s <code>glm</code> uses, which matters when porting a model between languages.</li>
+</ul>
+<h2>Closed since this page was written</h2>
+<ul>
+<li><a href="https://github.com/godofecht/flow-scikit/issues/355">Issue <a href="https://github.com/godofecht/flow-scikit/issues/355">#355</a></a>: a bootstrap cross-validator now exists. <code>BootstrapOOB</code> in <code>lib/scikit/model_selection.flow</code> implements plain out-of-bag bootstrap and names the variant, since scikit-learn removed its own <code>Bootstrap</code> class for inventing non-standard semantics under a misleading name.</li>
+<li><a href="https://github.com/godofecht/flow-scikit/issues/356">Issue <a href="https://github.com/godofecht/flow-scikit/issues/356">#356</a></a>: <code>pipeline_fit</code> now returns a fitted <code>Pipeline</code> instead of mutating.</li>
+</ul>
+</section></main><footer><a class="wordmark" href="index.html">flow<span>~</span>scikit</a><p>Compiled classical ML in Flow, with reproducible sklearn comparisons.</p></footer></body></html>

@@ -1,0 +1,253 @@
+# Regression test for the RandomForestClassifier.predict optimization
+# (roadmap rank 19, issue #228).
+#
+# predict now reduces over the shared vote kernel that predict_proba uses.
+# This test locks it against the pre-#228 per-sample implementation
+# element-wise, audits the tie-breaking rule on real tied rows, and covers the
+# small edge cases alongside a realistic digits workload.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+    function printf(fmt: string, ...) -> i32
+}
+
+const RFPR_TIME_UTC: i32 = 1
+
+function rfpr_now_ns() -> i64 {
+    let ts: ptr<i64> = malloc(16) as ptr<i64>
+    timespec_get(ts, RFPR_TIME_UTC)
+    let value: i64 = ts[0] * 1000000000 + ts[1]
+    free(ts as ptr<void>)
+    return value
+}
+
+# Pre-#228 reference implementation, kept only for A/B parity and timing.
+function rfpr_reference_predict(model: RandomForestClassifier, X: Matrix) -> ptr<f32> {
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    let row: ptr<f32> = array_new_f32(X.cols)
+
+    for i in 0 to X.rows {
+        matrix_row(X, i, row)
+
+        let votes: ptr<i32> = malloc((model.n_classes as i64) * 4) as ptr<i32>
+        for c in 0 to model.n_classes {
+            votes[c] = 0
+        }
+
+        for t in 0 to model.n_trees {
+            let pred: f32 = decision_tree_classifier_predict_one(model.trees[t], row)
+            for c in 0 to model.n_classes {
+                if model.classes[c] == pred {
+                    votes[c] = votes[c] + 1
+                }
+            }
+        }
+
+        let mut best_c: i32 = 0
+        let mut best_votes: i32 = 0
+        for c in 0 to model.n_classes {
+            if votes[c] > best_votes {
+                best_votes = votes[c]
+                best_c = c
+            }
+        }
+
+        preds[i] = model.classes[best_c]
+        free(votes as ptr<void>)
+    }
+
+    array_free_f32(row)
+    return preds
+}
+
+function rfpr_labels_match(a: ptr<f32>, b: ptr<f32>, n: i32) -> bool {
+    for i in 0 to n {
+        if a[i] != b[i] { return false }
+    }
+    return true
+}
+
+function main() -> i32 {
+    # ---------------------------------------------------------------
+    # 1. Realistic workload: digits, 10 trees, depth 10, seed 42.
+    # ---------------------------------------------------------------
+    let digits: Dataset = load_digits()
+    let n_train: i32 = 1437
+    let n_test: i32 = digits.X.rows - n_train
+
+    let X_train: Matrix = matrix_new(n_train, digits.X.cols)
+    let y_train: ptr<f32> = array_new_f32(n_train)
+    for i in 0 to n_train {
+        y_train[i] = digits.y[i]
+        for j in 0 to digits.X.cols { matrix_set(X_train, i, j, matrix_at(digits.X, i, j)) }
+    }
+    let X_test: Matrix = matrix_new(n_test, digits.X.cols)
+    for i in 0 to n_test {
+        for j in 0 to digits.X.cols { matrix_set(X_test, i, j, matrix_at(digits.X, n_train + i, j)) }
+    }
+
+    let model: RandomForestClassifier = random_forest_classifier_fit(X_train, y_train, 10, 10, 10, 42)
+
+    let reference: ptr<f32> = rfpr_reference_predict(model, X_test)
+    let optimized: ptr<f32> = random_forest_classifier_predict(model, X_test)
+
+    if not rfpr_labels_match(reference, optimized, n_test) {
+        println("FAIL: optimized RandomForestClassifier predict changed labels on digits")
+        return 1
+    }
+
+    # Every predicted label must be one of the fitted classes.
+    for i in 0 to n_test {
+        let mut found: bool = false
+        for c in 0 to model.n_classes {
+            if model.classes[c] == optimized[i] { found = true }
+        }
+        if not found {
+            println("FAIL: predict returned a label outside model.classes")
+            return 1
+        }
+    }
+
+    # predict must agree with the argmax of predict_proba, and on tied rows it
+    # must resolve to the lowest class index holding the maximum.
+    let probs: Matrix = random_forest_classifier_predict_proba(model, X_test)
+    let mut tied_rows: i32 = 0
+    for i in 0 to n_test {
+        let mut best_c: i32 = 0
+        let mut best_p: f32 = matrix_at(probs, i, 0)
+        for c in 1 to model.n_classes {
+            let p: f32 = matrix_at(probs, i, c)
+            if p > best_p {
+                best_p = p
+                best_c = c
+            }
+        }
+        let mut n_at_max: i32 = 0
+        for c in 0 to model.n_classes {
+            if matrix_at(probs, i, c) == best_p { n_at_max = n_at_max + 1 }
+        }
+        if n_at_max > 1 { tied_rows = tied_rows + 1 }
+        if optimized[i] != model.classes[best_c] {
+            println("FAIL: predict disagrees with the lowest-index argmax of predict_proba")
+            return 1
+        }
+    }
+    printf("digits rows whose vote was tied at the maximum: %d of %d\n", tied_rows, n_test)
+    if tied_rows == 0 {
+        println("FAIL: expected the digits workload to exercise the tie-breaking rule")
+        return 1
+    }
+    matrix_free(probs)
+
+    # decide() over predict_proba must give the same labels as predict().
+    let probs2: Matrix = random_forest_classifier_predict_proba(model, X_test)
+    let decided: ptr<f32> = random_forest_classifier_decide(model, probs2)
+    if not rfpr_labels_match(decided, optimized, n_test) {
+        println("FAIL: decide over predict_proba disagrees with predict")
+        return 1
+    }
+    array_free_f32(decided)
+    matrix_free(probs2)
+
+    # ---------------------------------------------------------------
+    # 2. Edge case: a single query row must match the batched result.
+    # ---------------------------------------------------------------
+    let one_row: Matrix = matrix_new(1, digits.X.cols)
+    for j in 0 to digits.X.cols { matrix_set(one_row, 0, j, matrix_at(X_test, 0, j)) }
+    let ref_one: ptr<f32> = rfpr_reference_predict(model, one_row)
+    let opt_one: ptr<f32> = random_forest_classifier_predict(model, one_row)
+    if opt_one[0] != ref_one[0] {
+        println("FAIL: single-row predict diverged")
+        return 1
+    }
+    if opt_one[0] != optimized[0] {
+        println("FAIL: single-row predict disagrees with the batched result")
+        return 1
+    }
+    array_free_f32(ref_one)
+    array_free_f32(opt_one)
+    matrix_free(one_row)
+
+    # ---------------------------------------------------------------
+    # 3. A/B timing on the digits workload.
+    # ---------------------------------------------------------------
+    let repeats: i32 = 200
+    let start_reference: i64 = rfpr_now_ns()
+    for r in 0 to repeats {
+        let output: ptr<f32> = rfpr_reference_predict(model, X_test)
+        array_free_f32(output)
+    }
+    let end_reference: i64 = rfpr_now_ns()
+
+    let start_optimized: i64 = rfpr_now_ns()
+    for r in 0 to repeats {
+        let output: ptr<f32> = random_forest_classifier_predict(model, X_test)
+        array_free_f32(output)
+    }
+    let end_optimized: i64 = rfpr_now_ns()
+
+    let reference_ms: f64 = ((end_reference - start_reference) as f64) / 1000000.0
+    let optimized_ms: f64 = ((end_optimized - start_optimized) as f64) / 1000000.0
+    printf("RandomForestClassifier predict A/B: reference=%.3f ms optimized=%.3f ms speedup=%.3fx\n", reference_ms, optimized_ms, reference_ms / optimized_ms)
+
+    array_free_f32(reference)
+    array_free_f32(optimized)
+    random_forest_classifier_free(model)
+
+    # ---------------------------------------------------------------
+    # 4. Edge case: single tree, two classes, tiny separable problem.
+    # ---------------------------------------------------------------
+    let small_X: Matrix = matrix_new(8, 2)
+    let small_y: ptr<f32> = array_new_f32(8)
+    for i in 0 to 8 {
+        let cls: i32 = i / 4
+        small_y[i] = cls as f32
+        matrix_set(small_X, i, 0, (cls as f32) * 10.0 + (i as f32) * 0.1)
+        matrix_set(small_X, i, 1, (i as f32) * 0.25)
+    }
+    let one_tree: RandomForestClassifier = random_forest_classifier_fit(small_X, small_y, 2, 1, 3, 7)
+    let ref_small: ptr<f32> = rfpr_reference_predict(one_tree, small_X)
+    let opt_small: ptr<f32> = random_forest_classifier_predict(one_tree, small_X)
+    if not rfpr_labels_match(ref_small, opt_small, 8) {
+        println("FAIL: single-tree predict diverged")
+        return 1
+    }
+    array_free_f32(ref_small)
+    array_free_f32(opt_small)
+    random_forest_classifier_free(one_tree)
+
+    # ---------------------------------------------------------------
+    # 5. Edge case: a degenerate single-class training set.
+    # ---------------------------------------------------------------
+    let flat_y: ptr<f32> = array_new_f32(8)
+    for i in 0 to 8 { flat_y[i] = 3.0 }
+    let flat_model: RandomForestClassifier = random_forest_classifier_fit(small_X, flat_y, 1, 4, 3, 11)
+    let ref_flat: ptr<f32> = rfpr_reference_predict(flat_model, small_X)
+    let opt_flat: ptr<f32> = random_forest_classifier_predict(flat_model, small_X)
+    if not rfpr_labels_match(ref_flat, opt_flat, 8) {
+        println("FAIL: single-class predict diverged")
+        return 1
+    }
+    for i in 0 to 8 {
+        if opt_flat[i] != 3.0 {
+            println("FAIL: single-class forest did not predict its only label")
+            return 1
+        }
+    }
+    array_free_f32(ref_flat)
+    array_free_f32(opt_flat)
+    random_forest_classifier_free(flat_model)
+    array_free_f32(flat_y)
+
+    matrix_free(small_X)
+    array_free_f32(small_y)
+    matrix_free(X_train)
+    matrix_free(X_test)
+    array_free_f32(y_train)
+    dataset_free(digits)
+
+    println("OK: RandomForestClassifier predict matches the reference implementation exactly")
+    return 0
+}

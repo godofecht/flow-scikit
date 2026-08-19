@@ -1,0 +1,366 @@
+# Regression test for the optimized GaussianMixture.predict (issue #278).
+#
+# predict is the argmax of the same per-component log score predict_proba
+# normalises, so the optimization is the same one: build the per-component
+# constants once per call instead of once per sample. Argmax hides small
+# numeric drift, so this test also compares the raw log scores bit-exactly.
+#
+# Run: FLOW_HOST=python flow run tests/test_opt_gaussianmixture_predict.flow
+
+import "lib/scikit/mixture.flow"
+
+extern {
+    function malloc(size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function exp(x: f64) -> f64
+    function log(x: f64) -> f64
+    function fabs(x: f64) -> f64
+    function printf(fmt: string, ...) -> i32
+}
+
+# ---------------------------------------------------------------------------
+# Verbatim copy of the pre-optimization implementation. Module-unique names
+# (Flow compiler bug #465).
+# ---------------------------------------------------------------------------
+
+function gmpr_ref_log_gaussian(x: ptr<f32>, mean: ptr<f32>, var: ptr<f32>, n_features: i32) -> f32 {
+    let mut log_prob: f32 = 0.0
+    for j in 0 to n_features {
+        let d: f32 = x[j] - mean[j]
+        let v: f32 = var[j]
+        if v < 0.0000000001 { v = 0.0000000001 }
+        log_prob = log_prob - 0.5 * log((2.0 * 3.14159265 * v) as f64) as f32
+        log_prob = log_prob - 0.5 * d * d / v
+    }
+    return log_prob
+}
+
+function gmpr_ref_predict(model: GaussianMixture, X: Matrix) -> ptr<i32> {
+    let n: i32 = X.rows
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let x_row: ptr<f32> = array_new_f32(model.n_features)
+
+    for i in 0 to n {
+        for j in 0 to model.n_features {
+            x_row[j] = matrix_at(X, i, j)
+        }
+
+        let mut best_k: i32 = 0
+        let mut best_log: f32 = -10000000000.0
+        for k in 0 to model.n_components {
+            let lg: f32 = log((model.weights[k] as f64)) as f32 + gmpr_ref_log_gaussian(x_row, model.means[k], model.variances[k], model.n_features)
+            if lg > best_log {
+                best_log = lg
+                best_k = k
+            }
+        }
+        labels[i] = best_k
+    }
+
+    array_free_f32(x_row)
+    return labels
+}
+
+# Raw per-component log scores from the old path, so the comparison is not
+# hidden behind an argmax.
+function gmpr_ref_scores(model: GaussianMixture, X: Matrix) -> Matrix {
+    let n: i32 = X.rows
+    let S: Matrix = matrix_new(n, model.n_components)
+    let x_row: ptr<f32> = array_new_f32(model.n_features)
+    for i in 0 to n {
+        for j in 0 to model.n_features {
+            x_row[j] = matrix_at(X, i, j)
+        }
+        for k in 0 to model.n_components {
+            let lg: f32 = log((model.weights[k] as f64)) as f32 + gmpr_ref_log_gaussian(x_row, model.means[k], model.variances[k], model.n_features)
+            matrix_set(S, i, k, lg)
+        }
+    }
+    array_free_f32(x_row)
+    return S
+}
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+function gmpr_make_model(n_components: i32, n_features: i32) -> GaussianMixture {
+    let means: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+    let variances: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+    let weights: ptr<f32> = array_new_f32(n_components)
+    for k in 0 to n_components {
+        means[k] = array_new_f32(n_features)
+        variances[k] = array_new_f32(n_features)
+        for j in 0 to n_features {
+            means[k][j] = 0.0
+            variances[k][j] = 1.0
+        }
+        weights[k] = 1.0 / (n_components as f32)
+    }
+    return GaussianMixture {
+        means: means, variances: variances, weights: weights,
+        n_components: n_components, n_features: n_features,
+        log_likelihood: 0.0, n_iter: 0, converged: true, fitted: true
+    }
+}
+
+function gmpr_synthetic(n: i32, d: i32, k: i32) -> Matrix {
+    let X: Matrix = matrix_new(n, d)
+    let mut s: i64 = 12345
+    for i in 0 to n {
+        let comp: i32 = i % k
+        for j in 0 to d {
+            s = (s * 1103515245 + 12345) % 2147483648
+            let u: f32 = ((s % 1000) as f32) / 1000.0 - 0.5
+            matrix_set(X, i, j, (comp as f32) * 1.7 + (j as f32) * 0.05 + u * 2.0)
+        }
+    }
+    return X
+}
+
+# ---------------------------------------------------------------------------
+# 1. Known-correct labels. Two components, one feature, means 0 and 10,
+#    unit variances, equal weights. The decision boundary is x = 5, and the
+#    argmax uses a strict >, so the exact tie at x = 5 goes to component 0.
+# ---------------------------------------------------------------------------
+
+function gmpr_test_known_labels() -> i32 {
+    println("Test: predict known labels (boundary at x = 5)")
+    let model: GaussianMixture = gmpr_make_model(2, 1)
+    model.means[0][0] = 0.0
+    model.means[1][0] = 10.0
+
+    let X: Matrix = matrix_new(6, 1)
+    matrix_set(X, 0, 0, -3.0)
+    matrix_set(X, 1, 0, 0.0)
+    matrix_set(X, 2, 0, 4.9)
+    matrix_set(X, 3, 0, 5.0)
+    matrix_set(X, 4, 0, 5.1)
+    matrix_set(X, 5, 0, 13.0)
+
+    let labels: ptr<i32> = gaussian_mixture_predict(model, X)
+    let mut expected: array<i32, 6> = [0, 0, 0, 0, 1, 1]
+
+    let mut fail: i32 = 0
+    for i in 0 to 6 {
+        if labels[i] != expected[i] {
+            printf("  got label %d at row %d, expected %d\n", labels[i], i, expected[i])
+            fail = 1
+        }
+    }
+
+    free(labels as ptr<void>)
+    matrix_free(X)
+    gaussian_mixture_free(model)
+
+    if fail != 0 {
+        println("  FAIL: known labels wrong")
+        return 1
+    }
+    println("  OK")
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# 2. Mixing weights move the boundary. With weights 0.9 / 0.1 the boundary
+#    shifts to x = 5 + log(9) / 10 = 5.2197, so x = 5.1 flips back to
+#    component 0. This pins the hoisted log(weight) term.
+# ---------------------------------------------------------------------------
+
+function gmpr_test_weight_shifts_boundary() -> i32 {
+    println("Test: predict boundary shifts with mixing weights")
+    let model: GaussianMixture = gmpr_make_model(2, 1)
+    model.means[0][0] = 0.0
+    model.means[1][0] = 10.0
+    model.weights[0] = 0.9
+    model.weights[1] = 0.1
+
+    let X: Matrix = matrix_new(2, 1)
+    matrix_set(X, 0, 0, 5.1)
+    matrix_set(X, 1, 0, 5.4)
+
+    let labels: ptr<i32> = gaussian_mixture_predict(model, X)
+    let mut fail: i32 = 0
+    if labels[0] != 0 { fail = 1 }
+    if labels[1] != 1 { fail = 1 }
+
+    free(labels as ptr<void>)
+    matrix_free(X)
+    gaussian_mixture_free(model)
+
+    if fail != 0 {
+        println("  FAIL: weighted boundary wrong")
+        return 1
+    }
+    println("  OK")
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# 3. Edge cases: one component, one row, zero variance clamp.
+# ---------------------------------------------------------------------------
+
+function gmpr_test_edge_cases() -> i32 {
+    println("Test: predict edge cases")
+    let mut fail: i32 = 0
+
+    # single component: every row is label 0
+    let m1: GaussianMixture = gmpr_make_model(1, 4)
+    let X1: Matrix = matrix_new(5, 4)
+    for i in 0 to 5 {
+        for j in 0 to 4 { matrix_set(X1, i, j, (i as f32) * 3.0 - (j as f32) * 0.5) }
+    }
+    let l1: ptr<i32> = gaussian_mixture_predict(m1, X1)
+    for i in 0 to 5 {
+        if l1[i] != 0 { fail = 1 }
+    }
+    free(l1 as ptr<void>)
+    matrix_free(X1)
+    gaussian_mixture_free(m1)
+
+    # single row, single feature
+    let m2: GaussianMixture = gmpr_make_model(2, 1)
+    m2.means[0][0] = -4.0
+    m2.means[1][0] = 4.0
+    let X2: Matrix = matrix_new(1, 1)
+    matrix_set(X2, 0, 0, 3.5)
+    let l2: ptr<i32> = gaussian_mixture_predict(m2, X2)
+    if l2[0] != 1 { fail = 1 }
+    free(l2 as ptr<void>)
+    matrix_free(X2)
+    gaussian_mixture_free(m2)
+
+    # zero variance exercises the 1e-10 clamp on both paths
+    let m3: GaussianMixture = gmpr_make_model(2, 2)
+    m3.means[0][0] = 0.0
+    m3.means[0][1] = 0.0
+    m3.means[1][0] = 3.0
+    m3.means[1][1] = 3.0
+    m3.variances[0][0] = 0.0
+    let X3: Matrix = matrix_new(3, 2)
+    matrix_set(X3, 0, 0, 0.0)
+    matrix_set(X3, 0, 1, 0.0)
+    matrix_set(X3, 1, 0, 0.0)
+    matrix_set(X3, 1, 1, 2.9)
+    matrix_set(X3, 2, 0, 0.0001)
+    matrix_set(X3, 2, 1, 1.5)
+    let l3: ptr<i32> = gaussian_mixture_predict(m3, X3)
+    let r3: ptr<i32> = gmpr_ref_predict(m3, X3)
+    for i in 0 to 3 {
+        if l3[i] != r3[i] { fail = 1 }
+    }
+    free(l3 as ptr<void>)
+    free(r3 as ptr<void>)
+    matrix_free(X3)
+    gaussian_mixture_free(m3)
+
+    if fail != 0 {
+        println("  FAIL: edge cases diverge")
+        return 1
+    }
+    println("  OK")
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# 4. Realistic workload: label parity, plus bit-exact parity of the raw log
+#    scores that the argmax is taken over.
+# ---------------------------------------------------------------------------
+
+function gmpr_test_workload_parity() -> i32 {
+    println("Test: predict parity on 600 x 12, 6 components")
+    let n: i32 = 600
+    let d: i32 = 12
+    let k: i32 = 6
+
+    let X: Matrix = gmpr_synthetic(n, d, k)
+    let model: GaussianMixture = gaussian_mixture_fit(X, k, 20, 0.000001, 7)
+
+    let labels: ptr<i32> = gaussian_mixture_predict(model, X)
+    let ref_labels: ptr<i32> = gmpr_ref_predict(model, X)
+
+    let mut label_mismatch: i32 = 0
+    for i in 0 to n {
+        if labels[i] != ref_labels[i] { label_mismatch = label_mismatch + 1 }
+    }
+
+    # argmax hides drift, so compare the scores themselves. predict_proba
+    # is a strictly monotone transform of the same scores, so a bit-exact
+    # match of its output pins the scores.
+    let P: Matrix = gaussian_mixture_predict_proba(model, X)
+    let S: Matrix = gmpr_ref_scores(model, X)
+    let mut score_mismatch: i32 = 0
+    for i in 0 to n {
+        let mut max_log: f32 = -10000000000.0
+        for c in 0 to k {
+            if matrix_at(S, i, c) > max_log { max_log = matrix_at(S, i, c) }
+        }
+        let mut sum_exp: f32 = 0.0
+        for c in 0 to k {
+            sum_exp = sum_exp + exp((matrix_at(S, i, c) - max_log) as f64) as f32
+        }
+        for c in 0 to k {
+            let want: f32 = (exp((matrix_at(S, i, c) - max_log) as f64) as f32) / sum_exp
+            if matrix_at(P, i, c) != want { score_mismatch = score_mismatch + 1 }
+        }
+    }
+
+    # every label is the argmax of its own score row
+    let mut argmax_mismatch: i32 = 0
+    for i in 0 to n {
+        let mut best: i32 = 0
+        let mut best_s: f32 = -10000000000.0
+        for c in 0 to k {
+            if matrix_at(S, i, c) > best_s {
+                best_s = matrix_at(S, i, c)
+                best = c
+            }
+        }
+        if labels[i] != best { argmax_mismatch = argmax_mismatch + 1 }
+    }
+
+    printf("  label mismatches: %d of %d\n", label_mismatch, n)
+    printf("  score mismatches: %d of %d\n", score_mismatch, n * k)
+    printf("  argmax disagreements: %d of %d\n", argmax_mismatch, n)
+
+    matrix_free(S)
+    matrix_free(P)
+    free(labels as ptr<void>)
+    free(ref_labels as ptr<void>)
+    gaussian_mixture_free(model)
+    matrix_free(X)
+
+    if label_mismatch != 0 {
+        println("  FAIL: labels differ from the reference")
+        return 1
+    }
+    if score_mismatch != 0 {
+        println("  FAIL: log scores are not bit-identical")
+        return 1
+    }
+    if argmax_mismatch != 0 {
+        println("  FAIL: label is not the argmax of the reference scores")
+        return 1
+    }
+    println("  OK")
+    return 0
+}
+
+function main() -> i32 {
+    println("=== GaussianMixture.predict optimization regression (#278) ===")
+    let mut failures: i32 = 0
+    if gmpr_test_known_labels() != 0 { failures = failures + 1 }
+    if gmpr_test_weight_shifts_boundary() != 0 { failures = failures + 1 }
+    if gmpr_test_edge_cases() != 0 { failures = failures + 1 }
+    if gmpr_test_workload_parity() != 0 { failures = failures + 1 }
+
+    println("")
+    if failures == 0 {
+        println("All GaussianMixture.predict optimization tests passed!")
+        return 0
+    }
+    print("FAILED: ")
+    print(failures)
+    println(" tests")
+    return 1
+}

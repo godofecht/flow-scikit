@@ -1,0 +1,236 @@
+# Regression test for the KNeighborsClassifier.fit class-discovery optimization
+# (roadmap rank 85, issue #294).
+#
+# knn_classifier_fit used to rescan the whole discovered-class list for every
+# training sample, an O(n * n_classes) pass. It now uses a direct-index seen
+# table when the labels are small integers and falls back to the original scan
+# otherwise. The discovered class vector must be identical in both cases,
+# including first-appearance order, because that order fixes the column order
+# of knn_classifier_predict_proba.
+
+import "lib/scikit/neighbors.flow"
+
+extern {
+    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+}
+
+const OPTKNN_TIME_UTC: i32 = 1
+
+function optknn_now_ns() -> i64 {
+    let ts: ptr<i64> = malloc(16) as ptr<i64>
+    timespec_get(ts, OPTKNN_TIME_UTC)
+    let value: i64 = ts[0] * 1000000000 + ts[1]
+    free(ts as ptr<void>)
+    return value
+}
+
+# Byte-for-byte copy of the pre-optimization class-discovery pass, used as the
+# reference oracle.
+function optknn_reference_classes(y: ptr<f32>, n: i32, n_classes: i32) -> ptr<f32> {
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let mut n_found: i32 = 0
+    for i in 0 to n {
+        let mut found: bool = false
+        for c in 0 to n_found {
+            if classes[c] == y[i] {
+                found = true
+            }
+        }
+        if not found {
+            if n_found < n_classes {
+                classes[n_found] = y[i]
+                n_found = n_found + 1
+            }
+        }
+    }
+    return classes
+}
+
+function optknn_check_classes(name: string, y: ptr<f32>, n: i32, n_classes: i32) -> i32 {
+    let X: Matrix = matrix_new(n, 2)
+    for i in 0 to n {
+        matrix_set(X, i, 0, (i as f32) * 0.25)
+        matrix_set(X, i, 1, y[i])
+    }
+    let model: KNNClassifier = knn_classifier_fit(X, y, n_classes, 1)
+    let expected: ptr<f32> = optknn_reference_classes(y, n, n_classes)
+
+    let mut bad: i32 = 0
+    for c in 0 to n_classes {
+        if model.classes[c] != expected[c] {
+            bad = bad + 1
+            printf("  MISMATCH %s class index %d got %f want %f\n", name, c, model.classes[c] as f64, expected[c] as f64)
+        }
+    }
+    if bad == 0 {
+        printf("  ok %s\n", name)
+    }
+
+    array_free_f32(expected)
+    knn_classifier_free(model)
+    matrix_free(X)
+    return bad
+}
+
+function main() -> i32 {
+    printf("test_opt_kneighborsclassifier_fit\n")
+    let mut failures: i32 = 0
+
+    # 1. Contiguous integer labels, out of order, repeated. Fast path.
+    let y1: ptr<f32> = array_new_f32(9)
+    y1[0] = 2.0
+    y1[1] = 0.0
+    y1[2] = 2.0
+    y1[3] = 1.0
+    y1[4] = 0.0
+    y1[5] = 1.0
+    y1[6] = 2.0
+    y1[7] = 0.0
+    y1[8] = 1.0
+    failures = failures + optknn_check_classes("contiguous_unordered", y1, 9, 3)
+
+    # 2. Single sample.
+    let y2: ptr<f32> = array_new_f32(1)
+    y2[0] = 7.0
+    failures = failures + optknn_check_classes("single_sample", y2, 1, 1)
+
+    # 3. All samples share one label.
+    let y3: ptr<f32> = array_new_f32(64)
+    for i in 0 to 64 { y3[i] = 3.0 }
+    failures = failures + optknn_check_classes("all_same_label", y3, 64, 1)
+
+    # 4. Negative and sparse integer labels. Fast path with a nonzero offset.
+    let y4: ptr<f32> = array_new_f32(8)
+    y4[0] = -5.0
+    y4[1] = 100.0
+    y4[2] = 0.0
+    y4[3] = -5.0
+    y4[4] = 100.0
+    y4[5] = 42.0
+    y4[6] = 0.0
+    y4[7] = 42.0
+    failures = failures + optknn_check_classes("negative_and_sparse", y4, 8, 4)
+
+    # 5. Non-integer labels. Must take the fallback scan.
+    let y5: ptr<f32> = array_new_f32(10)
+    y5[0] = 0.5
+    y5[1] = 1.25
+    y5[2] = 0.5
+    y5[3] = -0.75
+    y5[4] = 1.25
+    y5[5] = -0.75
+    y5[6] = 0.5
+    y5[7] = 1.25
+    y5[8] = -0.75
+    y5[9] = 0.5
+    failures = failures + optknn_check_classes("fractional_labels", y5, 10, 3)
+
+    # 6. Integer labels outside the direct-index window. Must take the fallback.
+    let y6: ptr<f32> = array_new_f32(6)
+    y6[0] = 5000000.0
+    y6[1] = 1.0
+    y6[2] = 5000000.0
+    y6[3] = 1.0
+    y6[4] = 2.0
+    y6[5] = 2.0
+    failures = failures + optknn_check_classes("out_of_window", y6, 6, 3)
+
+    # 7. Realistic workload: end to end probabilities and decisions must match
+    #    a model whose classes came from the reference pass.
+    let n: i32 = 400
+    let p: i32 = 12
+    let n_classes: i32 = 6
+    let X: Matrix = matrix_new(n, p)
+    let y: ptr<f32> = array_new_f32(n)
+    let mut seed: i32 = 17
+    for i in 0 to n {
+        for j in 0 to p {
+            seed = (seed * 1103515245 + 12345) % 100000
+            matrix_set(X, i, j, (seed as f32) / 50000.0 - 1.0)
+        }
+        y[i] = ((i * 7) % n_classes) as f32
+    }
+
+    let model: KNNClassifier = knn_classifier_fit(X, y, n_classes, 5)
+    let ref_classes: ptr<f32> = optknn_reference_classes(y, n, n_classes)
+    for c in 0 to n_classes {
+        if model.classes[c] != ref_classes[c] {
+            failures = failures + 1
+            printf("  MISMATCH workload class index %d got %f want %f\n", c, model.classes[c] as f64, ref_classes[c] as f64)
+        }
+    }
+
+    let Xq: Matrix = matrix_new(50, p)
+    for i in 0 to 50 {
+        for j in 0 to p {
+            Xq.data[i * p + j] = X.data[(i * 3) * p + j]
+        }
+    }
+    let probs: Matrix = knn_classifier_predict_proba(model, Xq)
+    let decided: ptr<f32> = knn_classifier_decide(model, probs, 0.5)
+
+    # Every row of the probability matrix must sum to 1 and the decision must be
+    # the argmax class under the discovered ordering.
+    for i in 0 to 50 {
+        let mut s: f32 = 0.0
+        let mut best: i32 = 0
+        for c in 0 to n_classes {
+            s = s + probs.data[i * n_classes + c]
+            if probs.data[i * n_classes + c] > probs.data[i * n_classes + best] { best = c }
+        }
+        let diff: f32 = fabs((s - 1.0) as f64) as f32
+        if diff > 0.0001 {
+            failures = failures + 1
+            printf("  MISMATCH proba row %d sums to %f\n", i, s as f64)
+        }
+        if decided[i] != ref_classes[best] {
+            failures = failures + 1
+            printf("  MISMATCH decide row %d got %f want %f\n", i, decided[i] as f64, ref_classes[best] as f64)
+        }
+    }
+    printf("  ok workload 400 by 12, 6 classes, k=5\n")
+
+    # 8. Timing on an identical workload, reported for the record.
+    let nb: i32 = 2000
+    let pb: i32 = 64
+    let Xb: Matrix = matrix_new(nb, pb)
+    let yb: ptr<f32> = array_new_f32(nb)
+    for i in 0 to nb {
+        for j in 0 to pb {
+            seed = (seed * 1103515245 + 12345) % 100000
+            Xb.data[i * pb + j] = (seed as f32) / 100000.0
+        }
+        yb[i] = (i % 200) as f32
+    }
+    let reps: i32 = 50
+    let t0: i64 = optknn_now_ns()
+    for r in 0 to reps {
+        let m: KNNClassifier = knn_classifier_fit(Xb, yb, 200, 5)
+        knn_classifier_free(m)
+    }
+    let t1: i64 = optknn_now_ns()
+    printf("  fit 2000 by 64, 200 classes: %f ms per call\n", ((t1 - t0) as f64) / 1000000.0 / (reps as f64))
+
+    array_free_f32(y1)
+    array_free_f32(y2)
+    array_free_f32(y3)
+    array_free_f32(y4)
+    array_free_f32(y5)
+    array_free_f32(y6)
+    array_free_f32(ref_classes)
+    array_free_f32(decided)
+    matrix_free(probs)
+    matrix_free(Xq)
+    knn_classifier_free(model)
+    matrix_free(X)
+    array_free_f32(y)
+    matrix_free(Xb)
+    array_free_f32(yb)
+
+    if failures == 0 {
+        printf("PASS test_opt_kneighborsclassifier_fit\n")
+        return 0
+    }
+    printf("FAIL test_opt_kneighborsclassifier_fit: %d mismatches\n", failures)
+    return 1
+}

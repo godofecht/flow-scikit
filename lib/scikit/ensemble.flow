@@ -29,20 +29,12 @@ export struct RandomForestClassifier {
 }
 
 export function random_forest_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_trees: i32, max_depth: i32, seed: i32) -> RandomForestClassifier {
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to X.rows {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] {
-                found = true
-            }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # n_classes, which wrote past the allocation whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, X.rows, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     let trees: ptr<DecisionTreeClassifier> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeClassifier>
     let mut prng: PRNG = prng_seed(seed)
@@ -55,22 +47,37 @@ export function random_forest_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: 
     # Shared PRNG state pointer for the RF tree builder
     let prng_state: ptr<u32> = malloc(4) as ptr<u32>
 
+    # Bootstrap scratch, allocated once and reused by every tree. The old loop
+    # allocated and freed the index array, the bootstrap design matrix and the
+    # bootstrap target vector on each iteration. Every tree overwrites all three
+    # in full before reading them, so reuse is safe.
+    #
+    # The draw order is deliberately untouched: n_samples indices are drawn for
+    # the bootstrap, then one draw seeds this tree's feature subsampling, in that
+    # order, exactly as before. Issue #205 owns the sampling scheme itself.
+    let n_samples: i32 = X.rows
+    let n_cols: i32 = X.cols
+    let row_bytes: i64 = (n_cols as i64) * 4
+    let bootstrap_indices: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+    let X_boot: Matrix = matrix_new(n_samples, n_cols)
+    let y_boot: ptr<f32> = array_new_f32(n_samples)
+    let x_data: ptr<f32> = X.data
+    let boot_data: ptr<f32> = X_boot.data
+
     for t in 0 to n_trees {
-        let n_samples: i32 = X.rows
-        let bootstrap_indices: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
         for i in 0 to n_samples {
             let res: PRNGResult = prng_int(prng, n_samples)
             prng = PRNG { state: res.state }
             bootstrap_indices[i] = res.value
         }
 
-        let X_boot: Matrix = matrix_new(n_samples, X.cols)
-        let y_boot: ptr<f32> = array_new_f32(n_samples)
+        # Row-major memcpy instead of n_samples * n_cols accessor call pairs.
+        let mut dst: i32 = 0
         for i in 0 to n_samples {
-            y_boot[i] = y[bootstrap_indices[i]]
-            for j in 0 to X.cols {
-                matrix_set(X_boot, i, j, matrix_at(X, bootstrap_indices[i], j))
-            }
+            let src: i32 = bootstrap_indices[i]
+            y_boot[i] = y[src]
+            memcpy((boot_data + dst) as ptr<void>, (x_data + src * n_cols) as ptr<void>, row_bytes)
+            dst = dst + n_cols
         }
 
         # Set PRNG state for this tree's feature subsampling
@@ -79,12 +86,11 @@ export function random_forest_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: 
         prng_state[0] = res.state
 
         trees[t] = decision_tree_classifier_fit_rf(X_boot, y_boot, n_classes, max_depth, CRITERION_GINI, max_features, prng_state)
-
-        free(bootstrap_indices as ptr<void>)
-        matrix_free(X_boot)
-        array_free_f32(y_boot)
     }
 
+    free(bootstrap_indices as ptr<void>)
+    matrix_free(X_boot)
+    array_free_f32(y_boot)
     free(prng_state as ptr<void>)
 
     return RandomForestClassifier {
@@ -98,74 +104,147 @@ export function random_forest_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: 
     }
 }
 
-export function random_forest_classifier_predict(model: RandomForestClassifier, X: Matrix) -> ptr<f32> {
-    let preds: ptr<f32> = array_new_f32(X.rows)
-    let row: ptr<f32> = array_new_f32(X.cols)
+# Raw per-class vote counts for every row of X, as an (X.rows x n_classes)
+# matrix. Shared inference kernel for the RandomForestClassifier.
+#
+# The orchestration here is what the per-sample loop used to pay for:
+#   - one malloc/free of the vote buffer per sample
+#   - one matrix_row copy of the sample into a scratch row buffer per sample
+#   - a DecisionTreeClassifier struct copy per (sample, tree)
+#   - an O(n_classes) scan of model.classes per (sample, tree) to turn the
+#     leaf label back into a class index
+#
+# Instead the loop runs tree-major so each tree's node array stays hot across
+# all rows, the traversal reads X.data in place, and the leaf-label lookup is
+# memoized per leaf node. The memo is calloc-backed, so 0 means unresolved, a
+# positive entry holds the class index plus one, -1 marks a leaf whose label is
+# absent from model.classes, and -2 marks a leaf whose label appears more than
+# once in model.classes. Resolution is lazy: a small batch never pays to
+# resolve leaves it does not reach, which matters because a fitted tree usually
+# has far more leaves than a query batch has rows.
+#
+# model.classes is normally deduplicated, so the -2 case only arises when a
+# caller declares more classes than the data contains and the padding collides
+# with a real label. The old loop credited a vote to every matching entry, so
+# that case falls back to the full scan rather than being quietly corrected.
+#
+# Counts accumulate as f32. Every count is a small integer bounded by n_trees,
+# so the accumulation is exact and the result is bit-identical to the integer
+# vote buffer it replaces.
+function rf_clf_vote_counts(model: RandomForestClassifier, X: Matrix) -> Matrix {
+    let counts: Matrix = matrix_new(X.rows, model.n_classes)
+    let n_rows: i32 = X.rows
+    let n_cols: i32 = X.cols
+    let n_classes: i32 = model.n_classes
+    let xd: ptr<f32> = X.data
+    let cd: ptr<f32> = counts.data
 
-    for i in 0 to X.rows {
-        matrix_row(X, i, row)
+    for t in 0 to model.n_trees {
+        let tree: DecisionTreeClassifier = model.trees[t]
+        let nodes: ptr<TreeNode> = tree.nodes
+        let leaf_class: ptr<i32> = calloc(tree.n_nodes as i64, 4) as ptr<i32>
 
-        let votes: ptr<i32> = malloc((model.n_classes as i64) * 4) as ptr<i32>
-        for c in 0 to model.n_classes {
-            votes[c] = 0
-        }
-
-        for t in 0 to model.n_trees {
-            let pred: f32 = decision_tree_classifier_predict_one(model.trees[t], row)
-            for c in 0 to model.n_classes {
-                if model.classes[c] == pred {
-                    votes[c] = votes[c] + 1
+        let mut row_base: i32 = 0
+        let mut out_base: i32 = 0
+        for i in 0 to n_rows {
+            let mut node_idx: i32 = 0
+            while not nodes[node_idx].is_leaf {
+                let node: ptr<TreeNode> = nodes + node_idx
+                if xd[row_base + node.feature] <= node.threshold {
+                    node_idx = node.left
+                } else {
+                    node_idx = node.right
                 }
             }
-        }
 
-        let mut best_c: i32 = 0
-        let mut best_votes: i32 = 0
-        for c in 0 to model.n_classes {
-            if votes[c] > best_votes {
-                best_votes = votes[c]
-                best_c = c
+            let leaf_value: f32 = nodes[node_idx].value
+            let mut slot: i32 = leaf_class[node_idx]
+            if slot == 0 {
+                let mut n_hits: i32 = 0
+                let mut first_hit: i32 = 0
+                for c in 0 to n_classes {
+                    if model.classes[c] == leaf_value {
+                        if n_hits == 0 { first_hit = c }
+                        n_hits = n_hits + 1
+                    }
+                }
+                if n_hits == 0 {
+                    slot = -1
+                } else {
+                    if n_hits == 1 {
+                        slot = first_hit + 1
+                    } else {
+                        slot = -2
+                    }
+                }
+                leaf_class[node_idx] = slot
             }
+
+            if slot > 0 {
+                let out_idx: i32 = out_base + slot - 1
+                cd[out_idx] = cd[out_idx] + 1.0
+            }
+            if slot == -2 {
+                for c in 0 to n_classes {
+                    if model.classes[c] == leaf_value {
+                        cd[out_base + c] = cd[out_base + c] + 1.0
+                    }
+                }
+            }
+
+            row_base = row_base + n_cols
+            out_base = out_base + n_classes
         }
 
-        preds[i] = model.classes[best_c]
-        free(votes as ptr<void>)
+        free(leaf_class as ptr<void>)
     }
 
-    array_free_f32(row)
-    return preds
+    return counts
 }
 
 export function random_forest_classifier_predict_proba(model: RandomForestClassifier, X: Matrix) -> Matrix {
-    let probs: Matrix = matrix_new(X.rows, model.n_classes)
-    let row: ptr<f32> = array_new_f32(X.cols)
+    let probs: Matrix = rf_clf_vote_counts(model, X)
+    let denom: f32 = model.n_trees as f32
+    let n_values: i32 = probs.rows * probs.cols
+    let pd: ptr<f32> = probs.data
+    for k in 0 to n_values {
+        pd[k] = pd[k] / denom
+    }
+    return probs
+}
 
+# predict is a majority vote, which is the same reduction predict_proba runs
+# before normalising. It reuses the shared vote kernel and then takes the
+# argmax over raw counts, so the traversal work is done once, in one place.
+#
+# Tie-breaking is preserved exactly: scanning ascending from class 0 with a
+# strict comparison against a running best that starts at zero picks the
+# lowest-indexed class holding the strict maximum, and falls back to class 0
+# when no tree voted. Dividing every count by the same positive n_trees is
+# monotone, so the argmax over counts is the argmax over probabilities.
+export function random_forest_classifier_predict(model: RandomForestClassifier, X: Matrix) -> ptr<f32> {
+    let counts: Matrix = rf_clf_vote_counts(model, X)
+    let preds: ptr<f32> = array_new_f32(X.rows)
+    let n_classes: i32 = model.n_classes
+    let cd: ptr<f32> = counts.data
+
+    let mut base: i32 = 0
     for i in 0 to X.rows {
-        matrix_row(X, i, row)
-
-        let votes: ptr<i32> = malloc((model.n_classes as i64) * 4) as ptr<i32>
-        for c in 0 to model.n_classes {
-            votes[c] = 0
-        }
-
-        for t in 0 to model.n_trees {
-            let pred: f32 = decision_tree_classifier_predict_one(model.trees[t], row)
-            for c in 0 to model.n_classes {
-                if model.classes[c] == pred {
-                    votes[c] = votes[c] + 1
-                }
+        let mut best_c: i32 = 0
+        let mut best_votes: f32 = 0.0
+        for c in 0 to n_classes {
+            let v: f32 = cd[base + c]
+            if v > best_votes {
+                best_votes = v
+                best_c = c
             }
         }
-
-        for c in 0 to model.n_classes {
-            matrix_set(probs, i, c, (votes[c] as f32) / (model.n_trees as f32))
-        }
-
-        free(votes as ptr<void>)
+        preds[i] = model.classes[best_c]
+        base = base + n_classes
     }
 
-    array_free_f32(row)
-    return probs
+    matrix_free(counts)
+    return preds
 }
 
 export function random_forest_classifier_decide(model: RandomForestClassifier, probs: Matrix) -> ptr<f32> {
@@ -317,46 +396,54 @@ export struct BaggingClassifier {
 }
 
 export function bagging_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_estimators: i32, max_depth: i32, seed: i32) -> BaggingClassifier {
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to X.rows {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] {
-                found = true
-            }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # n_classes, which wrote past the allocation whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, X.rows, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     let trees: ptr<DecisionTreeClassifier> = malloc((n_estimators as i64) * 128) as ptr<DecisionTreeClassifier>
     srand(seed)
 
+    # Bootstrap scratch, allocated once and reused by every estimator. The old
+    # loop allocated and freed the index array, the bootstrap design matrix and
+    # the bootstrap target vector on every iteration. Each estimator overwrites
+    # all three in full before reading them, so reuse is safe.
+    #
+    # The draw order is deliberately untouched: n_samples calls to rand() per
+    # estimator, in the same order, so a given seed produces the same fitted
+    # ensemble. Issue #205 owns the sampling scheme itself.
+    let n_samples: i32 = X.rows
+    let n_cols: i32 = X.cols
+    let row_bytes: i64 = (n_cols as i64) * 4
+    let indices: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+    let X_boot: Matrix = matrix_new(n_samples, n_cols)
+    let y_boot: ptr<f32> = array_new_f32(n_samples)
+    let x_data: ptr<f32> = X.data
+    let boot_data: ptr<f32> = X_boot.data
+
     for t in 0 to n_estimators {
-        let n_samples: i32 = X.rows
-        let indices: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
         for i in 0 to n_samples {
             indices[i] = rand() % n_samples
         }
 
-        let X_boot: Matrix = matrix_new(n_samples, X.cols)
-        let y_boot: ptr<f32> = array_new_f32(n_samples)
+        # Row-major memcpy instead of n_samples * n_cols matrix_set/matrix_at
+        # call pairs. On digits that is 115k accessor pairs per estimator.
+        let mut dst: i32 = 0
         for i in 0 to n_samples {
-            y_boot[i] = y[indices[i]]
-            for j in 0 to X.cols {
-                matrix_set(X_boot, i, j, matrix_at(X, indices[i], j))
-            }
+            let src: i32 = indices[i]
+            y_boot[i] = y[src]
+            memcpy((boot_data + dst) as ptr<void>, (x_data + src * n_cols) as ptr<void>, row_bytes)
+            dst = dst + n_cols
         }
 
         trees[t] = decision_tree_classifier_fit(X_boot, y_boot, n_classes, max_depth, CRITERION_GINI)
-
-        free(indices as ptr<void>)
-        matrix_free(X_boot)
-        array_free_f32(y_boot)
     }
+
+    free(indices as ptr<void>)
+    matrix_free(X_boot)
+    array_free_f32(y_boot)
 
     return BaggingClassifier {
         trees: trees,
@@ -509,20 +596,12 @@ function _gb_sigmoid(x: f32) -> f32 {
 }
 
 export function gradient_boosting_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_trees: i32, learning_rate: f32, max_depth: i32, seed: i32) -> GradientBoostingClassifier {
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to X.rows {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] {
-                found = true
-            }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # n_classes, which wrote past the allocation whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, X.rows, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     let y_binary: ptr<f32> = array_new_f32(X.rows)
     for i in 0 to X.rows {
@@ -780,20 +859,12 @@ export struct AdaBoostClassifier {
 }
 
 export function adaboost_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_trees: i32, max_depth: i32, seed: i32) -> AdaBoostClassifier {
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to X.rows {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] {
-                found = true
-            }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # n_classes, which wrote past the allocation whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, X.rows, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     let trees: ptr<DecisionTreeClassifier> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeClassifier>
     let alphas: ptr<f32> = array_new_f32(n_trees)
@@ -1082,51 +1153,101 @@ export function adaboost_regressor_fit(X: Matrix, y: ptr<f32>, n_trees: i32, max
     }
 }
 
+# AdaBoost.R2 weighted-median prediction.
+#
+# Three sources of waste in the old loop, all per query row:
+#
+#   - Three allocations and three frees (two f32 arrays and an index array),
+#     so 3 * n malloc/free pairs for a batch of n rows.
+#   - The per-tree predictions were held as m separate n-element arrays, so
+#     reading one row's m values walked m arrays at a stride of n floats. Every
+#     insertion-sort comparison then paid a double indirection,
+#     tree_preds[order[j]][i], to reach a value in a different cache line.
+#   - Each tree's predictions came from decision_tree_regressor_predict, which
+#     copies every row into a scratch buffer via matrix_row before traversing.
+#
+# The rewrite builds one row-major (n x m) table with a direct traversal over
+# X.data, so a row's m predictions are contiguous, then sorts the values and
+# their weights in place in two scratch arrays allocated once for the whole
+# call.
+#
+# The sort is the same stable ascending insertion sort. Sorting the value and
+# weight arrays together produces exactly the permutation the old code built in
+# `order`, including for equal predictions and for NaN, because moving order[j]
+# and moving the pair at j are the same operation under the same comparison.
+# The two reductions that follow still run over the sorted sequence in sorted
+# order, so the f32 arithmetic is unchanged and the output is bit-identical.
+#
+# n_trees == 0 now returns zeros instead of indexing sorted_preds[-1]; that
+# case read uninitialized memory before.
 export function adaboost_regressor_predict(model: AdaBoostRegressor, X: Matrix) -> ptr<f32> {
-    # Weighted median prediction (sorted by prediction, accumulate weights)
-    let preds: ptr<f32> = array_new_f32(X.rows)
-    let tree_preds: ptr<ptr<f32> > = malloc((model.n_trees as i64) * 8) as ptr<ptr<f32> >
+    let n: i32 = X.rows
+    let m: i32 = model.n_trees
+    let n_cols: i32 = X.cols
+    let preds: ptr<f32> = array_new_f32(n)
+    if m <= 0 { return preds }
 
-    for t in 0 to model.n_trees {
-        tree_preds[t] = decision_tree_regressor_predict(model.trees[t], X)
+    let xd: ptr<f32> = X.data
+
+    # Row-major (n x m) table of per-tree predictions, filled tree-major so
+    # each tree's node array stays hot across all rows.
+    let table: ptr<f32> = array_new_f32(n * m)
+    for t in 0 to m {
+        let tree: DecisionTreeRegressor = model.trees[t]
+        let nodes: ptr<TreeNode> = tree.nodes
+        let mut row_base: i32 = 0
+        let mut slot: i32 = t
+        for i in 0 to n {
+            let mut node_idx: i32 = 0
+            while not nodes[node_idx].is_leaf {
+                let node: ptr<TreeNode> = nodes + node_idx
+                if xd[row_base + node.feature] <= node.threshold {
+                    node_idx = node.left
+                } else {
+                    node_idx = node.right
+                }
+            }
+            table[slot] = nodes[node_idx].value
+            row_base = row_base + n_cols
+            slot = slot + m
+        }
     }
 
-    for i in 0 to X.rows {
-        # Collect (prediction, weight) pairs and sort by prediction
-        let sorted_preds: ptr<f32> = array_new_f32(model.n_trees)
-        let sorted_weights: ptr<f32> = array_new_f32(model.n_trees)
-        let order: ptr<i32> = malloc((model.n_trees as i64) * 4) as ptr<i32>
-        for t in 0 to model.n_trees {
-            order[t] = t
+    let sorted_preds: ptr<f32> = array_new_f32(m)
+    let sorted_weights: ptr<f32> = array_new_f32(m)
+    let alphas: ptr<f32> = model.alphas
+
+    let mut base: i32 = 0
+    for i in 0 to n {
+        for t in 0 to m {
+            sorted_preds[t] = table[base + t]
+            sorted_weights[t] = alphas[t]
         }
 
-        # Simple insertion sort by prediction value
-        for t in 1 to model.n_trees {
-            let key: i32 = order[t]
-            let key_val: f32 = tree_preds[key][i]
+        # Stable insertion sort by prediction, carrying the weight along.
+        for t in 1 to m {
+            let key_val: f32 = sorted_preds[t]
+            let key_w: f32 = sorted_weights[t]
             let mut j: i32 = t - 1
-            while j >= 0 && tree_preds[order[j]][i] > key_val {
-                order[j + 1] = order[j]
+            while j >= 0 && sorted_preds[j] > key_val {
+                sorted_preds[j + 1] = sorted_preds[j]
+                sorted_weights[j + 1] = sorted_weights[j]
                 j = j - 1
             }
-            order[j + 1] = key
+            sorted_preds[j + 1] = key_val
+            sorted_weights[j + 1] = key_w
         }
 
-        for t in 0 to model.n_trees {
-            sorted_preds[t] = tree_preds[order[t]][i]
-            sorted_weights[t] = model.alphas[order[t]]
-        }
-
-        # Weighted median: find where cumulative weight crosses 0.5
+        # Weighted median: find where cumulative weight crosses 0.5.
         let mut total_w: f32 = 0.0
-        for t in 0 to model.n_trees {
+        for t in 0 to m {
             total_w = total_w + sorted_weights[t]
         }
 
         let mut cum_w: f32 = 0.0
-        let mut median_idx: i32 = model.n_trees - 1
+        let mut median_idx: i32 = m - 1
         if total_w > 0.0 {
-            for t in 0 to model.n_trees {
+            for t in 0 to m {
                 cum_w = cum_w + sorted_weights[t] / total_w
                 if cum_w >= 0.5 {
                     median_idx = t
@@ -1136,16 +1257,12 @@ export function adaboost_regressor_predict(model: AdaBoostRegressor, X: Matrix) 
         }
 
         preds[i] = sorted_preds[median_idx]
-
-        array_free_f32(sorted_preds)
-        array_free_f32(sorted_weights)
-        free(order as ptr<void>)
+        base = base + m
     }
 
-    for t in 0 to model.n_trees {
-        array_free_f32(tree_preds[t])
-    }
-    free(tree_preds as ptr<void>)
+    array_free_f32(sorted_preds)
+    array_free_f32(sorted_weights)
+    array_free_f32(table)
 
     return preds
 }
@@ -1202,18 +1319,12 @@ export function extra_trees_classifier_fit(
     X: Matrix, y: ptr<f32>, n_classes: i32,
     n_trees: i32, max_depth: i32, seed: i32
 ) -> ExtraTreesClassifier {
-    let classes: ptr<f32> = array_new_f32(n_classes)
-    let mut n_found: i32 = 0
-    for i in 0 to X.rows {
-        let mut found: bool = false
-        for k in 0 to n_found {
-            if classes[k] == y[i] { found = true; break }
-        }
-        if not found {
-            classes[n_found] = y[i]
-            n_found = n_found + 1
-        }
-    }
+    # Issue #398: this used to append at classes[n_found] with no check against
+    # n_classes, which wrote past the allocation whenever y carried more
+    # distinct labels than the caller declared.
+    let found_classes: DistinctF32 = distinct_f32(y, X.rows, n_classes)
+    let classes: ptr<f32> = found_classes.values
+    let n_found: i32 = found_classes.count
 
     let trees: ptr<DecisionTreeClassifier> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeClassifier>
     let n_features: i32 = X.cols
@@ -2258,27 +2369,34 @@ export function bagging_regressor_fit(X: Matrix, y: ptr<f32>, n_estimators: i32,
     let trees: ptr<DecisionTreeRegressor> = malloc((n_estimators as i64) * 128) as ptr<DecisionTreeRegressor>
     srand(seed)
 
-    let mut i: i32 = 0
-    while i < n_estimators {
-        # Bootstrap sample
-        let X_boot: Matrix = matrix_new(n, n_features)
-        let y_boot: ptr<f32> = array_new_f32(n)
-        let mut j: i32 = 0
-        while j < n {
+    # Bootstrap scratch, allocated once and reused by every estimator. The old
+    # loop built a fresh design matrix and target vector per estimator and
+    # filled the matrix with n * n_features matrix_set/matrix_at call pairs.
+    # Each estimator overwrites both buffers in full before reading them, so
+    # reuse is safe.
+    #
+    # The draw order is deliberately untouched: rand() is still called once per
+    # bootstrap row, in row order, inside the estimator loop, after the same
+    # srand(seed). Issue #205 owns the sampling scheme itself.
+    let row_bytes: i64 = (n_features as i64) * 4
+    let X_boot: Matrix = matrix_new(n, n_features)
+    let y_boot: ptr<f32> = array_new_f32(n)
+    let x_data: ptr<f32> = X.data
+    let boot_data: ptr<f32> = X_boot.data
+
+    for t in 0 to n_estimators {
+        let mut dst: i32 = 0
+        for j in 0 to n {
             let idx: i32 = rand() % n
-            let mut k: i32 = 0
-            while k < n_features {
-                matrix_set(X_boot, j, k, matrix_at(X, idx, k))
-                k = k + 1
-            }
+            memcpy((boot_data + dst) as ptr<void>, (x_data + idx * n_features) as ptr<void>, row_bytes)
             y_boot[j] = y[idx]
-            j = j + 1
+            dst = dst + n_features
         }
-        trees[i] = decision_tree_regressor_fit(X_boot, y_boot, max_depth, 2)
-        matrix_free(X_boot)
-        array_free_f32(y_boot)
-        i = i + 1
+        trees[t] = decision_tree_regressor_fit(X_boot, y_boot, max_depth, 2)
     }
+
+    matrix_free(X_boot)
+    array_free_f32(y_boot)
 
     let result: BaggingRegressor = BaggingRegressor {
         trees: trees,
@@ -2289,22 +2407,52 @@ export function bagging_regressor_fit(X: Matrix, y: ptr<f32>, n_estimators: i32,
     return result
 }
 
+# Mean prediction over the bagged trees.
+#
+# The old loop was row-major over an estimator-major kernel: for every row i it
+# called decision_tree_regressor_predict once per tree, and that call predicts
+# every row of X, allocates an n-element buffer and a scratch row buffer, then
+# the caller read element i and threw the rest away. So a batch of n rows over
+# m trees did n * m full passes, n * n * m traversals, and 2 * n * m
+# allocations, to produce n * m useful numbers.
+#
+# Running tree-major instead does each tree once over all rows, keeps that
+# tree's node array hot for the whole pass, reads X.data in place instead of
+# copying a scratch row, and allocates nothing inside the loop. The work drops
+# from O(n^2 * m) traversals to O(n * m).
+#
+# The accumulation order is unchanged: row i still sums tree 0 through
+# tree m-1 in that order before the single divide, so the f32 result is
+# bit-identical to the old one. result comes from array_new_f32, which is
+# calloc-backed, so the zero it starts from is already there.
 export function bagging_regressor_predict(model: BaggingRegressor, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
+    let n_cols: i32 = X.cols
     let result: ptr<f32> = array_new_f32(n)
+    let xd: ptr<f32> = X.data
 
-    let mut i: i32 = 0
-    while i < n {
-        let mut sum: f32 = 0.0
-        let mut j: i32 = 0
-        while j < model.n_estimators {
-            let preds: ptr<f32> = decision_tree_regressor_predict(model.trees[j], X)
-            sum = sum + preds[i]
-            array_free_f32(preds)
-            j = j + 1
+    for t in 0 to model.n_estimators {
+        let tree: DecisionTreeRegressor = model.trees[t]
+        let nodes: ptr<TreeNode> = tree.nodes
+        let mut row_base: i32 = 0
+        for i in 0 to n {
+            let mut node_idx: i32 = 0
+            while not nodes[node_idx].is_leaf {
+                let node: ptr<TreeNode> = nodes + node_idx
+                if xd[row_base + node.feature] <= node.threshold {
+                    node_idx = node.left
+                } else {
+                    node_idx = node.right
+                }
+            }
+            result[i] = result[i] + nodes[node_idx].value
+            row_base = row_base + n_cols
         }
-        result[i] = sum / (model.n_estimators as f32)
-        i = i + 1
+    }
+
+    let denom: f32 = model.n_estimators as f32
+    for i in 0 to n {
+        result[i] = result[i] / denom
     }
     return result
 }
