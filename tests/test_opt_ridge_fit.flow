@@ -1,9 +1,11 @@
 # Regression test for the BLAS-backed Gram accumulation in ridge_fit.
-# The check that matters is element-wise coefficient parity against the
-# previous scalar triple loop, kept verbatim below as an independent
-# reference. It is exercised on a well-conditioned design, a near-collinear
-# design at two penalties, a design with column scales spanning eight orders
-# of magnitude, and a single-feature problem. Two hand-checkable cases pin the
+# The check that matters is tight element-wise numerical equivalence against
+# the previous scalar triple loop, kept verbatim below as an independent
+# reference. BLAS implementations are allowed to reassociate floating-point
+# operations internally, so cross-backend bit identity is not a valid contract.
+# The test is exercised on a well-conditioned design, a near-collinear design
+# at two penalties, a design with column scales spanning eight orders of
+# magnitude, and a single-feature problem. Two hand-checkable cases pin the
 # shrinkage direction and the intercept.
 
 import "lib/scikit/scikit.flow"
@@ -16,6 +18,25 @@ function optrf_close(a: f32, b: f32, tolerance: f32) -> bool {
     let d: f32 = a - b
     if d < 0.0 { d = -d }
     return d <= tolerance
+}
+
+# A deliberately tight cross-BLAS comparison. The absolute term protects
+# coefficients close to zero; the relative term scales with ordinary weights.
+# Linux/OpenBLAS on the CI regression corpus differed from the scalar reference
+# by at most a few e-6, while macOS Accelerate happened to be bit-identical.
+function optrf_equivalent(a: f32, b: f32) -> bool {
+    let mut d: f32 = a - b
+    if d < 0.0 { d = -d }
+    let mut aa: f32 = a
+    if aa < 0.0 { aa = -aa }
+    let mut bb: f32 = b
+    if bb < 0.0 { bb = -bb }
+    let mut scale: f32 = aa
+    if bb > scale { scale = bb }
+    let rel: f32 = scale * 0.0001
+    let mut tol: f32 = 0.00001
+    if rel > tol { tol = rel }
+    return d <= tol
 }
 
 # Verbatim copy of the pre-change ridge_fit body: means, then the scalar
@@ -108,12 +129,12 @@ function optrf_case(rows: i32, cols: i32, mode: i32, alpha: f32, seed0: i32) -> 
     let got: Ridge = ridge_fit(X, y, alpha, 1000, 0.01)
 
     let mut bad: i32 = 0
-    if got.bias != want.bias {
+    if not optrf_equivalent(got.bias, want.bias) {
         bad = bad + 1
         printf("  bias reference=%.9g got=%.9g\n", want.bias as f64, got.bias as f64)
     }
     for j in 0 to cols {
-        if got.weights[j] != want.weights[j] {
+        if not optrf_equivalent(got.weights[j], want.weights[j]) {
             bad = bad + 1
             if bad < 6 {
                 printf("  w%d reference=%.9g got=%.9g\n", j, want.weights[j] as f64, got.weights[j] as f64)
@@ -121,7 +142,7 @@ function optrf_case(rows: i32, cols: i32, mode: i32, alpha: f32, seed0: i32) -> 
         }
     }
     if bad > 0 {
-        printf("FAIL: ridge_fit coefficients moved (rows=%d cols=%d mode=%d)\n", rows, cols, mode)
+        printf("FAIL: ridge_fit coefficients exceed cross-BLAS tolerance (rows=%d cols=%d mode=%d)\n", rows, cols, mode)
     }
     ridge_free(want)
     ridge_free(got)
@@ -142,7 +163,7 @@ function main() -> i32 {
     bad = bad + optrf_case(500, 20, 2, 0.01, 31337)
     bad = bad + optrf_case(1000, 1, 0, 1.0, 5)
     if bad > 0 {
-        printf("  total mismatching coefficients: %d\n", bad)
+        printf("  total coefficients outside tolerance: %d\n", bad)
         return 1
     }
 
@@ -202,6 +223,6 @@ function main() -> i32 {
     array_free_f32(y1)
     matrix_free(X1)
 
-    println("OK: ridge_fit coefficients bit-identical after the BLAS Gram rewrite")
+    println("OK: ridge_fit coefficients remain numerically equivalent across BLAS backends")
     return 0
 }
