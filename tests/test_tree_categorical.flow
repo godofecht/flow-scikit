@@ -1,0 +1,571 @@
+# Issue #354: decision trees split categorical features on a subset of levels.
+#
+# Every dataset here is built so the best split is a genuine subset that no
+# threshold on the label encoding can express. That is the whole point of the
+# complaint in #354: label encoding imposes an order the data does not have,
+# and a threshold can only ever cut that invented order in one place.
+#
+# The subset search is Breiman's, so a k-level feature costs k-1 candidates
+# rather than 2^(k-1). The high-cardinality case below has 40 levels, where an
+# enumeration would be 2^39 subsets and this is 39.
+
+import "lib/scikit/matrix.flow"
+import "lib/scikit/tree.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+}
+
+# Levels cycle 0,1,2,3 and the label is the level's parity, so the classes are
+# {0,2} against {1,3}. Row 0 carries label 0.0, which fixes class index 0 to
+# label 0.0, so the level ordering by mean class index puts the even levels
+# first and the fitted left set is {0,2}, bits 0 and 2, mask 5.
+#
+# No threshold on 0 < 1 < 2 < 3 separates them. The best a threshold can do is
+# weighted gini 0.3333 against the subset split's 0.0.
+function _t354_make_parity_x(n_levels: i32, reps: i32) -> Matrix {
+    let n: i32 = n_levels * reps
+    let X: Matrix = matrix_new(n, 1)
+    for i in 0 to n {
+        let lvl: i32 = i % n_levels
+        matrix_set(X, i, 0, lvl as f32)
+    }
+    return X
+}
+
+function _t354_make_parity_y(n_levels: i32, reps: i32) -> ptr<f32> {
+    let n: i32 = n_levels * reps
+    let y: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let lvl: i32 = i % n_levels
+        y[i] = (lvl % 2) as f32
+    }
+    return y
+}
+
+function _t354_all_categorical(cols: i32) -> ptr<i32> {
+    let m: ptr<i32> = malloc((cols as i64) * 4) as ptr<i32>
+    for f in 0 to cols { m[f] = 1 }
+    return m
+}
+
+function _t354_no_categorical(cols: i32) -> ptr<i32> {
+    let m: ptr<i32> = malloc((cols as i64) * 4) as ptr<i32>
+    for f in 0 to cols { m[f] = 0 }
+    return m
+}
+
+function _t354_accuracy(pred: ptr<f32>, y: ptr<f32>, n: i32) -> f32 {
+    let mut hits: i32 = 0
+    for i in 0 to n {
+        if pred[i] == y[i] { hits = hits + 1 }
+    }
+    return (hits as f32) / (n as f32)
+}
+
+# ---------------------------------------------------------------------------
+# 1. A subset split no threshold can express.
+# ---------------------------------------------------------------------------
+function _t354_test_subset_beats_threshold() -> i32 {
+    println("subset split against a label-encoded threshold")
+    let mut failed: i32 = 0
+
+    let X: Matrix = _t354_make_parity_x(4, 4)
+    let y: ptr<f32> = _t354_make_parity_y(4, 4)
+    let n: i32 = 16
+
+    let cat: ptr<i32> = _t354_all_categorical(1)
+    let num: ptr<i32> = _t354_no_categorical(1)
+
+    # One split each, so the two fits are compared on the same budget.
+    let cm: DecisionTreeClassifier = decision_tree_classifier_fit_categorical(X, y, 2, 1, 0, cat)
+    let nm: DecisionTreeClassifier = decision_tree_classifier_fit(X, y, 2, 1, 0)
+
+    let croot: ptr<TreeNode> = cm.nodes
+    let nroot: ptr<TreeNode> = nm.nodes
+
+    let cpred: ptr<f32> = decision_tree_classifier_predict(cm, X)
+    let npred: ptr<f32> = decision_tree_classifier_predict(nm, X)
+    let cacc: f32 = _t354_accuracy(cpred, y, n)
+    let nacc: f32 = _t354_accuracy(npred, y, n)
+
+    if croot.is_leaf {
+        println("  FAIL: categorical root did not split")
+        failed = failed + 1
+    }
+    if croot.cat_kind != 1 {
+        print("  FAIL: categorical root cat_kind is ")
+        print(croot.cat_kind)
+        println(", expected 1")
+        failed = failed + 1
+    }
+    # Left set is exactly {0, 2}: bit 0 and bit 2, nothing else.
+    if croot.cat_mask0 != (5 as u32) {
+        print("  FAIL: categorical root left set is ")
+        print(croot.cat_mask0 as i32)
+        println(", expected 5 which is levels 0 and 2")
+        failed = failed + 1
+    }
+    if cacc < 0.9999 {
+        print("  FAIL: categorical accuracy ")
+        printf("%.6f", cacc)
+        println(", expected 1.0 from a perfect subset split")
+        failed = failed + 1
+    }
+
+    # The numeric fit is the label encoding the caller is forced into today.
+    # It splits on a threshold, and on this data that costs a quarter of the
+    # rows however the threshold is chosen.
+    if nroot.cat_kind != 0 {
+        println("  FAIL: numeric root claims to be a categorical split")
+        failed = failed + 1
+    }
+    if nacc > 0.9999 {
+        println("  FAIL: label-encoded threshold fit reached a perfect split, so this dataset does not prove anything")
+        failed = failed + 1
+    }
+    if nacc < 0.7499 || nacc > 0.7501 {
+        print("  FAIL: label-encoded accuracy ")
+        printf("%.6f", nacc)
+        println(", expected 0.75")
+        failed = failed + 1
+    }
+
+    if failed == 0 {
+        print("  OK: categorical ")
+        printf("%.4f", cacc)
+        print(" against label-encoded ")
+        printf("%.4f", nacc)
+        println("")
+    }
+
+    array_free_f32(cpred)
+    array_free_f32(npred)
+    decision_tree_classifier_free(cm)
+    decision_tree_classifier_free(nm)
+    free(cat as ptr<void>)
+    free(num as ptr<void>)
+    matrix_free(X)
+    array_free_f32(y)
+    return failed
+}
+
+# ---------------------------------------------------------------------------
+# 2. High cardinality: 40 levels.
+# ---------------------------------------------------------------------------
+function _t354_test_high_cardinality() -> i32 {
+    println("high-cardinality feature, 40 levels")
+    let mut failed: i32 = 0
+
+    let X: Matrix = _t354_make_parity_x(40, 4)
+    let y: ptr<f32> = _t354_make_parity_y(40, 4)
+    let n: i32 = 160
+
+    let cat: ptr<i32> = _t354_all_categorical(1)
+    let cm: DecisionTreeClassifier = decision_tree_classifier_fit_categorical(X, y, 2, 1, 0, cat)
+    let nm: DecisionTreeClassifier = decision_tree_classifier_fit(X, y, 2, 1, 0)
+
+    let croot: ptr<TreeNode> = cm.nodes
+    let cpred: ptr<f32> = decision_tree_classifier_predict(cm, X)
+    let npred: ptr<f32> = decision_tree_classifier_predict(nm, X)
+    let cacc: f32 = _t354_accuracy(cpred, y, n)
+    let nacc: f32 = _t354_accuracy(npred, y, n)
+
+    if croot.cat_kind != 1 {
+        println("  FAIL: 40-level root is not a categorical split")
+        failed = failed + 1
+    }
+    if cacc < 0.9999 {
+        print("  FAIL: 40-level categorical accuracy ")
+        printf("%.6f", cacc)
+        println(", expected 1.0")
+        failed = failed + 1
+    }
+    # Left set is the 20 even levels, which crosses the 32-bit word boundary:
+    # bits 0,2,..,30 in word 0 and bits 32,34,36,38 in word 1.
+    if croot.cat_mask0 != (1431655765 as u32) {
+        print("  FAIL: word 0 of the left set is ")
+        print(croot.cat_mask0 as i32)
+        println(", expected 1431655765")
+        failed = failed + 1
+    }
+    if croot.cat_mask1 != (85 as u32) {
+        print("  FAIL: word 1 of the left set is ")
+        print(croot.cat_mask1 as i32)
+        println(", expected 85")
+        failed = failed + 1
+    }
+    if croot.cat_mask2 != (0 as u32) || croot.cat_mask3 != (0 as u32) {
+        println("  FAIL: words 2 and 3 of the left set should be empty")
+        failed = failed + 1
+    }
+    if nacc > 0.9999 {
+        println("  FAIL: label-encoded threshold fit reached a perfect split on 40 levels")
+        failed = failed + 1
+    }
+
+    if failed == 0 {
+        print("  OK: 40 levels split exactly, 39 candidates rather than 2^39, label-encoded reached ")
+        printf("%.4f", nacc)
+        println("")
+    }
+
+    array_free_f32(cpred)
+    array_free_f32(npred)
+    decision_tree_classifier_free(cm)
+    decision_tree_classifier_free(nm)
+    free(cat as ptr<void>)
+    matrix_free(X)
+    array_free_f32(y)
+    return failed
+}
+
+# ---------------------------------------------------------------------------
+# 3. A level seen at predict time but not at fit time.
+#
+# Documented behaviour: an unseen level has no bit set in any node's left set,
+# so it goes right at every node it reaches. It is not an error and it does
+# not fall back to the majority class. Level 7 below was never fitted, and the
+# root's right child holds the odd levels, so it comes back as class 1.
+# ---------------------------------------------------------------------------
+function _t354_test_unseen_level() -> i32 {
+    println("a level present at predict time and absent at fit time")
+    let mut failed: i32 = 0
+
+    let X: Matrix = _t354_make_parity_x(4, 4)
+    let y: ptr<f32> = _t354_make_parity_y(4, 4)
+    let cat: ptr<i32> = _t354_all_categorical(1)
+    let cm: DecisionTreeClassifier = decision_tree_classifier_fit_categorical(X, y, 2, 1, 0, cat)
+
+    # Three rows: a fitted even level, a fitted odd level, and level 7 which
+    # the fit never saw.
+    let Q: Matrix = matrix_new(3, 1)
+    matrix_set(Q, 0, 0, 2.0)
+    matrix_set(Q, 1, 0, 3.0)
+    matrix_set(Q, 2, 0, 7.0)
+    let q: ptr<f32> = decision_tree_classifier_predict(cm, Q)
+
+    if q[0] != 0.0 {
+        print("  FAIL: fitted level 2 predicted ")
+        printf("%.4f", q[0])
+        println(", expected 0")
+        failed = failed + 1
+    }
+    if q[1] != 1.0 {
+        print("  FAIL: fitted level 3 predicted ")
+        printf("%.4f", q[1])
+        println(", expected 1")
+        failed = failed + 1
+    }
+    # Unseen level goes right, which on this tree is the odd-level child.
+    if q[2] != 1.0 {
+        print("  FAIL: unseen level 7 predicted ")
+        printf("%.4f", q[2])
+        println(", expected 1 from the right child, which is where an unseen level goes")
+        failed = failed + 1
+    }
+
+    if failed == 0 {
+        println("  OK: an unseen level takes the right branch at every node rather than failing")
+    }
+
+    array_free_f32(q)
+    matrix_free(Q)
+    decision_tree_classifier_free(cm)
+    free(cat as ptr<void>)
+    matrix_free(X)
+    array_free_f32(y)
+    return failed
+}
+
+# ---------------------------------------------------------------------------
+# 4. Regression. Breiman's ordering is exact for MSE at any number of levels.
+# ---------------------------------------------------------------------------
+function _t354_test_regressor_subset() -> i32 {
+    println("regression on a categorical feature")
+    let mut failed: i32 = 0
+
+    let n: i32 = 24
+    let X: Matrix = matrix_new(n, 1)
+    let y: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let lvl: i32 = i % 6
+        matrix_set(X, i, 0, lvl as f32)
+        if lvl % 2 == 0 {
+            y[i] = 10.0
+        } else {
+            y[i] = 1.0
+        }
+    }
+
+    let cat: ptr<i32> = _t354_all_categorical(1)
+    let cm: DecisionTreeRegressor = decision_tree_regressor_fit_categorical(X, y, 1, 2, cat)
+    let nm: DecisionTreeRegressor = decision_tree_regressor_fit(X, y, 1, 2)
+
+    let croot: ptr<TreeNode> = cm.nodes
+    let cpred: ptr<f32> = decision_tree_regressor_predict(cm, X)
+    let npred: ptr<f32> = decision_tree_regressor_predict(nm, X)
+
+    let mut cerr: f32 = 0.0
+    let mut nerr: f32 = 0.0
+    for i in 0 to n {
+        let cd: f32 = cpred[i] - y[i]
+        let nd: f32 = npred[i] - y[i]
+        cerr = cerr + cd * cd
+        nerr = nerr + nd * nd
+    }
+
+    if croot.cat_kind != 1 {
+        println("  FAIL: regressor root is not a categorical split")
+        failed = failed + 1
+    }
+    # Odd levels have the lower mean response, so they sort first and form the
+    # left set: bits 1, 3 and 5, mask 42.
+    if croot.cat_mask0 != (42 as u32) {
+        print("  FAIL: regressor left set is ")
+        print(croot.cat_mask0 as i32)
+        println(", expected 42 which is levels 1, 3 and 5")
+        failed = failed + 1
+    }
+    if cerr > 0.0001 {
+        print("  FAIL: categorical residual sum of squares ")
+        printf("%.6f", cerr)
+        println(", expected 0")
+        failed = failed + 1
+    }
+    if nerr < 0.0001 {
+        println("  FAIL: the label-encoded threshold fit was exact, so this dataset does not prove anything")
+        failed = failed + 1
+    }
+
+    if failed == 0 {
+        print("  OK: categorical residual 0, label-encoded residual ")
+        printf("%.4f", nerr)
+        println("")
+    }
+
+    array_free_f32(cpred)
+    array_free_f32(npred)
+    decision_tree_regressor_free(cm)
+    decision_tree_regressor_free(nm)
+    free(cat as ptr<void>)
+    matrix_free(X)
+    array_free_f32(y)
+    return failed
+}
+
+# ---------------------------------------------------------------------------
+# 5. A column marked categorical that is not whole numbers in 0..127 is
+#    reported and fitted numerically rather than failing the whole fit.
+# ---------------------------------------------------------------------------
+function _t354_test_invalid_levels_fall_back() -> i32 {
+    println("a categorical flag on a column that is not level indices")
+    let mut failed: i32 = 0
+
+    let n: i32 = 8
+    let X: Matrix = matrix_new(n, 1)
+    let y: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        matrix_set(X, i, 0, (i as f32) * 0.5 - 1.0)
+        y[i] = (i % 2) as f32
+    }
+
+    let cat: ptr<i32> = _t354_all_categorical(1)
+    println("  expect one warning line below")
+    let cm: DecisionTreeClassifier = decision_tree_classifier_fit_categorical(X, y, 2, 3, 0, cat)
+    let root: ptr<TreeNode> = cm.nodes
+
+    if cm.n_nodes < 1 {
+        println("  FAIL: the fit produced no nodes")
+        failed = failed + 1
+    }
+    if root.cat_kind != 0 {
+        println("  FAIL: a fractional, negative column was fitted as categorical")
+        failed = failed + 1
+    }
+
+    if failed == 0 {
+        println("  OK: reported and fitted as a numeric feature")
+    }
+
+    decision_tree_classifier_free(cm)
+    free(cat as ptr<void>)
+    matrix_free(X)
+    array_free_f32(y)
+    return failed
+}
+
+# ---------------------------------------------------------------------------
+# 6. An all-zero categorical mask must reproduce the plain fit node for node.
+#    tree.flow is shared with RandomForest and the Bagging estimators, and the
+#    plain fit now routes through the categorical fit, so this is the guard
+#    that the routing changed nothing.
+# ---------------------------------------------------------------------------
+function _t354_test_empty_mask_is_the_plain_fit() -> i32 {
+    println("an all-numeric categorical mask reproduces the plain fit")
+    let mut failed: i32 = 0
+
+    # y is not a function of any single column, so the builder has to keep
+    # splitting and the comparison covers a tree with real depth rather than a
+    # root and two leaves.
+    let n: i32 = 90
+    let X: Matrix = matrix_new(n, 4)
+    let y: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let c0: i32 = (i * 17) % 29
+        let c1: i32 = (i * 13) % 31
+        matrix_set(X, i, 0, (c0 as f32) * 0.25)
+        matrix_set(X, i, 1, (c1 as f32) - 3.0)
+        matrix_set(X, i, 2, ((i * 7) % 37) as f32 * 0.5)
+        matrix_set(X, i, 3, ((i * 5) % 41) as f32)
+        y[i] = ((c0 + c1) % 3) as f32
+    }
+
+    let num: ptr<i32> = _t354_no_categorical(4)
+    let a: DecisionTreeClassifier = decision_tree_classifier_fit(X, y, 3, 6, 0)
+    let b: DecisionTreeClassifier = decision_tree_classifier_fit_categorical(X, y, 3, 6, 0, num)
+
+    if a.n_nodes != b.n_nodes {
+        print("  FAIL: node counts differ, ")
+        print(a.n_nodes)
+        print(" against ")
+        print(b.n_nodes)
+        println("")
+        failed = failed + 1
+    } else {
+        let mut diffs: i32 = 0
+        for k in 0 to a.n_nodes {
+            let na: ptr<TreeNode> = a.nodes + k
+            let nb: ptr<TreeNode> = b.nodes + k
+            if na.feature != nb.feature { diffs = diffs + 1 }
+            if na.threshold != nb.threshold { diffs = diffs + 1 }
+            if na.left != nb.left { diffs = diffs + 1 }
+            if na.right != nb.right { diffs = diffs + 1 }
+            if na.value != nb.value { diffs = diffs + 1 }
+            if na.n_samples != nb.n_samples { diffs = diffs + 1 }
+            if na.impurity != nb.impurity { diffs = diffs + 1 }
+            if na.cat_kind != nb.cat_kind { diffs = diffs + 1 }
+            if na.is_leaf != nb.is_leaf { diffs = diffs + 1 }
+        }
+        if diffs != 0 {
+            print("  FAIL: ")
+            print(diffs)
+            println(" field differences between the plain fit and the all-numeric categorical fit")
+            failed = failed + 1
+        }
+        # And nothing in a numeric fit may claim to be a categorical split.
+        let mut cat_nodes: i32 = 0
+        for k in 0 to a.n_nodes {
+            let na: ptr<TreeNode> = a.nodes + k
+            if na.cat_kind != 0 { cat_nodes = cat_nodes + 1 }
+        }
+        if cat_nodes != 0 {
+            print("  FAIL: ")
+            print(cat_nodes)
+            println(" nodes of a numeric fit are marked categorical")
+            failed = failed + 1
+        }
+    }
+
+    if failed == 0 {
+        print("  OK: ")
+        print(a.n_nodes)
+        println(" nodes identical field by field")
+    }
+
+    decision_tree_classifier_free(a)
+    decision_tree_classifier_free(b)
+    free(num as ptr<void>)
+    matrix_free(X)
+    array_free_f32(y)
+    return failed
+}
+
+# ---------------------------------------------------------------------------
+# 7. A mixed frame: one categorical column and one numeric column that is
+#    weaker. The categorical column has to win, and the numeric column has to
+#    still be usable in the children.
+# ---------------------------------------------------------------------------
+function _t354_test_mixed_columns() -> i32 {
+    println("a categorical column beside a numeric one")
+    let mut failed: i32 = 0
+
+    let n: i32 = 40
+    let X: Matrix = matrix_new(n, 2)
+    let y: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let lvl: i32 = i % 4
+        matrix_set(X, i, 0, (i as f32) * 0.1)
+        matrix_set(X, i, 1, lvl as f32)
+        y[i] = (lvl % 2) as f32
+    }
+
+    let cat: ptr<i32> = malloc(8) as ptr<i32>
+    cat[0] = 0
+    cat[1] = 1
+
+    let cm: DecisionTreeClassifier = decision_tree_classifier_fit_categorical(X, y, 2, 1, 0, cat)
+    let root: ptr<TreeNode> = cm.nodes
+    let pred: ptr<f32> = decision_tree_classifier_predict(cm, X)
+    let acc: f32 = _t354_accuracy(pred, y, n)
+
+    if root.feature != 1 {
+        print("  FAIL: root split on feature ")
+        print(root.feature)
+        println(", expected the categorical column 1")
+        failed = failed + 1
+    }
+    if root.cat_kind != 1 {
+        println("  FAIL: root is not a categorical split")
+        failed = failed + 1
+    }
+    if acc < 0.9999 {
+        print("  FAIL: mixed-frame accuracy ")
+        printf("%.6f", acc)
+        println(", expected 1.0")
+        failed = failed + 1
+    }
+
+    if failed == 0 {
+        println("  OK: the categorical column wins the root and the split is exact")
+    }
+
+    array_free_f32(pred)
+    decision_tree_classifier_free(cm)
+    free(cat as ptr<void>)
+    matrix_free(X)
+    array_free_f32(y)
+    return failed
+}
+
+function main() -> i32 {
+    println("Running categorical split tests (issue #354)...")
+    println("==============================================")
+    println("")
+
+    let mut failures: i32 = 0
+
+    failures = failures + _t354_test_subset_beats_threshold()
+    println("")
+    failures = failures + _t354_test_high_cardinality()
+    println("")
+    failures = failures + _t354_test_unseen_level()
+    println("")
+    failures = failures + _t354_test_regressor_subset()
+    println("")
+    failures = failures + _t354_test_invalid_levels_fall_back()
+    println("")
+    failures = failures + _t354_test_empty_mask_is_the_plain_fit()
+    println("")
+    failures = failures + _t354_test_mixed_columns()
+
+    println("")
+    if failures == 0 {
+        println("All categorical split tests passed!")
+        return 0
+    }
+    print("FAILED: ")
+    print(failures)
+    println(" checks")
+    return 1
+}

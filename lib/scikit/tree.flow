@@ -29,9 +29,23 @@ export const CRITERION_MAE: i32 = 3
 # the same tree on the same data produce different bytes. Nothing reads an
 # unwritten field, so prediction is unaffected, but it makes per-node learned
 # structure impossible to compare against sklearn.
-# sizeof(TreeNode) is 32 on arm64: eight 4-byte fields, with the bool padded
-# to 4. The stride below stays at the repo's generous 36 so the tail padding
-# is zeroed too, which no per-field write could reach.
+# sizeof(TreeNode) is 52 on arm64: thirteen 4-byte fields, with the bool
+# padded to 4. Every allocation of a node array in this repo passes a literal
+# byte count per element, so that literal is now 64, above the real size with
+# room to spare and with the tail padding zeroed too, which no per-field write
+# could reach. Two heap overflows have come from a literal that no longer
+# matched the struct (#419, #421); if you add a field here, grep the repo for
+# `ptr<TreeNode>` and raise every literal you find, including the reference
+# builders under tests/.
+#
+# Issue #354: cat_kind and cat_mask0..3 carry categorical splits.
+#   cat_kind = 0  numeric split, take the branch on `value <= threshold`.
+#   cat_kind = 1  categorical split on a subset of levels. cat_mask0..3 are a
+#                 128-bit set, bit c set meaning level c goes left. threshold
+#                 is unused and left at 0.0.
+# calloc zeroes cat_kind, so a node written by any builder that knows nothing
+# about categorical features is a numeric node, which is what every existing
+# builder produces.
 export struct TreeNode {
     feature: i32,
     threshold: f32,
@@ -40,8 +54,22 @@ export struct TreeNode {
     is_leaf: bool,
     value: f32,
     n_samples: i32,
-    impurity: f32
+    impurity: f32,
+    cat_kind: i32,
+    cat_mask0: u32,
+    cat_mask1: u32,
+    cat_mask2: u32,
+    cat_mask3: u32
 }
+
+# Largest number of levels a categorical feature may have. The left set is a
+# bitmask stored inline in the node, four 32-bit words wide, so raising this
+# means widening TreeNode and raising every allocation literal with it.
+#
+# This constant is not visible through an import (see AGENTS.md), so the two
+# places outside this file that need it, the fit-time validator's message and
+# the tests, spell out 128.
+export const TREE_CAT_MAX_LEVELS: i32 = 128
 
 export struct DecisionTreeClassifier {
     nodes: ptr<TreeNode>,
@@ -245,7 +273,148 @@ function _tree_gini_present(counts: ptr<i32>, present: ptr<i32>, n_present: i32,
     return 1.0 - sum_sq
 }
 
+# Which way one sample goes at one internal node.
+#
+# For a numeric node this is the same `xv <= threshold` the builders have
+# always used, reading the same f32 threshold the builder wrote, so a tree
+# with no categorical split routes every row exactly as before.
+#
+# For a categorical node the level index is the feature value truncated to an
+# integer, and the sample goes left when that level's bit is set.
+#
+# Unseen levels go right. A level that was absent from the training data has
+# no bit set in any node, so it goes right at every node it reaches, and so
+# does a value outside 0..127 or one that is not a whole number. This is a
+# defined direction rather than an error: predict has to return something for
+# every row, and the alternatives used elsewhere (send the row to the child
+# with more training samples, or split it proportionally) need per-node counts
+# the node does not carry. Callers who need a distinct answer for an unseen
+# level should map it to a reserved level at fit time.
+function _tree_split_goes_left(node: ptr<TreeNode>, xv: f32) -> bool {
+    if node.cat_kind == 0 {
+        return xv <= node.threshold
+    }
+    let c: i32 = xv as i32
+    if (c as f32) != xv { return false }
+    if c < 0 || c >= 128 { return false }
+    let widx: i32 = c / 32
+    let bit: i32 = c - widx * 32
+    let mut w: u32 = node.cat_mask0
+    if widx == 1 { w = node.cat_mask1 }
+    if widx == 2 { w = node.cat_mask2 }
+    if widx == 3 { w = node.cat_mask3 }
+    let one: u32 = 1 as u32
+    let probe: u32 = one << (bit as u32)
+    let zero: u32 = 0 as u32
+    return (w & probe) != zero
+}
+
+# Turn the winning prefix of the level ordering into the node's left-set mask.
+# cats[0..n_left_cats) are the levels that go left, as level indices.
+function _tree_write_cat_mask(nodes: ptr<TreeNode>, node_idx: i32, cats: ptr<i32>, n_left_cats: i32) -> void {
+    let zero: u32 = 0 as u32
+    let one: u32 = 1 as u32
+    let mut w0: u32 = zero
+    let mut w1: u32 = zero
+    let mut w2: u32 = zero
+    let mut w3: u32 = zero
+    for j in 0 to n_left_cats {
+        let c: i32 = cats[j]
+        let widx: i32 = c / 32
+        let bit: i32 = c - widx * 32
+        let probe: u32 = one << (bit as u32)
+        if widx == 0 { w0 = w0 | probe }
+        if widx == 1 { w1 = w1 | probe }
+        if widx == 2 { w2 = w2 | probe }
+        if widx == 3 { w3 = w3 | probe }
+    }
+    nodes[node_idx].cat_kind = 1
+    nodes[node_idx].cat_mask0 = w0
+    nodes[node_idx].cat_mask1 = w1
+    nodes[node_idx].cat_mask2 = w2
+    nodes[node_idx].cat_mask3 = w3
+}
+
+# Validate the caller's categorical mask against the data and turn it into one
+# array the builders can read: entry f is 0 when feature f is to be fitted as
+# an ordinary numeric feature, and otherwise 1 + the largest level index in
+# column f.
+#
+# A feature marked categorical whose column is not whole numbers in
+# 0..127 is reported once and fitted numerically, which is the behaviour the
+# caller had before asking for a categorical fit. Failing the whole fit would
+# be worse: the column is still a usable numeric column, and a tree that
+# refuses to build gives the caller nothing to inspect.
+function _tree_cat_cardinalities(X: Matrix, categorical: ptr<i32>) -> ptr<i32> {
+    let cols: i32 = X.cols
+    let rows: i32 = X.rows
+    let xd: ptr<f32> = X.data
+    let card: ptr<i32> = malloc((cols as i64) * 4) as ptr<i32>
+    for f in 0 to cols { card[f] = 0 }
+    for f in 0 to cols {
+        if categorical[f] == 0 { continue }
+        let mut ok: bool = true
+        let mut hi: i32 = 0
+        for i in 0 to rows {
+            let v: f32 = xd[i * cols + f]
+            let c: i32 = v as i32
+            if (c as f32) != v { ok = false }
+            if c < 0 || c >= 128 { ok = false }
+            if ok && c > hi { hi = c }
+        }
+        if ok {
+            card[f] = hi + 1
+        } else {
+            print("[flow-scikit] WARNING: feature ")
+            print(f)
+            println(" is marked categorical but its column is not whole numbers in 0..127; fitting it as a numeric feature")
+        }
+    }
+    return card
+}
+
+# Largest level count over the categorical features, 0 when there are none.
+function _tree_cat_max_card(card: ptr<i32>, cols: i32) -> i32 {
+    let mut m: i32 = 0
+    for f in 0 to cols {
+        if card[f] > m { m = card[f] }
+    }
+    return m
+}
+
 export function decision_tree_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, max_depth: i32, criterion: i32) -> DecisionTreeClassifier {
+    # Every feature numeric: calloc gives the all-zero mask the categorical
+    # fit reads as "no categorical features", and with max_card 0 the builder
+    # never enters the categorical branch, so this is the old code path.
+    let none: ptr<i32> = calloc(X.cols as i64, 4) as ptr<i32>
+    let model: DecisionTreeClassifier = decision_tree_classifier_fit_categorical(X, y, n_classes, max_depth, criterion, none)
+    free(none as ptr<void>)
+    return model
+}
+
+# Fit a classification tree where the features flagged in `categorical` are
+# split on a subset of their levels instead of on a threshold. `categorical`
+# is X.cols entries, non-zero meaning categorical, and a categorical column
+# must hold whole numbers in 0..127 which are read as level indices.
+#
+# The subset search is Breiman's, not an enumeration. At each node the levels
+# present there are ordered by the mean class index of their samples and only
+# the k-1 prefixes of that ordering are scored, which is O(k log k) instead of
+# O(2^(k-1)). For a two-class problem the mean class index is the proportion
+# of the higher class and the theorem in CART section 4.2 says the best subset
+# split is one of those prefixes, so the search is exact. For more than two
+# classes no such theorem holds and the ordering is a heuristic; it is the
+# same one LightGBM and H2O use per class, and it is still strictly better
+# than the label encoding a caller would otherwise be forced into, because the
+# ordering is recomputed from the response at every node rather than fixed
+# once by the encoder.
+#
+# Only the plain classifier and the plain regressor accept a categorical mask.
+# RandomForest, the Bagging estimators and the ExtraTree builders go through
+# their own builders, which never set cat_kind, and several of them walk nodes
+# inline rather than through predict_one. They are unchanged and still numeric
+# only.
+export function decision_tree_classifier_fit_categorical(X: Matrix, y: ptr<f32>, n_classes: i32, max_depth: i32, criterion: i32, categorical: ptr<i32>) -> DecisionTreeClassifier {
     # Issue #398: this used to append at classes[n_found] with no check against
     # n_classes, which wrote past the allocation whenever y carried more
     # distinct labels than the caller declared.
@@ -253,7 +422,7 @@ export function decision_tree_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: 
     let classes: ptr<f32> = found_classes.values
 
     let max_nodes: i32 = 2 * X.rows + 1
-    let nodes: ptr<TreeNode> = calloc(max_nodes as i64, 36) as ptr<TreeNode>
+    let nodes: ptr<TreeNode> = calloc(max_nodes as i64, 64) as ptr<TreeNode>
     let n_nodes_ptr: ptr<i32> = malloc(4) as ptr<i32>
     n_nodes_ptr[0] = 0
 
@@ -297,11 +466,28 @@ export function decision_tree_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: 
     # Scratch marking each row's side of the current split, indexed by row.
     let side: ptr<i32> = malloc((n_rows as i64) * 4) as ptr<i32>
 
-    let final_n_nodes: i32 = _build_classifier_tree(nodes, n_nodes_ptr, X, y, order, n_rows, 0, max_depth, criterion, classes, n_classes, class_of_row, side)
+    # Categorical bookkeeping. cat_card[f] is 0 for a numeric feature, so with
+    # no categorical features max_card is 0, the builder's categorical branch
+    # is unreachable, and these two allocations are a fixed 16 bytes each.
+    #
+    # The scratch is allocated once here rather than per node so the numeric
+    # path picks up no extra allocation at all. Nothing in it survives across
+    # the recursive calls: a node fills it, picks its split and partitions
+    # before it descends.
+    let cat_card: ptr<i32> = _tree_cat_cardinalities(X, categorical)
+    let max_card: i32 = _tree_cat_max_card(cat_card, x_cols)
+    let ccap: i64 = max_card as i64
+    let cat_iscratch: ptr<i32> = malloc((ccap * 4 + ccap * (n_classes as i64)) * 4 + 16) as ptr<i32>
+    let cat_mean: ptr<f32> = array_new_f32(max_card + 1)
+
+    let final_n_nodes: i32 = _build_classifier_tree(nodes, n_nodes_ptr, X, y, order, n_rows, 0, max_depth, criterion, classes, n_classes, class_of_row, side, cat_card, max_card, cat_iscratch, cat_mean)
 
     free(order as ptr<void>)
     free(side as ptr<void>)
     free(class_of_row as ptr<void>)
+    free(cat_card as ptr<void>)
+    free(cat_iscratch as ptr<void>)
+    array_free_f32(cat_mean)
     let n_nodes: i32 = n_nodes_ptr[0]
     free(n_nodes_ptr as ptr<void>)
 
@@ -349,7 +535,11 @@ function _build_classifier_tree(
     classes: ptr<f32>,
     n_classes: i32,
     class_of_row: ptr<i32>,
-    side: ptr<i32>
+    side: ptr<i32>,
+    cat_card: ptr<i32>,
+    max_card: i32,
+    cat_iscratch: ptr<i32>,
+    cat_mean: ptr<f32>
 ) -> i32 {
     let node_idx: i32 = n_nodes[0]
     n_nodes[0] = n_nodes[0] + 1
@@ -374,9 +564,20 @@ function _build_classifier_tree(
     let mut best_feature: i32 = -1
     let mut best_threshold: f32 = 0.0
     let mut best_impurity: f32 = 9999999999.0
+    let mut best_is_cat: bool = false
+    let mut best_n_left_cats: i32 = 0
 
     let x_data: ptr<f32> = X.data
     let x_cols: i32 = X.cols
+
+    # Views into the one categorical scratch block the fit allocated. All four
+    # are empty when max_card is 0, and nothing below reads them unless some
+    # cat_card[f] is positive, which cannot happen when max_card is 0.
+    let cat_count: ptr<i32> = cat_iscratch
+    let cat_ci_sum: ptr<i32> = cat_iscratch + max_card
+    let cat_ids: ptr<i32> = cat_iscratch + 2 * max_card
+    let best_cats: ptr<i32> = cat_iscratch + 3 * max_card
+    let cat_class: ptr<i32> = cat_iscratch + 4 * max_card
 
     # Node class histogram, over any block since all blocks hold the same rows.
     let total_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
@@ -407,6 +608,85 @@ function _build_classifier_tree(
     let right_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
 
     for f in 0 to x_cols {
+        let card: i32 = cat_card[f]
+        if card > 0 {
+            # Breiman's subset search on a categorical feature.
+            #
+            # Bucket the node's rows by level, keeping each level's class
+            # histogram and the sum of the class indices of its samples.
+            for lv in 0 to card {
+                cat_count[lv] = 0
+                cat_ci_sum[lv] = 0
+            }
+            let cclen: i32 = card * n_classes
+            for k in 0 to cclen { cat_class[k] = 0 }
+
+            let cbase: i32 = f * n_indices
+            for i in 0 to n_indices {
+                let row: i32 = order[cbase + i]
+                let lv: i32 = x_data[row * x_cols + f] as i32
+                let cls: i32 = class_of_row[row]
+                cat_count[lv] = cat_count[lv] + 1
+                cat_ci_sum[lv] = cat_ci_sum[lv] + cls
+                cat_class[lv * n_classes + cls] = cat_class[lv * n_classes + cls] + 1
+            }
+
+            # Order the levels present here by their mean class index. Only
+            # the k-1 prefixes of that ordering are scored, so a 40-level
+            # column costs 39 candidates rather than 2^39.
+            let mut n_cats: i32 = 0
+            for lv in 0 to card {
+                if cat_count[lv] > 0 {
+                    cat_ids[n_cats] = lv
+                    cat_mean[n_cats] = (cat_ci_sum[lv] as f32) / (cat_count[lv] as f32)
+                    n_cats = n_cats + 1
+                }
+            }
+            if n_cats < 2 { continue }
+            _sort_pairs(cat_mean, cat_ids, n_cats)
+
+            for pi in 0 to n_present {
+                let c: i32 = present[pi]
+                left_counts[c] = 0
+                right_counts[c] = total_counts[c]
+            }
+
+            let mut n_left: i32 = 0
+            for j in 0 to n_cats - 1 {
+                let lv: i32 = cat_ids[j]
+                for pi in 0 to n_present {
+                    let c: i32 = present[pi]
+                    let hit: i32 = cat_class[lv * n_classes + c]
+                    left_counts[c] = left_counts[c] + hit
+                    right_counts[c] = right_counts[c] - hit
+                }
+                n_left = n_left + cat_count[lv]
+                let n_right: i32 = n_indices - n_left
+                if n_left < 1 || n_right < 1 { continue }
+
+                let gini_left: f32 = _tree_gini_present(left_counts, present, n_present, n_left)
+                let gini_right: f32 = _tree_gini_present(right_counts, present, n_present, n_right)
+                let nf: f32 = n_indices as f32
+                let weighted: f32 = (n_left as f32) / nf * gini_left + (n_right as f32) / nf * gini_right
+
+                # The same strict comparison as the numeric scan below, run
+                # from the same feature loop in the same index order, so the
+                # tie-break rule pinned by #204 and #426 is unchanged: the
+                # lowest feature index wins among equals whether the winner is
+                # numeric or categorical, and within one categorical feature
+                # the shortest left set wins.
+                if weighted < best_impurity {
+                    best_impurity = weighted
+                    best_feature = f
+                    best_threshold = 0.0
+                    best_is_cat = true
+                    best_n_left_cats = j + 1
+                    for k in 0 to j + 1 { best_cats[k] = cat_ids[k] }
+                }
+            }
+            continue
+        }
+
         # Gather this feature's values and classes in the order block f already
         # holds, which is ascending by construction.
         let base: i32 = f * n_indices
@@ -478,6 +758,7 @@ function _build_classifier_tree(
                 best_impurity = weighted
                 best_feature = f
                 best_threshold = (sort_values[i] + sort_values[i + 1]) / 2.0
+                best_is_cat = false
             }
         }
     }
@@ -508,13 +789,30 @@ function _build_classifier_tree(
     # order. A child block stays ascending because it keeps the parent's
     # relative order.
     let mut left_n: i32 = 0
-    for i in 0 to n_indices {
-        let row: i32 = order[i]
-        if x_data[row * x_cols + best_feature] <= best_threshold {
-            side[row] = 0
-            left_n = left_n + 1
-        } else {
-            side[row] = 1
+    if best_is_cat {
+        # Commit the left set first so the routing here is the identical
+        # predicate predict will use on the same node, rather than a second
+        # copy of it that could drift.
+        _tree_write_cat_mask(nodes, node_idx, best_cats, best_n_left_cats)
+        let split_node: ptr<TreeNode> = nodes + node_idx
+        for i in 0 to n_indices {
+            let row: i32 = order[i]
+            if _tree_split_goes_left(split_node, x_data[row * x_cols + best_feature]) {
+                side[row] = 0
+                left_n = left_n + 1
+            } else {
+                side[row] = 1
+            }
+        }
+    } else {
+        for i in 0 to n_indices {
+            let row: i32 = order[i]
+            if x_data[row * x_cols + best_feature] <= best_threshold {
+                side[row] = 0
+                left_n = left_n + 1
+            } else {
+                side[row] = 1
+            }
         }
     }
     let right_n: i32 = n_indices - left_n
@@ -546,8 +844,8 @@ function _build_classifier_tree(
     nodes[node_idx].n_samples = n_indices
     nodes[node_idx].impurity = parent_impurity
 
-    let left_idx: i32 = _build_classifier_tree(nodes, n_nodes, X, y, left_order, left_n, depth + 1, max_depth, criterion, classes, n_classes, class_of_row, side)
-    let right_idx: i32 = _build_classifier_tree(nodes, n_nodes, X, y, right_order, right_n, depth + 1, max_depth, criterion, classes, n_classes, class_of_row, side)
+    let left_idx: i32 = _build_classifier_tree(nodes, n_nodes, X, y, left_order, left_n, depth + 1, max_depth, criterion, classes, n_classes, class_of_row, side, cat_card, max_card, cat_iscratch, cat_mean)
+    let right_idx: i32 = _build_classifier_tree(nodes, n_nodes, X, y, right_order, right_n, depth + 1, max_depth, criterion, classes, n_classes, class_of_row, side, cat_card, max_card, cat_iscratch, cat_mean)
 
     nodes[node_idx].left = left_idx
     nodes[node_idx].right = right_idx
@@ -793,7 +1091,7 @@ export function decision_tree_classifier_fit_rf(X: Matrix, y: ptr<f32>, n_classe
     let classes: ptr<f32> = found_classes.values
 
     let max_nodes: i32 = 2 * X.rows + 1
-    let nodes: ptr<TreeNode> = calloc(max_nodes as i64, 36) as ptr<TreeNode>
+    let nodes: ptr<TreeNode> = calloc(max_nodes as i64, 64) as ptr<TreeNode>
     let n_nodes_ptr: ptr<i32> = malloc(4) as ptr<i32>
     n_nodes_ptr[0] = 0
 
@@ -821,7 +1119,7 @@ export function decision_tree_classifier_predict_one(model: DecisionTreeClassifi
     let mut node_idx: i32 = 0
     while not model.nodes[node_idx].is_leaf {
         let node: ptr<TreeNode> = model.nodes + node_idx
-        if x[node.feature] <= node.threshold {
+        if _tree_split_goes_left(node, x[node.feature]) {
             node_idx = node.left
         } else {
             node_idx = node.right
@@ -886,8 +1184,24 @@ export function decision_tree_classifier_feature_importances(model: DecisionTree
 }
 
 export function decision_tree_regressor_fit(X: Matrix, y: ptr<f32>, max_depth: i32, criterion: i32) -> DecisionTreeRegressor {
+    let none: ptr<i32> = calloc(X.cols as i64, 4) as ptr<i32>
+    let model: DecisionTreeRegressor = decision_tree_regressor_fit_categorical(X, y, max_depth, criterion, none)
+    free(none as ptr<void>)
+    return model
+}
+
+# Fit a regression tree where the features flagged in `categorical` are split
+# on a subset of their levels. Same contract as
+# decision_tree_classifier_fit_categorical: X.cols entries, non-zero meaning
+# categorical, levels whole numbers in 0..127.
+#
+# Here Breiman's result is exact regardless of the number of levels. Ordering
+# the levels by their mean response and scoring only the k-1 prefixes finds
+# the subset split with the lowest weighted MSE, which is the theorem in CART
+# section 9.4.
+export function decision_tree_regressor_fit_categorical(X: Matrix, y: ptr<f32>, max_depth: i32, criterion: i32, categorical: ptr<i32>) -> DecisionTreeRegressor {
     let max_nodes: i32 = 2 * X.rows + 1
-    let nodes: ptr<TreeNode> = calloc(max_nodes as i64, 36) as ptr<TreeNode>
+    let nodes: ptr<TreeNode> = calloc(max_nodes as i64, 64) as ptr<TreeNode>
     let n_nodes_ptr: ptr<i32> = malloc(4) as ptr<i32>
     n_nodes_ptr[0] = 0
 
@@ -896,9 +1210,20 @@ export function decision_tree_regressor_fit(X: Matrix, y: ptr<f32>, max_depth: i
         indices[i] = i
     }
 
-    let final_n_nodes: i32 = _build_regressor_tree(nodes, n_nodes_ptr, X, y, indices, X.rows, 0, max_depth, criterion)
+    # As in the classifier: with no categorical feature max_card is 0, the
+    # builder's categorical branch is unreachable and these are 16-byte stubs.
+    let cat_card: ptr<i32> = _tree_cat_cardinalities(X, categorical)
+    let max_card: i32 = _tree_cat_max_card(cat_card, X.cols)
+    let rccap: i64 = max_card as i64
+    let cat_iscratch: ptr<i32> = malloc(rccap * 12 + 16) as ptr<i32>
+    let cat_fscratch: ptr<f32> = array_new_f32(3 * max_card + 4)
+
+    let final_n_nodes: i32 = _build_regressor_tree(nodes, n_nodes_ptr, X, y, indices, X.rows, 0, max_depth, criterion, cat_card, max_card, cat_iscratch, cat_fscratch)
 
     free(indices as ptr<void>)
+    free(cat_card as ptr<void>)
+    free(cat_iscratch as ptr<void>)
+    array_free_f32(cat_fscratch)
     let n_nodes: i32 = n_nodes_ptr[0]
     free(n_nodes_ptr as ptr<void>)
 
@@ -920,7 +1245,11 @@ function _build_regressor_tree(
     n_indices: i32,
     depth: i32,
     max_depth: i32,
-    criterion: i32
+    criterion: i32,
+    cat_card: ptr<i32>,
+    max_card: i32,
+    cat_iscratch: ptr<i32>,
+    cat_fscratch: ptr<f32>
 ) -> i32 {
     let node_idx: i32 = n_nodes[0]
     n_nodes[0] = n_nodes[0] + 1
@@ -969,11 +1298,87 @@ function _build_regressor_tree(
     let mut best_feature: i32 = -1
     let mut best_threshold: f32 = 0.0
     let mut best_impurity: f32 = 9999999999.0
+    let mut best_is_cat: bool = false
+    let mut best_n_left_cats: i32 = 0
+
+    # Views into the one categorical scratch block the fit allocated. All
+    # empty when max_card is 0, and unreachable in that case.
+    let cat_count: ptr<i32> = cat_iscratch
+    let cat_ids: ptr<i32> = cat_iscratch + max_card
+    let best_cats: ptr<i32> = cat_iscratch + 2 * max_card
+    let cat_sum: ptr<f32> = cat_fscratch
+    let cat_sum_sq: ptr<f32> = cat_fscratch + max_card
+    let cat_mean: ptr<f32> = cat_fscratch + 2 * max_card
 
     let sort_values: ptr<f32> = array_new_f32(n_indices)
     let sort_y: ptr<f32> = array_new_f32(n_indices)
 
     for f in 0 to x_cols {
+        let card: i32 = cat_card[f]
+        if card > 0 {
+            # Breiman's subset search, exact for MSE. Bucket by level, order
+            # the levels present here by their mean response, then score the
+            # k-1 prefixes of that ordering.
+            for lv in 0 to card {
+                cat_count[lv] = 0
+                cat_sum[lv] = 0.0
+                cat_sum_sq[lv] = 0.0
+            }
+            for i in 0 to n_indices {
+                let lv: i32 = x_data[row_base[i] + f] as i32
+                let yv: f32 = y_vals[i]
+                cat_count[lv] = cat_count[lv] + 1
+                cat_sum[lv] = cat_sum[lv] + yv
+                cat_sum_sq[lv] = cat_sum_sq[lv] + yv * yv
+            }
+
+            let mut n_cats: i32 = 0
+            for lv in 0 to card {
+                if cat_count[lv] > 0 {
+                    cat_ids[n_cats] = lv
+                    cat_mean[n_cats] = cat_sum[lv] / (cat_count[lv] as f32)
+                    n_cats = n_cats + 1
+                }
+            }
+            if n_cats < 2 { continue }
+            _sort_pairs(cat_mean, cat_ids, n_cats)
+
+            let mut left_sum: f32 = 0.0
+            let mut left_sum_sq: f32 = 0.0
+            let mut n_left: i32 = 0
+            for j in 0 to n_cats - 1 {
+                let lv: i32 = cat_ids[j]
+                left_sum = left_sum + cat_sum[lv]
+                left_sum_sq = left_sum_sq + cat_sum_sq[lv]
+                n_left = n_left + cat_count[lv]
+                let n_right: i32 = n_indices - n_left
+                if n_left < 1 || n_right < 1 { continue }
+
+                let right_sum: f32 = total_sum - left_sum
+                let right_sum_sq: f32 = total_sum_sq - left_sum_sq
+
+                let nl: f32 = n_left as f32
+                let nr: f32 = n_right as f32
+                let left_mean: f32 = left_sum / nl
+                let right_mean: f32 = right_sum / nr
+                let left_mse: f32 = left_sum_sq / nl - left_mean * left_mean
+                let right_mse: f32 = right_sum_sq / nr - right_mean * right_mean
+
+                let nf: f32 = n_indices as f32
+                let weighted: f32 = nl / nf * left_mse + nr / nf * right_mse
+
+                if weighted < best_impurity {
+                    best_impurity = weighted
+                    best_feature = f
+                    best_threshold = 0.0
+                    best_is_cat = true
+                    best_n_left_cats = j + 1
+                    for k in 0 to j + 1 { best_cats[k] = cat_ids[k] }
+                }
+            }
+            continue
+        }
+
         # Gather and check for a constant column in one pass. If every sample
         # shares a value, the sweep below hits sort_values[i] == sort_values[i+1]
         # at every position and evaluates no candidate at all, and left_sum is
@@ -1027,6 +1432,7 @@ function _build_regressor_tree(
                 best_impurity = weighted
                 best_feature = f
                 best_threshold = (sort_values[i] + sort_values[i + 1]) / 2.0
+                best_is_cat = false
             }
         }
     }
@@ -1053,13 +1459,27 @@ function _build_regressor_tree(
     let mut left_n: i32 = 0
     let mut right_n: i32 = 0
 
-    for i in 0 to n_indices {
-        if x_data[row_base[i] + best_feature] <= best_threshold {
-            left_indices[left_n] = indices[i]
-            left_n = left_n + 1
-        } else {
-            right_indices[right_n] = indices[i]
-            right_n = right_n + 1
+    if best_is_cat {
+        _tree_write_cat_mask(nodes, node_idx, best_cats, best_n_left_cats)
+        let split_node: ptr<TreeNode> = nodes + node_idx
+        for i in 0 to n_indices {
+            if _tree_split_goes_left(split_node, x_data[row_base[i] + best_feature]) {
+                left_indices[left_n] = indices[i]
+                left_n = left_n + 1
+            } else {
+                right_indices[right_n] = indices[i]
+                right_n = right_n + 1
+            }
+        }
+    } else {
+        for i in 0 to n_indices {
+            if x_data[row_base[i] + best_feature] <= best_threshold {
+                left_indices[left_n] = indices[i]
+                left_n = left_n + 1
+            } else {
+                right_indices[right_n] = indices[i]
+                right_n = right_n + 1
+            }
         }
     }
 
@@ -1071,8 +1491,8 @@ function _build_regressor_tree(
     nodes[node_idx].n_samples = n_indices
     nodes[node_idx].impurity = parent_impurity
 
-    let left_idx: i32 = _build_regressor_tree(nodes, n_nodes, X, y, left_indices, left_n, depth + 1, max_depth, criterion)
-    let right_idx: i32 = _build_regressor_tree(nodes, n_nodes, X, y, right_indices, right_n, depth + 1, max_depth, criterion)
+    let left_idx: i32 = _build_regressor_tree(nodes, n_nodes, X, y, left_indices, left_n, depth + 1, max_depth, criterion, cat_card, max_card, cat_iscratch, cat_fscratch)
+    let right_idx: i32 = _build_regressor_tree(nodes, n_nodes, X, y, right_indices, right_n, depth + 1, max_depth, criterion, cat_card, max_card, cat_iscratch, cat_fscratch)
 
     nodes[node_idx].left = left_idx
     nodes[node_idx].right = right_idx
@@ -1087,7 +1507,7 @@ export function decision_tree_regressor_predict_one(model: DecisionTreeRegressor
     let mut node_idx: i32 = 0
     while not model.nodes[node_idx].is_leaf {
         let node: ptr<TreeNode> = model.nodes + node_idx
-        if x[node.feature] <= node.threshold {
+        if _tree_split_goes_left(node, x[node.feature]) {
             node_idx = node.left
         } else {
             node_idx = node.right
@@ -1164,7 +1584,7 @@ export struct ExtraTreeClassifier {
 
 export function extra_tree_classifier_fit(X: Matrix, y: ptr<f32>, n_samples: i32, n_features: i32, n_classes: i32, max_depth: i32, seed: i32) -> ExtraTreeClassifier {
     srand(seed)
-    let nodes: ptr<TreeNode> = calloc(1024 as i64, 36) as ptr<TreeNode>
+    let nodes: ptr<TreeNode> = calloc(1024 as i64, 64) as ptr<TreeNode>
     let mut n_nodes: i32 = 0
 
     n_nodes = _extra_tree_clf_build(nodes, n_nodes, X, y, n_samples, n_features, n_classes, 0, max_depth, seed)
@@ -1315,7 +1735,7 @@ export struct ExtraTreeRegressor {
 
 export function extra_tree_regressor_fit(X: Matrix, y: ptr<f32>, n_samples: i32, n_features: i32, max_depth: i32, seed: i32) -> ExtraTreeRegressor {
     srand(seed)
-    let nodes: ptr<TreeNode> = calloc(1024 as i64, 36) as ptr<TreeNode>
+    let nodes: ptr<TreeNode> = calloc(1024 as i64, 64) as ptr<TreeNode>
     let mut n_nodes: i32 = 0
 
     n_nodes = _extra_tree_reg_build(nodes, n_nodes, X, y, n_samples, n_features, 0, max_depth, seed)
