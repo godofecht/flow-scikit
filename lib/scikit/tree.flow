@@ -66,9 +66,10 @@ export struct TreeNode {
 # bitmask stored inline in the node, four 32-bit words wide, so raising this
 # means widening TreeNode and raising every allocation literal with it.
 #
-# This constant is not visible through an import (see AGENTS.md), so the two
-# places outside this file that need it, the fit-time validator's message and
-# the tests, spell out 128.
+# An exported const is not visible through an import here (see AGENTS.md), so
+# this names the cap for a reader rather than being referenced: the range
+# check, the validator's message and the tests all spell out 128. Change all
+# four together.
 export const TREE_CAT_MAX_LEVELS: i32 = 128
 
 export struct DecisionTreeClassifier {
@@ -468,7 +469,7 @@ export function decision_tree_classifier_fit_categorical(X: Matrix, y: ptr<f32>,
 
     # Categorical bookkeeping. cat_card[f] is 0 for a numeric feature, so with
     # no categorical features max_card is 0, the builder's categorical branch
-    # is unreachable, and these two allocations are a fixed 16 bytes each.
+    # is unreachable, and these two allocations are 16 bytes and one float.
     #
     # The scratch is allocated once here rather than per node so the numeric
     # path picks up no extra allocation at all. Nothing in it survives across
@@ -570,7 +571,7 @@ function _build_classifier_tree(
     let x_data: ptr<f32> = X.data
     let x_cols: i32 = X.cols
 
-    # Views into the one categorical scratch block the fit allocated. All four
+    # Views into the one categorical scratch block the fit allocated. All five
     # are empty when max_card is 0, and nothing below reads them unless some
     # cat_card[f] is positive, which cannot happen when max_card is 0.
     let cat_count: ptr<i32> = cat_iscratch
