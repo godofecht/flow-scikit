@@ -495,11 +495,309 @@ export struct LogisticRegression {
     fitted: bool
 }
 
-# Fits one binary logistic model per class, one-vs-rest.
+# Issue #433: turns one row of logits into softmax probabilities in place.
 #
-# The objective for each subproblem is the MEAN log loss over the m training
-# samples plus 0.5 * alpha * ||w||^2, with the intercept left unpenalized. To
-# match scikit-learn's C on the same data, build the penalty with
+# The row maximum is subtracted before exponentiating. Raw logits pass 300
+# whenever the gradient at the origin is small enough that LBFGS takes a large
+# first step, exp(300) overflows float32 to inf, inf / inf is NaN, and every
+# coefficient downstream of it becomes NaN. Subtracting the maximum leaves the
+# largest exponent at exactly 1.0 and cannot overflow for any finite input.
+# tests/test_multinomial_logistic.flow pins a fixture that reaches that range.
+#
+# The exp() call lives here rather than at the call site because the transpiler
+# miscompiles exp() inside a nested while loop (compiler bug #421). The name
+# carries the module and issue number because non-exported functions sharing a
+# name across modules collide in the generated C (compiler bug #465).
+function lin433_softmax_row(row: ptr<f32>, nc: i32) -> void {
+    if nc <= 0 { return }
+    let mut max_val: f32 = row[0]
+    for c in 1 to nc {
+        if row[c] > max_val { max_val = row[c] }
+    }
+    let mut sum: f32 = 0.0
+    for c in 0 to nc {
+        let e: f32 = exp((row[c] - max_val) as f64) as f32
+        row[c] = e
+        sum = sum + e
+    }
+    if sum > 0.0 {
+        let inv: f32 = 1.0 / sum
+        for c in 0 to nc {
+            row[c] = row[c] * inv
+        }
+    }
+}
+
+# Issue #433: multinomial (softmax) logistic regression, fitted jointly over all
+# classes, which is what scikit-learn's LogisticRegression does for a multiclass
+# target.
+#
+# The objective is the MEAN cross-entropy of the softmax over the m training
+# samples plus 0.5 * alpha * ||W||^2, summed over every class weight row, with
+# the intercepts left unpenalized. That is the same convention the binary path
+# uses, so penalty_l2_from_c(C, m) maps scikit-learn's C onto it unchanged
+# (issue #408).
+#
+# One-vs-rest fits K independent binary models and combines them afterwards. It
+# optimises a different objective and lands on different coefficients. On iris
+# at C=1.0 the difference was one test sample in thirty.
+#
+# Parameters are the stacked augmented vector theta, nc blocks of d = n + 1
+# entries each, with the intercept last inside each block. Solved with the same
+# LBFGS as the binary path: memory 10, no line search, at most 100 iterations.
+#
+# Returns weights in the same nc x n row-major layout the caller expects, so
+# logistic_predict and logistic_decide need no change: argmax over the softmax
+# is argmax over the linear scores.
+function lin433_multinomial_fit(X: Matrix, y: ptr<f32>, classes: ptr<f32>, nc: i32, epochs: i32, penalty: Penalty) -> LogisticRegression {
+    let n: i32 = X.cols
+    let m: i32 = X.rows
+    let d: i32 = n + 1
+    let dim: i32 = nc * d
+
+    let all_weights: ptr<f32> = array_new_f32(nc * n)
+    let all_biases: ptr<f32> = array_new_f32(nc)
+    for i in 0 to nc * n { all_weights[i] = 0.0 }
+    for i in 0 to nc { all_biases[i] = 0.0 }
+
+    # X_aug = [X | 1], row-major m x d, so the intercept is just another weight.
+    let X_aug: ptr<f32> = malloc((m as i64) * (d as i64) * 4) as ptr<f32>
+    let x_data: ptr<f32> = X.data
+    let x_stride: i32 = X.cols
+    for i in 0 to m {
+        let src: i32 = i * x_stride
+        let dst: i32 = i * d
+        for j in 0 to n {
+            X_aug[dst + j] = x_data[src + j]
+        }
+        X_aug[dst + n] = 1.0
+    }
+
+    # Class index of each sample, resolved once rather than per iteration.
+    let tgt: ptr<i32> = malloc((m as i64) * 4) as ptr<i32>
+    for i in 0 to m {
+        tgt[i] = 0
+        for c in 0 to nc {
+            if classes[c] == y[i] { tgt[i] = c }
+        }
+    }
+
+    let theta: ptr<f32> = array_new_f32(dim)
+    let grad: ptr<f32> = array_new_f32(dim)
+    let grad_prev: ptr<f32> = array_new_f32(dim)
+    let theta_prev: ptr<f32> = array_new_f32(dim)
+    let direction: ptr<f32> = array_new_f32(dim)
+    let q: ptr<f32> = array_new_f32(dim)
+    let r_lb: ptr<f32> = array_new_f32(dim)
+    # Z holds the m x nc logits, then the softmax probabilities, then the
+    # residual p - t, all in the same buffer.
+    let Z: ptr<f32> = malloc((m as i64) * (nc as i64) * 4) as ptr<f32>
+    let col: ptr<f32> = array_new_f32(m)
+
+    let mem: i32 = 10
+    let s_hist: ptr<f32> = malloc((mem as i64) * (dim as i64) * 4) as ptr<f32>
+    let y_hist: ptr<f32> = malloc((mem as i64) * (dim as i64) * 4) as ptr<f32>
+    let rho_hist: ptr<f32> = array_new_f32(mem)
+    let alpha_lb: ptr<f32> = array_new_f32(mem)
+
+    let l2_coeff: f32 = 0.0
+    if penalty.kind == PENALTY_L2 || penalty.kind == PENALTY_ELASTICNET {
+        l2_coeff = penalty.alpha * (1.0 - penalty.l1_ratio)
+    }
+
+    let max_iter: i32 = epochs
+    if max_iter > 100 { max_iter = 100 }
+    if max_iter < 10 { max_iter = 10 }
+
+    let inv_m: f32 = 1.0 / (m as f32)
+
+    for j in 0 to dim { theta[j] = 0.0 }
+
+    # Gradient at the starting point. Each later iteration ends by evaluating
+    # the gradient at the theta it stepped to, so the loop carries it forward.
+    for c in 0 to nc {
+        blas_matvec(X_aug, m, d, theta + c * d, col, 1.0, 0.0)
+        for i in 0 to m {
+            Z[i * nc + c] = col[i]
+        }
+    }
+    for i in 0 to m {
+        lin433_softmax_row(Z + i * nc, nc)
+        Z[i * nc + tgt[i]] = Z[i * nc + tgt[i]] - 1.0
+    }
+    for c in 0 to nc {
+        for i in 0 to m {
+            col[i] = Z[i * nc + c]
+        }
+        blas_matvec_trans(X_aug, m, d, col, grad + c * d, inv_m, 0.0)
+        let base: i32 = c * d
+        for j in 0 to n {
+            grad[base + j] = grad[base + j] + l2_coeff * theta[base + j]
+        }
+    }
+
+    let mut iter: i32 = 0
+    let mut converged: bool = false
+    let mut hist_size: i32 = 0
+    let mut hist_idx: i32 = 0
+
+    while iter < max_iter && not converged {
+        let mut gnorm: f32 = 0.0
+        for j in 0 to dim {
+            let g: f32 = grad[j]
+            gnorm = gnorm + g * g
+        }
+        gnorm = sqrt_f32(gnorm)
+        if gnorm < 0.0001 { converged = true; break }
+
+        for j in 0 to dim {
+            grad_prev[j] = grad[j]
+            theta_prev[j] = theta[j]
+        }
+
+        if hist_size == 0 {
+            for j in 0 to dim {
+                direction[j] = -grad[j]
+            }
+        } else {
+            for j in 0 to dim { q[j] = grad[j] }
+
+            let mut count: i32 = hist_size
+            if count > mem { count = mem }
+            let mut start: i32 = hist_idx - 1
+            if start < 0 { start = mem - 1 }
+            let mut k: i32 = 0
+            while k < count {
+                let si: i32 = start * dim
+                let s_dot_q: f32 = blas_dot(dim, s_hist + si, q)
+                alpha_lb[k] = rho_hist[start] * s_dot_q
+                blas_axpy(dim, -alpha_lb[k], y_hist + si, q)
+
+                start = start - 1
+                if start < 0 { start = mem - 1 }
+                k = k + 1
+            }
+
+            let last: i32 = hist_idx - 1
+            if last < 0 { last = mem - 1 }
+            let sy: f32 = blas_dot(dim, s_hist + last * dim, y_hist + last * dim)
+            let yy: f32 = blas_dot(dim, y_hist + last * dim, y_hist + last * dim)
+            let gamma: f32 = 1.0
+            if yy > 0.0000001 { gamma = sy / yy }
+            for j in 0 to dim { r_lb[j] = gamma * q[j] }
+
+            start = hist_idx - count
+            if start < 0 { start = start + mem }
+            k = count - 1
+            while k >= 0 {
+                let si: i32 = start * dim
+                let y_dot_r: f32 = blas_dot(dim, y_hist + si, r_lb)
+                let beta: f32 = rho_hist[start] * y_dot_r
+                blas_axpy(dim, alpha_lb[k] - beta, s_hist + si, r_lb)
+
+                start = start + 1
+                if start >= mem { start = 0 }
+                k = k - 1
+            }
+
+            for j in 0 to dim { direction[j] = -r_lb[j] }
+        }
+
+        let mut step: f32 = 1.0
+        if iter == 0 {
+            let mut gnorm2: f32 = 0.0
+            for j in 0 to dim { gnorm2 = gnorm2 + grad[j] * grad[j] }
+            if gnorm2 > 0.0000001 { step = 1.0 / gnorm2 }
+        }
+
+        for j in 0 to dim { theta[j] = theta_prev[j] + step * direction[j] }
+
+        for c in 0 to nc {
+            blas_matvec(X_aug, m, d, theta + c * d, col, 1.0, 0.0)
+            for i in 0 to m {
+                Z[i * nc + c] = col[i]
+            }
+        }
+        for i in 0 to m {
+            lin433_softmax_row(Z + i * nc, nc)
+            Z[i * nc + tgt[i]] = Z[i * nc + tgt[i]] - 1.0
+        }
+        for c in 0 to nc {
+            for i in 0 to m {
+                col[i] = Z[i * nc + c]
+            }
+            blas_matvec_trans(X_aug, m, d, col, grad + c * d, inv_m, 0.0)
+            let base: i32 = c * d
+            for j in 0 to n {
+                grad[base + j] = grad[base + j] + l2_coeff * theta[base + j]
+            }
+        }
+
+        let si: i32 = hist_idx * dim
+        for j in 0 to dim {
+            s_hist[si + j] = theta[j] - theta_prev[j]
+            y_hist[si + j] = grad[j] - grad_prev[j]
+        }
+        let sy2: f32 = blas_dot(dim, s_hist + si, y_hist + si)
+        if sy2 > 0.0000001 {
+            rho_hist[hist_idx] = 1.0 / sy2
+            hist_idx = hist_idx + 1
+            if hist_idx >= mem { hist_idx = 0 }
+            if hist_size < mem { hist_size = hist_size + 1 }
+        }
+
+        iter = iter + 1
+    }
+
+    for c in 0 to nc {
+        let base: i32 = c * d
+        for j in 0 to n {
+            all_weights[c * n + j] = theta[base + j]
+        }
+        all_biases[c] = theta[base + n]
+    }
+
+    free(X_aug as ptr<void>)
+    free(tgt as ptr<void>)
+    free(Z as ptr<void>)
+    array_free_f32(col)
+    array_free_f32(theta)
+    array_free_f32(grad)
+    array_free_f32(grad_prev)
+    array_free_f32(theta_prev)
+    array_free_f32(direction)
+    array_free_f32(q)
+    array_free_f32(r_lb)
+    free(s_hist as ptr<void>)
+    free(y_hist as ptr<void>)
+    array_free_f32(rho_hist)
+    array_free_f32(alpha_lb)
+
+    let first_bias: f32 = all_biases[0]
+    return LogisticRegression {
+        weights: all_weights,
+        bias: first_bias,
+        biases: all_biases,
+        n_features: n,
+        classes: classes,
+        n_classes: nc,
+        penalty: penalty,
+        fitted: true
+    }
+}
+
+# Fits a logistic regression classifier.
+#
+# Two or fewer classes: one binary model per class, one-vs-rest. The objective
+# for each subproblem is the MEAN log loss over the m training samples plus
+# 0.5 * alpha * ||w||^2, with the intercept left unpenalized.
+#
+# More than two classes: one multinomial softmax fitted jointly over all
+# classes, which is what scikit-learn's LogisticRegression does. See issue #433
+# and lin433_multinomial_fit. The objective carries the same mean-loss and
+# unpenalized-intercept convention, so the penalty mapping is unchanged.
+#
+# To match scikit-learn's C on the same data, build the penalty with
 # penalty_l2_from_c(C, m) rather than passing C or 1/C as alpha directly. See
 # issue #408.
 export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, epochs: i32, lr: f32, penalty: Penalty) -> LogisticRegression {
@@ -513,6 +811,14 @@ export function logistic_regression_fit(X: Matrix, y: ptr<f32>, n_classes: i32, 
     let classes: ptr<f32> = found_classes.values
     let n_found: i32 = found_classes.count
     let nc: i32 = n_found
+
+    # Issue #433: scikit-learn fits one multinomial softmax over all classes
+    # rather than K independent one-vs-rest binary models, and the two land on
+    # different coefficients. The binary case is untouched: with two classes
+    # scikit-learn also fits a single binary model.
+    if nc > 2 {
+        return lin433_multinomial_fit(X, y, classes, nc, epochs, penalty)
+    }
 
     let all_weights: ptr<f32> = array_new_f32(nc * n)
     let all_biases: ptr<f32> = array_new_f32(nc)
@@ -1574,7 +1880,8 @@ export function sgd_regressor_free(model: SGDRegressor) -> void {
 
 # ============================================================================
 # MultiClassLogisticRegression (softmax regression)
-# Handles n_classes > 2 via one-vs-rest softmax.
+# Fits one joint softmax over all classes, the same objective as
+# lin433_multinomial_fit, but with plain gradient descent rather than LBFGS.
 # Addresses Issue #28394: predict returns probabilities, decide returns classes.
 # ============================================================================
 
