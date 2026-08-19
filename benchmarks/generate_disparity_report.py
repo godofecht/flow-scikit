@@ -117,6 +117,15 @@ def enrich_state_from_raw_details(
     return state
 
 
+
+def _total_ms(row: dict, side: str):
+    """Fit plus predict for one side of a headline row, or None if unresolved."""
+    fit = row.get(f"{side}_fit_ms")
+    pred = row.get(f"{side}_pred_ms")
+    if fit is None or pred is None:
+        return None
+    return float(fit) + float(pred)
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--headline", type=Path, default=ROOT / "headline_result_v2.json")
@@ -214,6 +223,11 @@ def main() -> int:
             "effective_score_tolerance": effective_score_tol,
             "score_tolerance_fraction": tolerance_fraction,
             "runtime_ratio_sklearn_over_flow": runtime_ratio,
+            # Absolute timings, recorded so a reader can see each implementation's
+            # own trajectory. Every other timing field here is a ratio, which hides
+            # the case where both sides move and the ratio stays put.
+            "flow_total_ms": _total_ms(row, "flow"),
+            "sklearn_total_ms": _total_ms(row, "sklearn"),
             "runtime_log2_ratio": runtime_log2_ratio,
             "configuration_differences": config,
             "semantic_differences": semantic,

@@ -1073,6 +1073,134 @@ export struct Lasso {
     fitted: bool
 }
 
+# Coordinate-descent sweep over a Gram matrix.
+#
+# The residual r never appears. Instead the solver carries q = Xc^T r and
+# updates it directly: when w_j moves by delta the residual moves by
+# delta * Xc_j, so q moves by delta * G_j where G = Xc^T Xc. That turns one
+# coordinate update from O(n_samples) into O(n_features), which is the whole
+# point when n_samples >> n_features. rho_j = q_j + ||Xc_j||^2 * w_j, exactly
+# the quantity the residual formulation computes.
+#
+# G is symmetric and stored row-major, so row j is contiguous. The diagonal is
+# taken from col_sq so the two paths agree on it exactly.
+function lasso_cd_gram_f64(gram: ptr<f64>, col_sq: ptr<f64>, q: ptr<f64>, w_d: ptr<f64>, n: i32, threshold: f64, epochs: i32) -> void {
+    for epoch in 0 to epochs {
+        let mut max_change: f64 = 0.0
+        for j in 0 to n {
+            if col_sq[j] < 0.0000000000000001 { continue }
+
+            let rho: f64 = q[j] + col_sq[j] * w_d[j]
+
+            let mut new_w: f64 = 0.0
+            if rho > threshold {
+                new_w = (rho - threshold) / col_sq[j]
+            } elif rho < -threshold {
+                new_w = (rho + threshold) / col_sq[j]
+            }
+
+            let delta: f64 = w_d[j] - new_w
+            if delta != 0.0 {
+                let gj: i32 = j * n
+                for k in 0 to n {
+                    q[k] = q[k] + delta * gram[gj + k]
+                }
+            }
+
+            let change: f64 = new_w - w_d[j]
+            let abs_change: f64 = fabs(change)
+            if abs_change > max_change { max_change = abs_change }
+
+            w_d[j] = new_w
+        }
+
+        if max_change < 0.0000000000000001 { break }
+    }
+}
+
+# Coordinate-descent sweep over a materialized column-major centered matrix,
+# maintaining the residual. Same values and same summation order as the
+# original on-the-fly formulation; it only stops recomputing x_ij - mean_j on
+# every visit and stops striding by n_features through a row-major buffer.
+function lasso_cd_cols_f64(xc: ptr<f64>, col_sq: ptr<f64>, residual: ptr<f64>, w_d: ptr<f64>, n: i32, m: i32, threshold: f64, epochs: i32) -> void {
+    for epoch in 0 to epochs {
+        let mut max_change: f64 = 0.0
+        for j in 0 to n {
+            if col_sq[j] < 0.0000000000000001 { continue }
+            let base: i32 = j * m
+
+            let mut rho: f64 = 0.0
+            for i in 0 to m {
+                rho = rho + xc[base + i] * residual[i]
+            }
+            rho = rho + col_sq[j] * w_d[j]
+
+            let mut new_w: f64 = 0.0
+            if rho > threshold {
+                new_w = (rho - threshold) / col_sq[j]
+            } elif rho < -threshold {
+                new_w = (rho + threshold) / col_sq[j]
+            }
+
+            let delta: f64 = w_d[j] - new_w
+            if delta != 0.0 {
+                for i in 0 to m {
+                    residual[i] = residual[i] + delta * xc[base + i]
+                }
+            }
+
+            let change: f64 = new_w - w_d[j]
+            let abs_change: f64 = fabs(change)
+            if abs_change > max_change { max_change = abs_change }
+
+            w_d[j] = new_w
+        }
+
+        if max_change < 0.0000000000000001 { break }
+    }
+}
+
+# Streaming fallback for matrices too large to materialize a centered f64 copy
+# of. Byte-for-byte the original loop.
+function lasso_cd_stream_f64(X: Matrix, x_mean: ptr<f64>, col_sq: ptr<f64>, residual: ptr<f64>, w_d: ptr<f64>, n: i32, m: i32, threshold: f64, epochs: i32) -> void {
+    for epoch in 0 to epochs {
+        let mut max_change: f64 = 0.0
+        for j in 0 to n {
+            if col_sq[j] < 0.0000000000000001 { continue }
+
+            let mut rho: f64 = 0.0
+            for i in 0 to m {
+                let xc: f64 = (matrix_at(X, i, j) as f64) - x_mean[j]
+                rho = rho + xc * residual[i]
+            }
+            rho = rho + col_sq[j] * w_d[j]
+
+            let mut new_w: f64 = 0.0
+            if rho > threshold {
+                new_w = (rho - threshold) / col_sq[j]
+            } elif rho < -threshold {
+                new_w = (rho + threshold) / col_sq[j]
+            }
+
+            let delta: f64 = w_d[j] - new_w
+            if delta != 0.0 {
+                for i in 0 to m {
+                    let xc: f64 = (matrix_at(X, i, j) as f64) - x_mean[j]
+                    residual[i] = residual[i] + delta * xc
+                }
+            }
+
+            let change: f64 = new_w - w_d[j]
+            let abs_change: f64 = fabs(change)
+            if abs_change > max_change { max_change = abs_change }
+
+            w_d[j] = new_w
+        }
+
+        if max_change < 0.0000000000000001 { break }
+    }
+}
+
 export function lasso_fit(X: Matrix, y: ptr<f32>, alpha: f32, epochs: i32, lr: f32) -> Lasso {
     let n: i32 = X.cols
     let m: i32 = X.rows
@@ -1091,64 +1219,99 @@ export function lasso_fit(X: Matrix, y: ptr<f32>, alpha: f32, epochs: i32, lr: f
         x_mean[j] = x_mean[j] / (m as f64)
     }
 
-    # Precompute centered column squared norms in f64
+    # w_d and col_sq come from calloc, so they are already zero.
     let col_sq: ptr<f64> = array_new_f64(n)
-    for i in 0 to m {
-        for j in 0 to n {
-            let xc: f64 = (matrix_at(X, i, j) as f64) - x_mean[j]
-            col_sq[j] = col_sq[j] + xc * xc
-        }
-    }
-
-    # Initialize weights and residual in f64
     let w_d: ptr<f64> = array_new_f64(n)
-    for j in 0 to n { w_d[j] = 0.0 }
-    let residual: ptr<f64> = array_new_f64(m)
-    for i in 0 to m {
-        residual[i] = (y[i] as f64) - y_mean
-    }
 
-    # Coordinate descent with soft thresholding (f64)
     let alpha_d: f64 = alpha as f64
     let threshold: f64 = alpha_d * (m as f64)
-    for epoch in 0 to epochs {
-        let mut max_change: f64 = 0.0
+
+    # A centered f64 copy of X costs 8 * n_samples * n_features bytes. Below the
+    # cap it is always worth it; above it, fall back to recomputing on the fly.
+    let cells: i64 = (m as i64) * (n as i64)
+    let mut materialize: bool = true
+    if cells > 8000000 { materialize = false }
+
+    if materialize {
+        # Centered columns, column-major, so a coordinate reads contiguously.
+        # col_sq accumulates in ascending row order per column, which is the
+        # order the original row-major pass used, so the sums are identical.
+        let xc: ptr<f64> = array_new_f64(m * n)
         for j in 0 to n {
-            if col_sq[j] < 0.0000000000000001 { continue }
-
-            # rho_j = sum(x_cj * residual_i) + col_sq[j] * w_j
-            let mut rho: f64 = 0.0
+            let base: i32 = j * m
+            let mj: f64 = x_mean[j]
+            let mut acc: f64 = 0.0
             for i in 0 to m {
-                let xc: f64 = (matrix_at(X, i, j) as f64) - x_mean[j]
-                rho = rho + xc * residual[i]
+                let v: f64 = (matrix_at(X, i, j) as f64) - mj
+                xc[base + i] = v
+                acc = acc + v * v
             }
-            rho = rho + col_sq[j] * w_d[j]
-
-            # Soft threshold: w_j = sign(rho) * max(|rho| - alpha*m, 0) / col_sq[j]
-            let mut new_w: f64 = 0.0
-            if rho > threshold {
-                new_w = (rho - threshold) / col_sq[j]
-            } elif rho < -threshold {
-                new_w = (rho + threshold) / col_sq[j]
-            }
-
-            # Update residual: r += (w_j_old - w_j_new) * x_cj
-            let delta: f64 = w_d[j] - new_w
-            if delta != 0.0 {
-                for i in 0 to m {
-                    let xc: f64 = (matrix_at(X, i, j) as f64) - x_mean[j]
-                    residual[i] = residual[i] + delta * xc
-                }
-            }
-
-            let change: f64 = new_w - w_d[j]
-            let abs_change: f64 = fabs(change)
-            if abs_change > max_change { max_change = abs_change }
-
-            w_d[j] = new_w
+            col_sq[j] = acc
         }
 
-        if max_change < 0.0000000000000001 { break }
+        # The Gram path costs n_features^2 per sweep plus a one-off
+        # n_samples * n_features^2 / 2 build, against 2 * n_samples *
+        # n_features per sweep for the residual path. It wins whenever the
+        # feature count is modest and there are enough sweeps to amortize the
+        # build. n_features <= 512 also bounds the Gram matrix at 2 MB.
+        let mut use_gram: bool = false
+        if n <= 512 {
+            if (epochs as i64) * 8 >= (n as i64) { use_gram = true }
+        }
+
+        if use_gram {
+            let gram: ptr<f64> = array_new_f64(n * n)
+            for j in 0 to n {
+                let bj: i32 = j * m
+                for k in j to n {
+                    let bk: i32 = k * m
+                    let mut acc: f64 = 0.0
+                    for i in 0 to m {
+                        acc = acc + xc[bj + i] * xc[bk + i]
+                    }
+                    gram[j * n + k] = acc
+                    gram[k * n + j] = acc
+                }
+                gram[j * n + j] = col_sq[j]
+            }
+
+            # q = Xc^T r with r initialized to y - y_mean.
+            let q: ptr<f64> = array_new_f64(n)
+            for k in 0 to n {
+                let bk: i32 = k * m
+                let mut acc: f64 = 0.0
+                for i in 0 to m {
+                    acc = acc + xc[bk + i] * ((y[i] as f64) - y_mean)
+                }
+                q[k] = acc
+            }
+
+            lasso_cd_gram_f64(gram, col_sq, q, w_d, n, threshold, epochs)
+            array_free_f64(gram)
+            array_free_f64(q)
+        } else {
+            let residual: ptr<f64> = array_new_f64(m)
+            for i in 0 to m {
+                residual[i] = (y[i] as f64) - y_mean
+            }
+            lasso_cd_cols_f64(xc, col_sq, residual, w_d, n, m, threshold, epochs)
+            array_free_f64(residual)
+        }
+
+        array_free_f64(xc)
+    } else {
+        for i in 0 to m {
+            for j in 0 to n {
+                let xcv: f64 = (matrix_at(X, i, j) as f64) - x_mean[j]
+                col_sq[j] = col_sq[j] + xcv * xcv
+            }
+        }
+        let residual: ptr<f64> = array_new_f64(m)
+        for i in 0 to m {
+            residual[i] = (y[i] as f64) - y_mean
+        }
+        lasso_cd_stream_f64(X, x_mean, col_sq, residual, w_d, n, m, threshold, epochs)
+        array_free_f64(residual)
     }
 
     # Recover bias in f64
@@ -1164,7 +1327,6 @@ export function lasso_fit(X: Matrix, y: ptr<f32>, alpha: f32, epochs: i32, lr: f
 
     array_free_f64(x_mean)
     array_free_f64(col_sq)
-    array_free_f64(residual)
     array_free_f64(w_d)
 
     return Lasso { weights: weights, bias: bias_d as f32, n_features: n, alpha: alpha, fitted: true }
