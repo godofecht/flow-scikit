@@ -375,6 +375,31 @@ function _build_classifier_tree(
             let nf: f32 = n_indices as f32
             let weighted: f32 = (n_left as f32) / nf * gini_left + (n_right as f32) / nf * gini_right
 
+            # Tie-break rule, issue #204. The comparison is strict, and the
+            # feature loop runs 0..X.cols-1 in fixed order, so when several
+            # features reach the same weighted impurity the lowest feature
+            # index wins, and within one feature the earliest boundary wins.
+            #
+            # sklearn's BestSplitter reaches the same set of candidates
+            # (max_features is None for a plain DecisionTreeClassifier) but
+            # draws them through a Fisher-Yates shuffle off the splitter's
+            # rand_r state, seeded from random_state, and also compares
+            # strictly. First drawn among equals wins there.
+            #
+            # Ties are the common case on this data. On the canonical digits
+            # row, 68 of 122 split nodes have more than one feature at the
+            # exact f32 minimum, mean multiplicity 9.7. At node 4, features
+            # 3, 29, 37, 41, 45 and 46 all give weighted gini 0.32 against a
+            # parent of 0.66, identical in f32 and in float64. Flow takes 3,
+            # sklearn with random_state=42 takes 46, and both are correct.
+            #
+            # The choice is deliberate and stays. It makes the fit a pure
+            # function of the data with no RNG for a plain tree. Matching
+            # sklearn's pick would mean reproducing its xorshift stream and
+            # its constant-feature draw bookkeeping bit for bit, and the
+            # payoff is not accuracy: sweeping sklearn's own random_state
+            # over 0..59 on this row spans 0.8111 to 0.8444, which contains
+            # both Flow's 0.8333 and sklearn's seeded 0.8139.
             if weighted < best_impurity {
                 best_impurity = weighted
                 best_feature = f
@@ -589,6 +614,12 @@ function _build_classifier_tree_rf(
             let nf: f32 = n_indices as f32
             let weighted: f32 = (n_left as f32) / nf * gini_left + (n_right as f32) / nf * gini_right
 
+            # Same strict comparison and same lowest-index tie-break as the
+            # plain builder above. The feature loop walks feature_mask in
+            # ascending index order, so the sampled subset is scanned by index
+            # rather than by the order it was drawn. See the note there and
+            # #204: the canonical RandomForest digits row carries the same
+            # +0.0194 accuracy difference from the same cause, tracked in #205.
             if weighted < best_impurity {
                 best_impurity = weighted
                 best_feature = f

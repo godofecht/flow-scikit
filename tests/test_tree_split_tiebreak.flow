@@ -1,0 +1,128 @@
+# Regression for issue #204: pin the split-selection tie-break rule.
+#
+# The plain classifier builder scans features 0..X.cols-1 in fixed order and
+# keeps a candidate only on a strict improvement, so when several features
+# reach the same weighted impurity the lowest feature index wins, and within
+# one feature the earliest boundary wins. sklearn reaches the same candidate
+# set but draws it through a random permutation seeded from random_state, so
+# it resolves the same ties differently. Both are correct; the difference is
+# the whole of the digits DecisionTree accuracy gap.
+#
+# Ties are the common case on this data: 68 of 122 split nodes on the
+# canonical digits row have more than one feature at the exact f32 minimum.
+# This test makes the rule a checked property rather than an accident of the
+# loop, so anyone reordering the feature scan or relaxing the comparison to
+# <= sees a red test instead of a silently reshaped tree.
+
+import "lib/scikit/matrix.flow"
+import "lib/scikit/tree.flow"
+
+# Two features that separate the classes equally well, on different scales.
+# Column 0 is 0,0,1,1 and column 1 is 5,5,9,9. Both split the labels perfectly,
+# so both reach weighted gini 0.0. Column 2 is useless: it alternates with the
+# labels and separates nothing.
+function _t204_make_tied_x() -> Matrix {
+    let X: Matrix = matrix_new(4, 3)
+    matrix_set(X, 0, 0, 0.0); matrix_set(X, 0, 1, 5.0); matrix_set(X, 0, 2, 1.0)
+    matrix_set(X, 1, 0, 0.0); matrix_set(X, 1, 1, 5.0); matrix_set(X, 1, 2, 4.0)
+    matrix_set(X, 2, 0, 1.0); matrix_set(X, 2, 1, 9.0); matrix_set(X, 2, 2, 1.0)
+    matrix_set(X, 3, 0, 1.0); matrix_set(X, 3, 1, 9.0); matrix_set(X, 3, 2, 4.0)
+    return X
+}
+
+# Same labels, but now only column 2 separates them. Column 0 and column 1 are
+# useless. This proves the builder is choosing on impurity and not simply
+# always returning the first column.
+function _t204_make_untied_x() -> Matrix {
+    let X: Matrix = matrix_new(4, 3)
+    matrix_set(X, 0, 0, 1.0); matrix_set(X, 0, 1, 4.0); matrix_set(X, 0, 2, 0.0)
+    matrix_set(X, 1, 0, 4.0); matrix_set(X, 1, 1, 1.0); matrix_set(X, 1, 2, 0.0)
+    matrix_set(X, 2, 0, 1.0); matrix_set(X, 2, 1, 4.0); matrix_set(X, 2, 2, 1.0)
+    matrix_set(X, 3, 0, 4.0); matrix_set(X, 3, 1, 1.0); matrix_set(X, 3, 2, 1.0)
+    return X
+}
+
+function _t204_make_y() -> ptr<f32> {
+    let y: ptr<f32> = array_new_f32(4)
+    y[0] = 0.0
+    y[1] = 0.0
+    y[2] = 1.0
+    y[3] = 1.0
+    return y
+}
+
+function main() -> i32 {
+    let mut failed: i32 = 0
+
+    let y: ptr<f32> = _t204_make_y()
+
+    let Xt: Matrix = _t204_make_tied_x()
+    let tied: DecisionTreeClassifier = decision_tree_classifier_fit(Xt, y, 2, 4, 0)
+    let root_t: ptr<TreeNode> = tied.nodes
+    let tied_feature: i32 = root_t.feature
+    let tied_threshold: f32 = root_t.threshold
+    let tied_is_leaf: bool = root_t.is_leaf
+    decision_tree_classifier_free(tied)
+    matrix_free(Xt)
+
+    if tied_is_leaf {
+        println("FAIL: tied root did not split at all")
+        failed = 1
+    }
+
+    # Lowest feature index wins the tie between column 0 and column 1.
+    if tied_feature != 0 {
+        print("FAIL: tie broken toward feature ")
+        print(tied_feature)
+        println(", expected the lowest index 0")
+        failed = 1
+    }
+
+    # Threshold is the midpoint of the consecutive distinct sorted values that
+    # bound the split: (0.0 + 1.0) / 2. Picking the other member of the pair,
+    # or the midpoint of the wrong pair, lands somewhere else.
+    if tied_threshold < 0.4999 || tied_threshold > 0.5001 {
+        print("FAIL: tied root threshold ")
+        print(tied_threshold)
+        println(", expected the midpoint 0.5")
+        failed = 1
+    }
+
+    let Xu: Matrix = _t204_make_untied_x()
+    let untied: DecisionTreeClassifier = decision_tree_classifier_fit(Xu, y, 2, 4, 0)
+    let root_u: ptr<TreeNode> = untied.nodes
+    let untied_feature: i32 = root_u.feature
+    let untied_threshold: f32 = root_u.threshold
+    let untied_is_leaf: bool = root_u.is_leaf
+    decision_tree_classifier_free(untied)
+    matrix_free(Xu)
+    array_free_f32(y)
+
+    if untied_is_leaf {
+        println("FAIL: separable root did not split at all")
+        failed = 1
+    }
+
+    # Only column 2 separates the labels, so the tie-break never comes up and
+    # the builder must reach past the two lower-indexed columns.
+    if untied_feature != 2 {
+        print("FAIL: separable root split on feature ")
+        print(untied_feature)
+        println(", expected the only informative feature 2")
+        failed = 1
+    }
+
+    if untied_threshold < 0.4999 || untied_threshold > 0.5001 {
+        print("FAIL: separable root threshold ")
+        print(untied_threshold)
+        println(", expected the midpoint 0.5")
+        failed = 1
+    }
+
+    if failed == 1 {
+        return 1
+    }
+
+    println("PASS: split tie-break takes the lowest feature index at the midpoint")
+    return 0
+}
