@@ -1,0 +1,410 @@
+# Regression test for the DecisionTreeRegressor.fit changes (issue #396).
+#
+# The regressor deliberately keeps _sort_pairs_f32 and the exact order in which
+# the sweep sees equal values. Its scan accumulates left_sum and left_sum_sq in
+# f32 in sorted position order, so reordering equal values changes the rounding
+# and can flip the strict comparison that picks the split. Only the changes
+# that cannot move a value were applied: one copy of the node's y values
+# instead of two, row offsets hoisted out of matrix_at, and a skip for columns
+# that are constant at the node.
+#
+# This test fits the pre-#396 builder alongside the current one and compares
+# the trees node by node. Node arrays are calloc'd on both sides (issue #359),
+# so every field is defined and all eight are compared.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+    function printf(fmt: string, ...) -> i32
+    function calloc(count: i64, size: i64) -> ptr<void>
+}
+
+const DTRF_TIME_UTC: i32 = 1
+
+function dtrf_now_ns() -> i64 {
+    let ts: ptr<i64> = malloc(16) as ptr<i64>
+    timespec_get(ts, DTRF_TIME_UTC)
+    let value: i64 = ts[0] * 1000000000 + ts[1]
+    free(ts as ptr<void>)
+    return value
+}
+
+function dtrf_mse(y: ptr<f32>, n: i32) -> f32 {
+    let mut mean: f32 = 0.0
+    for i in 0 to n { mean = mean + y[i] }
+    mean = mean / (n as f32)
+    let mut sum_sq: f32 = 0.0
+    for i in 0 to n {
+        let d: f32 = y[i] - mean
+        sum_sq = sum_sq + d * d
+    }
+    return sum_sq / (n as f32)
+}
+
+function dtrf_mean_val(y: ptr<f32>, n: i32) -> f32 {
+    let mut sum: f32 = 0.0
+    for i in 0 to n { sum = sum + y[i] }
+    return sum / (n as f32)
+}
+
+function dtrf_sort_pairs_f32(values: ptr<f32>, companions: ptr<f32>, n: i32) -> void {
+    let mut gap: i32 = n / 2
+    while gap > 0 {
+        let mut i: i32 = gap
+        while i < n {
+            let key_v: f32 = values[i]
+            let key_c: f32 = companions[i]
+            let mut j: i32 = i
+            while j >= gap && values[j - gap] > key_v {
+                values[j] = values[j - gap]
+                companions[j] = companions[j - gap]
+                j = j - gap
+            }
+            values[j] = key_v
+            companions[j] = key_c
+            i = i + 1
+        }
+        gap = gap / 2
+    }
+}
+
+function dtrf_build(
+    nodes: ptr<TreeNode>,
+    n_nodes: ptr<i32>,
+    X: Matrix,
+    y: ptr<f32>,
+    indices: ptr<i32>,
+    n_indices: i32,
+    depth: i32,
+    max_depth: i32,
+    criterion: i32
+) -> i32 {
+    let node_idx: i32 = n_nodes[0]
+    n_nodes[0] = n_nodes[0] + 1
+
+    let should_stop: bool = depth >= max_depth || n_indices < 2
+
+    if should_stop {
+        let y_subset: ptr<f32> = array_new_f32(n_indices)
+        for i in 0 to n_indices { y_subset[i] = y[indices[i]] }
+        nodes[node_idx].is_leaf = true
+        nodes[node_idx].value = dtrf_mean_val(y_subset, n_indices)
+        nodes[node_idx].n_samples = n_indices
+        nodes[node_idx].left = -1
+        nodes[node_idx].right = -1
+        nodes[node_idx].impurity = dtrf_mse(y_subset, n_indices)
+        array_free_f32(y_subset)
+        return node_idx
+    }
+
+    let y_subset: ptr<f32> = array_new_f32(n_indices)
+    for i in 0 to n_indices { y_subset[i] = y[indices[i]] }
+    let parent_impurity: f32 = dtrf_mse(y_subset, n_indices)
+    array_free_f32(y_subset)
+
+    let y_vals: ptr<f32> = array_new_f32(n_indices)
+    for i in 0 to n_indices { y_vals[i] = y[indices[i]] }
+    let mut total_sum: f32 = 0.0
+    let mut total_sum_sq: f32 = 0.0
+    for i in 0 to n_indices {
+        total_sum = total_sum + y_vals[i]
+        total_sum_sq = total_sum_sq + y_vals[i] * y_vals[i]
+    }
+
+    let mut best_feature: i32 = -1
+    let mut best_threshold: f32 = 0.0
+    let mut best_impurity: f32 = 9999999999.0
+
+    let sort_values: ptr<f32> = array_new_f32(n_indices)
+    let sort_y: ptr<f32> = array_new_f32(n_indices)
+
+    for f in 0 to X.cols {
+        for i in 0 to n_indices {
+            sort_values[i] = matrix_at(X, indices[i], f)
+            sort_y[i] = y_vals[i]
+        }
+        dtrf_sort_pairs_f32(sort_values, sort_y, n_indices)
+
+        let mut left_sum: f32 = 0.0
+        let mut left_sum_sq: f32 = 0.0
+
+        for i in 0 to n_indices - 1 {
+            left_sum = left_sum + sort_y[i]
+            left_sum_sq = left_sum_sq + sort_y[i] * sort_y[i]
+
+            if sort_values[i] == sort_values[i + 1] { continue }
+
+            let n_left: i32 = i + 1
+            let n_right: i32 = n_indices - n_left
+            if n_left < 1 || n_right < 1 { continue }
+
+            let right_sum: f32 = total_sum - left_sum
+            let right_sum_sq: f32 = total_sum_sq - left_sum_sq
+
+            let nl: f32 = n_left as f32
+            let nr: f32 = n_right as f32
+            let left_mean: f32 = left_sum / nl
+            let right_mean: f32 = right_sum / nr
+            let left_mse: f32 = left_sum_sq / nl - left_mean * left_mean
+            let right_mse: f32 = right_sum_sq / nr - right_mean * right_mean
+
+            let nf: f32 = n_indices as f32
+            let weighted: f32 = nl / nf * left_mse + nr / nf * right_mse
+
+            if weighted < best_impurity {
+                best_impurity = weighted
+                best_feature = f
+                best_threshold = (sort_values[i] + sort_values[i + 1]) / 2.0
+            }
+        }
+    }
+
+    array_free_f32(sort_values)
+    array_free_f32(sort_y)
+    array_free_f32(y_vals)
+
+    if best_feature < 0 || best_impurity >= parent_impurity - 0.0000000001 {
+        let y_sub: ptr<f32> = array_new_f32(n_indices)
+        for i in 0 to n_indices { y_sub[i] = y[indices[i]] }
+        nodes[node_idx].is_leaf = true
+        nodes[node_idx].value = dtrf_mean_val(y_sub, n_indices)
+        nodes[node_idx].n_samples = n_indices
+        nodes[node_idx].left = -1
+        nodes[node_idx].right = -1
+        nodes[node_idx].impurity = parent_impurity
+        array_free_f32(y_sub)
+        return node_idx
+    }
+
+    let left_indices: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
+    let right_indices: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
+    let mut left_n: i32 = 0
+    let mut right_n: i32 = 0
+
+    for i in 0 to n_indices {
+        if matrix_at(X, indices[i], best_feature) <= best_threshold {
+            left_indices[left_n] = indices[i]
+            left_n = left_n + 1
+        } else {
+            right_indices[right_n] = indices[i]
+            right_n = right_n + 1
+        }
+    }
+
+    nodes[node_idx].is_leaf = false
+    nodes[node_idx].feature = best_feature
+    nodes[node_idx].threshold = best_threshold
+    nodes[node_idx].n_samples = n_indices
+    nodes[node_idx].impurity = parent_impurity
+
+    let left_idx: i32 = dtrf_build(nodes, n_nodes, X, y, left_indices, left_n, depth + 1, max_depth, criterion)
+    let right_idx: i32 = dtrf_build(nodes, n_nodes, X, y, right_indices, right_n, depth + 1, max_depth, criterion)
+
+    nodes[node_idx].left = left_idx
+    nodes[node_idx].right = right_idx
+
+    free(left_indices as ptr<void>)
+    free(right_indices as ptr<void>)
+
+    return node_idx
+}
+
+function dtrf_reference_fit(X: Matrix, y: ptr<f32>, max_depth: i32, criterion: i32) -> DecisionTreeRegressor {
+    let max_nodes: i32 = 2 * X.rows + 1
+    let nodes: ptr<TreeNode> = calloc(max_nodes as i64, 36) as ptr<TreeNode>
+    let n_nodes_ptr: ptr<i32> = malloc(4) as ptr<i32>
+    n_nodes_ptr[0] = 0
+
+    let indices: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
+    for i in 0 to X.rows { indices[i] = i }
+
+    let final_n: i32 = dtrf_build(nodes, n_nodes_ptr, X, y, indices, X.rows, 0, max_depth, criterion)
+
+    free(indices as ptr<void>)
+    let n_nodes: i32 = n_nodes_ptr[0]
+    free(n_nodes_ptr as ptr<void>)
+
+    return DecisionTreeRegressor {
+        nodes: nodes,
+        n_nodes: n_nodes,
+        max_depth: max_depth,
+        criterion: criterion,
+        fitted: true
+    }
+}
+
+function dtrf_same_tree(a: DecisionTreeRegressor, b: DecisionTreeRegressor) -> bool {
+    if a.n_nodes != b.n_nodes { return false }
+    if a.max_depth != b.max_depth { return false }
+    if a.criterion != b.criterion { return false }
+    for k in 0 to a.n_nodes {
+        let na: ptr<TreeNode> = a.nodes + k
+        let nb: ptr<TreeNode> = b.nodes + k
+        if na.feature != nb.feature { return false }
+        if na.threshold != nb.threshold { return false }
+        if na.left != nb.left { return false }
+        if na.right != nb.right { return false }
+        if na.is_leaf != nb.is_leaf { return false }
+        if na.value != nb.value { return false }
+        if na.n_samples != nb.n_samples { return false }
+        if na.impurity != nb.impurity { return false }
+    }
+    return true
+}
+
+function dtrf_check_case(X: Matrix, y: ptr<f32>, max_depth: i32, label: string) -> i32 {
+    let reference: DecisionTreeRegressor = dtrf_reference_fit(X, y, max_depth, CRITERION_MSE)
+    let optimized: DecisionTreeRegressor = decision_tree_regressor_fit(X, y, max_depth, CRITERION_MSE)
+
+    if not dtrf_same_tree(reference, optimized) {
+        print("FAIL: fitted tree differs for ")
+        println(label)
+        return 1
+    }
+
+    let p_ref: ptr<f32> = decision_tree_regressor_predict(reference, X)
+    let p_opt: ptr<f32> = decision_tree_regressor_predict(optimized, X)
+    for i in 0 to X.rows {
+        if p_ref[i] != p_opt[i] {
+            print("FAIL: predictions differ for ")
+            println(label)
+            return 1
+        }
+    }
+    array_free_f32(p_ref)
+    array_free_f32(p_opt)
+
+    decision_tree_regressor_free(reference)
+    decision_tree_regressor_free(optimized)
+    print("ok: ")
+    println(label)
+    return 0
+}
+
+function main() -> i32 {
+    # ---------------------------------------------------------------
+    # 1. Realistic workload: diabetes, 442 x 10, depth 5.
+    # ---------------------------------------------------------------
+    let diab: Dataset = load_diabetes()
+    let reference: DecisionTreeRegressor = dtrf_reference_fit(diab.X, diab.y, 5, CRITERION_MSE)
+    let optimized: DecisionTreeRegressor = decision_tree_regressor_fit(diab.X, diab.y, 5, CRITERION_MSE)
+
+    if not dtrf_same_tree(reference, optimized) {
+        println("FAIL: diabetes tree is not identical to the pre-optimization builder")
+        return 1
+    }
+
+    let p_opt: ptr<f32> = decision_tree_regressor_predict(optimized, diab.X)
+    let r2: f32 = r2_score(diab.y, p_opt, diab.X.rows)
+    if r2 < 0.4 {
+        println("FAIL: diabetes training r2 collapsed")
+        return 1
+    }
+    printf("DecisionTreeRegressor fit diabetes: train r2=%.6f n_nodes=%d\n", r2 as f64, optimized.n_nodes)
+    array_free_f32(p_opt)
+    decision_tree_regressor_free(reference)
+    decision_tree_regressor_free(optimized)
+
+    # ---------------------------------------------------------------
+    # 2. A/B timing on the same workload.
+    # ---------------------------------------------------------------
+    let repeats: i32 = 5
+    let start_reference: i64 = dtrf_now_ns()
+    for r in 0 to repeats {
+        let m: DecisionTreeRegressor = dtrf_reference_fit(diab.X, diab.y, 5, CRITERION_MSE)
+        decision_tree_regressor_free(m)
+    }
+    let end_reference: i64 = dtrf_now_ns()
+
+    let start_optimized: i64 = dtrf_now_ns()
+    for r in 0 to repeats {
+        let m: DecisionTreeRegressor = decision_tree_regressor_fit(diab.X, diab.y, 5, CRITERION_MSE)
+        decision_tree_regressor_free(m)
+    }
+    let end_optimized: i64 = dtrf_now_ns()
+
+    let reference_ms: f64 = ((end_reference - start_reference) as f64) / 1000000.0 / (repeats as f64)
+    let optimized_ms: f64 = ((end_optimized - start_optimized) as f64) / 1000000.0 / (repeats as f64)
+    printf("DecisionTreeRegressor fit A/B (diabetes): reference=%.3f ms optimized=%.3f ms speedup=%.3fx\n", reference_ms, optimized_ms, reference_ms / optimized_ms)
+
+    # ---------------------------------------------------------------
+    # 3. Edge cases.
+    # ---------------------------------------------------------------
+
+    # A single row.
+    let X1: Matrix = matrix_new(1, 3)
+    matrix_set(X1, 0, 0, 1.0); matrix_set(X1, 0, 1, 2.0); matrix_set(X1, 0, 2, 3.0)
+    let y1: ptr<f32> = array_new_f32(1)
+    y1[0] = 5.0
+    if dtrf_check_case(X1, y1, 4, "single row") != 0 { return 1 }
+    let t1: DecisionTreeRegressor = decision_tree_regressor_fit(X1, y1, 4, CRITERION_MSE)
+    if t1.n_nodes != 1 || not t1.nodes[0].is_leaf || t1.nodes[0].value != 5.0 {
+        println("FAIL: single row did not produce one leaf holding that value")
+        return 1
+    }
+    decision_tree_regressor_free(t1)
+
+    # Every column constant: nothing to split on.
+    let Xc: Matrix = matrix_new(6, 3)
+    let yc: ptr<f32> = array_new_f32(6)
+    for i in 0 to 6 {
+        matrix_set(Xc, i, 0, 4.0)
+        matrix_set(Xc, i, 1, -1.0)
+        matrix_set(Xc, i, 2, 0.0)
+        yc[i] = (i * 2) as f32
+    }
+    if dtrf_check_case(Xc, yc, 4, "all columns constant") != 0 { return 1 }
+    let tc: DecisionTreeRegressor = decision_tree_regressor_fit(Xc, yc, 4, CRITERION_MSE)
+    if tc.n_nodes != 1 || not tc.nodes[0].is_leaf {
+        println("FAIL: an all-constant X did not produce a single leaf")
+        return 1
+    }
+    decision_tree_regressor_free(tc)
+
+    # Constant target: parent impurity is 0, so no split improves on it.
+    let Xf: Matrix = matrix_new(8, 2)
+    let yf: ptr<f32> = array_new_f32(8)
+    for i in 0 to 8 {
+        matrix_set(Xf, i, 0, i as f32)
+        matrix_set(Xf, i, 1, (8 - i) as f32)
+        yf[i] = 3.0
+    }
+    if dtrf_check_case(Xf, yf, 4, "constant target") != 0 { return 1 }
+
+    # A constant column in front of a useful one.
+    let Xk: Matrix = matrix_new(6, 2)
+    let yk: ptr<f32> = array_new_f32(6)
+    for i in 0 to 6 {
+        matrix_set(Xk, i, 0, 2.5)
+        matrix_set(Xk, i, 1, i as f32)
+        if i < 3 { yk[i] = 0.0 } else { yk[i] = 10.0 }
+    }
+    if dtrf_check_case(Xk, yk, 4, "constant column before a useful one") != 0 { return 1 }
+    let tk: DecisionTreeRegressor = decision_tree_regressor_fit(Xk, yk, 4, CRITERION_MSE)
+    if tk.nodes[0].is_leaf || tk.nodes[0].feature != 1 || tk.nodes[0].threshold != 2.5 {
+        println("FAIL: the constant column was not skipped in favour of column 1")
+        return 1
+    }
+    decision_tree_regressor_free(tk)
+
+    # Duplicate feature values: the split has to land between the two runs.
+    let Xd: Matrix = matrix_new(6, 1)
+    let yd: ptr<f32> = array_new_f32(6)
+    matrix_set(Xd, 0, 0, 1.0); yd[0] = 1.0
+    matrix_set(Xd, 1, 0, 1.0); yd[1] = 2.0
+    matrix_set(Xd, 2, 0, 1.0); yd[2] = 1.0
+    matrix_set(Xd, 3, 0, 2.0); yd[3] = 9.0
+    matrix_set(Xd, 4, 0, 2.0); yd[4] = 9.0
+    matrix_set(Xd, 5, 0, 2.0); yd[5] = 9.0
+    if dtrf_check_case(Xd, yd, 3, "ties inside a column") != 0 { return 1 }
+    let td: DecisionTreeRegressor = decision_tree_regressor_fit(Xd, yd, 3, CRITERION_MSE)
+    if td.nodes[0].is_leaf || td.nodes[0].threshold != 1.5 {
+        println("FAIL: the split did not land between the two runs of equal values")
+        return 1
+    }
+    decision_tree_regressor_free(td)
+
+    println("PASS: DecisionTreeRegressor.fit is unchanged node for node after #396")
+    return 0
+}
