@@ -26,7 +26,7 @@ Estimator fitting returns a value. Hacker News commenter zeec123 argues `fit` sh
 
 Flow structs pass by value. Every estimator fit function returns a fitted struct.
 
-There is one exception. The `pipeline_fit` function in `lib/scikit/pipeline.flow` mutates state and returns void. Issue #356 tracks this divergence.
+`Pipeline` was the one exception until recently: `pipeline_fit` returned void and mutated in place, which is the single case where the criticism landed against this library rather than against scikit-learn. It now returns a fitted `Pipeline`, so the rule holds without exception.
 
 ## 4. No hidden threshold
 
@@ -47,11 +47,15 @@ The codebase contains nine `*_decide` functions:
 
 The `ValidationResult` struct in `lib/scikit/validation.flow` carries a numeric code and a string message. The `ensure_*` validation functions share a consistent naming convention. G2 reviewers raised unhelpful error messages in both 2019 and 2024. The structured approach provides clear diagnostics.
 
-## Known Gaps
+## Known gaps
 
-The implementation has several known gaps:
-- Issue #353: The library lacks coefficient inference. There are no p-values and no standard errors.
-- Issue #354: Decision trees cannot handle categorical features natively.
-- Issue #355: The project lacks a bootstrap cross-validator.
-- Issue #356: The `pipeline_fit` function mutates state.
-- Issue #357: The optimizer supports LBFGS only. There is no Newton solver.
+Recorded here so this page is not one-sided.
+
+- Issue #353: no coefficient inference. No standard errors, no p-values, no model summary.
+- Issue #354: decision trees cannot handle categorical features natively. A caller must label-encode, which imposes false ordinality, or one-hot encode, which inflates cardinality.
+- Issue #357: logistic regression offers LBFGS only. Newton's method is the textbook default and is what R's `glm` uses, which matters when porting a model between languages.
+
+## Closed since this page was written
+
+- Issue #355: a bootstrap cross-validator now exists. `BootstrapOOB` in `lib/scikit/model_selection.flow` implements plain out-of-bag bootstrap and names the variant, since scikit-learn removed its own `Bootstrap` class for inventing non-standard semantics under a misleading name.
+- Issue #356: `pipeline_fit` now returns a fitted `Pipeline` instead of mutating.
