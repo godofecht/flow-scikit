@@ -20,6 +20,18 @@ The parameter for regularization strength is alpha. The scikit-learn API uses C,
 
 The flow-scikit library uses `penalty_l2(alpha)`. This is a partial answer. As ryxcommar notes, alpha itself is one step removed from lambda.
 
+alpha and C are not reciprocals of each other. scikit-learn's `LogisticRegression` minimises the sum of the per-sample losses plus `0.5 * ||w||^2 / C`. `logistic_regression_fit` minimises the mean loss plus `0.5 * alpha * ||w||^2`. Putting the two in the same units leaves
+
+```
+alpha = 1 / (C * n_samples)
+```
+
+so the sample count is part of the conversion. `penalty_l2_from_c(C, n_samples)` in `lib/scikit/linear.flow` performs it.
+
+Issue #408 recorded what happens when the conversion is skipped. The canonical benchmark passed a flat `penalty_l2(0.001)` on both iris and digits against scikit-learn's `C=1.0`. On iris that is 8.3x weaker than the model it was published beside, and the Flow fit carried a coefficient Frobenius norm of 9.16 against scikit-learn's 4.52 at the same accuracy. A library that asks for the penalty explicitly and then ships a benchmark that picks a number with no stated relationship to the comparison is doing the thing this page objects to.
+
+The intercept is not penalized on either side. `logistic_regression_fit` augments theta with the bias at index `n` and applies the L2 term over `0 to n`, which leaves the bias out.
+
 ## 3. Fit returns a value
 
 Estimator fitting returns a value. Hacker News commenter zeec123 argues `fit` should return a function from input space to output space and avoid modifying internal state.
