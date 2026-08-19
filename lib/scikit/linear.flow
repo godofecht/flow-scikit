@@ -859,17 +859,21 @@ function lin357_logloss_term(z: f32, label: f32) -> f32 {
 
 # Penalized mean log loss at theta. Leaves the logits in z_arr, which the
 # caller reuses for the next iteration's probabilities.
-function lin357_objective(X_aug: ptr<f32>, m: i32, d: i32, n: i32, theta: ptr<f32>, label: ptr<f32>, z_arr: ptr<f32>, l2_coeff: f32) -> f32 {
+# The sum is accumulated in f64: over a few thousand samples an f32 running
+# total loses enough of the tail that a step which does lower the objective can
+# look like one that raises it, and the backtracking below would reject it.
+function lin357_objective(X_aug: ptr<f32>, m: i32, d: i32, n: i32, theta: ptr<f32>, label: ptr<f32>, z_arr: ptr<f32>, l2_coeff: f32) -> f64 {
     blas_matvec(X_aug, m, d, theta, z_arr, 1.0, 0.0)
-    let mut total: f32 = 0.0
+    let mut total: f64 = 0.0
     for i in 0 to m {
-        total = total + lin357_logloss_term(z_arr[i], label[i])
+        total = total + (lin357_logloss_term(z_arr[i], label[i]) as f64)
     }
-    let mut reg: f32 = 0.0
+    let mut reg: f64 = 0.0
     for j in 0 to n {
-        reg = reg + theta[j] * theta[j]
+        let tj: f64 = theta[j] as f64
+        reg = reg + tj * tj
     }
-    return total / (m as f32) + 0.5 * l2_coeff * reg
+    return total / (m as f64) + 0.5 * (l2_coeff as f64) * reg
 }
 
 # Solves (H + ridge*I) delta = -g, raising ridge until the step is usable.
@@ -1009,7 +1013,7 @@ function lin357_newton_fit(X: Matrix, y: ptr<f32>, classes: ptr<f32>, nc: i32, e
             if y[i] == target { label_arr[i] = 1.0 }
         }
 
-        let mut fobj: f32 = lin357_objective(X_aug, m, d, n, theta, label_arr, z_arr, l2_coeff)
+        let mut fobj: f64 = lin357_objective(X_aug, m, d, n, theta, label_arr, z_arr, l2_coeff)
         let mut iter: i32 = 0
         let mut converged: bool = false
 
@@ -1085,7 +1089,7 @@ function lin357_newton_fit(X: Matrix, y: ptr<f32>, classes: ptr<f32>, nc: i32, e
             let mut bt: i32 = 0
             while bt < 12 && not accepted {
                 for j in 0 to d { theta[j] = theta_prev[j] + step * (delta[j] as f32) }
-                let f_new: f32 = lin357_objective(X_aug, m, d, n, theta, label_arr, z_arr, l2_coeff)
+                let f_new: f64 = lin357_objective(X_aug, m, d, n, theta, label_arr, z_arr, l2_coeff)
                 if f_new == f_new && f_new <= fobj {
                     fobj = f_new
                     accepted = true
