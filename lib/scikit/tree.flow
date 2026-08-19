@@ -257,14 +257,51 @@ export function decision_tree_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: 
     let n_nodes_ptr: ptr<i32> = malloc(4) as ptr<i32>
     n_nodes_ptr[0] = 0
 
-    let indices: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
-    for i in 0 to X.rows {
-        indices[i] = i
+    # Every column is sorted once here, and the builder keeps each feature's
+    # ascending order as it partitions, so no node sorts anything. See the
+    # note on _build_classifier_tree for why the tree is unchanged.
+    let n_rows: i32 = X.rows
+    let x_cols: i32 = X.cols
+    let x_data: ptr<f32> = X.data
+
+    # Class index per row, resolved once instead of once per node.
+    let class_of_row: ptr<i32> = malloc((n_rows as i64) * 4) as ptr<i32>
+    for i in 0 to n_rows {
+        let mut ci: i32 = 0
+        let yi: f32 = y[i]
+        for c in 0 to n_classes {
+            if yi == classes[c] { ci = c }
+        }
+        class_of_row[i] = ci
     }
 
-    let final_n_nodes: i32 = _build_classifier_tree(nodes, n_nodes_ptr, X, y, indices, X.rows, 0, max_depth, criterion, classes, n_classes)
+    # order holds X.cols blocks of n_rows row indices. Block f lists every row
+    # in ascending order of feature f.
+    let order: ptr<i32> = malloc((x_cols as i64) * (n_rows as i64) * 4) as ptr<i32>
+    let sort_v: ptr<f32> = array_new_f32(n_rows)
+    let sort_r: ptr<i32> = malloc((n_rows as i64) * 4) as ptr<i32>
+    for f in 0 to x_cols {
+        for i in 0 to n_rows {
+            sort_v[i] = x_data[i * x_cols + f]
+            sort_r[i] = i
+        }
+        _sort_pairs(sort_v, sort_r, n_rows)
+        let base: i32 = f * n_rows
+        for i in 0 to n_rows {
+            order[base + i] = sort_r[i]
+        }
+    }
+    array_free_f32(sort_v)
+    free(sort_r as ptr<void>)
 
-    free(indices as ptr<void>)
+    # Scratch marking each row's side of the current split, indexed by row.
+    let side: ptr<i32> = malloc((n_rows as i64) * 4) as ptr<i32>
+
+    let final_n_nodes: i32 = _build_classifier_tree(nodes, n_nodes_ptr, X, y, order, n_rows, 0, max_depth, criterion, classes, n_classes, class_of_row, side)
+
+    free(order as ptr<void>)
+    free(side as ptr<void>)
+    free(class_of_row as ptr<void>)
     let n_nodes: i32 = n_nodes_ptr[0]
     free(n_nodes_ptr as ptr<void>)
 
@@ -279,18 +316,40 @@ export function decision_tree_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: 
     }
 }
 
+# Plain classifier builder, used by DecisionTreeClassifier and, through it, by
+# BaggingClassifier.
+#
+# No node sorts anything. `order` holds X.cols contiguous blocks of n_indices
+# row indices; block f lists this node's rows in ascending order of feature f.
+# decision_tree_classifier_fit sorts every column once, and a split partitions
+# each block into the two children while preserving relative order, which is
+# O(n) per feature per node instead of O(n log n).
+#
+# The tree is unchanged, and the reason is the one already recorded on
+# _sort_pairs: the scan reads counts only at boundaries where consecutive
+# values differ, and at such a boundary the samples on the left are exactly
+# those whose value is at or below that value, whatever order the equal values
+# came in. The counts are integers, so they are exact, and the value sequence
+# any correct ascending sort produces is the same sequence. Both the chosen
+# feature and the threshold therefore come out bit-identical.
+#
+# That argument depends on the criterion being counts. It does NOT carry to
+# _build_regressor_tree, whose scan accumulates left_sum and left_sum_sq in f32
+# in sorted position order, where reordering equal values changes the rounding.
 function _build_classifier_tree(
     nodes: ptr<TreeNode>,
     n_nodes: ptr<i32>,
     X: Matrix,
     y: ptr<f32>,
-    indices: ptr<i32>,
+    order: ptr<i32>,
     n_indices: i32,
     depth: i32,
     max_depth: i32,
     criterion: i32,
     classes: ptr<f32>,
-    n_classes: i32
+    n_classes: i32,
+    class_of_row: ptr<i32>,
+    side: ptr<i32>
 ) -> i32 {
     let node_idx: i32 = n_nodes[0]
     n_nodes[0] = n_nodes[0] + 1
@@ -300,7 +359,7 @@ function _build_classifier_tree(
     if should_stop {
         let y_subset: ptr<f32> = array_new_f32(n_indices)
         for i in 0 to n_indices {
-            y_subset[i] = y[indices[i]]
+            y_subset[i] = y[order[i]]
         }
         nodes[node_idx].is_leaf = true
         nodes[node_idx].value = _majority_class(y_subset, n_indices, classes, n_classes)
@@ -316,22 +375,30 @@ function _build_classifier_tree(
     let mut best_threshold: f32 = 0.0
     let mut best_impurity: f32 = 9999999999.0
 
-    # Precompute class index for each sample in this node.
-    let class_idx: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
-    for i in 0 to n_indices {
-        let mut ci: i32 = 0
-        for c in 0 to n_classes {
-            if y[indices[i]] == classes[c] { ci = c }
-        }
-        class_idx[i] = ci
-    }
+    let x_data: ptr<f32> = X.data
+    let x_cols: i32 = X.cols
 
-    # Parent impurity from total counts.
+    # Node class histogram, over any block since all blocks hold the same rows.
     let total_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
     for c in 0 to n_classes { total_counts[c] = 0 }
-    for i in 0 to n_indices { total_counts[class_idx[i]] = total_counts[class_idx[i]] + 1 }
-    let parent_impurity: f32 = _gini_from_counts(total_counts, n_classes, n_indices)
-    free(total_counts as ptr<void>)
+    for i in 0 to n_indices {
+        let c: i32 = class_of_row[order[i]]
+        total_counts[c] = total_counts[c] + 1
+    }
+
+    # Ascending list of the classes that actually occur at this node. A class
+    # with no samples here has no samples on either side of any split below,
+    # so its impurity term is 0.0 and dropping it is exact.
+    let present: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    let mut n_present: i32 = 0
+    for c in 0 to n_classes {
+        if total_counts[c] > 0 {
+            present[n_present] = c
+            n_present = n_present + 1
+        }
+    }
+
+    let parent_impurity: f32 = _tree_gini_present(total_counts, present, n_present, n_indices)
 
     # Allocated once, reused across features.
     let sort_values: ptr<f32> = array_new_f32(n_indices)
@@ -339,21 +406,28 @@ function _build_classifier_tree(
     let left_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
     let right_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
 
-    for f in 0 to X.cols {
-        # Build (value, class_idx) pairs for this feature.
+    for f in 0 to x_cols {
+        # Gather this feature's values and classes in the order block f already
+        # holds, which is ascending by construction.
+        let base: i32 = f * n_indices
         for i in 0 to n_indices {
-            sort_values[i] = matrix_at(X, indices[i], f)
-            sort_classes[i] = class_idx[i]
+            let row: i32 = order[base + i]
+            sort_values[i] = x_data[row * x_cols + f]
+            sort_classes[i] = class_of_row[row]
         }
-        _sort_pairs(sort_values, sort_classes, n_indices)
 
-        # All samples start in right.
-        for c in 0 to n_classes {
+        # Constant column: the scan would hit sort_values[i] == sort_values[i+1]
+        # at every position and evaluate no candidate at all. Sorted, that is a
+        # single comparison of the ends.
+        if sort_values[0] == sort_values[n_indices - 1] { continue }
+
+        # right_counts starts as the node's full class histogram; left_counts
+        # starts empty. Seeding from the histogram replaces a second pass over
+        # every sample.
+        for pi in 0 to n_present {
+            let c: i32 = present[pi]
             left_counts[c] = 0
-            right_counts[c] = 0
-        }
-        for i in 0 to n_indices {
-            right_counts[sort_classes[i]] = right_counts[sort_classes[i]] + 1
+            right_counts[c] = total_counts[c]
         }
 
         # Sweep sorted values, moving one sample at a time to left.
@@ -370,8 +444,8 @@ function _build_classifier_tree(
             let n_right: i32 = n_indices - n_left
             if n_left < 1 || n_right < 1 { continue }
 
-            let gini_left: f32 = _gini_from_counts(left_counts, n_classes, n_left)
-            let gini_right: f32 = _gini_from_counts(right_counts, n_classes, n_right)
+            let gini_left: f32 = _tree_gini_present(left_counts, present, n_present, n_left)
+            let gini_right: f32 = _tree_gini_present(right_counts, present, n_present, n_right)
             let nf: f32 = n_indices as f32
             let weighted: f32 = (n_left as f32) / nf * gini_left + (n_right as f32) / nf * gini_right
 
@@ -412,12 +486,13 @@ function _build_classifier_tree(
     free(sort_classes as ptr<void>)
     free(left_counts as ptr<void>)
     free(right_counts as ptr<void>)
-    free(class_idx as ptr<void>)
+    free(present as ptr<void>)
+    free(total_counts as ptr<void>)
 
     if best_feature < 0 || best_impurity >= parent_impurity - 0.0000000001 {
         let y_sub: ptr<f32> = array_new_f32(n_indices)
         for i in 0 to n_indices {
-            y_sub[i] = y[indices[i]]
+            y_sub[i] = y[order[i]]
         }
         nodes[node_idx].is_leaf = true
         nodes[node_idx].value = _majority_class(y_sub, n_indices, classes, n_classes)
@@ -429,18 +504,39 @@ function _build_classifier_tree(
         return node_idx
     }
 
-    let left_indices: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
-    let right_indices: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
+    # Mark each row's side once, then split every feature's block in place
+    # order. A child block stays ascending because it keeps the parent's
+    # relative order.
     let mut left_n: i32 = 0
-    let mut right_n: i32 = 0
-
     for i in 0 to n_indices {
-        if matrix_at(X, indices[i], best_feature) <= best_threshold {
-            left_indices[left_n] = indices[i]
+        let row: i32 = order[i]
+        if x_data[row * x_cols + best_feature] <= best_threshold {
+            side[row] = 0
             left_n = left_n + 1
         } else {
-            right_indices[right_n] = indices[i]
-            right_n = right_n + 1
+            side[row] = 1
+        }
+    }
+    let right_n: i32 = n_indices - left_n
+
+    let left_order: ptr<i32> = malloc(((x_cols as i64) * (left_n as i64) + 1) * 4) as ptr<i32>
+    let right_order: ptr<i32> = malloc(((x_cols as i64) * (right_n as i64) + 1) * 4) as ptr<i32>
+
+    for f in 0 to x_cols {
+        let sbase: i32 = f * n_indices
+        let lbase: i32 = f * left_n
+        let rbase: i32 = f * right_n
+        let mut li: i32 = 0
+        let mut ri: i32 = 0
+        for i in 0 to n_indices {
+            let row: i32 = order[sbase + i]
+            if side[row] == 0 {
+                left_order[lbase + li] = row
+                li = li + 1
+            } else {
+                right_order[rbase + ri] = row
+                ri = ri + 1
+            }
         }
     }
 
@@ -450,14 +546,14 @@ function _build_classifier_tree(
     nodes[node_idx].n_samples = n_indices
     nodes[node_idx].impurity = parent_impurity
 
-    let left_idx: i32 = _build_classifier_tree(nodes, n_nodes, X, y, left_indices, left_n, depth + 1, max_depth, criterion, classes, n_classes)
-    let right_idx: i32 = _build_classifier_tree(nodes, n_nodes, X, y, right_indices, right_n, depth + 1, max_depth, criterion, classes, n_classes)
+    let left_idx: i32 = _build_classifier_tree(nodes, n_nodes, X, y, left_order, left_n, depth + 1, max_depth, criterion, classes, n_classes, class_of_row, side)
+    let right_idx: i32 = _build_classifier_tree(nodes, n_nodes, X, y, right_order, right_n, depth + 1, max_depth, criterion, classes, n_classes, class_of_row, side)
 
     nodes[node_idx].left = left_idx
     nodes[node_idx].right = right_idx
 
-    free(left_indices as ptr<void>)
-    free(right_indices as ptr<void>)
+    free(left_order as ptr<void>)
+    free(right_order as ptr<void>)
 
     return node_idx
 }
@@ -846,16 +942,23 @@ function _build_regressor_tree(
         return node_idx
     }
 
-    let y_subset: ptr<f32> = array_new_f32(n_indices)
-    for i in 0 to n_indices {
-        y_subset[i] = y[indices[i]]
-    }
-    let parent_impurity: f32 = _mse(y_subset, n_indices)
-    array_free_f32(y_subset)
-
-    # Precompute y values for sorted sweep.
+    # One copy of the node's y values, used both for the parent impurity and
+    # for the sorted sweep. This used to be gathered twice into two separate
+    # allocations holding the same numbers in the same order.
     let y_vals: ptr<f32> = array_new_f32(n_indices)
     for i in 0 to n_indices { y_vals[i] = y[indices[i]] }
+    let parent_impurity: f32 = _mse(y_vals, n_indices)
+
+    # Row offsets into X.data, computed once per node and reused by every
+    # feature and by the final partition, instead of recomputing
+    # indices[i] * X.cols inside matrix_at on every element touch.
+    let x_data: ptr<f32> = X.data
+    let x_cols: i32 = X.cols
+    let row_base: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
+    for i in 0 to n_indices {
+        row_base[i] = indices[i] * x_cols
+    }
+
     let mut total_sum: f32 = 0.0
     let mut total_sum_sq: f32 = 0.0
     for i in 0 to n_indices {
@@ -870,11 +973,28 @@ function _build_regressor_tree(
     let sort_values: ptr<f32> = array_new_f32(n_indices)
     let sort_y: ptr<f32> = array_new_f32(n_indices)
 
-    for f in 0 to X.cols {
+    for f in 0 to x_cols {
+        # Gather and check for a constant column in one pass. If every sample
+        # shares a value, the sweep below hits sort_values[i] == sort_values[i+1]
+        # at every position and evaluates no candidate at all, and left_sum is
+        # reset per feature, so skipping the sort and the sweep changes nothing.
+        let first_value: f32 = x_data[row_base[0] + f]
+        let mut is_constant: bool = true
         for i in 0 to n_indices {
-            sort_values[i] = matrix_at(X, indices[i], f)
-            sort_y[i] = y_vals[i]
+            let v: f32 = x_data[row_base[i] + f]
+            sort_values[i] = v
+            if v != first_value { is_constant = false }
         }
+        if is_constant { continue }
+
+        memcpy(sort_y as ptr<void>, y_vals as ptr<void>, (n_indices as i64) * 4)
+
+        # _sort_pairs_f32 stays as it is. Unlike the classifier, this sweep
+        # accumulates left_sum and left_sum_sq in f32 in sorted position order,
+        # so reordering equal values changes the rounding and can flip the
+        # strict comparison below. The order among ties is part of the result
+        # here, which is why the presorted-order rewrite the classifier got
+        # does not apply.
         _sort_pairs_f32(sort_values, sort_y, n_indices)
 
         let mut left_sum: f32 = 0.0
@@ -913,22 +1033,20 @@ function _build_regressor_tree(
 
     array_free_f32(sort_values)
     array_free_f32(sort_y)
-    array_free_f32(y_vals)
 
     if best_feature < 0 || best_impurity >= parent_impurity - 0.0000000001 {
-        let y_sub: ptr<f32> = array_new_f32(n_indices)
-        for i in 0 to n_indices {
-            y_sub[i] = y[indices[i]]
-        }
         nodes[node_idx].is_leaf = true
-        nodes[node_idx].value = _mean_val(y_sub, n_indices)
+        nodes[node_idx].value = _mean_val(y_vals, n_indices)
         nodes[node_idx].n_samples = n_indices
         nodes[node_idx].left = -1
         nodes[node_idx].right = -1
         nodes[node_idx].impurity = parent_impurity
-        array_free_f32(y_sub)
+        array_free_f32(y_vals)
+        free(row_base as ptr<void>)
         return node_idx
     }
+
+    array_free_f32(y_vals)
 
     let left_indices: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
     let right_indices: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
@@ -936,7 +1054,7 @@ function _build_regressor_tree(
     let mut right_n: i32 = 0
 
     for i in 0 to n_indices {
-        if matrix_at(X, indices[i], best_feature) <= best_threshold {
+        if x_data[row_base[i] + best_feature] <= best_threshold {
             left_indices[left_n] = indices[i]
             left_n = left_n + 1
         } else {
@@ -944,6 +1062,8 @@ function _build_regressor_tree(
             right_n = right_n + 1
         }
     }
+
+    free(row_base as ptr<void>)
 
     nodes[node_idx].is_leaf = false
     nodes[node_idx].feature = best_feature
