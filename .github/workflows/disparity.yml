@@ -22,7 +22,7 @@ jobs:
       - name: Generate disparity evidence
         run: python benchmarks/generate_disparity_report.py
       - name: Audit learned-state diagnostic coverage
-        run: python benchmarks/model_state_coverage.py
+        run: python benchmarks/model_state_coverage.py --require-complete
       - name: Validate persistent disparity accounting
         run: |
           python - <<'PY'
@@ -39,7 +39,8 @@ jobs:
           assert all("model_state_diagnostics" in row for row in report["rows"])
           assert coverage["counts"]["canonical_rows"] == 19, coverage["counts"]
           assert coverage["counts"]["covered_rows"] == counts["rows_with_model_state_diagnostics"], (coverage["counts"], counts)
-          assert coverage["counts"]["covered_rows"] > 0, coverage["counts"]
+          assert coverage["counts"]["covered_rows"] == 19, coverage["counts"]
+          assert coverage["counts"]["missing_rows"] == 0, coverage["counts"]
           print({"disparity": counts, "model_state_coverage": coverage["counts"]})
           PY
       - uses: actions/upload-artifact@v4
