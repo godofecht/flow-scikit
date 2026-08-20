@@ -1,0 +1,624 @@
+# Issue #457: categorical splits reach the forest, Bagging and ExtraTree
+# builders, and every traversal in ensemble.flow evaluates the node's kind.
+#
+# PR #441 put cat_kind and a 128-bit inline left set on TreeNode and taught the
+# two plain builders Breiman's subset ordering. The ensemble builders never set
+# cat_kind and the four inline traversals in ensemble.flow read every node as a
+# threshold split, so a forest could not express a subset split at all.
+#
+# Every dataset here has the parity shape from #441's test, widened to sixteen
+# levels: the informative column's levels cycle 0..15 and the label is the
+# level's parity, so the optimum is the even levels against the odd ones and no
+# threshold on the label encoding 0 < 1 < ... < 15 can express it.
+
+import "lib/scikit/matrix.flow"
+import "lib/scikit/tree.flow"
+import "lib/scikit/ensemble.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+}
+
+# Column 0 cycles 0..15 and the label is the level's parity, so the optimum is
+# the eight even levels against the eight odd ones. A threshold on the label
+# encoding cuts that order in one place, so at depth 3 it can reach eight
+# contiguous pairs of levels and every one of them is half one class and half
+# the other: 50 percent, whatever the tree does. One subset split at depth 1
+# separates them exactly.
+#
+# Columns 1 to 3 are block indices: they change once per full cycle of the
+# levels, so each of them is constant across a whole 0..15 cycle and carries no
+# information about the parity at all. They are here so the fit is a real
+# search over four features rather than a one-column special case, and so that
+# max_features = sqrt(4) = 2 makes the forest's per-node feature draw matter.
+function _t457_make_x(reps: i32) -> Matrix {
+    let n: i32 = 16 * reps
+    let X: Matrix = matrix_new(n, 4)
+    for i in 0 to n {
+        let lvl: i32 = i % 16
+        let blk: i32 = i / 16
+        matrix_set(X, i, 0, lvl as f32)
+        matrix_set(X, i, 1, (blk % 7) as f32)
+        matrix_set(X, i, 2, (blk % 5) as f32)
+        matrix_set(X, i, 3, (blk % 3) as f32)
+    }
+    return X
+}
+
+function _t457_make_y(reps: i32) -> ptr<f32> {
+    let n: i32 = 16 * reps
+    let y: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let lvl: i32 = i % 16
+        y[i] = (lvl % 2) as f32
+    }
+    return y
+}
+
+# Only column 0 is categorical. Columns 1 to 3 stay numeric, so what is under
+# test is the mixed case rather than an all-categorical shortcut.
+function _t457_mask_col0(cols: i32) -> ptr<i32> {
+    let m: ptr<i32> = malloc((cols as i64) * 4) as ptr<i32>
+    for f in 0 to cols { m[f] = 0 }
+    m[0] = 1
+    return m
+}
+
+function _t457_mask_none(cols: i32) -> ptr<i32> {
+    let m: ptr<i32> = malloc((cols as i64) * 4) as ptr<i32>
+    for f in 0 to cols { m[f] = 0 }
+    return m
+}
+
+function _t457_accuracy(pred: ptr<f32>, y: ptr<f32>, n: i32) -> f32 {
+    let mut hits: i32 = 0
+    for i in 0 to n {
+        if pred[i] == y[i] { hits = hits + 1 }
+    }
+    return (hits as f32) / (n as f32)
+}
+
+# How many nodes across the whole forest carry a fitted left set.
+function _t457_forest_mask_nodes(m: RandomForestClassifier) -> i32 {
+    let mut found: i32 = 0
+    for t in 0 to m.n_trees {
+        let tree: DecisionTreeClassifier = m.trees[t]
+        for k in 0 to tree.n_nodes {
+            let nd: ptr<TreeNode> = tree.nodes + k
+            if nd.cat_kind == 1 { found = found + 1 }
+        }
+    }
+    return found
+}
+
+function _t457_bag_mask_nodes(m: BaggingClassifier) -> i32 {
+    let mut found: i32 = 0
+    for t in 0 to m.n_estimators {
+        let tree: DecisionTreeClassifier = m.trees[t]
+        for k in 0 to tree.n_nodes {
+            let nd: ptr<TreeNode> = tree.nodes + k
+            if nd.cat_kind == 1 { found = found + 1 }
+        }
+    }
+    return found
+}
+
+# Every field of every node of every tree, both forests.
+function _t457_forests_match(a: RandomForestClassifier, b: RandomForestClassifier) -> bool {
+    if a.n_trees != b.n_trees { return false }
+    if a.n_classes != b.n_classes { return false }
+    for c in 0 to a.n_classes {
+        if a.classes[c] != b.classes[c] { return false }
+    }
+    for t in 0 to a.n_trees {
+        let ta: DecisionTreeClassifier = a.trees[t]
+        let tb: DecisionTreeClassifier = b.trees[t]
+        if ta.n_nodes != tb.n_nodes { return false }
+        for k in 0 to ta.n_nodes {
+            let na: ptr<TreeNode> = ta.nodes + k
+            let nb: ptr<TreeNode> = tb.nodes + k
+            if na.feature != nb.feature { return false }
+            if na.threshold != nb.threshold { return false }
+            if na.left != nb.left { return false }
+            if na.right != nb.right { return false }
+            if na.is_leaf != nb.is_leaf { return false }
+            if na.value != nb.value { return false }
+            if na.n_samples != nb.n_samples { return false }
+            if na.impurity != nb.impurity { return false }
+            if na.cat_kind != nb.cat_kind { return false }
+            if na.cat_mask0 != nb.cat_mask0 { return false }
+            if na.cat_mask1 != nb.cat_mask1 { return false }
+            if na.cat_mask2 != nb.cat_mask2 { return false }
+            if na.cat_mask3 != nb.cat_mask3 { return false }
+        }
+    }
+    return true
+}
+
+function _t457_total_nodes(m: RandomForestClassifier) -> i32 {
+    let mut total: i32 = 0
+    for t in 0 to m.n_trees { total = total + m.trees[t].n_nodes }
+    return total
+}
+
+# ---------------------------------------------------------------------------
+# 1. A forest on a subset optimum beats the same forest on a label encoding.
+# ---------------------------------------------------------------------------
+function _t457_test_forest_beats_label_encoding() -> i32 {
+    println("random forest on a categorical feature")
+    let mut failed: i32 = 0
+
+    let reps: i32 = 16
+    let n: i32 = 16 * reps
+    let X: Matrix = _t457_make_x(reps)
+    let y: ptr<f32> = _t457_make_y(reps)
+
+    let cat: ptr<i32> = _t457_mask_col0(4)
+    let num: ptr<i32> = _t457_mask_none(4)
+
+    # Depth 3 is the budget where the difference is unambiguous. One subset
+    # split separates the classes exactly, and every tree that draws column 0
+    # anywhere in its three levels finds it. A threshold on the label encoding
+    # reaches at best eight contiguous pairs of levels, each half one class and
+    # half the other, so no depth short of four helps it at all.
+    let cm: RandomForestClassifier = random_forest_classifier_fit_categorical(X, y, 2, 25, 3, 7, cat)
+    let nm: RandomForestClassifier = random_forest_classifier_fit_categorical(X, y, 2, 25, 3, 7, num)
+
+    let cp: ptr<f32> = random_forest_classifier_predict(cm, X)
+    let np: ptr<f32> = random_forest_classifier_predict(nm, X)
+    let ca: f32 = _t457_accuracy(cp, y, n)
+    let na: f32 = _t457_accuracy(np, y, n)
+
+    if ca <= na {
+        printf("  FAIL: categorical forest %.4f did not beat label-encoded %.4f\n", ca, na)
+        failed = failed + 1
+    } else {
+        printf("  OK: categorical forest %.4f against label-encoded %.4f\n", ca, na)
+    }
+
+    if ca < 0.999 {
+        printf("  FAIL: the subset split is exact, so the categorical forest should be perfect, got %.4f\n", ca)
+        failed = failed + 1
+    }
+
+    # At least one tree must actually carry a fitted left set, otherwise the
+    # accuracy above could have come from somewhere else entirely.
+    let masks: i32 = _t457_forest_mask_nodes(cm)
+    if masks < 1 {
+        println("  FAIL: no node in the categorical forest carries a mask")
+        failed = failed + 1
+    } else {
+        printf("  OK: %d mask nodes across the forest\n", masks)
+    }
+
+    # The label-encoded forest must carry none, which is the numeric-path
+    # guarantee stated in the same breath.
+    let nmasks: i32 = _t457_forest_mask_nodes(nm)
+    if nmasks != 0 {
+        printf("  FAIL: the label-encoded forest carries %d mask nodes\n", nmasks)
+        failed = failed + 1
+    }
+
+    array_free_f32(cp)
+    array_free_f32(np)
+    random_forest_classifier_free(cm)
+    random_forest_classifier_free(nm)
+    free(cat as ptr<void>)
+    free(num as ptr<void>)
+    array_free_f32(y)
+    matrix_free(X)
+    return failed
+}
+
+# ---------------------------------------------------------------------------
+# 2. The mask reaches every tree of a BaggingClassifier too.
+# ---------------------------------------------------------------------------
+function _t457_test_bagging_beats_label_encoding() -> i32 {
+    println("bagging classifier on a categorical feature")
+    let mut failed: i32 = 0
+
+    let reps: i32 = 16
+    let n: i32 = 16 * reps
+    let X: Matrix = _t457_make_x(reps)
+    let y: ptr<f32> = _t457_make_y(reps)
+
+    let cat: ptr<i32> = _t457_mask_col0(4)
+    let num: ptr<i32> = _t457_mask_none(4)
+
+    let cm: BaggingClassifier = bagging_classifier_fit_categorical(X, y, 2, 8, 1, 11, cat)
+    let nm: BaggingClassifier = bagging_classifier_fit_categorical(X, y, 2, 8, 1, 11, num)
+
+    let cp: ptr<f32> = bagging_classifier_predict(cm, X)
+    let np: ptr<f32> = bagging_classifier_predict(nm, X)
+    let ca: f32 = _t457_accuracy(cp, y, n)
+    let na: f32 = _t457_accuracy(np, y, n)
+
+    if ca <= na {
+        printf("  FAIL: categorical bagging %.4f did not beat label-encoded %.4f\n", ca, na)
+        failed = failed + 1
+    } else {
+        printf("  OK: categorical bagging %.4f against label-encoded %.4f\n", ca, na)
+    }
+
+    let masks: i32 = _t457_bag_mask_nodes(cm)
+    if masks < 1 {
+        println("  FAIL: no node in the bagged ensemble carries a mask")
+        failed = failed + 1
+    } else {
+        printf("  OK: %d mask nodes across the bagged ensemble\n", masks)
+    }
+
+    let nmasks: i32 = _t457_bag_mask_nodes(nm)
+    if nmasks != 0 {
+        printf("  FAIL: the label-encoded bagged ensemble carries %d mask nodes\n", nmasks)
+        failed = failed + 1
+    }
+
+    array_free_f32(cp)
+    array_free_f32(np)
+    bagging_classifier_free(cm)
+    bagging_classifier_free(nm)
+    free(cat as ptr<void>)
+    free(num as ptr<void>)
+    array_free_f32(y)
+    matrix_free(X)
+    return failed
+}
+
+# ---------------------------------------------------------------------------
+# 3. An all-zero mask is the plain numeric fit, node for node.
+#
+# This is the claim the whole threading rests on: the old entry point calls the
+# new one with an all-zero mask, so there is one implementation and the numeric
+# forest is unchanged. Comparing every field of every node is the only way to
+# assert it; two forests can agree on 100 predictions and differ in structure.
+# ---------------------------------------------------------------------------
+function _t457_test_empty_mask_is_the_plain_fit() -> i32 {
+    println("an all-numeric mask reproduces the plain forest")
+    let mut failed: i32 = 0
+
+    let reps: i32 = 16
+    let X: Matrix = _t457_make_x(reps)
+    let y: ptr<f32> = _t457_make_y(reps)
+    let num: ptr<i32> = _t457_mask_none(4)
+
+    let plain: RandomForestClassifier = random_forest_classifier_fit(X, y, 2, 12, 4, 7)
+    let masked: RandomForestClassifier = random_forest_classifier_fit_categorical(X, y, 2, 12, 4, 7, num)
+
+    if not _t457_forests_match(plain, masked) {
+        println("  FAIL: the all-zero mask changed the forest")
+        failed = failed + 1
+    } else {
+        printf("  OK: %d nodes identical field by field\n", _t457_total_nodes(plain))
+    }
+
+    random_forest_classifier_free(plain)
+    random_forest_classifier_free(masked)
+    free(num as ptr<void>)
+    array_free_f32(y)
+    matrix_free(X)
+    return failed
+}
+
+# ---------------------------------------------------------------------------
+# 4. Same seed, same forest, twice over, with the mask on.
+#
+# Threading a mask must not make the fit depend on anything but the data and
+# the seed. Fitting three times and comparing all three catches a builder that
+# reads scratch it forgot to clear as readily as one that consumes a draw it
+# should not.
+# ---------------------------------------------------------------------------
+function _t457_test_seed_stability() -> i32 {
+    println("same seed, same forest")
+    let mut failed: i32 = 0
+
+    let reps: i32 = 16
+    let X: Matrix = _t457_make_x(reps)
+    let y: ptr<f32> = _t457_make_y(reps)
+    let cat: ptr<i32> = _t457_mask_col0(4)
+
+    let a: RandomForestClassifier = random_forest_classifier_fit_categorical(X, y, 2, 12, 4, 19, cat)
+    let b: RandomForestClassifier = random_forest_classifier_fit_categorical(X, y, 2, 12, 4, 19, cat)
+    let c: RandomForestClassifier = random_forest_classifier_fit_categorical(X, y, 2, 12, 4, 19, cat)
+
+    if not _t457_forests_match(a, b) {
+        println("  FAIL: two fits at seed 19 differ")
+        failed = failed + 1
+    }
+    if not _t457_forests_match(a, c) {
+        println("  FAIL: the third fit at seed 19 differs")
+        failed = failed + 1
+    }
+    if failed == 0 {
+        printf("  OK: three fits at seed 19 agree on all %d nodes\n", _t457_total_nodes(a))
+    }
+
+    # A different seed must produce a different forest, otherwise the check
+    # above passes for the wrong reason.
+    let d: RandomForestClassifier = random_forest_classifier_fit_categorical(X, y, 2, 12, 4, 20, cat)
+    if _t457_forests_match(a, d) {
+        println("  FAIL: seed 19 and seed 20 produced the same forest, so the seed is not read")
+        failed = failed + 1
+    }
+
+    random_forest_classifier_free(a)
+    random_forest_classifier_free(b)
+    random_forest_classifier_free(c)
+    random_forest_classifier_free(d)
+    free(cat as ptr<void>)
+    array_free_f32(y)
+    matrix_free(X)
+    return failed
+}
+
+# ---------------------------------------------------------------------------
+# 5. Unseen levels go right at every node of every tree.
+#
+# The direction is defined rather than an error: a level absent from training
+# has no bit set in any node. Asserting it at the forest is not the same as
+# asserting it at one tree, because a vote can hide a wrong turn.
+# ---------------------------------------------------------------------------
+function _t457_test_unseen_level_predicts() -> i32 {
+    println("an unseen level takes the right branch through the forest")
+    let mut failed: i32 = 0
+
+    let reps: i32 = 16
+    let X: Matrix = _t457_make_x(reps)
+    let y: ptr<f32> = _t457_make_y(reps)
+    let cat: ptr<i32> = _t457_mask_col0(4)
+
+    let m: RandomForestClassifier = random_forest_classifier_fit_categorical(X, y, 2, 12, 3, 7, cat)
+
+    # Level 9 never occurred in training. Every row here is otherwise valid.
+    let Q: Matrix = matrix_new(3, 4)
+    for i in 0 to 3 {
+        matrix_set(Q, i, 0, 99.0)
+        matrix_set(Q, i, 1, (i % 7) as f32)
+        matrix_set(Q, i, 2, (i % 5) as f32)
+        matrix_set(Q, i, 3, (i % 3) as f32)
+    }
+
+    let pred: ptr<f32> = random_forest_classifier_predict(m, Q)
+    for i in 0 to 3 {
+        if pred[i] != 0.0 && pred[i] != 1.0 {
+            printf("  FAIL: unseen level produced %.4f, which is not a class label\n", pred[i])
+            failed = failed + 1
+        }
+    }
+    if failed == 0 {
+        println("  OK: an unseen level predicts a valid label rather than failing")
+    }
+
+    array_free_f32(pred)
+    matrix_free(Q)
+    random_forest_classifier_free(m)
+    free(cat as ptr<void>)
+    array_free_f32(y)
+    matrix_free(X)
+    return failed
+}
+
+# ---------------------------------------------------------------------------
+# 6. The ExtraTree builder takes a mask and produces mask nodes.
+#
+# ExtraTree draws its split at random, so the assertion is structural rather
+# than about accuracy: a categorical feature must produce a subset split, and
+# an all-zero mask must produce none.
+# ---------------------------------------------------------------------------
+function _t457_test_extra_tree_mask() -> i32 {
+    println("extra tree on a categorical feature")
+    let mut failed: i32 = 0
+
+    let reps: i32 = 16
+    let n: i32 = 16 * reps
+    let X: Matrix = _t457_make_x(reps)
+    let y: ptr<f32> = _t457_make_y(reps)
+    let cat: ptr<i32> = _t457_mask_col0(4)
+    let num: ptr<i32> = _t457_mask_none(4)
+
+    let cm: ExtraTreeClassifier = extra_tree_classifier_fit_categorical(X, y, n, 4, 2, 5, 5, cat)
+    let nm: ExtraTreeClassifier = extra_tree_classifier_fit_categorical(X, y, n, 4, 2, 5, 5, num)
+
+    let mut cmasks: i32 = 0
+    for k in 0 to cm.n_nodes {
+        let nd: ptr<TreeNode> = cm.nodes + k
+        if nd.cat_kind == 1 { cmasks = cmasks + 1 }
+    }
+    let mut nmasks: i32 = 0
+    for k in 0 to nm.n_nodes {
+        let nd: ptr<TreeNode> = nm.nodes + k
+        if nd.cat_kind == 1 { nmasks = nmasks + 1 }
+    }
+
+    if cmasks < 1 {
+        println("  FAIL: no node of the categorical extra tree carries a mask")
+        failed = failed + 1
+    } else {
+        printf("  OK: %d mask nodes in the categorical extra tree\n", cmasks)
+    }
+    if nmasks != 0 {
+        printf("  FAIL: the numeric extra tree carries %d mask nodes\n", nmasks)
+        failed = failed + 1
+    }
+
+    # A leaf never carries a left set, whichever way the random split fell.
+    for k in 0 to cm.n_nodes {
+        let nd: ptr<TreeNode> = cm.nodes + k
+        if nd.is_leaf && nd.cat_kind != 0 {
+            printf("  FAIL: leaf node %d carries a left set\n", k)
+            failed = failed + 1
+        }
+    }
+
+    # The predictions must still be labels the model was trained on.
+    let pred: ptr<f32> = extra_tree_classifier_predict(cm, X)
+    for i in 0 to n {
+        if pred[i] != 0.0 && pred[i] != 1.0 {
+            printf("  FAIL: extra tree predicted %.4f, which is not a class label\n", pred[i])
+            failed = failed + 1
+        }
+    }
+
+    array_free_f32(pred)
+    extra_tree_classifier_free(cm)
+    extra_tree_classifier_free(nm)
+    free(cat as ptr<void>)
+    free(num as ptr<void>)
+    array_free_f32(y)
+    matrix_free(X)
+    return failed
+}
+
+# ---------------------------------------------------------------------------
+# 7. The regression side: a bagged regressor on a subset optimum.
+# ---------------------------------------------------------------------------
+function _t457_test_bagging_regressor() -> i32 {
+    println("bagging regressor on a categorical feature")
+    let mut failed: i32 = 0
+
+    let reps: i32 = 16
+    let n: i32 = 16 * reps
+    let X: Matrix = _t457_make_x(reps)
+
+    # Response is 10 on the even levels and 0 on the odd ones, the same {0,2}
+    # against {1,3} partition, so the exact fit has residual 0.
+    let y: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let lvl: i32 = i % 16
+        let odd: f32 = ((lvl % 2) * 10) as f32
+        y[i] = 10.0 - odd
+    }
+
+    let cat: ptr<i32> = _t457_mask_col0(4)
+    let num: ptr<i32> = _t457_mask_none(4)
+
+    let cm: BaggingRegressor = bagging_regressor_fit_categorical(X, y, 8, 1, 13, cat)
+    let nm: BaggingRegressor = bagging_regressor_fit_categorical(X, y, 8, 1, 13, num)
+
+    let cp: ptr<f32> = bagging_regressor_predict(cm, X)
+    let np: ptr<f32> = bagging_regressor_predict(nm, X)
+
+    let mut cres: f32 = 0.0
+    let mut nres: f32 = 0.0
+    for i in 0 to n {
+        let cd: f32 = cp[i] - y[i]
+        let nd: f32 = np[i] - y[i]
+        cres = cres + cd * cd
+        nres = nres + nd * nd
+    }
+
+    if cres >= nres {
+        printf("  FAIL: categorical residual %.4f did not beat label-encoded %.4f\n", cres, nres)
+        failed = failed + 1
+    } else {
+        printf("  OK: categorical residual %.4f against label-encoded %.4f\n", cres, nres)
+    }
+
+    array_free_f32(cp)
+    array_free_f32(np)
+    bagging_regressor_free(cm)
+    bagging_regressor_free(nm)
+    free(cat as ptr<void>)
+    free(num as ptr<void>)
+    array_free_f32(y)
+    matrix_free(X)
+    return failed
+}
+
+# ---------------------------------------------------------------------------
+# 8. max_features scopes the categorical scan.
+#
+# A categorical feature that was not drawn at a node must not be scanned there,
+# exactly as a numeric one is not. With three features and max_features = 1 the
+# informative column is drawn at roughly a third of the nodes, so a forest deep
+# enough to have many nodes must contain both mask nodes and threshold nodes.
+# A builder that scanned every categorical feature regardless of the draw would
+# put a mask on every internal node, since the categorical column is the only
+# one that separates the classes at all.
+# ---------------------------------------------------------------------------
+function _t457_test_max_features_scopes_the_scan() -> i32 {
+    println("max_features scopes the categorical scan")
+    let mut failed: i32 = 0
+
+    let reps: i32 = 16
+    let X: Matrix = _t457_make_x(reps)
+    let y: ptr<f32> = _t457_make_y(reps)
+    let cat: ptr<i32> = _t457_mask_col0(4)
+
+    let m: RandomForestClassifier = random_forest_classifier_fit_categorical(X, y, 2, 20, 4, 3, cat)
+
+    let mut internal: i32 = 0
+    let mut masked: i32 = 0
+    for t in 0 to m.n_trees {
+        let tree: DecisionTreeClassifier = m.trees[t]
+        for k in 0 to tree.n_nodes {
+            let nd: ptr<TreeNode> = tree.nodes + k
+            if not nd.is_leaf {
+                internal = internal + 1
+                if nd.cat_kind == 1 { masked = masked + 1 }
+            }
+        }
+    }
+
+    if masked < 1 {
+        println("  FAIL: no internal node carries a mask, so the scan never ran")
+        failed = failed + 1
+    }
+    if masked >= internal {
+        printf("  FAIL: %d of %d internal nodes are masked, so the scan ignored max_features\n", masked, internal)
+        failed = failed + 1
+    }
+    if failed == 0 {
+        printf("  OK: %d of %d internal nodes are subset splits\n", masked, internal)
+    }
+
+    # Every masked node must actually split on the column that is categorical.
+    for t in 0 to m.n_trees {
+        let tree: DecisionTreeClassifier = m.trees[t]
+        for k in 0 to tree.n_nodes {
+            let nd: ptr<TreeNode> = tree.nodes + k
+            if nd.cat_kind == 1 && nd.feature != 0 {
+                printf("  FAIL: a mask node splits on numeric feature %d\n", nd.feature)
+                failed = failed + 1
+            }
+        }
+    }
+
+    random_forest_classifier_free(m)
+    free(cat as ptr<void>)
+    array_free_f32(y)
+    matrix_free(X)
+    return failed
+}
+
+function main() -> i32 {
+    println("=== Issue #457: categorical splits in ensembles ===")
+    println("")
+
+    let mut failures: i32 = 0
+    failures = failures + _t457_test_forest_beats_label_encoding()
+    println("")
+    failures = failures + _t457_test_bagging_beats_label_encoding()
+    println("")
+    failures = failures + _t457_test_empty_mask_is_the_plain_fit()
+    println("")
+    failures = failures + _t457_test_seed_stability()
+    println("")
+    failures = failures + _t457_test_unseen_level_predicts()
+    println("")
+    failures = failures + _t457_test_extra_tree_mask()
+    println("")
+    failures = failures + _t457_test_bagging_regressor()
+    println("")
+    failures = failures + _t457_test_max_features_scopes_the_scan()
+    println("")
+
+    if failures == 0 {
+        println("All categorical ensemble tests passed!")
+        return 0
+    }
+    print("FAILURES: ")
+    print(failures)
+    println("")
+    return 1
+}
