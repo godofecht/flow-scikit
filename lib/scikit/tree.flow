@@ -859,6 +859,19 @@ function _build_classifier_tree(
 
 # Tree builder with feature subsampling for RandomForest.
 # At each node, only max_features randomly chosen features are considered.
+#
+# Issue #457: a drawn feature flagged categorical in cat_card gets Breiman's
+# subset scan instead of the threshold sweep, and an undrawn one is skipped
+# whether it is categorical or numeric. The categorical scan runs from the same
+# feature loop, after the same feature_mask test, so max_features means the
+# same thing for both kinds of feature.
+#
+# The draw order is untouched. The feature mask is drawn before any feature is
+# looked at, and it is drawn from n_features and the PRNG state alone, so which
+# features are sampled does not depend on what those features contain.
+#
+# With no categorical feature max_card is 0, every cat_card entry is 0, the
+# categorical branch is unreachable and this is the numeric builder unchanged.
 function _build_classifier_tree_rf(
     nodes: ptr<TreeNode>,
     n_nodes: ptr<i32>,
@@ -872,7 +885,11 @@ function _build_classifier_tree_rf(
     classes: ptr<f32>,
     n_classes: i32,
     max_features: i32,
-    prng_state: ptr<u32>
+    prng_state: ptr<u32>,
+    cat_card: ptr<i32>,
+    max_card: i32,
+    cat_iscratch: ptr<i32>,
+    cat_mean: ptr<f32>
 ) -> i32 {
     let node_idx: i32 = n_nodes[0]
     n_nodes[0] = n_nodes[0] + 1
@@ -897,6 +914,17 @@ function _build_classifier_tree_rf(
     let mut best_feature: i32 = -1
     let mut best_threshold: f32 = 0.0
     let mut best_impurity: f32 = 9999999999.0
+    let mut best_is_cat: bool = false
+    let mut best_n_left_cats: i32 = 0
+
+    # Views into the one categorical scratch block the fit allocated. All five
+    # are empty when max_card is 0, and nothing below reads them unless some
+    # cat_card[f] is positive, which cannot happen when max_card is 0.
+    let cat_count: ptr<i32> = cat_iscratch
+    let cat_ci_sum: ptr<i32> = cat_iscratch + max_card
+    let cat_ids: ptr<i32> = cat_iscratch + 2 * max_card
+    let best_cats: ptr<i32> = cat_iscratch + 3 * max_card
+    let cat_class: ptr<i32> = cat_iscratch + 4 * max_card
 
     # Row offsets into X.data, computed once per node and reused by every
     # candidate feature and by the final partition, instead of recomputing
@@ -967,6 +995,82 @@ function _build_classifier_tree_rf(
     for f in 0 to n_features {
         if feature_mask[f] == 0 { continue }
 
+        let card: i32 = cat_card[f]
+        if card > 0 {
+            # Breiman's subset search, the same scan the plain builder runs.
+            # Bucket this node's rows by level, keeping each level's class
+            # histogram and the sum of the class indices of its samples.
+            for lv in 0 to card {
+                cat_count[lv] = 0
+                cat_ci_sum[lv] = 0
+            }
+            let cclen: i32 = card * n_classes
+            for k in 0 to cclen { cat_class[k] = 0 }
+
+            for i in 0 to n_indices {
+                let lv: i32 = x_data[row_base[i] + f] as i32
+                let cls: i32 = class_idx[i]
+                cat_count[lv] = cat_count[lv] + 1
+                cat_ci_sum[lv] = cat_ci_sum[lv] + cls
+                cat_class[lv * n_classes + cls] = cat_class[lv * n_classes + cls] + 1
+            }
+
+            # Order the levels present here by their mean class index and score
+            # only the k-1 prefixes of that ordering, so a 40-level column
+            # costs 39 candidates rather than 2^39.
+            let mut n_cats: i32 = 0
+            for lv in 0 to card {
+                if cat_count[lv] > 0 {
+                    cat_ids[n_cats] = lv
+                    cat_mean[n_cats] = (cat_ci_sum[lv] as f32) / (cat_count[lv] as f32)
+                    n_cats = n_cats + 1
+                }
+            }
+            if n_cats < 2 { continue }
+            _sort_pairs(cat_mean, cat_ids, n_cats)
+
+            for pi in 0 to n_present {
+                let c: i32 = present[pi]
+                left_counts[c] = 0
+                right_counts[c] = total_counts[c]
+            }
+
+            let mut n_left_c: i32 = 0
+            for j in 0 to n_cats - 1 {
+                let lv: i32 = cat_ids[j]
+                for pi in 0 to n_present {
+                    let c: i32 = present[pi]
+                    let hit: i32 = cat_class[lv * n_classes + c]
+                    left_counts[c] = left_counts[c] + hit
+                    right_counts[c] = right_counts[c] - hit
+                }
+                n_left_c = n_left_c + cat_count[lv]
+                let n_right_c: i32 = n_indices - n_left_c
+                if n_left_c < 1 || n_right_c < 1 { continue }
+
+                let gini_left: f32 = _tree_gini_present(left_counts, present, n_present, n_left_c)
+                let gini_right: f32 = _tree_gini_present(right_counts, present, n_present, n_right_c)
+                let nf: f32 = n_indices as f32
+                let weighted: f32 = (n_left_c as f32) / nf * gini_left + (n_right_c as f32) / nf * gini_right
+
+                # The same strict comparison as the numeric scan below, run
+                # from the same feature loop in the same index order, so the
+                # tie-break rule pinned by #204 and #426 is unchanged: the
+                # lowest feature index wins among equals whether the winner is
+                # numeric or categorical, and within one categorical feature
+                # the shortest left set wins.
+                if weighted < best_impurity {
+                    best_impurity = weighted
+                    best_feature = f
+                    best_threshold = 0.0
+                    best_is_cat = true
+                    best_n_left_cats = j + 1
+                    for k in 0 to j + 1 { best_cats[k] = cat_ids[k] }
+                }
+            }
+            continue
+        }
+
         # Gather and check for a constant column in one pass. If every sample
         # shares a value, the scan below hits `sort_values[i] == sort_values[i+1]`
         # at every position and evaluates no candidate at all, so skipping the
@@ -1019,6 +1123,7 @@ function _build_classifier_tree_rf(
                 best_impurity = weighted
                 best_feature = f
                 best_threshold = (sort_values[i] + sort_values[i + 1]) / 2.0
+                best_is_cat = false
             }
         }
     }
@@ -1053,13 +1158,30 @@ function _build_classifier_tree_rf(
     let mut left_n: i32 = 0
     let mut right_n: i32 = 0
 
-    for i in 0 to n_indices {
-        if x_data[row_base[i] + best_feature] <= best_threshold {
-            left_indices[left_n] = indices[i]
-            left_n = left_n + 1
-        } else {
-            right_indices[right_n] = indices[i]
-            right_n = right_n + 1
+    if best_is_cat {
+        # Commit the left set first so the routing here is the identical
+        # predicate predict will use on the same node, rather than a second
+        # copy of it that could drift.
+        _tree_write_cat_mask(nodes, node_idx, best_cats, best_n_left_cats)
+        let split_node: ptr<TreeNode> = nodes + node_idx
+        for i in 0 to n_indices {
+            if _tree_split_goes_left(split_node, x_data[row_base[i] + best_feature]) {
+                left_indices[left_n] = indices[i]
+                left_n = left_n + 1
+            } else {
+                right_indices[right_n] = indices[i]
+                right_n = right_n + 1
+            }
+        }
+    } else {
+        for i in 0 to n_indices {
+            if x_data[row_base[i] + best_feature] <= best_threshold {
+                left_indices[left_n] = indices[i]
+                left_n = left_n + 1
+            } else {
+                right_indices[right_n] = indices[i]
+                right_n = right_n + 1
+            }
         }
     }
 
@@ -1071,8 +1193,8 @@ function _build_classifier_tree_rf(
     nodes[node_idx].n_samples = n_indices
     nodes[node_idx].impurity = parent_impurity
 
-    let left_idx: i32 = _build_classifier_tree_rf(nodes, n_nodes, X, y, left_indices, left_n, depth + 1, max_depth, criterion, classes, n_classes, max_features, prng_state)
-    let right_idx: i32 = _build_classifier_tree_rf(nodes, n_nodes, X, y, right_indices, right_n, depth + 1, max_depth, criterion, classes, n_classes, max_features, prng_state)
+    let left_idx: i32 = _build_classifier_tree_rf(nodes, n_nodes, X, y, left_indices, left_n, depth + 1, max_depth, criterion, classes, n_classes, max_features, prng_state, cat_card, max_card, cat_iscratch, cat_mean)
+    let right_idx: i32 = _build_classifier_tree_rf(nodes, n_nodes, X, y, right_indices, right_n, depth + 1, max_depth, criterion, classes, n_classes, max_features, prng_state, cat_card, max_card, cat_iscratch, cat_mean)
 
     nodes[node_idx].left = left_idx
     nodes[node_idx].right = right_idx
@@ -1085,6 +1207,25 @@ function _build_classifier_tree_rf(
 
 # Fit a decision tree with feature subsampling (for RandomForest).
 export function decision_tree_classifier_fit_rf(X: Matrix, y: ptr<f32>, n_classes: i32, max_depth: i32, criterion: i32, max_features: i32, prng_state: ptr<u32>) -> DecisionTreeClassifier {
+    # Every feature numeric: calloc gives the all-zero mask the categorical
+    # fit reads as "no categorical features", and with max_card 0 the builder
+    # never enters the categorical branch, so this is the old code path.
+    let none: ptr<i32> = calloc(X.cols as i64, 4) as ptr<i32>
+    let model: DecisionTreeClassifier = decision_tree_classifier_fit_rf_categorical(X, y, n_classes, max_depth, criterion, max_features, prng_state, none)
+    free(none as ptr<void>)
+    return model
+}
+
+# Issue #457: the feature-subsampling fit RandomForest uses, with the same
+# per-feature categorical mask the plain classifier fit takes. `categorical` is
+# X.cols entries, non-zero meaning categorical, and a categorical column must
+# hold whole numbers in 0..127 which are read as level indices.
+#
+# The subset search is the same Breiman ordering the plain builder runs, and
+# the same 128-level cap applies. It is scoped by max_features exactly as the
+# threshold sweep is: a categorical feature that was not drawn at a node is not
+# scanned there.
+export function decision_tree_classifier_fit_rf_categorical(X: Matrix, y: ptr<f32>, n_classes: i32, max_depth: i32, criterion: i32, max_features: i32, prng_state: ptr<u32>, categorical: ptr<i32>) -> DecisionTreeClassifier {
     # Issue #398: this used to append at classes[n_found] with no check against
     # n_classes, which wrote past the allocation whenever y carried more
     # distinct labels than the caller declared.
@@ -1099,7 +1240,20 @@ export function decision_tree_classifier_fit_rf(X: Matrix, y: ptr<f32>, n_classe
     let indices: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
     for i in 0 to X.rows { indices[i] = i }
 
-    let _final: i32 = _build_classifier_tree_rf(nodes, n_nodes_ptr, X, y, indices, X.rows, 0, max_depth, criterion, classes, n_classes, max_features, prng_state)
+    # Categorical bookkeeping, allocated once per tree rather than per node so
+    # the numeric path picks up no extra allocation at all. With no categorical
+    # feature max_card is 0 and these are a 16-byte stub and one float.
+    let cat_card: ptr<i32> = _tree_cat_cardinalities(X, categorical)
+    let max_card: i32 = _tree_cat_max_card(cat_card, X.cols)
+    let ccap: i64 = max_card as i64
+    let cat_iscratch: ptr<i32> = malloc((ccap * 4 + ccap * (n_classes as i64)) * 4 + 16) as ptr<i32>
+    let cat_mean: ptr<f32> = array_new_f32(max_card + 1)
+
+    let _final: i32 = _build_classifier_tree_rf(nodes, n_nodes_ptr, X, y, indices, X.rows, 0, max_depth, criterion, classes, n_classes, max_features, prng_state, cat_card, max_card, cat_iscratch, cat_mean)
+
+    free(cat_card as ptr<void>)
+    free(cat_iscratch as ptr<void>)
+    array_free_f32(cat_mean)
 
     free(indices as ptr<void>)
     let n_nodes: i32 = n_nodes_ptr[0]
@@ -1583,12 +1737,92 @@ export struct ExtraTreeClassifier {
     fitted: bool
 }
 
+# Draw the left set for an ExtraTree split on a categorical feature.
+#
+# Issue #457. The ExtraTree split rule is "pick one feature at random, then one
+# cut at random inside it". On an ordered feature the random cut is the
+# midpoint of two randomly drawn sample values. The subset analogue, the one
+# Geurts, Ernst and Wehenkel give for a nominal attribute, is a random
+# non-empty proper subset of the levels present at the node, drawn by one coin
+# flip per level.
+#
+# `seen`, `present_lv` and `left_lv` are 128-entry scratch arrays owned by the
+# fit, so a node allocates nothing. The return value is the number of levels
+# written to left_lv, and 0 means the node has fewer than two levels here and
+# cannot be split on this feature at all.
+#
+# A draw that lands on the empty set or on every level is not a split, so it is
+# repaired to the single lowest level rather than redrawn. Redrawing would make
+# the number of rand() calls at a node depend on the draws themselves, and the
+# repaired set is still a valid random subset of a set the node can separate.
+#
+# rand() is consumed only when this is reached, which is only when the node's
+# drawn feature is categorical, so the numeric path draws exactly what it drew
+# before: one feature and two rows per node, in that order.
+function _tree_extra_cat_left_set(X: Matrix, n: i32, feature: i32, seen: ptr<i32>, present_lv: ptr<i32>, left_lv: ptr<i32>) -> i32 {
+    for lv in 0 to 128 { seen[lv] = 0 }
+    for i in 0 to n {
+        let v: f32 = matrix_at(X, i, feature)
+        let c: i32 = v as i32
+        if (c as f32) == v {
+            if c >= 0 && c < 128 { seen[c] = 1 }
+        }
+    }
+    let mut k: i32 = 0
+    for lv in 0 to 128 {
+        if seen[lv] == 1 {
+            present_lv[k] = lv
+            k = k + 1
+        }
+    }
+    if k < 2 { return 0 }
+
+    let mut nl: i32 = 0
+    for j in 0 to k {
+        let coin: i32 = rand() % 2
+        if coin == 1 {
+            left_lv[nl] = present_lv[j]
+            nl = nl + 1
+        }
+    }
+    if nl == 0 || nl == k {
+        left_lv[0] = present_lv[0]
+        nl = 1
+    }
+    return nl
+}
+
 export function extra_tree_classifier_fit(X: Matrix, y: ptr<f32>, n_samples: i32, n_features: i32, n_classes: i32, max_depth: i32, seed: i32) -> ExtraTreeClassifier {
+    # Every feature numeric: calloc gives the all-zero mask the categorical fit
+    # reads as "no categorical features", so this is the old code path.
+    let none: ptr<i32> = calloc(X.cols as i64, 4) as ptr<i32>
+    let model: ExtraTreeClassifier = extra_tree_classifier_fit_categorical(X, y, n_samples, n_features, n_classes, max_depth, seed, none)
+    free(none as ptr<void>)
+    return model
+}
+
+# Issue #457: the ExtraTree classifier with a per-feature categorical mask.
+# `categorical` is X.cols entries, non-zero meaning categorical, and a
+# categorical column must hold whole numbers in 0..127 read as level indices.
+# A node whose drawn feature is categorical splits on a random subset of the
+# levels present there instead of on a random threshold.
+export function extra_tree_classifier_fit_categorical(X: Matrix, y: ptr<f32>, n_samples: i32, n_features: i32, n_classes: i32, max_depth: i32, seed: i32, categorical: ptr<i32>) -> ExtraTreeClassifier {
     srand(seed)
     let nodes: ptr<TreeNode> = calloc(1024 as i64, 64) as ptr<TreeNode>
     let mut n_nodes: i32 = 0
 
-    n_nodes = _extra_tree_clf_build(nodes, n_nodes, X, y, n_samples, n_features, n_classes, 0, max_depth, seed)
+    # One allocation per fit, not per node, so the numeric path is unchanged.
+    let cat_card: ptr<i32> = _tree_cat_cardinalities(X, categorical)
+    let et_seen: ptr<i32> = malloc(512) as ptr<i32>
+    let et_present: ptr<i32> = malloc(512) as ptr<i32>
+    let et_left: ptr<i32> = malloc(512) as ptr<i32>
+
+    n_nodes = _extra_tree_clf_build(nodes, n_nodes, X, y, n_samples, n_features, n_classes, 0, max_depth, seed, cat_card, et_seen, et_present, et_left)
+
+    free(cat_card as ptr<void>)
+    free(et_seen as ptr<void>)
+    free(et_present as ptr<void>)
+    free(et_left as ptr<void>)
 
     return ExtraTreeClassifier {
         nodes: nodes,
@@ -1600,7 +1834,7 @@ export function extra_tree_classifier_fit(X: Matrix, y: ptr<f32>, n_samples: i32
     }
 }
 
-function _extra_tree_clf_build(nodes: ptr<TreeNode>, node_idx: i32, X: Matrix, y: ptr<f32>, n: i32, p: i32, n_classes: i32, depth: i32, max_depth: i32, seed: i32) -> i32 {
+function _extra_tree_clf_build(nodes: ptr<TreeNode>, node_idx: i32, X: Matrix, y: ptr<f32>, n: i32, p: i32, n_classes: i32, depth: i32, max_depth: i32, seed: i32, cat_card: ptr<i32>, et_seen: ptr<i32>, et_present: ptr<i32>, et_left: ptr<i32>) -> i32 {
     let mut idx: i32 = node_idx
 
     let mut class_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
@@ -1634,7 +1868,18 @@ function _extra_tree_clf_build(nodes: ptr<TreeNode>, node_idx: i32, X: Matrix, y
     let feature: i32 = rand() % p
     let r1: i32 = rand() % n
     let r2: i32 = rand() % n
-    if r1 == r2 {
+
+    # A categorical feature splits on a random subset of its levels; the two
+    # row draws above are spent either way, so the numeric draw order stands.
+    let is_cat: bool = cat_card[feature] > 0
+    let mut n_left_cats: i32 = 0
+    if is_cat {
+        n_left_cats = _tree_extra_cat_left_set(X, n, feature, et_seen, et_present, et_left)
+    }
+
+    let mut degenerate: bool = r1 == r2
+    if is_cat { degenerate = n_left_cats == 0 }
+    if degenerate {
         nodes[idx].is_leaf = true
         nodes[idx].value = best_class as f32
         nodes[idx].feature = -1
@@ -1644,7 +1889,15 @@ function _extra_tree_clf_build(nodes: ptr<TreeNode>, node_idx: i32, X: Matrix, y
         free(class_counts as ptr<void>)
         return idx + 1
     }
-    let threshold: f32 = (matrix_at(X, r1, feature) + matrix_at(X, r2, feature)) / 2.0
+
+    let mut threshold: f32 = 0.0
+    if is_cat {
+        # Commit the left set before partitioning so the routing here is the
+        # identical predicate predict will use on the same node.
+        _tree_write_cat_mask(nodes, idx, et_left, n_left_cats)
+    } else {
+        threshold = (matrix_at(X, r1, feature) + matrix_at(X, r2, feature)) / 2.0
+    }
 
     let left_y: ptr<f32> = array_new_f32(n)
     let right_y: ptr<f32> = array_new_f32(n)
@@ -1653,8 +1906,12 @@ function _extra_tree_clf_build(nodes: ptr<TreeNode>, node_idx: i32, X: Matrix, y
     let mut n_left: i32 = 0
     let mut n_right: i32 = 0
 
+    let split_node: ptr<TreeNode> = nodes + idx
     for i in 0 to n {
-        if matrix_at(X, i, feature) <= threshold {
+        let xv: f32 = matrix_at(X, i, feature)
+        let mut goes_left: bool = xv <= threshold
+        if is_cat { goes_left = _tree_split_goes_left(split_node, xv) }
+        if goes_left {
             for j in 0 to p { matrix_set(left_X, n_left, j, matrix_at(X, i, j)) }
             left_y[n_left] = y[i]
             n_left = n_left + 1
@@ -1677,6 +1934,13 @@ function _extra_tree_clf_build(nodes: ptr<TreeNode>, node_idx: i32, X: Matrix, y
         nodes[idx].feature = -1
         nodes[idx].left = -1
         nodes[idx].right = -1
+        # A leaf carries no split, so the left set written above is cleared
+        # rather than left behind for a node dump to trip over.
+        nodes[idx].cat_kind = 0
+        nodes[idx].cat_mask0 = 0 as u32
+        nodes[idx].cat_mask1 = 0 as u32
+        nodes[idx].cat_mask2 = 0 as u32
+        nodes[idx].cat_mask3 = 0 as u32
         matrix_free(left_X)
         matrix_free(right_X)
         array_free_f32(left_y)
@@ -1685,11 +1949,11 @@ function _extra_tree_clf_build(nodes: ptr<TreeNode>, node_idx: i32, X: Matrix, y
     }
 
     let left_idx: i32 = idx + 1
-    let next_idx: i32 = _extra_tree_clf_build(nodes, left_idx, left_X, left_y, n_left, p, n_classes, depth + 1, max_depth, seed + 1)
+    let next_idx: i32 = _extra_tree_clf_build(nodes, left_idx, left_X, left_y, n_left, p, n_classes, depth + 1, max_depth, seed + 1, cat_card, et_seen, et_present, et_left)
     nodes[idx].right = next_idx
 
     let right_idx: i32 = next_idx
-    let final_idx: i32 = _extra_tree_clf_build(nodes, right_idx, right_X, right_y, n_right, p, n_classes, depth + 1, max_depth, seed + 2)
+    let final_idx: i32 = _extra_tree_clf_build(nodes, right_idx, right_X, right_y, n_right, p, n_classes, depth + 1, max_depth, seed + 2, cat_card, et_seen, et_present, et_left)
 
     matrix_free(left_X)
     matrix_free(right_X)
@@ -1706,10 +1970,11 @@ export function extra_tree_classifier_predict(model: ExtraTreeClassifier, X: Mat
         matrix_row(X, i, row)
         let mut node: i32 = 0
         while not model.nodes[node].is_leaf {
-            if row[model.nodes[node].feature] <= model.nodes[node].threshold {
-                node = model.nodes[node].left
+            let np: ptr<TreeNode> = model.nodes + node
+            if _tree_split_goes_left(np, row[np.feature]) {
+                node = np.left
             } else {
-                node = model.nodes[node].right
+                node = np.right
             }
         }
         result[i] = model.nodes[node].value
@@ -1735,11 +2000,32 @@ export struct ExtraTreeRegressor {
 }
 
 export function extra_tree_regressor_fit(X: Matrix, y: ptr<f32>, n_samples: i32, n_features: i32, max_depth: i32, seed: i32) -> ExtraTreeRegressor {
+    # Every feature numeric: calloc gives the all-zero mask the categorical fit
+    # reads as "no categorical features", so this is the old code path.
+    let none: ptr<i32> = calloc(X.cols as i64, 4) as ptr<i32>
+    let model: ExtraTreeRegressor = extra_tree_regressor_fit_categorical(X, y, n_samples, n_features, max_depth, seed, none)
+    free(none as ptr<void>)
+    return model
+}
+
+# Issue #457: the ExtraTree regressor with a per-feature categorical mask, the
+# same contract as extra_tree_classifier_fit_categorical.
+export function extra_tree_regressor_fit_categorical(X: Matrix, y: ptr<f32>, n_samples: i32, n_features: i32, max_depth: i32, seed: i32, categorical: ptr<i32>) -> ExtraTreeRegressor {
     srand(seed)
     let nodes: ptr<TreeNode> = calloc(1024 as i64, 64) as ptr<TreeNode>
     let mut n_nodes: i32 = 0
 
-    n_nodes = _extra_tree_reg_build(nodes, n_nodes, X, y, n_samples, n_features, 0, max_depth, seed)
+    let cat_card: ptr<i32> = _tree_cat_cardinalities(X, categorical)
+    let et_seen: ptr<i32> = malloc(512) as ptr<i32>
+    let et_present: ptr<i32> = malloc(512) as ptr<i32>
+    let et_left: ptr<i32> = malloc(512) as ptr<i32>
+
+    n_nodes = _extra_tree_reg_build(nodes, n_nodes, X, y, n_samples, n_features, 0, max_depth, seed, cat_card, et_seen, et_present, et_left)
+
+    free(cat_card as ptr<void>)
+    free(et_seen as ptr<void>)
+    free(et_present as ptr<void>)
+    free(et_left as ptr<void>)
 
     return ExtraTreeRegressor {
         nodes: nodes,
@@ -1750,7 +2036,7 @@ export function extra_tree_regressor_fit(X: Matrix, y: ptr<f32>, n_samples: i32,
     }
 }
 
-function _extra_tree_reg_build(nodes: ptr<TreeNode>, node_idx: i32, X: Matrix, y: ptr<f32>, n: i32, p: i32, depth: i32, max_depth: i32, seed: i32) -> i32 {
+function _extra_tree_reg_build(nodes: ptr<TreeNode>, node_idx: i32, X: Matrix, y: ptr<f32>, n: i32, p: i32, depth: i32, max_depth: i32, seed: i32, cat_card: ptr<i32>, et_seen: ptr<i32>, et_present: ptr<i32>, et_left: ptr<i32>) -> i32 {
     let mut idx: i32 = node_idx
 
     let mut mean: f32 = 0.0
@@ -1770,7 +2056,18 @@ function _extra_tree_reg_build(nodes: ptr<TreeNode>, node_idx: i32, X: Matrix, y
     let feature: i32 = rand() % p
     let r1: i32 = rand() % n
     let r2: i32 = rand() % n
-    if r1 == r2 {
+
+    # A categorical feature splits on a random subset of its levels; the two
+    # row draws above are spent either way, so the numeric draw order stands.
+    let is_cat: bool = cat_card[feature] > 0
+    let mut n_left_cats: i32 = 0
+    if is_cat {
+        n_left_cats = _tree_extra_cat_left_set(X, n, feature, et_seen, et_present, et_left)
+    }
+
+    let mut degenerate: bool = r1 == r2
+    if is_cat { degenerate = n_left_cats == 0 }
+    if degenerate {
         nodes[idx].is_leaf = true
         nodes[idx].value = mean
         nodes[idx].feature = -1
@@ -1779,7 +2076,15 @@ function _extra_tree_reg_build(nodes: ptr<TreeNode>, node_idx: i32, X: Matrix, y
         nodes[idx].right = -1
         return idx + 1
     }
-    let threshold: f32 = (matrix_at(X, r1, feature) + matrix_at(X, r2, feature)) / 2.0
+
+    let mut threshold: f32 = 0.0
+    if is_cat {
+        # Commit the left set before partitioning so the routing here is the
+        # identical predicate predict will use on the same node.
+        _tree_write_cat_mask(nodes, idx, et_left, n_left_cats)
+    } else {
+        threshold = (matrix_at(X, r1, feature) + matrix_at(X, r2, feature)) / 2.0
+    }
 
     let left_y: ptr<f32> = array_new_f32(n)
     let right_y: ptr<f32> = array_new_f32(n)
@@ -1788,8 +2093,12 @@ function _extra_tree_reg_build(nodes: ptr<TreeNode>, node_idx: i32, X: Matrix, y
     let mut n_left: i32 = 0
     let mut n_right: i32 = 0
 
+    let split_node: ptr<TreeNode> = nodes + idx
     for i in 0 to n {
-        if matrix_at(X, i, feature) <= threshold {
+        let xv: f32 = matrix_at(X, i, feature)
+        let mut goes_left: bool = xv <= threshold
+        if is_cat { goes_left = _tree_split_goes_left(split_node, xv) }
+        if goes_left {
             for j in 0 to p { matrix_set(left_X, n_left, j, matrix_at(X, i, j)) }
             left_y[n_left] = y[i]
             n_left = n_left + 1
@@ -1807,6 +2116,12 @@ function _extra_tree_reg_build(nodes: ptr<TreeNode>, node_idx: i32, X: Matrix, y
         nodes[idx].threshold = 0.0
         nodes[idx].left = -1
         nodes[idx].right = -1
+        # A leaf carries no split, so the left set written above is cleared.
+        nodes[idx].cat_kind = 0
+        nodes[idx].cat_mask0 = 0 as u32
+        nodes[idx].cat_mask1 = 0 as u32
+        nodes[idx].cat_mask2 = 0 as u32
+        nodes[idx].cat_mask3 = 0 as u32
         matrix_free(left_X)
         matrix_free(right_X)
         array_free_f32(left_y)
@@ -1820,11 +2135,11 @@ function _extra_tree_reg_build(nodes: ptr<TreeNode>, node_idx: i32, X: Matrix, y
     nodes[idx].left = idx + 1
 
     let left_idx: i32 = idx + 1
-    let next_idx: i32 = _extra_tree_reg_build(nodes, left_idx, left_X, left_y, n_left, p, depth + 1, max_depth, seed + 1)
+    let next_idx: i32 = _extra_tree_reg_build(nodes, left_idx, left_X, left_y, n_left, p, depth + 1, max_depth, seed + 1, cat_card, et_seen, et_present, et_left)
     nodes[idx].right = next_idx
 
     let right_idx: i32 = next_idx
-    let final_idx: i32 = _extra_tree_reg_build(nodes, right_idx, right_X, right_y, n_right, p, depth + 1, max_depth, seed + 2)
+    let final_idx: i32 = _extra_tree_reg_build(nodes, right_idx, right_X, right_y, n_right, p, depth + 1, max_depth, seed + 2, cat_card, et_seen, et_present, et_left)
 
     matrix_free(left_X)
     matrix_free(right_X)
@@ -1841,10 +2156,11 @@ export function extra_tree_regressor_predict(model: ExtraTreeRegressor, X: Matri
         matrix_row(X, i, row)
         let mut node: i32 = 0
         while not model.nodes[node].is_leaf {
-            if row[model.nodes[node].feature] <= model.nodes[node].threshold {
-                node = model.nodes[node].left
+            let np: ptr<TreeNode> = model.nodes + node
+            if _tree_split_goes_left(np, row[np.feature]) {
+                node = np.left
             } else {
-                node = model.nodes[node].right
+                node = np.right
             }
         }
         result[i] = model.nodes[node].value

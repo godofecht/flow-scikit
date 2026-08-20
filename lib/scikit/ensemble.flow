@@ -18,6 +18,50 @@ extern {
     function srand(seed: u32) -> void
 }
 
+# Which way one sample goes at one internal node. The single node-evaluation
+# predicate for every tree traversal in this module.
+#
+# Issue #457: this module used to test `xv <= node.threshold` inline at four
+# separate traversal sites, which was correct only for as long as no builder
+# here set cat_kind. Once a forest, a Bagging estimator or an ExtraTree can
+# produce a categorical node, each of those sites needs the set-membership
+# test, and four copies of it is how the next inconsistency starts. Every
+# traversal below calls this instead.
+#
+# cat_kind == 0 is a numeric node and takes the same `xv <= threshold` those
+# sites always took, so a tree with no categorical split routes every row
+# exactly as before, bit for bit.
+#
+# cat_kind == 1 is a categorical node: the level index is the feature value
+# truncated to an integer, and the sample goes left when that level's bit is
+# set in the 128-bit left set. Unseen levels go right, along with any value
+# outside 0..127 or one that is not a whole number.
+#
+# This is deliberately the same predicate as `_tree_split_goes_left` in
+# tree.flow. That one is not exported, and a non-exported function is not
+# visible across modules in Flow, so the predicate cannot literally be shared;
+# the two must be changed together. The name is module-unique because
+# non-exported functions sharing a name across modules collide in the
+# generated C (compiler bug #465).
+function _ensemble_node_goes_left(node: ptr<TreeNode>, xv: f32) -> bool {
+    if node.cat_kind == 0 {
+        return xv <= node.threshold
+    }
+    let c: i32 = xv as i32
+    if (c as f32) != xv { return false }
+    if c < 0 || c >= 128 { return false }
+    let widx: i32 = c / 32
+    let bit: i32 = c - widx * 32
+    let mut w: u32 = node.cat_mask0
+    if widx == 1 { w = node.cat_mask1 }
+    if widx == 2 { w = node.cat_mask2 }
+    if widx == 3 { w = node.cat_mask3 }
+    let one: u32 = 1 as u32
+    let probe: u32 = one << (bit as u32)
+    let zero: u32 = 0 as u32
+    return (w & probe) != zero
+}
+
 export struct RandomForestClassifier {
     trees: ptr<DecisionTreeClassifier>,
     n_trees: i32,
@@ -29,6 +73,28 @@ export struct RandomForestClassifier {
 }
 
 export function random_forest_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_trees: i32, max_depth: i32, seed: i32) -> RandomForestClassifier {
+    # Every feature numeric: calloc gives the all-zero mask the categorical fit
+    # reads as "no categorical features", so this is one implementation and the
+    # numeric forest is the old code path, draw for draw.
+    let none: ptr<i32> = calloc(X.cols as i64, 4) as ptr<i32>
+    let model: RandomForestClassifier = random_forest_classifier_fit_categorical(X, y, n_classes, n_trees, max_depth, seed, none)
+    free(none as ptr<void>)
+    return model
+}
+
+# Issue #457: a random forest whose flagged features are split on a subset of
+# their levels rather than on a threshold. `categorical` is X.cols entries,
+# non-zero meaning categorical, and a categorical column must hold whole
+# numbers in 0..127 which are read as level indices. The 128-level cap is
+# per feature, inherited from the node representation added in #441.
+#
+# The mask is passed straight down to each tree's builder. It changes nothing
+# about the sampling: the bootstrap draws n_samples indices and then one seed
+# for this tree's feature subsampling, in that order, exactly as before, and
+# the per-node feature draw happens before any feature is looked at. So a
+# numeric fit through this entry point and a numeric fit through
+# random_forest_classifier_fit produce the same forest from the same seed.
+export function random_forest_classifier_fit_categorical(X: Matrix, y: ptr<f32>, n_classes: i32, n_trees: i32, max_depth: i32, seed: i32, categorical: ptr<i32>) -> RandomForestClassifier {
     # Issue #398: this used to append at classes[n_found] with no check against
     # n_classes, which wrote past the allocation whenever y carried more
     # distinct labels than the caller declared.
@@ -85,7 +151,7 @@ export function random_forest_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: 
         prng = PRNG { state: res.state }
         prng_state[0] = res.state
 
-        trees[t] = decision_tree_classifier_fit_rf(X_boot, y_boot, n_classes, max_depth, CRITERION_GINI, max_features, prng_state)
+        trees[t] = decision_tree_classifier_fit_rf_categorical(X_boot, y_boot, n_classes, max_depth, CRITERION_GINI, max_features, prng_state, categorical)
     }
 
     free(bootstrap_indices as ptr<void>)
@@ -150,7 +216,7 @@ function rf_clf_vote_counts(model: RandomForestClassifier, X: Matrix) -> Matrix 
             let mut node_idx: i32 = 0
             while not nodes[node_idx].is_leaf {
                 let node: ptr<TreeNode> = nodes + node_idx
-                if xd[row_base + node.feature] <= node.threshold {
+                if _ensemble_node_goes_left(node, xd[row_base + node.feature]) {
                     node_idx = node.left
                 } else {
                     node_idx = node.right
@@ -302,6 +368,18 @@ export struct RandomForestRegressor {
 }
 
 export function random_forest_regressor_fit(X: Matrix, y: ptr<f32>, n_trees: i32, max_depth: i32, seed: i32) -> RandomForestRegressor {
+    # All-zero mask: the categorical fit with no categorical feature is the old
+    # code path, and rand() is consumed in the same order.
+    let none: ptr<i32> = calloc(X.cols as i64, 4) as ptr<i32>
+    let model: RandomForestRegressor = random_forest_regressor_fit_categorical(X, y, n_trees, max_depth, seed, none)
+    free(none as ptr<void>)
+    return model
+}
+
+# Issue #457: the regression forest with a per-feature categorical mask. The
+# per-tree builder is the plain regressor, whose subset search is Breiman's
+# ordering by mean response and is exact for a squared-error criterion.
+export function random_forest_regressor_fit_categorical(X: Matrix, y: ptr<f32>, n_trees: i32, max_depth: i32, seed: i32, categorical: ptr<i32>) -> RandomForestRegressor {
     let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeRegressor>
     srand(seed)
 
@@ -321,7 +399,7 @@ export function random_forest_regressor_fit(X: Matrix, y: ptr<f32>, n_trees: i32
             }
         }
 
-        trees[t] = decision_tree_regressor_fit(X_boot, y_boot, max_depth, CRITERION_MSE)
+        trees[t] = decision_tree_regressor_fit_categorical(X_boot, y_boot, max_depth, CRITERION_MSE, categorical)
 
         free(bootstrap_indices as ptr<void>)
         matrix_free(X_boot)
@@ -396,6 +474,19 @@ export struct BaggingClassifier {
 }
 
 export function bagging_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_estimators: i32, max_depth: i32, seed: i32) -> BaggingClassifier {
+    # All-zero mask: the categorical fit with no categorical feature is the old
+    # code path, and rand() is consumed in the same order.
+    let none: ptr<i32> = calloc(X.cols as i64, 4) as ptr<i32>
+    let model: BaggingClassifier = bagging_classifier_fit_categorical(X, y, n_classes, n_estimators, max_depth, seed, none)
+    free(none as ptr<void>)
+    return model
+}
+
+# Issue #457: bagged classification trees with a per-feature categorical mask,
+# the same contract as decision_tree_classifier_fit_categorical. Each estimator
+# is a full plain tree over a bootstrap sample, so every estimator sees the
+# mask and can split on a subset of levels.
+export function bagging_classifier_fit_categorical(X: Matrix, y: ptr<f32>, n_classes: i32, n_estimators: i32, max_depth: i32, seed: i32, categorical: ptr<i32>) -> BaggingClassifier {
     # Issue #398: this used to append at classes[n_found] with no check against
     # n_classes, which wrote past the allocation whenever y carried more
     # distinct labels than the caller declared.
@@ -438,7 +529,7 @@ export function bagging_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n
             dst = dst + n_cols
         }
 
-        trees[t] = decision_tree_classifier_fit(X_boot, y_boot, n_classes, max_depth, CRITERION_GINI)
+        trees[t] = decision_tree_classifier_fit_categorical(X_boot, y_boot, n_classes, max_depth, CRITERION_GINI, categorical)
     }
 
     free(indices as ptr<void>)
@@ -1201,7 +1292,7 @@ export function adaboost_regressor_predict(model: AdaBoostRegressor, X: Matrix) 
             let mut node_idx: i32 = 0
             while not nodes[node_idx].is_leaf {
                 let node: ptr<TreeNode> = nodes + node_idx
-                if xd[row_base + node.feature] <= node.threshold {
+                if _ensemble_node_goes_left(node, xd[row_base + node.feature]) {
                     node_idx = node.left
                 } else {
                     node_idx = node.right
@@ -1319,6 +1410,19 @@ export function extra_trees_classifier_fit(
     X: Matrix, y: ptr<f32>, n_classes: i32,
     n_trees: i32, max_depth: i32, seed: i32
 ) -> ExtraTreesClassifier {
+    # All-zero mask: the categorical fit with no categorical feature is the old
+    # code path, and rand() is consumed in the same order.
+    let none: ptr<i32> = calloc(X.cols as i64, 4) as ptr<i32>
+    let model: ExtraTreesClassifier = extra_trees_classifier_fit_categorical(X, y, n_classes, n_trees, max_depth, seed, none)
+    free(none as ptr<void>)
+    return model
+}
+
+# Issue #457: the ExtraTrees classifier with a per-feature categorical mask.
+export function extra_trees_classifier_fit_categorical(
+    X: Matrix, y: ptr<f32>, n_classes: i32,
+    n_trees: i32, max_depth: i32, seed: i32, categorical: ptr<i32>
+) -> ExtraTreesClassifier {
     # Issue #398: this used to append at classes[n_found] with no check against
     # n_classes, which wrote past the allocation whenever y carried more
     # distinct labels than the caller declared.
@@ -1348,7 +1452,7 @@ export function extra_trees_classifier_fit(
             y_boot[i] = y[idx]
         }
 
-        trees[t] = decision_tree_classifier_fit(X_boot, y_boot, n_classes, max_depth, CRITERION_GINI)
+        trees[t] = decision_tree_classifier_fit_categorical(X_boot, y_boot, n_classes, max_depth, CRITERION_GINI, categorical)
 
         matrix_free(X_boot)
         array_free_f32(y_boot)
@@ -1426,6 +1530,19 @@ export function extra_trees_regressor_fit(
     X: Matrix, y: ptr<f32>,
     n_trees: i32, max_depth: i32, seed: i32
 ) -> ExtraTreesRegressor {
+    # All-zero mask: the categorical fit with no categorical feature is the old
+    # code path, and rand() is consumed in the same order.
+    let none: ptr<i32> = calloc(X.cols as i64, 4) as ptr<i32>
+    let model: ExtraTreesRegressor = extra_trees_regressor_fit_categorical(X, y, n_trees, max_depth, seed, none)
+    free(none as ptr<void>)
+    return model
+}
+
+# Issue #457: the ExtraTrees regressor with a per-feature categorical mask.
+export function extra_trees_regressor_fit_categorical(
+    X: Matrix, y: ptr<f32>,
+    n_trees: i32, max_depth: i32, seed: i32, categorical: ptr<i32>
+) -> ExtraTreesRegressor {
     let trees: ptr<DecisionTreeRegressor> = malloc((n_trees as i64) * 128) as ptr<DecisionTreeRegressor>
 
     srand(seed)
@@ -1443,7 +1560,7 @@ export function extra_trees_regressor_fit(
             y_boot[i] = y[idx]
         }
 
-        trees[t] = decision_tree_regressor_fit(X_boot, y_boot, max_depth, CRITERION_MSE)
+        trees[t] = decision_tree_regressor_fit_categorical(X_boot, y_boot, max_depth, CRITERION_MSE, categorical)
 
         matrix_free(X_boot)
         array_free_f32(y_boot)
@@ -2364,6 +2481,16 @@ export struct BaggingRegressor {
 }
 
 export function bagging_regressor_fit(X: Matrix, y: ptr<f32>, n_estimators: i32, max_depth: i32, seed: i32) -> BaggingRegressor {
+    # All-zero mask: the categorical fit with no categorical feature is the old
+    # code path, and rand() is consumed in the same order.
+    let none: ptr<i32> = calloc(X.cols as i64, 4) as ptr<i32>
+    let model: BaggingRegressor = bagging_regressor_fit_categorical(X, y, n_estimators, max_depth, seed, none)
+    free(none as ptr<void>)
+    return model
+}
+
+# Issue #457: bagged regression trees with a per-feature categorical mask.
+export function bagging_regressor_fit_categorical(X: Matrix, y: ptr<f32>, n_estimators: i32, max_depth: i32, seed: i32, categorical: ptr<i32>) -> BaggingRegressor {
     let n: i32 = X.rows
     let n_features: i32 = X.cols
     let trees: ptr<DecisionTreeRegressor> = malloc((n_estimators as i64) * 128) as ptr<DecisionTreeRegressor>
@@ -2392,7 +2519,7 @@ export function bagging_regressor_fit(X: Matrix, y: ptr<f32>, n_estimators: i32,
             y_boot[j] = y[idx]
             dst = dst + n_features
         }
-        trees[t] = decision_tree_regressor_fit(X_boot, y_boot, max_depth, 2)
+        trees[t] = decision_tree_regressor_fit_categorical(X_boot, y_boot, max_depth, 2, categorical)
     }
 
     matrix_free(X_boot)
@@ -2439,7 +2566,7 @@ export function bagging_regressor_predict(model: BaggingRegressor, X: Matrix) ->
             let mut node_idx: i32 = 0
             while not nodes[node_idx].is_leaf {
                 let node: ptr<TreeNode> = nodes + node_idx
-                if xd[row_base + node.feature] <= node.threshold {
+                if _ensemble_node_goes_left(node, xd[row_base + node.feature]) {
                     node_idx = node.left
                 } else {
                     node_idx = node.right
@@ -2712,7 +2839,7 @@ function _leaf_index(nodes: ptr<TreeNode>, node_idx: i32, x: ptr<f32>, counter: 
         counter[0] = counter[0] + 1
         return idx
     }
-    if x[node.feature] <= node.threshold {
+    if _ensemble_node_goes_left(node, x[node.feature]) {
         return _leaf_index(nodes, node.left, x, counter)
     }
     return _leaf_index(nodes, node.right, x, counter)
