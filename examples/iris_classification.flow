@@ -108,8 +108,11 @@ function main() -> i32 {
     }
 
     println("")
-    println("Predicting (predict = probabilities, decide = classes)...")
-    let probs: ptr<f32> = pipeline_predict(pipeline, split.X_test)
+    println("Predicting (predict_proba = P(class 1), decide = classes)...")
+    # Issue #449: this read pipeline_predict, which returns argmax class
+    # labels. The calibration curve below was being handed 0.0 and 1.0 as if
+    # they were probabilities. pipeline_predict_proba returns P(classes[1]).
+    let probs: ptr<f32> = pipeline_predict_proba(pipeline, split.X_test)
     let labels: ptr<f32> = pipeline_decide(pipeline, split.X_test, 0.5)
 
     println("")
