@@ -410,11 +410,11 @@ export function decision_tree_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: 
 # ordering is recomputed from the response at every node rather than fixed
 # once by the encoder.
 #
-# Only the plain classifier and the plain regressor accept a categorical mask.
-# RandomForest, the Bagging estimators and the ExtraTree builders go through
-# their own builders, which never set cat_kind, and several of them walk nodes
-# inline rather than through predict_one. They are unchanged and still numeric
-# only.
+# Issue #457 extended the mask to the ensembles. RandomForest, Bagging,
+# ExtraTrees and the ExtraTree builders each have a _categorical entry point on
+# this same contract, and ensemble.flow evaluates cat_kind at every traversal.
+# The one thing still numeric only is the boosting family: GradientBoosting,
+# AdaBoost and the histogram estimators.
 export function decision_tree_classifier_fit_categorical(X: Matrix, y: ptr<f32>, n_classes: i32, max_depth: i32, criterion: i32, categorical: ptr<i32>) -> DecisionTreeClassifier {
     # Issue #398: this used to append at classes[n_found] with no check against
     # n_classes, which wrote past the allocation whenever y carried more
