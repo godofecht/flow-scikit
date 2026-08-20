@@ -479,6 +479,357 @@ export function linear_regression_free(model: LinearRegression) -> void {
 }
 
 # ============================================================================
+# OLS coefficient inference (Issue #353)
+#
+# Scope, deliberately narrow. Issue #353 records a real disagreement in its
+# sources about whether a machine learning library should report inference at
+# all. What is not in dispute is that for an unpenalized least squares fit the
+# coefficient covariance is a by-product of the solve that has already run, so
+# withholding it buys nothing. This exposes exactly four quantities:
+#
+#   residual standard error   s = sqrt(SSE / df)
+#   coefficient covariance    s^2 * (Xc^T Xc)^-1, extended to the intercept
+#   standard errors           the square roots of its diagonal
+#   t statistics              coefficient / standard error
+#
+# There is no p-value and no printed summary. A p-value needs an accurate
+# incomplete beta function, and a summary table is the statsmodels-shaped thing
+# the issue's dissenting sources argue against.
+#
+# Where the covariance comes from. linear_regression_fit centres X and y and
+# calls _solve_lstsq_qr, whose Householder sweep leaves R (the triangular
+# factor of the centred design) in the upper triangle of its X buffer. R is
+# discarded there because the fit does not need it. This function repeats the
+# same centring and the same QR, keeps R, inverts it by back substitution and
+# forms (Xc^T Xc)^-1 = R^-1 R^-T. Nothing squares the condition number.
+#
+# The intercept. The fit solves the centred problem, so R covers the slopes
+# only. The intercept b0 = ybar - xbar^T w has the standard textbook variance
+# s^2 * (1/m + xbar^T (Xc^T Xc)^-1 xbar) and covariance -s^2 * (Xc^T Xc)^-1 xbar
+# with the slopes. Both are filled in, so cov is (n+1) x (n+1).
+#
+# Index convention throughout: 0..n-1 are the slopes in feature order and index
+# n is the intercept.
+#
+# Penalized fits are refused. This answers one of the two questions PR #443
+# left open on the issue. Under a ridge penalty the estimator is biased and
+# s^2 * (X^T X)^-1 is no longer its covariance, so reporting it would be
+# dishonest rather than merely imprecise. ols_inference_fit returns
+# fitted = false with every buffer zeroed when model.penalty.kind is not
+# PENALTY_NONE, and likewise when there are not enough residual degrees of
+# freedom to estimate s^2.
+#
+# Rank deficiency, stated rather than left to chance. A perfectly collinear
+# design gives R a zero diagonal entry and (Xc^T Xc)^-1 does not exist.
+# ols_inference_fit detects this from R's diagonal, returns fitted = false with
+# every buffer zeroed, sets rank_deficient = true and reports the numerical
+# rank it found in the rank field. No standard error is invented.
+#
+# PR #443 met a singular system in its Newton solve and handled it differently:
+# it lets _solve_f64 zero the dependent coordinate and solves the reduced
+# problem, which is a genuine Newton step and leaves the fitted linear
+# predictor unchanged. That reasoning does not carry over here, because there
+# the zeroed coordinate only has to produce a good step, whereas here the
+# coefficients themselves are the object being reported on. Concretely, on
+# X = [x, 2x] with x = 1..5, linear_regression_fit returns weights of about
+# 9.86e14 and -4.93e14: R's second pivot lands just above the solver's absolute
+# 1e-15 cutoff, so it divides by it, and the f32 store of the two enormous
+# opposing coefficients cancels the fit down to a flat line at the intercept.
+# There is no reduced-problem solution held in the model to do inference about.
+# Refusing is the only honest answer, and rank_deficient is how it is said.
+#
+# The second question PR #443 left open, ownership of the matrix after the fit,
+# is answered by not attaching it to the fit at all. LinearRegression is
+# untouched. The buffers live on OLSInference and are released by
+# ols_inference_free.
+# ============================================================================
+
+export struct OLSInference {
+    cov: ptr<f32>,
+    std_errors: ptr<f32>,
+    t_stats: ptr<f32>,
+    residual_std_error: f32,
+    n_features: i32,
+    n_params: i32,
+    df_residual: i32,
+    rank: i32,
+    rank_deficient: bool,
+    fitted: bool
+}
+
+# Inverts the upper triangular R (n x n, row stride n) into Z by back
+# substitution, one column at a time. Diagonal entries below tol are treated as
+# structurally zero: that row and column of Z stay zero. Returns the number of
+# usable pivots, i.e. the numerical rank.
+function lin353_invert_upper(R: ptr<f64>, Z: ptr<f64>, n: i32, tol: f64) -> i32 {
+    let bad: ptr<f64> = array_new_f64(n + 8)
+    let mut rank: i32 = 0
+    for j in 0 to n {
+        let dj: f64 = fabs(R[j * n + j])
+        if dj < tol {
+            bad[j] = 1.0
+        } else {
+            bad[j] = 0.0
+            rank = rank + 1
+        }
+    }
+
+    for c in 0 to n {
+        if bad[c] == 0.0 {
+            let mut i: i32 = c
+            while i >= 0 {
+                if bad[i] != 0.0 {
+                    Z[i * n + c] = 0.0
+                } else {
+                    let mut s: f64 = 0.0
+                    if i == c { s = 1.0 }
+                    let mut j: i32 = i + 1
+                    while j <= c {
+                        s = s - R[i * n + j] * Z[j * n + c]
+                        j = j + 1
+                    }
+                    Z[i * n + c] = s / R[i * n + i]
+                }
+                i = i - 1
+            }
+        }
+    }
+
+    array_free_f64(bad)
+    return rank
+}
+
+# Sum of squared residuals of the fitted model on (X, y), accumulated in f64.
+function lin353_sse(model: LinearRegression, X: Matrix, y: ptr<f32>) -> f64 {
+    let m: i32 = X.rows
+    let n: i32 = model.n_features
+    let data: ptr<f32> = X.data
+    let stride: i32 = X.cols
+    let w: ptr<f32> = model.weights
+    let mut sse: f64 = 0.0
+    for i in 0 to m {
+        let base: i32 = i * stride
+        let mut pred: f64 = model.bias as f64
+        for j in 0 to n {
+            pred = pred + (w[j] as f64) * (data[base + j] as f64)
+        }
+        let r: f64 = (y[i] as f64) - pred
+        sse = sse + r * r
+    }
+    return sse
+}
+
+function lin353_empty(n: i32, d: i32, rank: i32, deficient: bool) -> OLSInference {
+    let cov: ptr<f32> = array_new_f32(d * d + 16)
+    let se: ptr<f32> = array_new_f32(d + 8)
+    let ts: ptr<f32> = array_new_f32(d + 8)
+    return OLSInference {
+        cov: cov,
+        std_errors: se,
+        t_stats: ts,
+        residual_std_error: 0.0,
+        n_features: n,
+        n_params: d,
+        df_residual: 0,
+        rank: rank,
+        rank_deficient: deficient,
+        fitted: false
+    }
+}
+
+# Coefficient inference for an unpenalized least squares fit.
+#
+# model must be the result of linear_regression_fit(X, y, penalty_none()) on
+# the same X and y that are passed here. Returns fitted = false with zeroed
+# buffers if the fit was penalized, if X is empty, or if there is no residual
+# degree of freedom left.
+export function ols_inference_fit(model: LinearRegression, X: Matrix, y: ptr<f32>) -> OLSInference {
+    let n: i32 = X.cols
+    let m: i32 = X.rows
+    let d: i32 = n + 1
+
+    if n <= 0 || m <= 0 {
+        let bad0: OLSInference = lin353_empty(n, d, 0, false)
+        return bad0
+    }
+    if model.penalty.kind != PENALTY_NONE {
+        let bad1: OLSInference = lin353_empty(n, d, 0, false)
+        return bad1
+    }
+
+    # Same centring the fit performs, in f64.
+    let xdata: ptr<f32> = X.data
+    let x_mean: ptr<f64> = array_new_f64(n + 8)
+    let mut y_mean: f64 = 0.0
+    for i in 0 to m {
+        y_mean = y_mean + (y[i] as f64)
+        let base: i32 = i * n
+        for j in 0 to n {
+            x_mean[j] = x_mean[j] + (xdata[base + j] as f64)
+        }
+    }
+    y_mean = y_mean / (m as f64)
+    for j in 0 to n {
+        x_mean[j] = x_mean[j] / (m as f64)
+    }
+
+    let Xc: ptr<f64> = malloc((m as i64) * (n as i64) * 8 + 128) as ptr<f64>
+    let yc: ptr<f64> = array_new_f64(m + 8)
+    for i in 0 to m {
+        yc[i] = (y[i] as f64) - y_mean
+        let base: i32 = i * n
+        for j in 0 to n {
+            Xc[base + j] = (xdata[base + j] as f64) - x_mean[j]
+        }
+    }
+
+    # The Householder sweep leaves R in the upper triangle of Xc. yc comes back
+    # holding the same slope estimates the fit produced; they are not used here,
+    # the model's own coefficients are.
+    _solve_lstsq_qr(Xc, yc, m, n)
+
+    let mut maxdiag: f64 = 0.0
+    for j in 0 to n {
+        let dj: f64 = fabs(Xc[j * n + j])
+        if dj > maxdiag { maxdiag = dj }
+    }
+    let mut tol: f64 = 0.00000000001 * maxdiag
+    if tol < 0.000000000000001 { tol = 0.000000000000001 }
+
+    let Z: ptr<f64> = array_new_f64(n * n + 16)
+    let rank: i32 = lin353_invert_upper(Xc, Z, n, tol)
+
+    # Rank deficiency: refuse, and say so through the flag. See the header
+    # comment for why this does not follow PR #443 in solving a reduced problem.
+    if rank < n {
+        free(Xc as ptr<void>)
+        array_free_f64(yc)
+        array_free_f64(Z)
+        array_free_f64(x_mean)
+        let bad3: OLSInference = lin353_empty(n, d, rank, true)
+        return bad3
+    }
+
+    # (Xc^T Xc)^-1 = Z Z^T, symmetric.
+    let XtXinv: ptr<f64> = array_new_f64(n * n + 16)
+    for a in 0 to n {
+        for b in 0 to n {
+            let mut s: f64 = 0.0
+            for k in 0 to n {
+                s = s + Z[a * n + k] * Z[b * n + k]
+            }
+            XtXinv[a * n + b] = s
+        }
+    }
+
+    let df: i32 = m - rank - 1
+    let sse: f64 = lin353_sse(model, X, y)
+
+    free(Xc as ptr<void>)
+    array_free_f64(yc)
+    array_free_f64(Z)
+
+    if df <= 0 {
+        array_free_f64(x_mean)
+        array_free_f64(XtXinv)
+        let bad2: OLSInference = lin353_empty(n, d, n, false)
+        return bad2
+    }
+
+    let sigma2: f64 = sse / (df as f64)
+    let cov: ptr<f32> = array_new_f32(d * d + 16)
+    let se: ptr<f32> = array_new_f32(d + 8)
+    let ts: ptr<f32> = array_new_f32(d + 8)
+
+    for a in 0 to n {
+        for b in 0 to n {
+            cov[a * d + b] = (sigma2 * XtXinv[a * n + b]) as f32
+        }
+    }
+
+    # Intercept block. u = (Xc^T Xc)^-1 xbar.
+    let u: ptr<f64> = array_new_f64(n + 8)
+    for a in 0 to n {
+        let mut s: f64 = 0.0
+        for b in 0 to n {
+            s = s + XtXinv[a * n + b] * x_mean[b]
+        }
+        u[a] = s
+    }
+    let mut q: f64 = 0.0
+    for a in 0 to n {
+        q = q + x_mean[a] * u[a]
+    }
+    for a in 0 to n {
+        let cab: f32 = (0.0 - sigma2 * u[a]) as f32
+        cov[a * d + n] = cab
+        cov[n * d + a] = cab
+    }
+    cov[n * d + n] = (sigma2 * (1.0 / (m as f64) + q)) as f32
+
+    let w: ptr<f32> = model.weights
+    for j in 0 to d {
+        let v: f32 = cov[j * d + j]
+        let mut sj: f32 = 0.0
+        if v > 0.0 { sj = sqrt((v as f64)) as f32 }
+        se[j] = sj
+        let mut coef: f32 = model.bias
+        if j < n { coef = w[j] }
+        if sj > 0.0 {
+            ts[j] = coef / sj
+        } else {
+            ts[j] = 0.0
+        }
+    }
+
+    let rse: f32 = sqrt((sigma2)) as f32
+    let deficient: bool = rank < n
+
+    array_free_f64(u)
+    array_free_f64(x_mean)
+    array_free_f64(XtXinv)
+
+    return OLSInference {
+        cov: cov,
+        std_errors: se,
+        t_stats: ts,
+        residual_std_error: rse,
+        n_features: n,
+        n_params: d,
+        df_residual: df,
+        rank: rank,
+        rank_deficient: deficient,
+        fitted: true
+    }
+}
+
+# Standard error of coefficient j. j in 0..n_features-1 is a slope, j ==
+# n_features is the intercept.
+export function ols_inference_std_error(inf: OLSInference, j: i32) -> f32 {
+    if j < 0 || j >= inf.n_params { return 0.0 }
+    return inf.std_errors[j]
+}
+
+# t statistic of coefficient j against the null that it is zero.
+export function ols_inference_t_stat(inf: OLSInference, j: i32) -> f32 {
+    if j < 0 || j >= inf.n_params { return 0.0 }
+    return inf.t_stats[j]
+}
+
+# Entry (a, b) of the coefficient covariance matrix.
+export function ols_inference_cov(inf: OLSInference, a: i32, b: i32) -> f32 {
+    if a < 0 || a >= inf.n_params { return 0.0 }
+    if b < 0 || b >= inf.n_params { return 0.0 }
+    return inf.cov[a * inf.n_params + b]
+}
+
+export function ols_inference_free(inf: OLSInference) -> void {
+    array_free_f32(inf.cov)
+    array_free_f32(inf.std_errors)
+    array_free_f32(inf.t_stats)
+}
+
+# ============================================================================
 # LogisticRegression
 # Addresses Issue #28394: predict returns probabilities, decide returns classes
 # Addresses Issue #30909: pos_label handled internally via classes_ array
