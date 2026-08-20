@@ -1,0 +1,271 @@
+# Issue #461: the preprocessing scalers must not let summation order decide
+# their f32 output.
+#
+# Two properties are checked here.
+#
+# 1. Determinism. Fitting and transforming the same matrix twice inside one
+#    process must produce bit-identical output.
+# 2. Precision. On data with a large offset and a small spread the mean and
+#    variance must come out right to f32 precision. An f32 running sum over the
+#    same data is visibly wrong, which is what makes the case discriminating:
+#    once the accumulator error is comparable to the spread, the rounded f32
+#    result depends on the order the compiler chose to add the terms, and that
+#    order is not the same on every platform.
+#
+# Run: flow run tests/test_scaler_f64_accumulation.flow
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+    function sqrtf(x: f32) -> f32
+}
+
+# Raw bit pattern of an f32, for exact comparison.
+function sf461_bits(v: f32) -> i32 {
+    let p: ptr<f32> = array_new_f32(4)
+    p[0] = v
+    let q: ptr<i32> = p as ptr<i32>
+    let b: i32 = q[0]
+    array_free_f32(p)
+    return b
+}
+
+function sf461_bits_equal(a: f32, b: f32) -> bool {
+    return sf461_bits(a) == sf461_bits(b)
+}
+
+# The offset fixture: 2n rows alternating between base and base + 1.
+# Exact mean is base + 0.5, exact population variance is 0.25, exact std is 0.5.
+function sf461_offset_matrix(half: i32, base: f32) -> Matrix {
+    let X: Matrix = matrix_new(half * 2, 1)
+    for i in 0 to half {
+        matrix_set(X, i * 2, 0, base)
+        matrix_set(X, i * 2 + 1, 0, base + 1.0)
+    }
+    return X
+}
+
+# The accumulator shape the library must not use: a single f32 running sum,
+# then a second f32 pass for the squared deviations.
+function sf461_naive_f32(X: Matrix, out: ptr<f32>) -> void {
+    let mut s: f32 = 0.0
+    for i in 0 to X.rows {
+        s = s + matrix_at(X, i, 0)
+    }
+    let m: f32 = s / (X.rows as f32)
+    let mut q: f32 = 0.0
+    for i in 0 to X.rows {
+        let d: f32 = matrix_at(X, i, 0) - m
+        q = q + d * d
+    }
+    out[0] = m
+    out[1] = sqrtf(q / (X.rows as f32))
+}
+
+function sf461_test_determinism() -> i32 {
+    println("Test: StandardScaler is deterministic within a process")
+    let X: Matrix = matrix_new(400, 5)
+    for i in 0 to 400 {
+        for j in 0 to 5 {
+            let v: f32 = ((i * 7 + j * 13) % 97) as f32
+            matrix_set(X, i, j, v * 0.37 + 100.0)
+        }
+    }
+
+    let a: StandardScaler = standard_scaler_fit(X)
+    let b: StandardScaler = standard_scaler_fit(X)
+    let mut bad: i32 = 0
+    for j in 0 to 5 {
+        if not sf461_bits_equal(a.mean[j], b.mean[j]) { bad = bad + 1 }
+        if not sf461_bits_equal(a.std[j], b.std[j]) { bad = bad + 1 }
+    }
+    if bad != 0 {
+        printf("  FAIL: refitting moved %d fitted statistics\n", bad)
+        return 1
+    }
+
+    let Ta: Matrix = standard_scaler_transform(a, X)
+    let Tb: Matrix = standard_scaler_transform(b, X)
+    let mut cells: i32 = 0
+    for i in 0 to 400 {
+        for j in 0 to 5 {
+            if not sf461_bits_equal(matrix_at(Ta, i, j), matrix_at(Tb, i, j)) {
+                cells = cells + 1
+            }
+        }
+    }
+    if cells != 0 {
+        printf("  FAIL: %d of 2000 scaled cells were not bit-identical\n", cells)
+        return 1
+    }
+
+    matrix_free(Ta); matrix_free(Tb)
+    standard_scaler_free(a); standard_scaler_free(b)
+    matrix_free(X)
+    println("  OK: 2000 scaled cells bit-identical across two fits")
+    return 0
+}
+
+function sf461_test_large_offset() -> i32 {
+    println("Test: StandardScaler mean/variance on large-offset data")
+    let X: Matrix = sf461_offset_matrix(1024, 1000000.0)
+    let sc: StandardScaler = standard_scaler_fit(X)
+
+    let ref: ptr<f32> = array_new_f32(4)
+    sf461_naive_f32(X, ref)
+    printf("  library     mean=%.9f std=%.9f\n", sc.mean[0] as f64, sc.std[0] as f64)
+    printf("  f32 running mean=%.9f std=%.9f\n", ref[0] as f64, ref[1] as f64)
+
+    let mut failures: i32 = 0
+
+    # 1000000.5 is exactly representable in f32, so demand it exactly.
+    if not sf461_bits_equal(sc.mean[0], 1000000.5) {
+        println("  FAIL: mean is not exactly 1000000.5")
+        failures = failures + 1
+    }
+    # 0.5 is exactly representable too.
+    if not sf461_bits_equal(sc.std[0], 0.5) {
+        println("  FAIL: std is not exactly 0.5")
+        failures = failures + 1
+    }
+
+    # The case only proves anything if the f32 accumulator really does fail on
+    # it. 2048 partial sums past 2^24 cannot stay exact, so this must hold.
+    if ref[1] > 0.45 && ref[1] < 0.55 {
+        println("  FAIL: the f32 running sum got the std right, so this fixture")
+        println("        no longer discriminates between the two accumulators")
+        failures = failures + 1
+    }
+
+    array_free_f32(ref)
+    standard_scaler_free(sc)
+    matrix_free(X)
+    if failures == 0 {
+        println("  OK: exact mean and std where an f32 running sum drifts")
+    }
+    return failures
+}
+
+function sf461_test_transform_recentre() -> i32 {
+    println("Test: scaled large-offset column recentres to exactly 0 and 1")
+    let X: Matrix = sf461_offset_matrix(1024, 1000000.0)
+    let T: Matrix = standard_scaler_fit_transform(X)
+    let mut bad: i32 = 0
+    for i in 0 to 2048 {
+        let v: f32 = matrix_at(T, i, 0)
+        if not sf461_bits_equal(v, -1.0) && not sf461_bits_equal(v, 1.0) {
+            bad = bad + 1
+        }
+    }
+    matrix_free(T); matrix_free(X)
+    if bad != 0 {
+        printf("  FAIL: %d of 2048 scaled values were not exactly -1 or 1\n", bad)
+        return 1
+    }
+    println("  OK: all 2048 scaled values are exactly -1 or 1")
+    return 0
+}
+
+# MinMaxScaler, MaxAbsScaler and RobustScaler reduce with min, max and a sort.
+# All three are order-independent by construction, so a row permutation must
+# leave the fitted parameters bit-identical. This is the check behind the claim
+# that they need no f64 accumulator.
+function sf461_test_order_independent_scalers() -> i32 {
+    println("Test: min/max/median scalers are invariant to row order")
+    let n: i32 = 600
+    let X: Matrix = matrix_new(n, 3)
+    let Y: Matrix = matrix_new(n, 3)
+    for i in 0 to n {
+        for j in 0 to 3 {
+            let v: f32 = (((i * 31 + j * 17) % 211) as f32) * 0.013 - 1.5
+            matrix_set(X, i, j, v)
+            # Y holds the same rows in a different order.
+            matrix_set(Y, (i * 7) % n, j, v)
+        }
+    }
+
+    let mut failures: i32 = 0
+
+    let ma: MinMaxScaler = minmax_scaler_fit(X)
+    let mb: MinMaxScaler = minmax_scaler_fit(Y)
+    for j in 0 to 3 {
+        if not sf461_bits_equal(ma.min_vals[j], mb.min_vals[j]) { failures = failures + 1 }
+        if not sf461_bits_equal(ma.max_vals[j], mb.max_vals[j]) { failures = failures + 1 }
+    }
+    minmax_scaler_free(ma); minmax_scaler_free(mb)
+
+    let xa: MaxAbsScaler = maxabs_scaler_fit(X)
+    let xb: MaxAbsScaler = maxabs_scaler_fit(Y)
+    for j in 0 to 3 {
+        if not sf461_bits_equal(xa.max_abs[j], xb.max_abs[j]) { failures = failures + 1 }
+    }
+    maxabs_scaler_free(xa); maxabs_scaler_free(xb)
+
+    let ra: RobustScaler = robust_scaler_fit(X)
+    let rb: RobustScaler = robust_scaler_fit(Y)
+    for j in 0 to 3 {
+        if not sf461_bits_equal(ra.median[j], rb.median[j]) { failures = failures + 1 }
+        if not sf461_bits_equal(ra.iqr[j], rb.iqr[j]) { failures = failures + 1 }
+    }
+    robust_scaler_free(ra); robust_scaler_free(rb)
+
+    matrix_free(X); matrix_free(Y)
+    if failures != 0 {
+        printf("  FAIL: %d fitted parameters moved under a row permutation\n", failures)
+        return 1
+    }
+    println("  OK: 15 fitted parameters unchanged under a row permutation")
+    return 0
+}
+
+function sf461_test_normalizer_norm() -> i32 {
+    println("Test: Normalizer L2 row norm on a wide large-offset row")
+    let cols: i32 = 2048
+    let X: Matrix = matrix_new(1, cols)
+    for j in 0 to cols {
+        matrix_set(X, 0, j, 1000.0)
+    }
+    # Every entry is 1000, so the L2 norm is exactly 1000 * sqrt(2048) and every
+    # normalised entry is exactly 1 / sqrt(2048).
+    let nz: Normalizer = normalizer_init(NORM_L2)
+    let T: Matrix = normalizer_transform(nz, X)
+    let expected: f32 = 1.0 / (sqrt(2048.0) as f32)
+    let mut bad: i32 = 0
+    for j in 0 to cols {
+        let d: f32 = matrix_at(T, 0, j) - expected
+        if d > 0.0000005 || d < -0.0000005 { bad = bad + 1 }
+    }
+    matrix_free(T); matrix_free(X)
+    if bad != 0 {
+        printf("  FAIL: %d of %d normalised entries were off\n", bad, cols)
+        return 1
+    }
+    println("  OK: 2048 normalised entries match 1/sqrt(2048)")
+    return 0
+}
+
+function main() -> i32 {
+    println("Issue #461: scaler accumulation precision")
+    println("=========================================")
+    println("")
+
+    let mut failures: i32 = 0
+    failures = failures + sf461_test_determinism()
+    println("")
+    failures = failures + sf461_test_large_offset()
+    println("")
+    failures = failures + sf461_test_transform_recentre()
+    println("")
+    failures = failures + sf461_test_order_independent_scalers()
+    println("")
+    failures = failures + sf461_test_normalizer_norm()
+    println("")
+
+    if failures == 0 {
+        println("All scaler accumulation tests passed!")
+        return 0
+    }
+    printf("FAILED: %d checks\n", failures)
+    return 1
+}
