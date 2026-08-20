@@ -1,0 +1,457 @@
+# Tests for OLS coefficient inference (Issue #353).
+# Run: flow run tests/test_linear_inference.flow
+#
+# Every expected number below is derived by hand from the closed form for
+# simple or orthogonal least squares, then confirmed against numpy.
+
+import "lib/scikit/scikit.flow"
+
+function t353_close(got: f32, want: f32, tol: f32) -> bool {
+    let mut d: f32 = got - want
+    if d < 0.0 { d = 0.0 - d }
+    return d <= tol
+}
+
+function t353_report(label: string, got: f32, want: f32) -> void {
+    print("  ")
+    print(label)
+    print(" got ")
+    printf("%.6f", got)
+    print(" want ")
+    printf("%.6f", want)
+    println("")
+}
+
+# Single feature, x = 1..5, y = 2,4,5,4,5.
+#
+#   xbar = 3, ybar = 4, Sxx = 10, Sxy = 6
+#   slope = 0.6, intercept = 2.2
+#   residuals -0.8, 0.6, 1.0, -0.6, -0.2  ->  SSE = 2.4, df = 3, s^2 = 0.8
+#   rse   = sqrt(0.8)            = 0.8944272
+#   var(slope)     = 0.8 / 10    = 0.08      se = 0.2828427  t = 2.1213203
+#   var(intercept) = 0.8 * (1/5 + 9/10) = 0.88  se = 0.9380832  t = 2.3452079
+#   cov(slope, intercept) = -0.8 * 3 / 10 = -0.24
+function test_simple_regression_inference() -> i32 {
+    println("Test: single-feature OLS inference")
+    let X: Matrix = matrix_new(5, 1)
+    matrix_set(X, 0, 0, 1.0)
+    matrix_set(X, 1, 0, 2.0)
+    matrix_set(X, 2, 0, 3.0)
+    matrix_set(X, 3, 0, 4.0)
+    matrix_set(X, 4, 0, 5.0)
+    let y: ptr<f32> = array_new_f32(5)
+    y[0] = 2.0
+    y[1] = 4.0
+    y[2] = 5.0
+    y[3] = 4.0
+    y[4] = 5.0
+
+    let model: LinearRegression = linear_regression_fit(X, y, penalty_none())
+    let inf: OLSInference = ols_inference_fit(model, X, y)
+
+    let mut fails: i32 = 0
+
+    if inf.fitted == false {
+        println("  FAIL: inference should be available for an unpenalized fit")
+        fails = fails + 1
+    }
+    if inf.rank_deficient {
+        println("  FAIL: full rank design flagged rank deficient")
+        fails = fails + 1
+    }
+    if inf.df_residual != 3 {
+        print("  FAIL: df_residual should be 3, got ")
+        print(inf.df_residual)
+        println("")
+        fails = fails + 1
+    }
+
+    t353_report("rse         ", inf.residual_std_error, 0.8944272)
+    if t353_close(inf.residual_std_error, 0.8944272, 0.00002) == false { fails = fails + 1 }
+
+    let se0: f32 = ols_inference_std_error(inf, 0)
+    t353_report("se(slope)   ", se0, 0.2828427)
+    if t353_close(se0, 0.2828427, 0.00002) == false { fails = fails + 1 }
+
+    let se1: f32 = ols_inference_std_error(inf, 1)
+    t353_report("se(intercpt)", se1, 0.9380832)
+    if t353_close(se1, 0.9380832, 0.00002) == false { fails = fails + 1 }
+
+    let t0: f32 = ols_inference_t_stat(inf, 0)
+    t353_report("t(slope)    ", t0, 2.1213203)
+    if t353_close(t0, 2.1213203, 0.0002) == false { fails = fails + 1 }
+
+    let t1: f32 = ols_inference_t_stat(inf, 1)
+    t353_report("t(intercpt) ", t1, 2.3452079)
+    if t353_close(t1, 2.3452079, 0.0002) == false { fails = fails + 1 }
+
+    let c00: f32 = ols_inference_cov(inf, 0, 0)
+    t353_report("cov(0,0)    ", c00, 0.08)
+    if t353_close(c00, 0.08, 0.00002) == false { fails = fails + 1 }
+
+    let c01: f32 = ols_inference_cov(inf, 0, 1)
+    t353_report("cov(0,1)    ", c01, -0.24)
+    if t353_close(c01, -0.24, 0.00002) == false { fails = fails + 1 }
+
+    let c10: f32 = ols_inference_cov(inf, 1, 0)
+    if t353_close(c10, c01, 0.0000001) == false {
+        println("  FAIL: covariance is not symmetric")
+        fails = fails + 1
+    }
+
+    let c11: f32 = ols_inference_cov(inf, 1, 1)
+    t353_report("cov(1,1)    ", c11, 0.88)
+    if t353_close(c11, 0.88, 0.00002) == false { fails = fails + 1 }
+
+    ols_inference_free(inf)
+    linear_regression_free(model)
+    array_free_f32(y)
+    matrix_free(X)
+
+    if fails == 0 {
+        println("  OK: single-feature standard errors and t statistics match")
+        return 0
+    }
+    return 1
+}
+
+# Two orthogonal features on a 2x2 factorial design.
+#
+#   x1 = -1,-1,1,1   x2 = -1,1,-1,1   y = 1,2,3,6
+#   both columns already centred, Xc^T Xc = 4 I
+#   w1 = 6/4 = 1.5, w2 = 4/4 = 1.0, intercept = 3
+#   residuals 0.5, -0.5, -0.5, 0.5  ->  SSE = 1, df = 1, s^2 = 1
+#   se(w1) = se(w2) = sqrt(1/4) = 0.5, t = 3.0 and 2.0
+#   var(intercept) = 1 * (1/4 + 0) = 0.25, se = 0.5, t = 6.0
+#   every off-diagonal covariance is exactly zero
+function test_orthogonal_design_inference() -> i32 {
+    println("Test: orthogonal two-feature OLS inference")
+    let X: Matrix = matrix_new(4, 2)
+    matrix_set(X, 0, 0, -1.0); matrix_set(X, 0, 1, -1.0)
+    matrix_set(X, 1, 0, -1.0); matrix_set(X, 1, 1, 1.0)
+    matrix_set(X, 2, 0, 1.0);  matrix_set(X, 2, 1, -1.0)
+    matrix_set(X, 3, 0, 1.0);  matrix_set(X, 3, 1, 1.0)
+    let y: ptr<f32> = array_new_f32(4)
+    y[0] = 1.0
+    y[1] = 2.0
+    y[2] = 3.0
+    y[3] = 6.0
+
+    let model: LinearRegression = linear_regression_fit(X, y, penalty_none())
+    let inf: OLSInference = ols_inference_fit(model, X, y)
+
+    let mut fails: i32 = 0
+
+    if inf.df_residual != 1 {
+        print("  FAIL: df_residual should be 1, got ")
+        print(inf.df_residual)
+        println("")
+        fails = fails + 1
+    }
+
+    t353_report("rse         ", inf.residual_std_error, 1.0)
+    if t353_close(inf.residual_std_error, 1.0, 0.00002) == false { fails = fails + 1 }
+
+    let se0: f32 = ols_inference_std_error(inf, 0)
+    t353_report("se(w1)      ", se0, 0.5)
+    if t353_close(se0, 0.5, 0.00002) == false { fails = fails + 1 }
+
+    let se1: f32 = ols_inference_std_error(inf, 1)
+    t353_report("se(w2)      ", se1, 0.5)
+    if t353_close(se1, 0.5, 0.00002) == false { fails = fails + 1 }
+
+    let se2: f32 = ols_inference_std_error(inf, 2)
+    t353_report("se(intercpt)", se2, 0.5)
+    if t353_close(se2, 0.5, 0.00002) == false { fails = fails + 1 }
+
+    let t0: f32 = ols_inference_t_stat(inf, 0)
+    t353_report("t(w1)       ", t0, 3.0)
+    if t353_close(t0, 3.0, 0.0002) == false { fails = fails + 1 }
+
+    let t1: f32 = ols_inference_t_stat(inf, 1)
+    t353_report("t(w2)       ", t1, 2.0)
+    if t353_close(t1, 2.0, 0.0002) == false { fails = fails + 1 }
+
+    let t2: f32 = ols_inference_t_stat(inf, 2)
+    t353_report("t(intercpt) ", t2, 6.0)
+    if t353_close(t2, 6.0, 0.0002) == false { fails = fails + 1 }
+
+    let c01: f32 = ols_inference_cov(inf, 0, 1)
+    t353_report("cov(w1,w2)  ", c01, 0.0)
+    if t353_close(c01, 0.0, 0.00002) == false { fails = fails + 1 }
+
+    let c02: f32 = ols_inference_cov(inf, 0, 2)
+    t353_report("cov(w1,b0)  ", c02, 0.0)
+    if t353_close(c02, 0.0, 0.00002) == false { fails = fails + 1 }
+
+    ols_inference_free(inf)
+    linear_regression_free(model)
+    array_free_f32(y)
+    matrix_free(X)
+
+    if fails == 0 {
+        println("  OK: orthogonal design gives a diagonal covariance")
+        return 0
+    }
+    return 1
+}
+
+# Perfectly collinear design: x2 = 2 * x1, so Xc^T Xc is singular and its
+# inverse does not exist.
+#
+# What this implementation does, stated rather than left to chance:
+#
+#   fitted          = false, the request is refused
+#   rank_deficient  = true
+#   rank            = 1, the numerical rank actually found
+#   every standard error, t statistic and covariance entry is exactly 0.0
+#   residual_std_error is 0.0
+#
+# This diverges from PR #443, which met a singular system in its Newton solve
+# and let _solve_f64 zero the dependent coordinate and solve the reduced
+# problem. There the zeroed coordinate only has to give a good step. Here the
+# coefficients are the thing being reported on, and on this exact design
+# linear_regression_fit does not hold a reduced-problem solution to report on:
+# it returns weights of about 9.86e14 and -4.93e14, because R's second pivot
+# lands just above the solver's absolute 1e-15 cutoff, so it divides by it, and
+# the f32 store of two enormous opposing coefficients cancels the fit down to a
+# flat line at the intercept (every prediction 2.875, against a true fit of
+# 0.6 * x1 + 2.2). This test asserts the refusal, and asserts that the broken
+# fit is why.
+function test_collinear_design_inference() -> i32 {
+    println("Test: perfectly collinear OLS inference")
+    let X: Matrix = matrix_new(5, 2)
+    matrix_set(X, 0, 0, 1.0); matrix_set(X, 0, 1, 2.0)
+    matrix_set(X, 1, 0, 2.0); matrix_set(X, 1, 1, 4.0)
+    matrix_set(X, 2, 0, 3.0); matrix_set(X, 2, 1, 6.0)
+    matrix_set(X, 3, 0, 4.0); matrix_set(X, 3, 1, 8.0)
+    matrix_set(X, 4, 0, 5.0); matrix_set(X, 4, 1, 10.0)
+    let y: ptr<f32> = array_new_f32(5)
+    y[0] = 2.0
+    y[1] = 4.0
+    y[2] = 5.0
+    y[3] = 4.0
+    y[4] = 5.0
+
+    let model: LinearRegression = linear_regression_fit(X, y, penalty_none())
+    let inf: OLSInference = ols_inference_fit(model, X, y)
+
+    let mut fails: i32 = 0
+
+    print("  rank ")
+    print(inf.rank)
+    print(" of ")
+    print(inf.n_features)
+    println("")
+    print("  fit weights ")
+    printf("%.4e", model.weights[0])
+    print(" ")
+    printf("%.4e", model.weights[1])
+    println("")
+
+    if inf.fitted {
+        println("  FAIL: a singular design has no coefficient covariance to report")
+        fails = fails + 1
+    }
+    if inf.rank_deficient == false {
+        println("  FAIL: singular design was not flagged rank deficient")
+        fails = fails + 1
+    }
+    if inf.rank != 1 {
+        println("  FAIL: numerical rank should be 1")
+        fails = fails + 1
+    }
+
+    for j in 0 to 3 {
+        if ols_inference_std_error(inf, j) != 0.0 {
+            println("  FAIL: refused inference must carry no standard error")
+            fails = fails + 1
+        }
+        if ols_inference_t_stat(inf, j) != 0.0 {
+            println("  FAIL: refused inference must carry no t statistic")
+            fails = fails + 1
+        }
+    }
+    if ols_inference_cov(inf, 0, 0) != 0.0 {
+        println("  FAIL: refused inference must carry no covariance")
+        fails = fails + 1
+    }
+    if inf.residual_std_error != 0.0 {
+        println("  FAIL: refused inference must carry no residual std error")
+        fails = fails + 1
+    }
+
+    # The reason for the refusal: the fit itself has collapsed to a constant.
+    let preds: ptr<f32> = linear_regression_predict(model, X)
+    let spread: f32 = preds[4] - preds[0]
+    let mut aspread: f32 = spread
+    if aspread < 0.0 { aspread = 0.0 - aspread }
+    print("  prediction spread across x1 = 1..5: ")
+    printf("%.6f", aspread)
+    println("")
+    if aspread > 0.001 {
+        println("  NOTE: linear_regression_fit no longer collapses on this design")
+        println("  the refusal above is still correct, but revisit the comment")
+    }
+    array_free_f32(preds)
+
+    ols_inference_free(inf)
+    linear_regression_free(model)
+    array_free_f32(y)
+    matrix_free(X)
+
+    if fails == 0 {
+        println("  OK: singular design is refused and flagged rank deficient")
+        return 0
+    }
+    return 1
+}
+
+# A ridge fit is biased, so s^2 (X^T X)^-1 is not its covariance. The request
+# is refused rather than answered with a number that would be read as one.
+function test_penalized_fit_is_refused() -> i32 {
+    println("Test: penalized fit is refused")
+    let X: Matrix = matrix_new(5, 1)
+    matrix_set(X, 0, 0, 1.0)
+    matrix_set(X, 1, 0, 2.0)
+    matrix_set(X, 2, 0, 3.0)
+    matrix_set(X, 3, 0, 4.0)
+    matrix_set(X, 4, 0, 5.0)
+    let y: ptr<f32> = array_new_f32(5)
+    y[0] = 2.0
+    y[1] = 4.0
+    y[2] = 5.0
+    y[3] = 4.0
+    y[4] = 5.0
+
+    let pen: Penalty = penalty_l2(1.0)
+    let model: LinearRegression = linear_regression_fit(X, y, pen)
+    let inf: OLSInference = ols_inference_fit(model, X, y)
+
+    let mut fails: i32 = 0
+    if inf.fitted {
+        println("  FAIL: inference on a penalized fit should not be reported")
+        fails = fails + 1
+    }
+    if ols_inference_std_error(inf, 0) != 0.0 {
+        println("  FAIL: refused inference should carry no numbers")
+        fails = fails + 1
+    }
+    if inf.residual_std_error != 0.0 {
+        println("  FAIL: refused inference should carry no residual std error")
+        fails = fails + 1
+    }
+
+    ols_inference_free(inf)
+    linear_regression_free(model)
+    array_free_f32(y)
+    matrix_free(X)
+
+    if fails == 0 {
+        println("  OK: ridge fit returns fitted = false")
+        return 0
+    }
+    return 1
+}
+
+# A realistic shape: 200 rows, 4 features, y built from a known linear rule
+# plus a deterministic wobble. The point is that the standard errors are
+# finite, positive, and small enough that the true coefficients sit inside a
+# few standard errors of the estimates.
+function test_inference_on_larger_design() -> i32 {
+    println("Test: 200 x 4 design")
+    let m: i32 = 200
+    let n: i32 = 4
+    let X: Matrix = matrix_new(m, n)
+    let y: ptr<f32> = array_new_f32(m)
+    let mut seed: i32 = 12345
+    for i in 0 to m {
+        let mut target: f32 = 1.5
+        for j in 0 to n {
+            seed = (seed * 1103515245 + 12345) % 2147483647
+            if seed < 0 { seed = 0 - seed }
+            let v: f32 = ((seed % 1000) as f32) / 250.0 - 2.0
+            matrix_set(X, i, j, v)
+            let coef: f32 = 1.0 + (j as f32)
+            target = target + coef * v
+        }
+        seed = (seed * 1103515245 + 12345) % 2147483647
+        if seed < 0 { seed = 0 - seed }
+        let noise: f32 = ((seed % 200) as f32) / 1000.0 - 0.1
+        y[i] = target + noise
+    }
+
+    let model: LinearRegression = linear_regression_fit(X, y, penalty_none())
+    let inf: OLSInference = ols_inference_fit(model, X, y)
+
+    let mut fails: i32 = 0
+    if inf.df_residual != 195 {
+        print("  FAIL: df_residual should be 195, got ")
+        print(inf.df_residual)
+        println("")
+        fails = fails + 1
+    }
+    if inf.rank_deficient {
+        println("  FAIL: random design should be full rank")
+        fails = fails + 1
+    }
+    for j in 0 to n {
+        let sej: f32 = ols_inference_std_error(inf, j)
+        let want: f32 = 1.0 + (j as f32)
+        let est: f32 = model.weights[j]
+        print("  w")
+        print(j)
+        print(" est ")
+        printf("%.5f", est)
+        print(" se ")
+        printf("%.5f", sej)
+        println("")
+        if sej <= 0.0 {
+            println("  FAIL: standard error must be positive")
+            fails = fails + 1
+        }
+        if t353_close(est, want, 4.0 * sej) == false {
+            println("  FAIL: true coefficient is more than 4 standard errors away")
+            fails = fails + 1
+        }
+    }
+
+    ols_inference_free(inf)
+    linear_regression_free(model)
+    array_free_f32(y)
+    matrix_free(X)
+
+    if fails == 0 {
+        println("  OK: standard errors are positive and cover the true coefficients")
+        return 0
+    }
+    return 1
+}
+
+function main() -> i32 {
+    println("Running OLS coefficient inference tests...")
+    println("=========================================")
+    println("")
+
+    let mut failures: i32 = 0
+
+    if test_simple_regression_inference() != 0 { failures = failures + 1 }
+    println("")
+    if test_orthogonal_design_inference() != 0 { failures = failures + 1 }
+    println("")
+    if test_collinear_design_inference() != 0 { failures = failures + 1 }
+    println("")
+    if test_penalized_fit_is_refused() != 0 { failures = failures + 1 }
+    println("")
+    if test_inference_on_larger_design() != 0 { failures = failures + 1 }
+
+    println("")
+    if failures == 0 {
+        println("All OLS inference tests passed!")
+        return 0
+    }
+    print("FAILED: ")
+    print(failures)
+    println(" tests")
+    return 1
+}
