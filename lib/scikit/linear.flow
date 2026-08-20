@@ -2088,6 +2088,328 @@ export function logistic_regression_free(model: LogisticRegression) -> void {
 }
 
 # ============================================================================
+# Logistic coefficient inference (Issue #458)
+#
+# The deferred half of #353. PR #446 shipped OLS inference and left logistic
+# models out; PR #443's Newton solver forms the matrix this needs, the observed
+# information at the fitted coefficients.
+#
+# CONVENTION. For a binary logit the asymptotic covariance of the maximum
+# likelihood coefficients is the inverse of the observed information
+#
+#     I(theta) = sum_i p_i (1 - p_i) xt_i xt_i^T,        cov = I^-1
+#
+# over the augmented rows xt_i = [x_i, 1], with p_i the fitted probability of
+# the positive class. Written with the MEAN Hessian H = I / m that
+# lin357_newton_fit assembles, the same quantity is H^-1 / m. The two are equal
+# and this code computes the unscaled form directly. It is what statsmodels
+# reports as Logit.cov_params() and what R's glm reports as vcov(), so these
+# numbers are checkable against either.
+#
+# The information matrix is never formed. sqrt(p_i (1 - p_i)) scales row i of
+# the augmented design into A, and then I = A^T A, so the QR of A gives the
+# triangular factor R with R^T R = I and cov = R^-1 R^-T. That is exactly the
+# route ols_inference_fit takes, reusing _solve_lstsq_qr and
+# lin353_invert_upper unchanged, and it avoids squaring the condition number
+# the way an explicit Hessian and a Gaussian solve would.
+#
+# INDEX CONVENTION follows ols_inference_fit: 0..n_features-1 are the slopes in
+# feature order and index n_features is the intercept. There is no p value, for
+# the same reason #446 shipped none: it needs a normal CDF accurate in the
+# tail, and a hand-rolled one is worse than none.
+#
+# OWNERSHIP. Nothing is retained on the fit. LogisticRegression gains no field,
+# logistic_regression_fit is untouched, and this call recomputes the
+# probabilities at the fitted coefficients into buffers it owns and
+# logistic_inference_free releases. That is #446's answer to the ownership
+# question #443 left open on #353, applied unchanged.
+#
+# WHAT IS REFUSED, each with fitted = false and zeroed buffers.
+#
+#   Penalized fits. The Newton Hessian carries the alpha * I term, so its
+#   inverse is a PENALIZED covariance and not the sampling covariance a reader
+#   of a standard error expects. ols_inference_fit refuses the same case; this
+#   follows it. After #430 the canonical benchmark always fits penalized, so
+#   this surface is for callers who fit with penalty_none().
+#
+#   More than two classes. Above two classes the fit is the joint multinomial
+#   softmax of #433, whose information matrix is a (K-1)d x (K-1)d block system
+#   with cross-class blocks. That is a substantially bigger job than the binary
+#   case and is deliberately out of scope, as #458 scopes it.
+#
+#   A separated fixture. Complete separation has no maximum likelihood
+#   estimate: the coefficients diverge and any standard error read off the
+#   information matrix records where the optimizer stopped rather than a
+#   sampling variance. It is reported through separable = true rather than as a
+#   very large finite number. The test is the fitted hyperplane classifying
+#   every point correctly, which is exactly what separation means.
+#
+#   A singular weighted design, reported through rank_deficient = true, on the
+#   same relative cutoff (1e-11 * max|R_ii|, floored at 1e-15) that #446 and
+#   #450 made standard in this file.
+# ============================================================================
+
+export struct LogisticInference {
+    cov: ptr<f32>,
+    std_errors: ptr<f32>,
+    z_stats: ptr<f32>,
+    n_features: i32,
+    n_params: i32,
+    n_samples: i32,
+    rank: i32,
+    rank_deficient: bool,
+    separable: bool,
+    fitted: bool
+}
+
+# The binomial variance p(1-p) at a logit, as e / (1+e)^2 with e = exp(-|z|).
+# Computing p first and then p * (1 - p) loses the whole quantity to
+# cancellation once p rounds to 1; this form stays accurate into the tails and
+# underflows smoothly to zero.
+#
+# exp() lives in a helper rather than at the call site because the transpiler
+# miscompiles it inside a nested while loop (compiler bug #421). The name
+# carries the module and issue number because non-exported functions sharing a
+# name across modules collide in the generated C (compiler bug #465).
+function lin458_variance_f64(z: f64) -> f64 {
+    let mut az: f64 = z
+    if az < 0.0 { az = 0.0 - z }
+    let e: f64 = exp(0.0 - az)
+    let s: f64 = 1.0 + e
+    return e / (s * s)
+}
+
+# A refused result: zeroed buffers, fitted = false, and the flag that says why.
+function lin458_empty(n: i32, d: i32, rank: i32, deficient: bool, separable: bool) -> LogisticInference {
+    let cov: ptr<f32> = array_new_f32(d * d + 16)
+    let se: ptr<f32> = array_new_f32(d + 8)
+    let zs: ptr<f32> = array_new_f32(d + 8)
+    return LogisticInference {
+        cov: cov,
+        std_errors: se,
+        z_stats: zs,
+        n_features: n,
+        n_params: d,
+        n_samples: 0,
+        rank: rank,
+        rank_deficient: deficient,
+        separable: separable,
+        fitted: false
+    }
+}
+
+# Coefficient inference for an unpenalized binary logistic fit.
+#
+# model must be the result of fitting the same X and y that are passed here,
+# with penalty_none(). The coefficients described are the ones
+# logistic_decision_function reports, that is the model for classes[1]. Class
+# order comes from distinct_f32, which lists labels in order of first
+# appearance in y, so classes[1] is the second distinct label seen and not
+# necessarily the larger one.
+export function logistic_inference_fit(model: LogisticRegression, X: Matrix, y: ptr<f32>) -> LogisticInference {
+    let n: i32 = X.cols
+    let m: i32 = X.rows
+    let d: i32 = n + 1
+
+    if n <= 0 || m <= 0 {
+        let bad0: LogisticInference = lin458_empty(n, d, 0, false, false)
+        return bad0
+    }
+    if model.fitted == false || model.n_features != n {
+        let bad1: LogisticInference = lin458_empty(n, d, 0, false, false)
+        return bad1
+    }
+    # Penalized: refused, see the header.
+    if model.penalty.kind != PENALTY_NONE {
+        let bad2: LogisticInference = lin458_empty(n, d, 0, false, false)
+        return bad2
+    }
+    # Multiclass: refused, out of scope. n_classes < 2 means y carried a single
+    # label, which has no identified coefficient either.
+    if model.n_classes != 2 {
+        let bad3: LogisticInference = lin458_empty(n, d, 0, false, false)
+        return bad3
+    }
+    # Fewer rows than parameters cannot support a full rank information matrix.
+    if m < d {
+        let bad4: LogisticInference = lin458_empty(n, d, 0, true, false)
+        return bad4
+    }
+
+    let w: ptr<f32> = model.weights + n
+    let bias: f32 = model.biases[1]
+    let positive: f32 = model.classes[1]
+
+    let xdata: ptr<f32> = X.data
+    let stride: i32 = X.cols
+
+    # Logits at the fitted coefficients. No exp() in this loop: it is nested.
+    let zbuf: ptr<f64> = array_new_f64(m + 8)
+    for i in 0 to m {
+        let base: i32 = i * stride
+        let mut z: f64 = bias as f64
+        for j in 0 to n {
+            z = z + (w[j] as f64) * (xdata[base + j] as f64)
+        }
+        zbuf[i] = z
+    }
+
+    # Row weights, and the separation test.
+    #
+    # Complete separation IS the condition that some hyperplane classifies
+    # every point correctly. When one exists, scaling that hyperplane up drives
+    # the log likelihood towards zero without ever attaining it, the maximum
+    # likelihood estimate does not exist, and no covariance describes a
+    # coefficient that is not there. So the test is a property of the data, and
+    # the fitted hyperplane is the witness: if every z_i has the sign of its
+    # label, the data are separable.
+    #
+    # This is exact where a threshold is not. An earlier draft asked whether
+    # every fitted probability was within 1e-4 of its label and whether the
+    # total binomial variance had collapsed. On a six point separable fixture
+    # the Newton fit tripped both, and the LBFGS fit of the same data stopped
+    # at a slope of 8.3 and tripped neither, so the same data got standard
+    # errors from one solver and a refusal from the other. The sign test
+    # catches both fits, because both found a separating hyperplane.
+    #
+    # A point with z_i exactly zero sits on the boundary and is counted as not
+    # separated, which is the conservative direction: it answers rather than
+    # refuses.
+    let sw: ptr<f64> = array_new_f64(m + 8)
+    let mut separable: bool = true
+    for i in 0 to m {
+        let zi: f64 = zbuf[i]
+        sw[i] = sqrt(lin458_variance_f64(zi))
+        if y[i] == positive {
+            if zi <= 0.0 { separable = false }
+        } else {
+            if zi >= 0.0 { separable = false }
+        }
+    }
+
+    if separable {
+        array_free_f64(zbuf)
+        array_free_f64(sw)
+        let bad5: LogisticInference = lin458_empty(n, d, 0, true, true)
+        return bad5
+    }
+
+    # A = diag(sqrt(v)) * [X | 1], so that A^T A is the observed information.
+    let A: ptr<f64> = malloc((m as i64) * (d as i64) * 8 + 128) as ptr<f64>
+    let rhs: ptr<f64> = array_new_f64(m + 8)
+    for i in 0 to m {
+        let base: i32 = i * stride
+        let dst: i32 = i * d
+        let s: f64 = sw[i]
+        for j in 0 to n {
+            A[dst + j] = s * (xdata[base + j] as f64)
+        }
+        A[dst + n] = s
+        rhs[i] = 0.0
+    }
+
+    # Leaves R, the triangular factor of A, in the upper triangle of A. rhs is
+    # the zero vector and its solution is discarded; only R is wanted.
+    _solve_lstsq_qr(A, rhs, m, d)
+
+    let mut maxdiag: f64 = 0.0
+    for j in 0 to d {
+        let dj: f64 = fabs(A[j * d + j])
+        if dj > maxdiag { maxdiag = dj }
+    }
+    let mut tol: f64 = 0.00000000001 * maxdiag
+    if tol < 0.000000000000001 { tol = 0.000000000000001 }
+
+    let Z: ptr<f64> = array_new_f64(d * d + 16)
+    let rank: i32 = lin353_invert_upper(A, Z, d, tol)
+
+    if rank < d {
+        array_free_f64(zbuf)
+        array_free_f64(sw)
+        free(A as ptr<void>)
+        array_free_f64(rhs)
+        array_free_f64(Z)
+        let bad6: LogisticInference = lin458_empty(n, d, rank, true, false)
+        return bad6
+    }
+
+    # cov = (A^T A)^-1 = Z Z^T, symmetric.
+    let cov: ptr<f32> = array_new_f32(d * d + 16)
+    let se: ptr<f32> = array_new_f32(d + 8)
+    let zs: ptr<f32> = array_new_f32(d + 8)
+    for a in 0 to d {
+        for b in 0 to d {
+            let mut s: f64 = 0.0
+            for k in 0 to d {
+                s = s + Z[a * d + k] * Z[b * d + k]
+            }
+            cov[a * d + b] = s as f32
+        }
+    }
+
+    for j in 0 to d {
+        let v: f32 = cov[j * d + j]
+        let mut sj: f32 = 0.0
+        if v > 0.0 { sj = sqrt((v as f64)) as f32 }
+        se[j] = sj
+        let mut coef: f32 = bias
+        if j < n { coef = w[j] }
+        if sj > 0.0 {
+            zs[j] = coef / sj
+        } else {
+            zs[j] = 0.0
+        }
+    }
+
+    array_free_f64(zbuf)
+    array_free_f64(sw)
+    free(A as ptr<void>)
+    array_free_f64(rhs)
+    array_free_f64(Z)
+
+    return LogisticInference {
+        cov: cov,
+        std_errors: se,
+        z_stats: zs,
+        n_features: n,
+        n_params: d,
+        n_samples: m,
+        rank: rank,
+        rank_deficient: false,
+        separable: false,
+        fitted: true
+    }
+}
+
+# Standard error of coefficient j. j in 0..n_features-1 is a slope, j ==
+# n_features is the intercept.
+export function logistic_inference_std_error(inf: LogisticInference, j: i32) -> f32 {
+    if j < 0 || j >= inf.n_params { return 0.0 }
+    return inf.std_errors[j]
+}
+
+# z statistic of coefficient j against the null that it is zero. The logistic
+# analogue of ols_inference_t_stat: the reference distribution is normal, not
+# t, because the variance is not estimated separately from the coefficients.
+export function logistic_inference_z_stat(inf: LogisticInference, j: i32) -> f32 {
+    if j < 0 || j >= inf.n_params { return 0.0 }
+    return inf.z_stats[j]
+}
+
+# Entry (a, b) of the coefficient covariance matrix.
+export function logistic_inference_cov(inf: LogisticInference, a: i32, b: i32) -> f32 {
+    if a < 0 || a >= inf.n_params { return 0.0 }
+    if b < 0 || b >= inf.n_params { return 0.0 }
+    return inf.cov[a * inf.n_params + b]
+}
+
+export function logistic_inference_free(inf: LogisticInference) -> void {
+    array_free_f32(inf.cov)
+    array_free_f32(inf.std_errors)
+    array_free_f32(inf.z_stats)
+}
+
+# ============================================================================
 # Ridge Regression (L2-penalized linear regression with closed-form-ish GD)
 # ============================================================================
 

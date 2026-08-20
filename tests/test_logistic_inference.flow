@@ -1,0 +1,637 @@
+# Tests for binary logistic coefficient inference (Issue #458).
+# Run: flow run tests/test_logistic_inference.flow
+#
+# The convention under test is cov = I^-1 with I = sum_i p_i (1 - p_i) xt_i
+# xt_i^T, the unscaled observed information at the fitted coefficients. Two
+# independent references pin it:
+#
+#   Fixture A is checked against statsmodels 0.14.6,
+#   Logit(y, add_constant(X)).fit(method=newton, tol=1e-13).cov_params().
+#
+#   Fixture B is the saturated 2x2 table, whose maximum likelihood estimate and
+#   covariance are closed form and worked out by hand in the comment above the
+#   test. statsmodels agrees with that hand computation to every printed digit.
+#
+# Index convention, the same one ols_inference_fit uses: 0..n_features-1 are
+# the slopes in feature order and index n_features is the intercept.
+
+import "lib/scikit/scikit.flow"
+
+function t458_close(got: f32, want: f32, tol: f32) -> bool {
+    let mut d: f32 = got - want
+    if d < 0.0 { d = 0.0 - d }
+    return d <= tol
+}
+
+function t458_flag(label: string, v: bool) -> void {
+    print("  ")
+    print(label)
+    if v {
+        println(" yes")
+    } else {
+        println(" no")
+    }
+}
+
+function t458_report(label: string, got: f32, want: f32) -> void {
+    print("  ")
+    print(label)
+    print(" got ")
+    printf("%.6f", got)
+    print(" want ")
+    printf("%.6f", want)
+    println("")
+}
+
+# Fixture A, shared by the reference test and by the penalty test below.
+function t458_fill_fixture_a(X: Matrix, y: ptr<f32>) -> void {
+
+    matrix_set(X, 0, 0, 0.5)
+    matrix_set(X, 0, 1, 1.0)
+    matrix_set(X, 1, 0, 1.0)
+    matrix_set(X, 1, 1, 0.5)
+    matrix_set(X, 2, 0, 1.5)
+    matrix_set(X, 2, 1, 2.0)
+    matrix_set(X, 3, 0, 2.0)
+    matrix_set(X, 3, 1, 1.0)
+    matrix_set(X, 4, 0, 2.5)
+    matrix_set(X, 4, 1, 3.0)
+    matrix_set(X, 5, 0, 3.0)
+    matrix_set(X, 5, 1, 2.0)
+    matrix_set(X, 6, 0, 3.5)
+    matrix_set(X, 6, 1, 1.5)
+    matrix_set(X, 7, 0, 4.0)
+    matrix_set(X, 7, 1, 3.5)
+    matrix_set(X, 8, 0, 4.5)
+    matrix_set(X, 8, 1, 2.5)
+    matrix_set(X, 9, 0, 5.0)
+    matrix_set(X, 9, 1, 4.0)
+    matrix_set(X, 10, 0, 0.75)
+    matrix_set(X, 10, 1, 2.5)
+    matrix_set(X, 11, 0, 1.25)
+    matrix_set(X, 11, 1, 3.0)
+    matrix_set(X, 12, 0, 1.75)
+    matrix_set(X, 12, 1, 0.5)
+    matrix_set(X, 13, 0, 2.25)
+    matrix_set(X, 13, 1, 4.0)
+    matrix_set(X, 14, 0, 2.75)
+    matrix_set(X, 14, 1, 1.25)
+    matrix_set(X, 15, 0, 3.25)
+    matrix_set(X, 15, 1, 4.5)
+    matrix_set(X, 16, 0, 3.75)
+    matrix_set(X, 16, 1, 0.75)
+    matrix_set(X, 17, 0, 4.25)
+    matrix_set(X, 17, 1, 4.75)
+    matrix_set(X, 18, 0, 4.75)
+    matrix_set(X, 18, 1, 1.75)
+    matrix_set(X, 19, 0, 5.5)
+    matrix_set(X, 19, 1, 3.25)
+    matrix_set(X, 20, 0, 2.0)
+    matrix_set(X, 20, 1, 2.0)
+    matrix_set(X, 21, 0, 3.0)
+    matrix_set(X, 21, 1, 3.0)
+    matrix_set(X, 22, 0, 1.0)
+    matrix_set(X, 22, 1, 4.0)
+    matrix_set(X, 23, 0, 4.0)
+    matrix_set(X, 23, 1, 1.0)
+
+    y[0] = 0.0
+    y[1] = 1.0
+    y[2] = 0.0
+    y[3] = 0.0
+    y[4] = 1.0
+    y[5] = 0.0
+    y[6] = 1.0
+    y[7] = 1.0
+    y[8] = 0.0
+    y[9] = 1.0
+    y[10] = 0.0
+    y[11] = 1.0
+    y[12] = 0.0
+    y[13] = 0.0
+    y[14] = 1.0
+    y[15] = 1.0
+    y[16] = 0.0
+    y[17] = 1.0
+    y[18] = 0.0
+    y[19] = 1.0
+    y[20] = 0.0
+    y[21] = 1.0
+    y[22] = 1.0
+    y[23] = 0.0
+}
+
+# Fixture A: 24 samples, 2 features, labels deliberately overlapping so the
+# maximum likelihood estimate exists and the information matrix is well
+# conditioned (condition number 140, fitted probabilities between 0.134 and
+# 0.909).
+#
+# statsmodels reports
+#   coefficients   0.0992060632   0.9025423465  -2.4127187328
+#   std errors     0.3402656264   0.4265496942   1.3457563286
+#   z              0.2915547606   2.1159137113  -1.7928347663
+#   cov  [[ 0.1157806965 -0.0237681631 -0.2695920839]
+#         [-0.0237681631  0.1819446416 -0.3572172811]
+#         [-0.2695920839 -0.3572172811  1.8110600959]]
+function test_binary_inference_matches_statsmodels() -> i32 {
+    println("Test: binary logistic inference against statsmodels")
+    let X: Matrix = matrix_new(24, 2)
+    let y: ptr<f32> = array_new_f32(24)
+    t458_fill_fixture_a(X, y)
+
+    # Solver 1 is Newton / IRLS (issue #357). The literal is used rather than
+    # LOGISTIC_SOLVER_NEWTON because an export const is not transitively
+    # visible through the scikit.flow umbrella.
+    let model: LogisticRegression = logistic_regression_fit_solver(X, y, 2, 100, 0.1, penalty_none(), 1)
+    let inf: LogisticInference = logistic_inference_fit(model, X, y)
+
+    let mut fails: i32 = 0
+
+    if inf.fitted == false {
+        println("  FAIL: inference should be available for an unpenalized binary fit")
+        fails = fails + 1
+    }
+    if inf.rank_deficient {
+        println("  FAIL: a well conditioned design was flagged rank deficient")
+        fails = fails + 1
+    }
+    if inf.separable {
+        println("  FAIL: an overlapping fixture was flagged separable")
+        fails = fails + 1
+    }
+    if inf.n_params != 3 {
+        print("  FAIL: n_params should be 3, got ")
+        print(inf.n_params)
+        println("")
+        fails = fails + 1
+    }
+
+    # The covariance is evaluated at the fitted coefficients, so the fit has to
+    # be on the optimum before the standard errors can match the reference.
+    let c0: f32 = model.weights[2]
+    let c1: f32 = model.weights[3]
+    let cb: f32 = model.biases[1]
+    t458_report("coef(x0)    ", c0, 0.0992061)
+    if t458_close(c0, 0.0992061, 0.0005) == false { fails = fails + 1 }
+    t458_report("coef(x1)    ", c1, 0.9025423)
+    if t458_close(c1, 0.9025423, 0.0005) == false { fails = fails + 1 }
+    t458_report("intercept   ", cb, -2.4127187)
+    if t458_close(cb, -2.4127187, 0.0015) == false { fails = fails + 1 }
+
+    let se0: f32 = logistic_inference_std_error(inf, 0)
+    t458_report("se(x0)      ", se0, 0.3402656)
+    if t458_close(se0, 0.3402656, 0.0004) == false { fails = fails + 1 }
+
+    let se1: f32 = logistic_inference_std_error(inf, 1)
+    t458_report("se(x1)      ", se1, 0.4265497)
+    if t458_close(se1, 0.4265497, 0.0005) == false { fails = fails + 1 }
+
+    let se2: f32 = logistic_inference_std_error(inf, 2)
+    t458_report("se(intercpt)", se2, 1.3457563)
+    if t458_close(se2, 1.3457563, 0.0015) == false { fails = fails + 1 }
+
+    let z0: f32 = logistic_inference_z_stat(inf, 0)
+    t458_report("z(x0)       ", z0, 0.2915548)
+    if t458_close(z0, 0.2915548, 0.002) == false { fails = fails + 1 }
+
+    let z1: f32 = logistic_inference_z_stat(inf, 1)
+    t458_report("z(x1)       ", z1, 2.1159137)
+    if t458_close(z1, 2.1159137, 0.003) == false { fails = fails + 1 }
+
+    let z2: f32 = logistic_inference_z_stat(inf, 2)
+    t458_report("z(intercpt) ", z2, -1.7928348)
+    if t458_close(z2, -1.7928348, 0.003) == false { fails = fails + 1 }
+
+    let v00: f32 = logistic_inference_cov(inf, 0, 0)
+    t458_report("cov(0,0)    ", v00, 0.1157807)
+    if t458_close(v00, 0.1157807, 0.0003) == false { fails = fails + 1 }
+
+    let v01: f32 = logistic_inference_cov(inf, 0, 1)
+    t458_report("cov(0,1)    ", v01, -0.0237682)
+    if t458_close(v01, -0.0237682, 0.0003) == false { fails = fails + 1 }
+
+    let v02: f32 = logistic_inference_cov(inf, 0, 2)
+    t458_report("cov(0,2)    ", v02, -0.2695921)
+    if t458_close(v02, -0.2695921, 0.001) == false { fails = fails + 1 }
+
+    let v11: f32 = logistic_inference_cov(inf, 1, 1)
+    t458_report("cov(1,1)    ", v11, 0.1819446)
+    if t458_close(v11, 0.1819446, 0.0005) == false { fails = fails + 1 }
+
+    let v12: f32 = logistic_inference_cov(inf, 1, 2)
+    t458_report("cov(1,2)    ", v12, -0.3572173)
+    if t458_close(v12, -0.3572173, 0.0012) == false { fails = fails + 1 }
+
+    let v22: f32 = logistic_inference_cov(inf, 2, 2)
+    t458_report("cov(2,2)    ", v22, 1.8110601)
+    if t458_close(v22, 1.8110601, 0.004) == false { fails = fails + 1 }
+
+    let v10: f32 = logistic_inference_cov(inf, 1, 0)
+    if t458_close(v10, v01, 0.0000001) == false {
+        println("  FAIL: covariance is not symmetric")
+        fails = fails + 1
+    }
+
+    logistic_inference_free(inf)
+    logistic_regression_free(model)
+    array_free_f32(y)
+    matrix_free(X)
+
+    if fails == 0 {
+        println("  OK: standard errors, z statistics and covariance match statsmodels")
+        return 0
+    }
+    return 1
+}
+
+# Fixture B: one binary feature, the saturated 2x2 table. Eight rows at x = 0
+# of which two are positive, eight rows at x = 1 of which six are positive. The
+# first row carries the negative label on purpose: the class whose coefficients
+# are reported is classes[1], the second distinct label in order of appearance
+# in y, which is the convention logistic_decision_function already uses.
+#
+# The maximum likelihood estimate is the table itself:
+#   p0 = 0.25, p1 = 0.75
+#   intercept = log(p0 / (1 - p0)) = log(1/3)  = -1.0986123
+#   slope     = log(p1 / (1 - p1)) - intercept =  2.1972246
+#
+# The information matrix is block diagonal in the two cell counts, so the
+# covariance is closed form with n0 p0 q0 = n1 p1 q1 = 8 * 0.1875 = 1.5:
+#   var(intercept) = 1 / 1.5                 = 0.6666667  se = 0.8164966
+#   var(slope)     = 1 / 1.5 + 1 / 1.5       = 1.3333333  se = 1.1547005
+#   cov(slope, intercept) = -1 / 1.5         = -0.6666667
+#   z(slope) = 1.9028523     z(intercept) = -1.3455198
+#
+# statsmodels reproduces every one of those digits, so this test is a hand
+# computation that a library happens to agree with rather than the other way
+# round.
+function test_saturated_table_closed_form() -> i32 {
+    println("Test: saturated 2x2 table against the closed form")
+    let X: Matrix = matrix_new(16, 1)
+    let y: ptr<f32> = array_new_f32(16)
+    for i in 0 to 8 {
+        matrix_set(X, i, 0, 0.0)
+        matrix_set(X, i + 8, 0, 1.0)
+        y[i] = 0.0
+        y[i + 8] = 1.0
+    }
+    y[2] = 1.0
+    y[3] = 1.0
+    y[14] = 0.0
+    y[15] = 0.0
+
+    let model: LogisticRegression = logistic_regression_fit_solver(X, y, 2, 100, 0.1, penalty_none(), 1)
+    let inf: LogisticInference = logistic_inference_fit(model, X, y)
+
+    let mut fails: i32 = 0
+    if inf.fitted == false {
+        println("  FAIL: inference should be available for this fit")
+        fails = fails + 1
+        logistic_inference_free(inf)
+        logistic_regression_free(model)
+        array_free_f32(y)
+        matrix_free(X)
+        return 1
+    }
+
+    let slope: f32 = model.weights[1]
+    let intercept: f32 = model.biases[1]
+    t458_report("slope       ", slope, 2.1972246)
+    if t458_close(slope, 2.1972246, 0.002) == false { fails = fails + 1 }
+    t458_report("intercept   ", intercept, -1.0986123)
+    if t458_close(intercept, -1.0986123, 0.002) == false { fails = fails + 1 }
+
+    let se_slope: f32 = logistic_inference_std_error(inf, 0)
+    t458_report("se(slope)   ", se_slope, 1.1547005)
+    if t458_close(se_slope, 1.1547005, 0.0012) == false { fails = fails + 1 }
+
+    let se_int: f32 = logistic_inference_std_error(inf, 1)
+    t458_report("se(intercpt)", se_int, 0.8164966)
+    if t458_close(se_int, 0.8164966, 0.0009) == false { fails = fails + 1 }
+
+    let cov01: f32 = logistic_inference_cov(inf, 0, 1)
+    t458_report("cov(0,1)    ", cov01, -0.6666667)
+    if t458_close(cov01, -0.6666667, 0.0015) == false { fails = fails + 1 }
+
+    let zs: f32 = logistic_inference_z_stat(inf, 0)
+    t458_report("z(slope)    ", zs, 1.9028523)
+    if t458_close(zs, 1.9028523, 0.003) == false { fails = fails + 1 }
+
+    let zi: f32 = logistic_inference_z_stat(inf, 1)
+    t458_report("z(intercpt) ", zi, -1.3455198)
+    if t458_close(zi, -1.3455198, 0.003) == false { fails = fails + 1 }
+
+    logistic_inference_free(inf)
+    logistic_regression_free(model)
+    array_free_f32(y)
+    matrix_free(X)
+
+    if fails == 0 {
+        println("  OK: closed form covariance for the saturated table reproduced")
+        return 0
+    }
+    return 1
+}
+
+# A perfectly separable fixture has no maximum likelihood estimate. The
+# coefficients diverge, every fitted probability saturates and the information
+# matrix goes to zero, so a standard error read off it says only where the
+# optimizer stopped. The result must be refused and flagged, not returned as a
+# large finite number.
+function test_separable_fixture_is_refused() -> i32 {
+    println("Test: separable fixture is refused")
+    let X: Matrix = matrix_new(6, 1)
+    let y: ptr<f32> = array_new_f32(6)
+    matrix_set(X, 0, 0, -3.0)
+    matrix_set(X, 1, 0, -2.0)
+    matrix_set(X, 2, 0, -1.0)
+    matrix_set(X, 3, 0, 1.0)
+    matrix_set(X, 4, 0, 2.0)
+    matrix_set(X, 5, 0, 3.0)
+    y[0] = 0.0
+    y[1] = 0.0
+    y[2] = 0.0
+    y[3] = 1.0
+    y[4] = 1.0
+    y[5] = 1.0
+
+    # Both solvers, because they stop in very different places on separable
+    # data: Newton runs the slope out to 13.4, LBFGS stops at 8.3. Separation
+    # is a property of the data, so both have to be refused.
+    let newton: LogisticRegression = logistic_regression_fit_solver(X, y, 2, 100, 0.1, penalty_none(), 1)
+    let lbfgs: LogisticRegression = logistic_regression_fit(X, y, 2, 100, 0.1, penalty_none())
+    let inf_n: LogisticInference = logistic_inference_fit(newton, X, y)
+    let inf_l: LogisticInference = logistic_inference_fit(lbfgs, X, y)
+
+    let mut fails: i32 = 0
+    print("  newton slope ")
+    printf("%.4f", newton.weights[1])
+    print("   lbfgs slope ")
+    printf("%.4f", lbfgs.weights[1])
+    println("")
+    t458_flag("newton fitted    ", inf_n.fitted)
+    t458_flag("newton separable ", inf_n.separable)
+    t458_flag("lbfgs  fitted    ", inf_l.fitted)
+    t458_flag("lbfgs  separable ", inf_l.separable)
+
+    if inf_n.fitted || inf_l.fitted {
+        println("  FAIL: a separated fit must not report standard errors")
+        fails = fails + 1
+    }
+    if inf_n.separable == false || inf_l.separable == false {
+        println("  FAIL: separation was not detected")
+        fails = fails + 1
+    }
+    if logistic_inference_std_error(inf_n, 0) != 0.0 {
+        println("  FAIL: refused inference must return a zero standard error")
+        fails = fails + 1
+    }
+    if logistic_inference_std_error(inf_l, 0) != 0.0 {
+        println("  FAIL: refused inference must return a zero standard error")
+        fails = fails + 1
+    }
+
+    logistic_inference_free(inf_n)
+    logistic_inference_free(inf_l)
+    logistic_regression_free(newton)
+    logistic_regression_free(lbfgs)
+    array_free_f32(y)
+    matrix_free(X)
+
+    if fails == 0 {
+        println("  OK: separation refused rather than reported")
+        return 0
+    }
+    return 1
+}
+
+# A duplicated column makes the weighted design rank deficient. The refusal is
+# the same one ols_inference_fit gives, on the same relative pivot cutoff.
+function test_collinear_design_is_refused() -> i32 {
+    println("Test: collinear design is refused")
+    let X: Matrix = matrix_new(10, 2)
+    let y: ptr<f32> = array_new_f32(10)
+    for i in 0 to 10 {
+        let v: f32 = (i as f32) * 0.5 + 1.0
+        matrix_set(X, i, 0, v)
+        matrix_set(X, i, 1, v)
+        y[i] = 0.0
+    }
+    y[1] = 1.0
+    y[3] = 1.0
+    y[4] = 1.0
+    y[6] = 1.0
+    y[8] = 1.0
+    y[9] = 1.0
+
+    let model: LogisticRegression = logistic_regression_fit_solver(X, y, 2, 100, 0.1, penalty_none(), 1)
+    let inf: LogisticInference = logistic_inference_fit(model, X, y)
+
+    let mut fails: i32 = 0
+    t458_flag("fitted     ", inf.fitted)
+    print("  rank        ")
+    print(inf.rank)
+    print(" of ")
+    print(inf.n_params)
+    println("")
+
+    if inf.fitted {
+        println("  FAIL: a singular information matrix must not report standard errors")
+        fails = fails + 1
+    }
+    if inf.rank_deficient == false {
+        println("  FAIL: rank deficiency was not flagged")
+        fails = fails + 1
+    }
+
+    logistic_inference_free(inf)
+    logistic_regression_free(model)
+    array_free_f32(y)
+    matrix_free(X)
+
+    if fails == 0 {
+        println("  OK: singular information matrix refused")
+        return 0
+    }
+    return 1
+}
+
+# The Newton Hessian of a penalized fit carries the alpha * I term, so its
+# inverse is a penalized covariance and not a sampling covariance. Refused, as
+# ols_inference_fit refuses the same case.
+function test_penalized_fit_is_refused() -> i32 {
+    println("Test: penalized fit is refused")
+    # Fixture A again, so the only thing that changes between the refusal and
+    # the answer below is the penalty.
+    let X: Matrix = matrix_new(24, 2)
+    let y: ptr<f32> = array_new_f32(24)
+    t458_fill_fixture_a(X, y)
+
+    let model: LogisticRegression = logistic_regression_fit_solver(X, y, 2, 100, 0.1, penalty_l2(0.5), 1)
+    let inf: LogisticInference = logistic_inference_fit(model, X, y)
+
+    let mut fails: i32 = 0
+    if inf.fitted {
+        println("  FAIL: a penalized fit must be refused")
+        fails = fails + 1
+    }
+    if logistic_inference_cov(inf, 0, 0) != 0.0 {
+        println("  FAIL: refused inference must return a zero covariance")
+        fails = fails + 1
+    }
+
+    logistic_inference_free(inf)
+    logistic_regression_free(model)
+
+    # The same design fitted unpenalized is answered, which is what makes the
+    # refusal above about the penalty and not about the data.
+    let free_model: LogisticRegression = logistic_regression_fit_solver(X, y, 2, 100, 0.1, penalty_none(), 1)
+    let free_inf: LogisticInference = logistic_inference_fit(free_model, X, y)
+    if free_inf.fitted == false {
+        println("  FAIL: the same design fitted unpenalized should be answered")
+        fails = fails + 1
+    }
+    if logistic_inference_std_error(free_inf, 0) <= 0.0 {
+        println("  FAIL: unpenalized fit should report a positive standard error")
+        fails = fails + 1
+    }
+    logistic_inference_free(free_inf)
+    logistic_regression_free(free_model)
+
+    array_free_f32(y)
+    matrix_free(X)
+
+    if fails == 0 {
+        println("  OK: penalized refused, unpenalized answered on the same design")
+        return 0
+    }
+    return 1
+}
+
+# Above two classes the fit is the joint multinomial softmax of #433, whose
+# information matrix is a block system this surface does not build. Refused.
+function test_multiclass_fit_is_refused() -> i32 {
+    println("Test: multiclass fit is refused")
+    let X: Matrix = matrix_new(12, 2)
+    let y: ptr<f32> = array_new_f32(12)
+    for i in 0 to 12 {
+        let a: f32 = (i as f32) * 0.5
+        matrix_set(X, i, 0, a)
+        matrix_set(X, i, 1, 3.0 - a * 0.2)
+        y[i] = (i % 3) as f32
+    }
+
+    let model: LogisticRegression = logistic_regression_fit_solver(X, y, 3, 60, 0.1, penalty_none(), 1)
+    let inf: LogisticInference = logistic_inference_fit(model, X, y)
+
+    let mut fails: i32 = 0
+    print("  n_classes   ")
+    print(model.n_classes)
+    println("")
+    t458_flag("fitted     ", inf.fitted)
+
+    if inf.fitted {
+        println("  FAIL: a multiclass fit must be refused")
+        fails = fails + 1
+    }
+    if logistic_inference_z_stat(inf, 0) != 0.0 {
+        println("  FAIL: refused inference must return a zero z statistic")
+        fails = fails + 1
+    }
+
+    logistic_inference_free(inf)
+    logistic_regression_free(model)
+    array_free_f32(y)
+    matrix_free(X)
+
+    if fails == 0 {
+        println("  OK: multiclass refused")
+        return 0
+    }
+    return 1
+}
+
+# The default LBFGS solver optimizes the same objective, so it lands on the
+# same optimum and the inference has to agree with the Newton fit to the
+# accuracy of the two solvers. This is what pins the claim that the inference
+# is a property of the fitted coefficients and not of the optimizer.
+function test_lbfgs_and_newton_agree() -> i32 {
+    println("Test: LBFGS and Newton fits give the same standard errors")
+    let X: Matrix = matrix_new(16, 1)
+    let y: ptr<f32> = array_new_f32(16)
+    for i in 0 to 8 {
+        matrix_set(X, i, 0, 0.0)
+        matrix_set(X, i + 8, 0, 1.0)
+        y[i] = 0.0
+        y[i + 8] = 1.0
+    }
+    y[2] = 1.0
+    y[3] = 1.0
+    y[14] = 0.0
+    y[15] = 0.0
+
+    let newton: LogisticRegression = logistic_regression_fit_solver(X, y, 2, 100, 0.1, penalty_none(), 1)
+    let lbfgs: LogisticRegression = logistic_regression_fit(X, y, 2, 100, 0.1, penalty_none())
+    let inf_n: LogisticInference = logistic_inference_fit(newton, X, y)
+    let inf_l: LogisticInference = logistic_inference_fit(lbfgs, X, y)
+
+    let mut fails: i32 = 0
+    if inf_n.fitted == false || inf_l.fitted == false {
+        println("  FAIL: both fits should be answered")
+        fails = fails + 1
+    }
+
+    let sn: f32 = logistic_inference_std_error(inf_n, 0)
+    let sl: f32 = logistic_inference_std_error(inf_l, 0)
+    t458_report("se newton   ", sn, 1.1547005)
+    t458_report("se lbfgs    ", sl, 1.1547005)
+    if t458_close(sn, sl, 0.01) == false {
+        println("  FAIL: the two solvers disagree on the standard error")
+        fails = fails + 1
+    }
+
+    logistic_inference_free(inf_n)
+    logistic_inference_free(inf_l)
+    logistic_regression_free(newton)
+    logistic_regression_free(lbfgs)
+    array_free_f32(y)
+    matrix_free(X)
+
+    if fails == 0 {
+        println("  OK: both solvers give the same inference")
+        return 0
+    }
+    return 1
+}
+
+function main() -> i32 {
+    println("Running binary logistic inference tests...")
+    println("=========================================")
+    println("")
+
+    let mut failures: i32 = 0
+
+    if test_binary_inference_matches_statsmodels() != 0 { failures = failures + 1 }
+    println("")
+    if test_saturated_table_closed_form() != 0 { failures = failures + 1 }
+    println("")
+    if test_separable_fixture_is_refused() != 0 { failures = failures + 1 }
+    println("")
+    if test_collinear_design_is_refused() != 0 { failures = failures + 1 }
+    println("")
+    if test_penalized_fit_is_refused() != 0 { failures = failures + 1 }
+    println("")
+    if test_multiclass_fit_is_refused() != 0 { failures = failures + 1 }
+    println("")
+    if test_lbfgs_and_newton_agree() != 0 { failures = failures + 1 }
+
+    println("")
+    if failures == 0 {
+        println("All logistic inference tests passed!")
+        return 0
+    }
+    print("FAILED: ")
+    print(failures)
+    println(" tests")
+    return 1
+}
