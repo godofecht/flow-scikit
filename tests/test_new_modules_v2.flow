@@ -886,19 +886,36 @@ function test_sparse_pca() -> i32 {
         println(n_zeros)
         return 1
     }
-    # The convergence test compares the raw gradient magnitude against tol,
-    # which never falls below 0.0001 on this workload, so the loop runs the
-    # full 200 iterations. Under the bug it stopped at iteration 10 whenever
-    # the freed buffer happened to read back as near-zero.
-    if spca.n_iter != 200 {
-        print("  FAIL: expected n_iter 200, got ")
+    # Issue #460 replaced the convergence test. It used to compare the raw
+    # gradient magnitude against tol, which an L1 objective never drives to
+    # zero, so the loop always ran the full 200 iterations and tol did
+    # nothing. It now compares the largest absolute change in the component
+    # over one update pass, which the soft-thresholded iteration does drive to
+    # zero. The loadings are identical to the ones the 200-iteration run
+    # produced; only the iteration count moved.
+    #
+    # Two accepted values, because n_iter here is platform-dependent. The
+    # component initialisation consumes libc rand(), and Darwin's Park-Miller
+    # generator gives a different starting vector from glibc's TYPE_3
+    # generator, so the fit reaches its fixed point at a different iteration.
+    # A standalone C replica of this fixture and of sparse_pca_fit, checked to
+    # reproduce the Flow output exactly on Darwin, gives 19 under Darwin libc
+    # and 24 under glibc on both linux/amd64 and linux/arm64. The zero count
+    # is 6 on every one of them.
+    #
+    # This assertion is still the issue #378 gate: it pins an exact iteration
+    # count, so a convergence test reading freed memory would make it vary
+    # from run to run on one unmodified binary.
+    if spca.n_iter != 19 && spca.n_iter != 24 {
+        print("  FAIL: expected n_iter 19 (Darwin) or 24 (glibc), got ")
         println(spca.n_iter)
         return 1
     }
 
     print("  OK: 2 components, ")
     print(n_zeros)
-    println(" sparse zeros in loading vectors")
+    print(" sparse zeros in loading vectors, n_iter = ")
+    println(spca.n_iter)
 
     matrix_free(transformed)
     sparse_pca_free(spca)
