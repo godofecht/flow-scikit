@@ -29,7 +29,7 @@ Trains a LogisticRegression on synthetic iris-like data. Shows the predict/decid
 **What it shows:**
 - `train_test_split` with auto-stratify
 - `StandardScaler` preprocessing
-- `LogisticRegression` with `predict` (probabilities) and `decide` (classes)
+- `LogisticRegression` with `predict_proba` (probabilities) and `decide` (classes)
 - `classification_report` with structured output
 - `Pipeline` with clone-in-init
 
