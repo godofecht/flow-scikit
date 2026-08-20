@@ -7,6 +7,13 @@
 # loop from ensemble.flow and the RF tree builder, shell sort, gini and leaf
 # helpers from tree.flow, exactly as they stood before the change.
 #
+# One block is not verbatim. #445 redefined max_features as a budget of
+# evaluated non-constant candidates rather than of draws, which is a change to
+# the split rule itself, so the reference copy adopts it. Everything the #227
+# optimization touched (row-offset gathering, the seeded count loops, the
+# present-class list, the memcpy of class indices) is still absent here, which
+# is what makes the node-by-node comparison meaningful.
+#
 # The same copy doubles as the A/B timing reference, measured in the same
 # process so machine load cannot skew the ratio.
 
@@ -168,68 +175,88 @@ function rfft_build_tree(
     let left_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
     let right_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
 
-    # Determine which features to try at this node
+    # Determine which features to try at this node.
+    #
+    # Issue #445 changed what max_features budgets: candidates evaluated, not
+    # candidates drawn. This block is the only part of the pre-#227 copy that
+    # tracks that change, because the property being pinned here is that the
+    # optimized fit path is bit-identical to a straightforward implementation
+    # of the SAME split rule. The rest of the copy is still verbatim: naive
+    # matrix_at gathering, full-width count loops and shell sort.
     let n_features: i32 = X.cols
-    let feature_mask: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
-    for f in 0 to n_features { feature_mask[f] = 0 }
+    let use_all: bool = max_features >= n_features
 
-    if max_features >= n_features {
-        for f in 0 to n_features { feature_mask[f] = 1 }
-    } else {
-        # Randomly select max_features features without replacement
-        let n_selected: i32 = 0
-        while n_selected < max_features {
+    let pool: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    for f in 0 to n_features { pool[f] = f }
+    let mut budget: i32 = max_features
+    if use_all { budget = n_features }
+    let mut n_remaining: i32 = n_features
+    let mut n_evaluated: i32 = 0
+
+    while n_remaining > 0 && n_evaluated < budget {
+        let mut f: i32 = 0
+        if use_all {
+            f = pool[n_features - n_remaining]
+        } else {
             let prng: PRNG = PRNG { state: prng_state[0] }
-            let res: PRNGResult = prng_int(prng, n_features)
+            let res: PRNGResult = prng_int(prng, n_remaining)
             prng_state[0] = res.state
-            if feature_mask[res.value] == 0 {
-                feature_mask[res.value] = 1
-                n_selected = n_selected + 1
-            }
+            f = pool[res.value]
+            pool[res.value] = pool[n_remaining - 1]
         }
-    }
-
-    for f in 0 to n_features {
-        if feature_mask[f] == 0 { continue }
+        n_remaining = n_remaining - 1
 
         for i in 0 to n_indices {
             sort_values[i] = matrix_at(X, indices[i], f)
             sort_classes[i] = class_idx[i]
         }
-        rfft_sort_pairs(sort_values, sort_classes, n_indices)
 
-        for c in 0 to n_classes {
-            left_counts[c] = 0
-            right_counts[c] = 0
-        }
+        # Constant at this node means every sample shares one value, the same
+        # test the library builder folds into its gather. Written as its own
+        # pass here to keep the reference implementation obvious.
+        let mut is_constant: bool = true
         for i in 0 to n_indices {
-            right_counts[sort_classes[i]] = right_counts[sort_classes[i]] + 1
+            if sort_values[i] != sort_values[0] { is_constant = false }
         }
 
-        for i in 0 to n_indices - 1 {
-            left_counts[sort_classes[i]] = left_counts[sort_classes[i]] + 1
-            right_counts[sort_classes[i]] = right_counts[sort_classes[i]] - 1
+        if not is_constant {
+            n_evaluated = n_evaluated + 1
 
-            if sort_values[i] == sort_values[i + 1] { continue }
+            rfft_sort_pairs(sort_values, sort_classes, n_indices)
 
-            let n_left: i32 = i + 1
-            let n_right: i32 = n_indices - n_left
-            if n_left < 1 || n_right < 1 { continue }
+            for c in 0 to n_classes {
+                left_counts[c] = 0
+                right_counts[c] = 0
+            }
+            for i in 0 to n_indices {
+                right_counts[sort_classes[i]] = right_counts[sort_classes[i]] + 1
+            }
 
-            let gini_left: f32 = rfft_gini_from_counts(left_counts, n_classes, n_left)
-            let gini_right: f32 = rfft_gini_from_counts(right_counts, n_classes, n_right)
-            let nf: f32 = n_indices as f32
-            let weighted: f32 = (n_left as f32) / nf * gini_left + (n_right as f32) / nf * gini_right
+            for i in 0 to n_indices - 1 {
+                left_counts[sort_classes[i]] = left_counts[sort_classes[i]] + 1
+                right_counts[sort_classes[i]] = right_counts[sort_classes[i]] - 1
 
-            if weighted < best_impurity {
-                best_impurity = weighted
-                best_feature = f
-                best_threshold = (sort_values[i] + sort_values[i + 1]) / 2.0
+                if sort_values[i] == sort_values[i + 1] { continue }
+
+                let n_left: i32 = i + 1
+                let n_right: i32 = n_indices - n_left
+                if n_left < 1 || n_right < 1 { continue }
+
+                let gini_left: f32 = rfft_gini_from_counts(left_counts, n_classes, n_left)
+                let gini_right: f32 = rfft_gini_from_counts(right_counts, n_classes, n_right)
+                let nf: f32 = n_indices as f32
+                let weighted: f32 = (n_left as f32) / nf * gini_left + (n_right as f32) / nf * gini_right
+
+                if weighted < best_impurity || (weighted == best_impurity && f < best_feature) {
+                    best_impurity = weighted
+                    best_feature = f
+                    best_threshold = (sort_values[i] + sort_values[i + 1]) / 2.0
+                }
             }
         }
     }
 
-    free(feature_mask as ptr<void>)
+    free(pool as ptr<void>)
     array_free_f32(sort_values)
     free(sort_classes as ptr<void>)
     free(left_counts as ptr<void>)

@@ -943,29 +943,57 @@ function _build_classifier_tree_rf(
     let left_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
     let right_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
 
-    # Determine which features to try at this node
+    # Determine which features to try at this node.
+    #
+    # Issue #445: max_features is a budget of EVALUATED candidates, not of
+    # draws. sklearn's BestSplitter keeps drawing until it has evaluated
+    # max_features non-constant features at the node, tracking constants
+    # explicitly so a column that is constant here never consumes one of the
+    # budgeted candidates. This builder used to draw exactly max_features and
+    # then skip whichever turned out constant, so on data with many constant
+    # columns it evaluated a smaller effective pool than the same nominal
+    # max_features gives in sklearn. The profiling in #396 counted 3512
+    # constant-column scans of 11328 on the canonical digits fit, so about a
+    # third of the budget went on columns that evaluate no candidate at all.
+    #
+    # The loop below draws without replacement and charges a draw against the
+    # budget only once the column has actually been evaluated. It stops when
+    # the budget is met or when the pool is exhausted, the latter being the
+    # case where fewer than max_features non-constant columns exist here.
     let n_features: i32 = X.cols
-    let feature_mask: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
-    for f in 0 to n_features { feature_mask[f] = 0 }
+    let use_all: bool = max_features >= n_features
 
-    if max_features >= n_features {
-        for f in 0 to n_features { feature_mask[f] = 1 }
-    } else {
-        # Randomly select max_features features without replacement
-        let n_selected: i32 = 0
-        while n_selected < max_features {
+    # Undrawn candidates live in pool[0 .. n_remaining-1]. A draw takes a
+    # uniform position and swaps the last live entry into the hole, a partial
+    # Fisher-Yates shuffle: exactly one PRNG call per candidate examined and no
+    # rejection retries. That matters because a deep node can be almost all
+    # constant columns and drain the whole pool, where rejection sampling would
+    # spend O(n_features log n_features) draws to make the same walk.
+    let pool: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    for f in 0 to n_features { pool[f] = f }
+
+    # Without subsampling every column is examined, so the budget is put out of
+    # reach and the pool alone ends the loop.
+    let mut budget: i32 = max_features
+    if use_all { budget = n_features }
+
+    let mut n_remaining: i32 = n_features
+    let mut n_evaluated: i32 = 0
+
+    while n_remaining > 0 && n_evaluated < budget {
+        let mut f: i32 = 0
+        if use_all {
+            # No subsampling: walk the columns in ascending index order, which
+            # is the order this builder has always used.
+            f = pool[n_features - n_remaining]
+        } else {
             let prng: PRNG = PRNG { state: prng_state[0] }
-            let res: PRNGResult = prng_int(prng, n_features)
+            let res: PRNGResult = prng_int(prng, n_remaining)
             prng_state[0] = res.state
-            if feature_mask[res.value] == 0 {
-                feature_mask[res.value] = 1
-                n_selected = n_selected + 1
-            }
+            f = pool[res.value]
+            pool[res.value] = pool[n_remaining - 1]
         }
-    }
-
-    for f in 0 to n_features {
-        if feature_mask[f] == 0 { continue }
+        n_remaining = n_remaining - 1
 
         # Gather and check for a constant column in one pass. If every sample
         # shares a value, the scan below hits `sort_values[i] == sort_values[i+1]`
@@ -973,6 +1001,11 @@ function _build_classifier_tree_rf(
         # sort and the scan changes nothing. Constant columns are common in a
         # forest: pixel-style features are constant over most nodes, and deeper
         # nodes make more of them constant.
+        #
+        # This is the builder's only definition of "constant at this node", and
+        # the draw loop reuses it rather than pre-screening columns in a pass of
+        # its own: the gather that decides constancy is the same gather the
+        # split scan consumes, so a drawn column is never read twice.
         let first_value: f32 = x_data[row_base[0] + f]
         let mut is_constant: bool = true
         for i in 0 to n_indices {
@@ -980,50 +1013,57 @@ function _build_classifier_tree_rf(
             sort_values[i] = v
             if v != first_value { is_constant = false }
         }
-        if is_constant { continue }
 
-        memcpy(sort_classes as ptr<void>, class_idx as ptr<void>, class_bytes)
-        _sort_pairs(sort_values, sort_classes, n_indices)
+        if not is_constant {
+            n_evaluated = n_evaluated + 1
 
-        # right_counts starts as the node's full class histogram, which is
-        # exactly total_counts; left_counts starts empty. Seeding from the
-        # histogram replaces a second pass over every sample.
-        for pi in 0 to n_present {
-            let c: i32 = present[pi]
-            left_counts[c] = 0
-            right_counts[c] = total_counts[c]
-        }
+            memcpy(sort_classes as ptr<void>, class_idx as ptr<void>, class_bytes)
+            _sort_pairs(sort_values, sort_classes, n_indices)
 
-        for i in 0 to n_indices - 1 {
-            left_counts[sort_classes[i]] = left_counts[sort_classes[i]] + 1
-            right_counts[sort_classes[i]] = right_counts[sort_classes[i]] - 1
+            # right_counts starts as the node's full class histogram, which is
+            # exactly total_counts; left_counts starts empty. Seeding from the
+            # histogram replaces a second pass over every sample.
+            for pi in 0 to n_present {
+                let c: i32 = present[pi]
+                left_counts[c] = 0
+                right_counts[c] = total_counts[c]
+            }
 
-            if sort_values[i] == sort_values[i + 1] { continue }
+            for i in 0 to n_indices - 1 {
+                left_counts[sort_classes[i]] = left_counts[sort_classes[i]] + 1
+                right_counts[sort_classes[i]] = right_counts[sort_classes[i]] - 1
 
-            let n_left: i32 = i + 1
-            let n_right: i32 = n_indices - n_left
-            if n_left < 1 || n_right < 1 { continue }
+                if sort_values[i] == sort_values[i + 1] { continue }
 
-            let gini_left: f32 = _tree_gini_present(left_counts, present, n_present, n_left)
-            let gini_right: f32 = _tree_gini_present(right_counts, present, n_present, n_right)
-            let nf: f32 = n_indices as f32
-            let weighted: f32 = (n_left as f32) / nf * gini_left + (n_right as f32) / nf * gini_right
+                let n_left: i32 = i + 1
+                let n_right: i32 = n_indices - n_left
+                if n_left < 1 || n_right < 1 { continue }
 
-            # Same strict comparison and same lowest-index tie-break as the
-            # plain builder above. The feature loop walks feature_mask in
-            # ascending index order, so the sampled subset is scanned by index
-            # rather than by the order it was drawn. See the note there and
-            # #204: the canonical RandomForest digits row carries the same
-            # +0.0194 accuracy difference from the same cause, tracked in #205.
-            if weighted < best_impurity {
-                best_impurity = weighted
-                best_feature = f
-                best_threshold = (sort_values[i] + sort_values[i + 1]) / 2.0
+                let gini_left: f32 = _tree_gini_present(left_counts, present, n_present, n_left)
+                let gini_right: f32 = _tree_gini_present(right_counts, present, n_present, n_right)
+                let nf: f32 = n_indices as f32
+                let weighted: f32 = (n_left as f32) / nf * gini_left + (n_right as f32) / nf * gini_right
+
+                # Same strict comparison and same lowest-index tie-break as the
+                # plain builder above. That builder gets the lowest index for
+                # free by scanning ascending; here candidates arrive in draw
+                # order, so the rule is written out. The two select the same
+                # split from the same candidate set: strictly better wins, and
+                # among exact f32 ties the lowest feature index wins, with the
+                # earliest boundary still winning inside one feature because a
+                # feature index is never less than itself. See #204, and #205
+                # for the accuracy difference the rule carries on the canonical
+                # RandomForest digits row.
+                if weighted < best_impurity || (weighted == best_impurity && f < best_feature) {
+                    best_impurity = weighted
+                    best_feature = f
+                    best_threshold = (sort_values[i] + sort_values[i + 1]) / 2.0
+                }
             }
         }
     }
 
-    free(feature_mask as ptr<void>)
+    free(pool as ptr<void>)
     array_free_f32(sort_values)
     free(sort_classes as ptr<void>)
     free(left_counts as ptr<void>)

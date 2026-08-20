@@ -1,0 +1,233 @@
+# Regression for issue #445: max_features is a budget of EVALUATED candidates.
+#
+# sklearn's BestSplitter keeps drawing until it has evaluated max_features
+# non-constant features at a node, so a column that is constant there never
+# consumes one of the budgeted candidates. The forest builder used to draw
+# exactly max_features columns and then skip whichever turned out constant,
+# which on data with constant columns evaluated a smaller pool per node than
+# the same nominal max_features gives in sklearn.
+#
+# The builder exposes no candidate counter, so the property is asserted through
+# the split it returns on fixtures where the evaluated set is observable.
+#
+#   k constant columns and m non-constant ones, the non-constant ones ordered
+#   by strictly decreasing split quality with no ties anywhere.
+#
+#   * m <= max_features: every non-constant column must be evaluated at the
+#     node, so the single best one is chosen for every seed. Deterministic.
+#   * m > max_features: the evaluated set is the first max_features
+#     non-constant columns of a uniform random permutation, so the best column
+#     wins with probability max_features / m. Counting wins over a fixed list
+#     of seeds estimates the effective candidate count directly. The seeds are
+#     fixed, so the count is deterministic, not a sampled statistic.
+#
+# The old draw-exactly-max_features rule fails all three: it can miss the best
+# column even when only three non-constant columns exist, and its effective
+# count on the third fixture is max_features * m / n_features rather than
+# max_features.
+#
+# Also pins seed stability: the draw loop consumes a different number of PRNG
+# values per node than it used to, so two fits at one seed must still produce
+# identical forests, compared node by node.
+
+import "lib/scikit/scikit.flow"
+
+# 60 rows, two classes, split 30/30. Column layout is
+#   index 2*q     -> constant zero
+#   index 2*q + 1 -> informative, misclassifying exactly q rows
+# so informative column 2*q+1 has strictly worse weighted gini as q grows and
+# 2*q+1 == 1 is the unique perfect split. n_informative columns are laid down;
+# the rest of the matrix is constant.
+function t445_make_x(n_features: i32, n_informative: i32) -> Matrix {
+    let X: Matrix = matrix_new(60, n_features)
+    for i in 0 to 60 {
+        for j in 0 to n_features {
+            matrix_set(X, i, j, 0.0)
+        }
+    }
+    for q in 0 to n_informative {
+        let col: i32 = 2 * q + 1
+        for i in 0 to 60 {
+            let mut v: f32 = 0.0
+            if i >= 30 { v = 1.0 }
+            if i < q { v = 1.0 }
+            matrix_set(X, i, col, v)
+        }
+    }
+    return X
+}
+
+function t445_make_y() -> ptr<f32> {
+    let y: ptr<f32> = array_new_f32(60)
+    for i in 0 to 60 {
+        y[i] = 0.0
+        if i >= 30 { y[i] = 1.0 }
+    }
+    return y
+}
+
+# Root split feature over `n_trials` distinct PRNG states, counting how often
+# the builder lands on the unique best column (index 1). Returns the count.
+# is_leaf roots are counted separately through the leaf_count pointer.
+function t445_count_best_root(X: Matrix, y: ptr<f32>, max_features: i32, n_trials: i32, leaf_count: ptr<i32>) -> i32 {
+    let prng_state: ptr<u32> = malloc(4) as ptr<u32>
+    let mut gen: PRNG = prng_seed(20250445)
+    let mut wins: i32 = 0
+    leaf_count[0] = 0
+    for t in 0 to n_trials {
+        let res: PRNGResult = prng_int(gen, 2147483647)
+        gen = PRNG { state: res.state }
+        prng_state[0] = res.state
+        let m: DecisionTreeClassifier = decision_tree_classifier_fit_rf(X, y, 2, 1, 0, max_features, prng_state)
+        let root: ptr<TreeNode> = m.nodes
+        if root.is_leaf {
+            leaf_count[0] = leaf_count[0] + 1
+        } else {
+            if root.feature == 1 { wins = wins + 1 }
+        }
+        decision_tree_classifier_free(m)
+    }
+    free(prng_state as ptr<void>)
+    return wins
+}
+
+function t445_trees_identical(a: DecisionTreeClassifier, b: DecisionTreeClassifier) -> bool {
+    if a.n_nodes != b.n_nodes { return false }
+    for n in 0 to a.n_nodes {
+        let na: ptr<TreeNode> = a.nodes + n
+        let nb: ptr<TreeNode> = b.nodes + n
+        if na.is_leaf != nb.is_leaf { return false }
+        if na.left != nb.left { return false }
+        if na.right != nb.right { return false }
+        if na.n_samples != nb.n_samples { return false }
+        if na.impurity != nb.impurity { return false }
+        if na.feature != nb.feature { return false }
+        if na.threshold != nb.threshold { return false }
+        if na.value != nb.value { return false }
+    }
+    return true
+}
+
+function main() -> i32 {
+    let mut failed: i32 = 0
+    let y: ptr<f32> = t445_make_y()
+    let leaves: ptr<i32> = malloc(4) as ptr<i32>
+
+    # -----------------------------------------------------------------
+    # 1. m == max_features. Eight non-constant columns among twenty, a
+    #    budget of eight, so the pool must be drained and every one of the
+    #    eight evaluated. The perfect column wins on every seed.
+    # -----------------------------------------------------------------
+    let X_eq: Matrix = t445_make_x(20, 8)
+    let wins_eq: i32 = t445_count_best_root(X_eq, y, 8, 200, leaves)
+    print("case m == max_features: best column chosen on ")
+    print(wins_eq)
+    println(" of 200 seeds, expected 200")
+    if wins_eq != 200 {
+        println("FAIL: a non-constant column was left unevaluated inside the budget")
+        failed = 1
+    }
+    if leaves[0] != 0 {
+        println("FAIL: root became a leaf on a separable fixture")
+        failed = 1
+    }
+    matrix_free(X_eq)
+
+    # -----------------------------------------------------------------
+    # 2. m < max_features. Three non-constant columns among twenty, budget
+    #    of eight. The pool is exhausted before the budget is met, which is
+    #    the termination case, and all three are still evaluated.
+    # -----------------------------------------------------------------
+    let X_lt: Matrix = t445_make_x(20, 3)
+    let wins_lt: i32 = t445_count_best_root(X_lt, y, 8, 200, leaves)
+    print("case m < max_features: best column chosen on ")
+    print(wins_lt)
+    println(" of 200 seeds, expected 200")
+    if wins_lt != 200 {
+        println("FAIL: builder missed a non-constant column when the pool is smaller than the budget")
+        failed = 1
+    }
+    matrix_free(X_lt)
+
+    # -----------------------------------------------------------------
+    # 3. m > max_features. Sixteen non-constant columns among thirty-two,
+    #    budget of four. The evaluated set is a uniform four-subset of the
+    #    sixteen, so wins / trials estimates 4 / 16 and wins * 16 / trials
+    #    estimates the effective candidate count.
+    #
+    #    The old rule drew four of thirty-two columns outright, giving an
+    #    effective count of 4 * 16 / 32 = 2. The seeds are fixed, so this
+    #    count is reproducible rather than sampled.
+    # -----------------------------------------------------------------
+    let X_gt: Matrix = t445_make_x(32, 16)
+    let trials: i32 = 2000
+    let wins_gt: i32 = t445_count_best_root(X_gt, y, 4, trials, leaves)
+    let n_eff: f32 = (wins_gt as f32) * 16.0 / (trials as f32)
+    print("case m > max_features: best column chosen on ")
+    print(wins_gt)
+    print(" of 2000 seeds, effective candidate count ")
+    print(n_eff)
+    println(", expected 4")
+    if n_eff < 3.25 || n_eff > 4.75 {
+        println("FAIL: effective candidate count is not max_features")
+        failed = 1
+    }
+    matrix_free(X_gt)
+
+    # -----------------------------------------------------------------
+    # 4. Every column constant. The draw loop must drain the pool and stop
+    #    rather than spin, and the node must fall back to a leaf.
+    # -----------------------------------------------------------------
+    let X_const: Matrix = t445_make_x(20, 0)
+    let wins_c: i32 = t445_count_best_root(X_const, y, 8, 50, leaves)
+    print("case all columns constant: leaf roots ")
+    print(leaves[0])
+    println(" of 50, expected 50")
+    if leaves[0] != 50 || wins_c != 0 {
+        println("FAIL: an all-constant node did not fall back to a leaf")
+        failed = 1
+    }
+    matrix_free(X_const)
+
+    free(leaves as ptr<void>)
+    array_free_f32(y)
+
+    # -----------------------------------------------------------------
+    # 5. Seed stability. The draw loop consumes a different number of PRNG
+    #    values per node than the old rejection sampler did, so pin that one
+    #    seed still gives one forest. Node fields are fully defined since
+    #    #403's calloc, so every field can be compared.
+    # -----------------------------------------------------------------
+    let digits: Dataset = load_digits()
+    let a: RandomForestClassifier = random_forest_classifier_fit(digits.X, digits.y, 10, 8, 8, 42)
+    let b: RandomForestClassifier = random_forest_classifier_fit(digits.X, digits.y, 10, 8, 8, 42)
+    let mut compared: i32 = 0
+    let mut mismatch: i32 = 0
+    for t in 0 to a.n_trees {
+        compared = compared + a.trees[t].n_nodes
+        if not t445_trees_identical(a.trees[t], b.trees[t]) { mismatch = mismatch + 1 }
+    }
+    print("seed stability: ")
+    print(compared)
+    print(" nodes compared field by field, mismatched trees ")
+    print(mismatch)
+    println(", expected 0")
+    if mismatch != 0 {
+        println("FAIL: two fits at seed 42 produced different forests")
+        failed = 1
+    }
+    if compared < 500 {
+        println("FAIL: seed-stability forest is too small to be worth comparing")
+        failed = 1
+    }
+    random_forest_classifier_free(a)
+    random_forest_classifier_free(b)
+    dataset_free(digits)
+
+    if failed == 1 {
+        return 1
+    }
+
+    println("PASS: max_features budgets evaluated non-constant candidates, and fits are seed stable")
+    return 0
+}
