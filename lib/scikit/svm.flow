@@ -751,6 +751,7 @@ function _kernel_svc_smo_precomputed(
     # Extract the n x n sub-kernel for this pair from the full kernel.
     # Fold y_i * y_j into the kernel to get Q directly, saving one O(n^2) pass.
     let Q: ptr<f64> = malloc((n as i64) * (n as i64) * 8) as ptr<f64>
+    let QD: ptr<f64> = array_new_f64(n)
     for i in 0 to n {
         let gi: i32 = idx_map[i]
         let yi: f64 = y_d[i]
@@ -758,6 +759,7 @@ function _kernel_svc_smo_precomputed(
             let gj: i32 = idx_map[j]
             Q[i * n + j] = yi * y_d[j] * kernel_full[gi * n_total + gj]
         }
+        QD[i] = Q[i * n + i]
     }
 
     # Maintain gradient incrementally: G[i] = sum_j Q[i,j] * alpha_j - 1
@@ -766,39 +768,158 @@ function _kernel_svc_smo_precomputed(
         G[i] = -1.0
     }
 
+    # Second order working set selection, as in libsvm's Solver (WSS3 of
+    # Fan, Chen and Lin 2005). Each iteration picks i maximising -y_i * G_i
+    # over the up set, then picks j minimising the resulting objective value
+    # over the low set, so the pair is chosen by the objective decrease it
+    # actually delivers instead of by max |E1 - E2| with a scan on failure.
+    # Issue #412; the previous rule stopped short of the optimum (#206).
     let tol: f64 = 0.001
-    let mut iter: i32 = 0
-    let mut examine_all: bool = true
-    let mut n_changed: i32 = 0
+    let tau: f64 = 0.000000000001
+    let big: f64 = 1000000000000.0
+    let mut steps: i32 = 0
+    # max_iter counted outer sweeps of n examines under the old rule; keep the
+    # same total step budget so callers passing small caps behave the same way.
+    let budget: i32 = max_iter * n
 
-    while iter < max_iter {
-        n_changed = 0
-        if examine_all {
-            for i in 0 to n {
-                if _smo_examine(i, n, alphas_d, y_d, G, Q, C_d, tol) {
-                    n_changed = n_changed + 1
+    while steps < budget {
+        let mut gmax: f64 = 0.0 - big
+        let mut i_sel: i32 = -1
+        for t in 0 to n {
+            let at: f64 = alphas_d[t]
+            if y_d[t] > 0.0 {
+                if at < C_d {
+                    let v: f64 = 0.0 - G[t]
+                    if v >= gmax {
+                        gmax = v
+                        i_sel = t
+                    }
+                }
+            } else {
+                if at > 0.0 {
+                    let v2: f64 = G[t]
+                    if v2 >= gmax {
+                        gmax = v2
+                        i_sel = t
+                    }
                 }
             }
-        } else {
-            for i in 0 to n {
-                if alphas_d[i] > 0.0 && alphas_d[i] < C_d {
-                    if _smo_examine(i, n, alphas_d, y_d, G, Q, C_d, tol) {
-                        n_changed = n_changed + 1
+        }
+        if i_sel < 0 { break }
+
+        let y_i: f64 = y_d[i_sel]
+        let row_i: i32 = i_sel * n
+        let qd_i: f64 = QD[i_sel]
+
+        let mut gmax2: f64 = 0.0 - big
+        let mut j_sel: i32 = -1
+        let mut obj_min: f64 = big
+        for t2 in 0 to n {
+            let a2: f64 = alphas_d[t2]
+            let y_t: f64 = y_d[t2]
+            let mut usable: bool = false
+            if y_t > 0.0 {
+                if a2 > 0.0 { usable = true }
+            } else {
+                if a2 < C_d { usable = true }
+            }
+            if usable {
+                let ygt: f64 = y_t * G[t2]
+                if ygt >= gmax2 { gmax2 = ygt }
+                let gdiff: f64 = gmax + ygt
+                if gdiff > 0.0 {
+                    let mut quad: f64 = qd_i + QD[t2] - 2.0 * y_i * y_t * Q[row_i + t2]
+                    if quad <= 0.0 { quad = tau }
+                    let odiff: f64 = 0.0 - (gdiff * gdiff) / quad
+                    if odiff <= obj_min {
+                        obj_min = odiff
+                        j_sel = t2
                     }
                 }
             }
         }
 
-        if examine_all {
-            examine_all = false
-        } elif n_changed == 0 {
-            examine_all = true
+        # Maximal KKT violation is gmax + gmax2; this is libsvm's stopping rule.
+        if gmax + gmax2 < tol { break }
+        if j_sel < 0 { break }
+
+        let y_j: f64 = y_d[j_sel]
+        let ai_old: f64 = alphas_d[i_sel]
+        let aj_old: f64 = alphas_d[j_sel]
+        # Curvature along the feasible direction: K_ii + K_jj - 2 K_ij, which
+        # in terms of Q is QD_i + QD_j - 2 y_i y_j Q_ij.
+        let mut quad_c: f64 = qd_i + QD[j_sel] - 2.0 * y_i * y_j * Q[row_i + j_sel]
+        if quad_c <= 0.0 { quad_c = tau }
+
+        let mut ai_new: f64 = 0.0
+        let mut aj_new: f64 = 0.0
+        if y_i != y_j {
+            let delta: f64 = (0.0 - G[i_sel] - G[j_sel]) / quad_c
+            let diff: f64 = ai_old - aj_old
+            ai_new = ai_old + delta
+            aj_new = aj_old + delta
+            if diff > 0.0 {
+                if aj_new < 0.0 {
+                    aj_new = 0.0
+                    ai_new = diff
+                }
+            } else {
+                if ai_new < 0.0 {
+                    ai_new = 0.0
+                    aj_new = 0.0 - diff
+                }
+            }
+            if diff > 0.0 {
+                if ai_new > C_d {
+                    ai_new = C_d
+                    aj_new = C_d - diff
+                }
+            } else {
+                if aj_new > C_d {
+                    aj_new = C_d
+                    ai_new = C_d + diff
+                }
+            }
+        } else {
+            let delta2: f64 = (G[i_sel] - G[j_sel]) / quad_c
+            let sum_a: f64 = ai_old + aj_old
+            ai_new = ai_old - delta2
+            aj_new = aj_old + delta2
+            if sum_a > C_d {
+                if ai_new > C_d {
+                    ai_new = C_d
+                    aj_new = sum_a - C_d
+                }
+            } else {
+                if aj_new < 0.0 {
+                    aj_new = 0.0
+                    ai_new = sum_a
+                }
+            }
+            if sum_a > C_d {
+                if aj_new > C_d {
+                    aj_new = C_d
+                    ai_new = sum_a - C_d
+                }
+            } else {
+                if ai_new < 0.0 {
+                    ai_new = 0.0
+                    aj_new = sum_a
+                }
+            }
         }
 
-        iter = iter + 1
-        if n_changed == 0 && examine_all {
-            break
+        alphas_d[i_sel] = ai_new
+        alphas_d[j_sel] = aj_new
+        let d_i: f64 = ai_new - ai_old
+        let d_j: f64 = aj_new - aj_old
+        # Q is symmetric, so rows serve for columns and the update stays
+        # row-major instead of striding down two columns.
+        let row_j: i32 = j_sel * n
+        for k in 0 to n {
+            G[k] = G[k] + Q[row_i + k] * d_i + Q[row_j + k] * d_j
         }
+        steps = steps + 1
     }
 
     # Compute bias from free support vectors (0 < alpha < C)
@@ -822,6 +943,7 @@ function _kernel_svc_smo_precomputed(
     }
 
     free(Q as ptr<void>)
+    array_free_f64(QD)
     array_free_f64(G)
     array_free_f64(y_d)
 
@@ -847,146 +969,6 @@ function _kernel_svc_smo_precomputed(
         fitted: true
     }
     return result
-}
-
-# SMO: examine example i. Try to find a j that violates KKT and do a 2-variable step.
-function _smo_examine(
-    i2: i32,
-    n: i32,
-    alphas: ptr<f64>,
-    y: ptr<f64>,
-    G: ptr<f64>,
-    Q: ptr<f64>,
-    C: f64,
-    tol: f64
-) -> bool {
-    let y2: f64 = y[i2]
-    let alpha2: f64 = alphas[i2]
-    # r = y_i * E_i = G[i] (since G[i] = y_i * E_i)
-    let r2: f64 = G[i2]
-
-    # KKT violation check
-    if (r2 < -tol && alpha2 < C) || (r2 > tol && alpha2 > 0.0) {
-        # Find j that maximizes |E1 - E2| (second-order heuristic)
-        # E_i = G[i] * y_i
-        let E2: f64 = G[i2] * y2
-        let mut best_j: i32 = -1
-        let mut best_gain: f64 = 0.0
-        for j in 0 to n {
-            if alphas[j] > 0.0 && alphas[j] < C {
-                let E1: f64 = G[j] * y[j]
-                let gain: f64 = (E1 - E2) * (E1 - E2)
-                if gain > best_gain {
-                    best_gain = gain
-                    best_j = j
-                }
-            }
-        }
-
-        if best_j >= 0 {
-            if _smo_step(best_j, i2, n, alphas, y, G, Q, C) {
-                return true
-            }
-        }
-
-        # Fall back to iterating over non-bound examples
-        let mut start: i32 = (i2 + 1) % n
-        let mut k: i32 = 0
-        while k < n {
-            let j: i32 = (start + k) % n
-            if alphas[j] > 0.0 && alphas[j] < C {
-                if _smo_step(j, i2, n, alphas, y, G, Q, C) {
-                    return true
-                }
-            }
-            k = k + 1
-        }
-
-        # Fall back to iterating over all examples
-        let mut k2: i32 = 0
-        while k2 < n {
-            let j: i32 = (start + k2) % n
-            if _smo_step(j, i2, n, alphas, y, G, Q, C) {
-                return true
-            }
-            k2 = k2 + 1
-        }
-    }
-    return false
-}
-
-# SMO 2-variable analytic step. Updates alpha_i1, alpha_i2, G, and returns true if progress.
-function _smo_step(
-    i1: i32,
-    i2: i32,
-    n: i32,
-    alphas: ptr<f64>,
-    y: ptr<f64>,
-    G: ptr<f64>,
-    Q: ptr<f64>,
-    C: f64
-) -> bool {
-    if i1 == i2 { return false }
-
-    let alpha1: f64 = alphas[i1]
-    let alpha2: f64 = alphas[i2]
-    let y1: f64 = y[i1]
-    let y2: f64 = y[i2]
-
-    # Q values
-    let q11: f64 = Q[i1 * n + i1]
-    let q12: f64 = Q[i1 * n + i2]
-    let q22: f64 = Q[i2 * n + i2]
-
-    let eta: f64 = q11 + q22 - 2.0 * q12
-
-    # G[i] = y_i * E_i, so E_i = G[i] * y_i (since y_i^2 = 1)
-    # SMO update: a2_new = alpha2 + y2 * (E1 - E2) / eta
-    #            = alpha2 + (y1*y2*G[i1] - G[i2]) / eta
-    let mut a2_new: f64 = 0.0
-    if eta > 0.0000000001 {
-        a2_new = alpha2 + (y1 * y2 * G[i1] - G[i2]) / eta
-    } else {
-        return false
-    }
-
-    # Clip
-    let mut L: f64 = 0.0
-    let mut H: f64 = C
-    if y1 == y2 {
-        L = alpha1 + alpha2 - C
-        H = alpha1 + alpha2
-        if L < 0.0 { L = 0.0 }
-        if H > C { H = C }
-    } else {
-        L = alpha2 - alpha1
-        H = alpha2 - alpha1 + C
-        if L < 0.0 { L = 0.0 }
-        if H > C { H = C }
-    }
-
-    if a2_new < L { a2_new = L }
-    if a2_new > H { a2_new = H }
-
-    let a1_new: f64 = alpha1 + y1 * y2 * (alpha2 - a2_new)
-
-    # Check for negligible change
-    let d2: f64 = a2_new - alpha2
-    let d1: f64 = a1_new - alpha1
-    let abs_d2: f64 = d2
-    if d2 < 0.0 { abs_d2 = 0.0 - d2 }
-    if abs_d2 < 0.0000000001 { return false }
-
-    # Update alphas
-    alphas[i1] = a1_new
-    alphas[i2] = a2_new
-
-    # Update gradient: G += d1 * Q[:,i1] + d2 * Q[:,i2]
-    for j in 0 to n {
-        G[j] = G[j] + d1 * Q[j * n + i1] + d2 * Q[j * n + i2]
-    }
-
-    return true
 }
 
 function _rbf_exp(neg_gamma_sum: f32) -> f32 {
