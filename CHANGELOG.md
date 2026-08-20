@@ -23,10 +23,46 @@ numeric splits every other builder produces, and node arrays are
 calloc'd, so nothing existing changed shape. A level absent from the
 training data goes right at every node it reaches.
 
-`RandomForest`, the Bagging estimators and the ExtraTree builders are
-unchanged and remain numeric only. The canonical DecisionTree and
-RandomForest digits rows are bit-identical, verified node by node rather
-than by accuracy.
+The canonical DecisionTree and RandomForest digits rows are
+bit-identical, verified node by node rather than by accuracy.
+
+### Categorical splits in the ensemble builders (#457)
+
+The mask now reaches the ensembles that #354 left out. New entry points,
+each taking the same `X.cols` mask on the same contract:
+
+    random_forest_classifier_fit_categorical
+    random_forest_regressor_fit_categorical
+    bagging_classifier_fit_categorical
+    bagging_regressor_fit_categorical
+    extra_trees_classifier_fit_categorical
+    extra_trees_regressor_fit_categorical
+    decision_tree_classifier_fit_rf_categorical
+    extra_tree_classifier_fit_categorical
+    extra_tree_regressor_fit_categorical
+
+Every existing entry point calls its `_categorical` variant with an
+all-zero mask, so there is one implementation per estimator and the
+numeric path is the old code path.
+
+Inside the RandomForest builder the subset search is scoped by
+`max_features` exactly as the threshold sweep is: a drawn categorical
+feature gets its Breiman scan, an undrawn one is skipped. The feature
+mask is drawn before any feature is looked at, so the PRNG consumption
+does not depend on which features are categorical.
+
+ExtraTree splits a categorical feature on a random non-empty proper
+subset of the levels present at the node, one coin flip per level, which
+is the nominal rule from Geurts, Ernst and Wehenkel. `rand()` is
+consumed only when the drawn feature is categorical.
+
+`ensemble.flow` evaluated every node as a threshold split at four inline
+traversal sites. They now all go through one node-evaluation helper that
+reads `cat_kind`.
+
+All 165 `RESULT` and `DETAIL` records from `benchmarks/bench_flow_v2.flow`
+are unchanged, including the canonical RandomForest digits 0.955555558
+and the per-tree structural rows.
 
 ### Estimator hot-path optimization pass
 
