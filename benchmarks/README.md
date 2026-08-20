@@ -6,7 +6,7 @@ This directory contains the canonical numerical-parity, timing and execution-arc
 
 [`headline_result_v2.json`](headline_result_v2.json) is the current competitive source of truth.
 
-The committed result contains **19 total rows, 19 parity-eligible comparisons, 8 Flow wins, 11 scikit-learn wins, 0 ties, 0 parity-unresolved rows and 0 measurement-unresolved rows**.
+The committed result contains **19 total rows, 19 parity-eligible comparisons, 11 Flow wins, 7 scikit-learn wins, 1 ties, 0 parity-unresolved rows and 0 measurement-unresolved rows**.
 
 A competitive speed claim is only emitted when a row has resolved timing, a declared millisecond unit, comparable benchmark semantics and a passing estimator-specific parity contract.
 
