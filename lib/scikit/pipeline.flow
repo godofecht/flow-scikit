@@ -146,7 +146,7 @@ export function pipeline_new(steps: ptr<PipelineStep>, n_steps: i32) -> Pipeline
         cloned_steps[i].onehot = OneHotEncoder { categories: null as ptr<ptr<f32> >, n_categories: null as ptr<i32>, n_features: 0, total_output_cols: 0, handle_unknown: HANDLE_UNKNOWN_WARN, fitted: false }
         cloned_steps[i].imputer = SimpleImputer { fill_values: null as ptr<f32>, n_features: 0, strategy: IMPUTE_STRATEGY_MEAN, constant_value: 0.0, fitted: false }
         cloned_steps[i].linear_reg = LinearRegression { weights: null as ptr<f32>, bias: 0.0, n_features: 0, penalty: pen2, fitted: false }
-        cloned_steps[i].logistic_reg = LogisticRegression { weights: null as ptr<f32>, bias: 0.0, biases: null as ptr<f32>, n_features: 0, classes: null as ptr<f32>, n_classes: 0, penalty: pen2, fitted: false }
+        cloned_steps[i].logistic_reg = LogisticRegression { weights: null as ptr<f32>, bias: 0.0, biases: null as ptr<f32>, n_features: 0, classes: null as ptr<f32>, n_classes: 0, penalty: pen2, fitted: false, n_iter: 0 }
     }
 
     return Pipeline { steps: cloned_steps, n_steps: n_steps, cloned: true }
