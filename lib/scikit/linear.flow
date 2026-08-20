@@ -1535,9 +1535,14 @@ export function logistic_regression_fit_sparse(S: SparseMatrix, y: ptr<f32>, n_c
     }
 }
 
-# Positive-class probabilities. This is exactly sigmoid(decision_function), so
-# it reuses the BLAS-backed score path and maps the result in place rather than
-# repeating the dot product with per-element matrix_at calls.
+# Positive-class probabilities: P(classes[1]), which is what scikit-learn puts
+# in column 1 of predict_proba. Issue #435 pins that convention, because the
+# threshold logistic_decide takes is meaningless unless caller and callee agree
+# on which class the probability refers to.
+#
+# This is exactly sigmoid(decision_function), so it reuses the BLAS-backed score
+# path and maps the result in place rather than repeating the dot product with
+# per-element matrix_at calls.
 export function logistic_predict_proba(model: LogisticRegression, X: Matrix) -> ptr<f32> {
     let probs: ptr<f32> = logistic_decision_function(model, X)
     let rows: i32 = X.rows
@@ -1609,6 +1614,14 @@ export function logistic_predict(model: LogisticRegression, X: Matrix) -> ptr<f3
     return result
 }
 
+# Turns probabilities into labels at an explicit threshold. probs is
+# P(classes[1]) as logistic_predict_proba returns it, so a value at or above
+# the threshold is classes[1] and raising the threshold makes classes[1] rarer
+# (issue #435).
+#
+# With more than two classes there is no single probability to threshold, so
+# the input is passed through unchanged. Callers hand it the argmax labels from
+# logistic_predict in that case.
 export function logistic_decide(model: LogisticRegression, probs: ptr<f32>, n_samples: i32, threshold: f32) -> ptr<f32> {
     let labels: ptr<f32> = array_new_f32(n_samples)
     if model.n_classes <= 2 {
@@ -1627,7 +1640,20 @@ export function logistic_decide(model: LogisticRegression, probs: ptr<f32>, n_sa
     return labels
 }
 
-# Binary decision scores: z = X * w + b for the first (positive) coefficient row.
+# Binary decision scores: z = X * w + b for the positive class, which is
+# classes[1]. A positive score means classes[1], the same sign convention
+# scikit-learn's decision_function uses.
+#
+# Issue #435: the one-vs-rest loop fits class c as the positive class and
+# stores that model in weights row c, so for a binary target the classes[1]
+# model is row 1. This function used to read row 0, the classes[0] model, which
+# made logistic_predict_proba return P(classes[0]) while logistic_decide
+# labelled a high probability classes[1]. The two composed to an inverted
+# label: 0 of 6 correct on a perfectly separable problem.
+#
+# model.weights and model.bias are row 0 and are left alone. Nothing else reads
+# them for a binary target; logistic_predict takes the argmax over both rows.
+#
 # X is contiguous row-major, so the whole thing is one cblas_sgemv with the
 # matrix row stride passed as lda. Falls back to the scalar dot product when the
 # feature count does not fit inside a row of X.
@@ -1637,8 +1663,12 @@ export function logistic_decision_function(model: LogisticRegression, X: Matrix)
     if rows <= 0 { return scores }
 
     let nf: i32 = model.n_features
-    let bias: f32 = model.bias
-    let w: ptr<f32> = model.weights
+    let mut bias: f32 = model.bias
+    let mut w: ptr<f32> = model.weights
+    if model.n_classes == 2 {
+        bias = model.biases[1]
+        w = model.weights + nf
+    }
 
     if nf <= 0 || nf > X.cols {
         let data: ptr<f32> = X.data
