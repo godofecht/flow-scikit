@@ -195,7 +195,12 @@ export function pipeline_fit(pipeline: Pipeline, X: Matrix, y: ptr<f32>) -> Pipe
     return pipeline
 }
 
-export function pipeline_predict_proba(pipeline: Pipeline, X: Matrix) -> ptr<f32> {
+# Runs every transform step in order and stops at the first estimator step.
+# The matrix the estimator should see is returned and the caller owns it.
+#
+# The name carries the module because non-exported functions that share a name
+# across modules collide in the generated C (compiler bug #465).
+function pipeline_transform_to_estimator(pipeline: Pipeline, X: Matrix) -> Matrix {
     let mut current_X: Matrix = matrix_copy(X)
 
     for i in 0 to pipeline.n_steps {
@@ -218,11 +223,43 @@ export function pipeline_predict_proba(pipeline: Pipeline, X: Matrix) -> ptr<f32
             matrix_free(current_X)
             current_X = transformed
         } elif step.kind == STEP_LINEAR_REG {
-            let preds: ptr<f32> = linear_regression_predict(step.linear_reg, current_X)
-            matrix_free(current_X)
-            return preds
+            return current_X
         } elif step.kind == STEP_LOGISTIC_REG {
-            let probs: ptr<f32> = logistic_predict(step.logistic_reg, current_X)
+            return current_X
+        }
+    }
+
+    return current_X
+}
+
+# Positive-class probabilities for a binary classifier pipeline: P(classes[1]),
+# the same quantity logistic_predict_proba returns for the estimator alone
+# (issue #435).
+#
+# Issue #449: this function returned logistic_predict's argmax class labels.
+# The labels were then thresholded by pipeline_decide as if they were
+# probabilities, which is the identity for classes {0, 1} and wrong for every
+# other labelling: with classes {2, 7} both labels exceed 0.5 and every sample
+# came out as 7.
+#
+# It is binary only, and returns null otherwise. A multiclass fit has no single
+# column to call the probability, and a regression pipeline has no probability
+# at all. Both cases want pipeline_predict.
+export function pipeline_predict_proba(pipeline: Pipeline, X: Matrix) -> ptr<f32> {
+    let current_X: Matrix = pipeline_transform_to_estimator(pipeline, X)
+
+    for i in 0 to pipeline.n_steps {
+        let step: ptr<PipelineStep> = pipeline.steps + i
+
+        if step.kind == STEP_LINEAR_REG {
+            matrix_free(current_X)
+            return null as ptr<f32>
+        } elif step.kind == STEP_LOGISTIC_REG {
+            if step.logistic_reg.n_classes > 2 {
+                matrix_free(current_X)
+                return null as ptr<f32>
+            }
+            let probs: ptr<f32> = logistic_predict_proba(step.logistic_reg, current_X)
             matrix_free(current_X)
             return probs
         }
@@ -232,24 +269,46 @@ export function pipeline_predict_proba(pipeline: Pipeline, X: Matrix) -> ptr<f32
     return null as ptr<f32>
 }
 
+# Predictions from the final step: fitted values for a regression pipeline,
+# argmax class labels for a classifier, which is what the estimator's own
+# predict returns.
 export function pipeline_predict(pipeline: Pipeline, X: Matrix) -> ptr<f32> {
-    let result = pipeline_predict_proba(pipeline, X)
-    return result
-}
-
-export function pipeline_decide(pipeline: Pipeline, X: Matrix, threshold: f32) -> ptr<f32> {
-    let probs: ptr<f32> = pipeline_predict_proba(pipeline, X)
+    let current_X: Matrix = pipeline_transform_to_estimator(pipeline, X)
 
     for i in 0 to pipeline.n_steps {
         let step: ptr<PipelineStep> = pipeline.steps + i
-        if step.kind == STEP_LOGISTIC_REG {
+
+        if step.kind == STEP_LINEAR_REG {
+            let preds: ptr<f32> = linear_regression_predict(step.linear_reg, current_X)
+            matrix_free(current_X)
+            return preds
+        } elif step.kind == STEP_LOGISTIC_REG {
+            let preds: ptr<f32> = logistic_predict(step.logistic_reg, current_X)
+            matrix_free(current_X)
+            return preds
+        }
+    }
+
+    matrix_free(current_X)
+    return null as ptr<f32>
+}
+
+# Labels at an explicit threshold, mirroring logistic_decide: for a binary
+# classifier the threshold is applied to P(classes[1]), so raising it makes
+# classes[1] rarer. With more than two classes there is nothing to threshold
+# and the argmax labels are returned unchanged, as is the regression case.
+export function pipeline_decide(pipeline: Pipeline, X: Matrix, threshold: f32) -> ptr<f32> {
+    for i in 0 to pipeline.n_steps {
+        let step: ptr<PipelineStep> = pipeline.steps + i
+        if step.kind == STEP_LOGISTIC_REG && step.logistic_reg.n_classes <= 2 {
+            let probs: ptr<f32> = pipeline_predict_proba(pipeline, X)
             let labels: ptr<f32> = logistic_decide(step.logistic_reg, probs, X.rows, threshold)
             array_free_f32(probs)
             return labels
         }
     }
 
-    return probs
+    return pipeline_predict(pipeline, X)
 }
 
 export function pipeline_free(pipeline: Pipeline) -> void {

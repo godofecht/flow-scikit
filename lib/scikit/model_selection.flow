@@ -245,12 +245,17 @@ export function cross_validate_score(X: Matrix, y: ptr<f32>, n_classes: i32, n_f
 
         let penalty: Penalty = penalty_l2(0.01)
         let model: LogisticRegression = logistic_regression_fit(X_train, y_train, n_classes, epochs, lr, penalty)
-        let probs: ptr<f32> = logistic_predict(model, X_test)
-        let preds: ptr<f32> = logistic_decide(model, probs, n_test, 0.5)
+        # Issue #449: score the fold against logistic_predict's argmax labels.
+        # These lines used to hand those labels to logistic_decide, which
+        # thresholds P(classes[1]) at 0.5. A label is not a probability. With
+        # classes {0, 1} the threshold is the identity and the result happened
+        # to be right; with classes {2, 7} both labels sit above 0.5, so every
+        # sample was scored as classes[1]. Cross-validation wants a prediction,
+        # and a multiclass fit has no single probability to threshold at all.
+        let preds: ptr<f32> = logistic_predict(model, X_test)
 
         scores[fold] = accuracy_score(y_test, preds, n_test)
 
-        array_free_f32(probs)
         array_free_f32(preds)
         logistic_regression_free(model)
         matrix_free(X_train)
@@ -379,12 +384,17 @@ function _cv_logistic_single(X: Matrix, y: ptr<f32>, n_classes: i32, n_folds: i3
         }
 
         let model: LogisticRegression = logistic_regression_fit(X_train, y_train, n_classes, epochs, lr, penalty)
-        let probs: ptr<f32> = logistic_predict(model, X_test)
-        let preds: ptr<f32> = logistic_decide(model, probs, n_test, 0.5)
+        # Issue #449: score the fold against logistic_predict's argmax labels.
+        # These lines used to hand those labels to logistic_decide, which
+        # thresholds P(classes[1]) at 0.5. A label is not a probability. With
+        # classes {0, 1} the threshold is the identity and the result happened
+        # to be right; with classes {2, 7} both labels sit above 0.5, so every
+        # sample was scored as classes[1]. Cross-validation wants a prediction,
+        # and a multiclass fit has no single probability to threshold at all.
+        let preds: ptr<f32> = logistic_predict(model, X_test)
 
         scores[fold] = accuracy_score(y_test, preds, n_test)
 
-        array_free_f32(probs)
         array_free_f32(preds)
         logistic_regression_free(model)
         matrix_free(X_train)
@@ -732,17 +742,15 @@ export function learning_curve(X: Matrix, y: ptr<f32>, n_classes: i32, train_siz
         let penalty: Penalty = penalty_l2(0.01)
         let model: LogisticRegression = logistic_regression_fit(X_train, y_train, n_classes, epochs, lr, penalty)
 
-        let train_probs: ptr<f32> = logistic_predict(model, X_train)
-        let train_preds: ptr<f32> = logistic_decide(model, train_probs, n_train, 0.5)
+        # Issue #449: argmax labels from logistic_predict, not a probability
+        # passed through logistic_decide. See cross_validate_score.
+        let train_preds: ptr<f32> = logistic_predict(model, X_train)
         train_scores[s] = accuracy_score(y_train, train_preds, n_train)
 
-        let test_probs: ptr<f32> = logistic_predict(model, X_test)
-        let test_preds: ptr<f32> = logistic_decide(model, test_probs, n_test, 0.5)
+        let test_preds: ptr<f32> = logistic_predict(model, X_test)
         test_scores[s] = accuracy_score(y_test, test_preds, n_test)
 
-        array_free_f32(train_probs)
         array_free_f32(train_preds)
-        array_free_f32(test_probs)
         array_free_f32(test_preds)
         logistic_regression_free(model)
         matrix_free(X_train)
@@ -822,17 +830,15 @@ export function validation_curve(X: Matrix, y: ptr<f32>, n_classes: i32, param_v
         let penalty: Penalty = penalty_l2(alpha)
         let model: LogisticRegression = logistic_regression_fit(X_train, y_train, n_classes, epochs, lr, penalty)
 
-        let train_probs: ptr<f32> = logistic_predict(model, X_train)
-        let train_preds: ptr<f32> = logistic_decide(model, train_probs, n_train, 0.5)
+        # Issue #449: argmax labels from logistic_predict, not a probability
+        # passed through logistic_decide. See cross_validate_score.
+        let train_preds: ptr<f32> = logistic_predict(model, X_train)
         train_scores[p] = accuracy_score(y_train, train_preds, n_train)
 
-        let test_probs: ptr<f32> = logistic_predict(model, X_test)
-        let test_preds: ptr<f32> = logistic_decide(model, test_probs, n_test, 0.5)
+        let test_preds: ptr<f32> = logistic_predict(model, X_test)
         test_scores[p] = accuracy_score(y_test, test_preds, n_test)
 
-        array_free_f32(train_probs)
         array_free_f32(train_preds)
-        array_free_f32(test_probs)
         array_free_f32(test_preds)
         logistic_regression_free(model)
     }
