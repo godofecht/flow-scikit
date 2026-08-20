@@ -63,14 +63,16 @@ The `ValidationResult` struct in `lib/scikit/validation.flow` carries a numeric 
 
 ## Known gaps
 
-Recorded here so this page is not one-sided.
-
-- Issue #353: no coefficient inference. No standard errors, no p-values, no model summary.
-- Issue #354: decision trees cannot handle categorical features natively. A caller must label-encode, which imposes false ordinality, or one-hot encode, which inflates cardinality.
-- Issue #357: logistic regression offers LBFGS only. Newton's method is the textbook default and is what R's `glm` uses, which matters when porting a model between languages.
+A hardcoded list here went stale twice, so it no longer lives in prose. The
+current gaps are the [open issues](https://github.com/godofecht/flow-scikit/issues),
+each carrying verified claims and a named fix direction. This page records
+positions and their reasoning; the tracker records what is missing.
 
 ## Closed since this page was written
 
+- Issue #353: OLS coefficient inference exists. `OLSInference` exposes the residual standard error, coefficient covariance, standard errors and t statistics, computed from the QR factorization the fit already performs and checked against hand-derived values. It refuses penalized and rank-deficient fits rather than reporting a covariance that does not mean what the name promises. Logistic inference remains open for the same honesty reason: the Newton Hessian carries the penalty term.
+- Issue #354: decision trees handle categorical features natively. A per-feature flag routes a column through Breiman's optimal subset split (sort levels by mean response, evaluate the k-1 contiguous partitions) with the left set stored as a 128-bit mask in the node. On a parity-of-level dataset the categorical path reaches accuracy 1.0 where any threshold on a label encoding tops out at 0.75. Forest and Bagging builders remain numeric-only for now.
+- Issue #357: logistic regression offers an explicit solver choice. Newton/IRLS is available and reaches the optimum in 2 to 6 iterations where LBFGS takes 5 to 27 on low-dimensional problems; LBFGS stays the default because Newton pays O(d^2) memory and O(d^3) per iteration on wide data. On a singular Hessian the solve zeroes the dependent coordinate and takes the genuine Newton step for the reduced problem.
 - Issue #355: a bootstrap cross-validator now exists. `BootstrapOOB` in `lib/scikit/model_selection.flow` implements plain out-of-bag bootstrap and names the variant, since scikit-learn removed its own `Bootstrap` class for inventing non-standard semantics under a misleading name.
 - Issue #356: `pipeline_fit` now returns a fitted `Pipeline` instead of mutating.
 - Issue #435: `logistic_predict_proba` returned P(`classes[0]`) while `logistic_decide` labelled a probability above the threshold `classes[1]`, so the two composed to an inverted binary label. The probability is now P(`classes[1]`).
