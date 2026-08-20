@@ -1,0 +1,233 @@
+# Regression tests for issue #460: SparsePCA convergence tolerance.
+#
+# Before the fix, sparse_pca_fit tested the mean absolute GRADIENT against
+# tol. The gradient of an L1-penalized objective does not vanish at a
+# soft-thresholded solution, so that statistic never reached tol and every fit
+# ran the full max_iter regardless of what the caller passed. tol was dead API
+# surface.
+#
+# The criterion now tests the largest absolute change in the component over one
+# full update pass. These tests are the gate on that: they fail if tol stops
+# influencing the iteration count, and they fail if stopping early changes the
+# fitted loadings.
+#
+# Run: flow run tests/test_sparse_pca_tol.flow
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function rand() -> i32
+    function srand(seed: u32) -> void
+}
+
+function _i460_noise(seed: i32) -> f32 {
+    let s: i64 = (seed as i64) * 1103515245 + 12345
+    let n: i32 = ((s % 100) + 100) % 100
+    return ((n as f32) / 100.0 - 0.5) * 0.3
+}
+
+# Two latent signals, one in features 0 and 1, one in features 2 and 3. Same
+# fixture as the SparsePCA case in tests/test_new_modules_v2.flow.
+function _i460_two_signal_fixture() -> Matrix {
+    let n: i32 = 40
+    let X: Matrix = matrix_new(n, 4)
+    srand(42)
+    for i in 0 to n {
+        let s1: f32 = sin((i as f64) * 0.3) as f32
+        let s2: f32 = ((rand() % 100) as f32) / 50.0 - 1.0
+        matrix_set(X, i, 0, s1 + _i460_noise(i) * 0.05)
+        matrix_set(X, i, 1, s1 + _i460_noise(i + 10) * 0.05)
+        matrix_set(X, i, 2, s2 + _i460_noise(i + 20) * 0.05)
+        matrix_set(X, i, 3, s2 + _i460_noise(i + 30) * 0.05)
+    }
+    return X
+}
+
+# A smoothly converging fixture: three correlated features built from two
+# oscillators with unequal amplitude. With alpha 0 the update is plain
+# projected gradient ascent, so the per-iteration change decays geometrically
+# instead of snapping to an exact fixed point. That decay is what makes the
+# stopping tolerance readable.
+function _i460_smooth_fixture() -> Matrix {
+    let n: i32 = 60
+    let X: Matrix = matrix_new(n, 3)
+    for i in 0 to n {
+        let t: f64 = (i as f64) * 0.11
+        let a: f32 = sin((t) as f64) as f32
+        let b: f32 = cos((t * 1.7) as f64) as f32
+        matrix_set(X, i, 0, 1.0 * a + 0.10 * b)
+        matrix_set(X, i, 1, 0.9 * a - 0.10 * b)
+        matrix_set(X, i, 2, 0.2 * a + 0.85 * b)
+    }
+    return X
+}
+
+# A loose tolerance must stop strictly earlier than a tight one. This is the
+# direct proof that tol is alive. Under the old gradient criterion both fits
+# ran all 500 iterations and this assertion failed.
+#
+# Only the ordering is asserted, never the absolute counts: the component
+# initialisation consumes libc rand(), which differs between Darwin and glibc,
+# so the exact iteration at which each tolerance bites is platform-dependent.
+# The ordering is not: the iterate sequence does not depend on tol at all, so
+# raising tol can only move the stop earlier or leave it where it was.
+function _i460_n_iter_at(X: Matrix, tol: f32) -> i32 {
+    let m: SparsePCA = sparse_pca_fit(X, 1, 0.0, 500, tol, 5)
+    let k: i32 = m.n_iter
+    sparse_pca_free(m)
+    return k
+}
+
+function test_i460_tol_changes_n_iter() -> i32 {
+    println("Test: SparsePCA tol controls the iteration count")
+    let X: Matrix = _i460_smooth_fixture()
+
+    let n_a: i32 = _i460_n_iter_at(X, 0.01)
+    let n_b: i32 = _i460_n_iter_at(X, 0.001)
+    let n_c: i32 = _i460_n_iter_at(X, 0.0001)
+    let n_d: i32 = _i460_n_iter_at(X, 0.0000001)
+    matrix_free(X)
+
+    let mut failures: i32 = 0
+
+    # Tightening tol can only push the stopping point later, never earlier:
+    # the iterate sequence does not depend on tol, so the stop is the first
+    # index whose change falls under it.
+    if n_a > n_b || n_b > n_c || n_c > n_d {
+        println("  FAIL: n_iter is not monotone in tol")
+        failures = failures + 1
+    }
+    # The gate. Under the old gradient criterion all four ran to 500.
+    if n_b >= n_d {
+        println("  FAIL: tol has no effect on the stopping point")
+        failures = failures + 1
+    }
+    # And the loose end must actually stop early rather than hit the cap.
+    if n_b >= 500 {
+        print("  FAIL: tol 0.001 never stopped early, n_iter = ")
+        println(n_b)
+        failures = failures + 1
+    }
+
+    print("  n_iter at tol 0.01 / 0.001 / 0.0001 / 0.0000001: ")
+    print(n_a)
+    print(" ")
+    print(n_b)
+    print(" ")
+    print(n_c)
+    print(" ")
+    println(n_d)
+
+    if failures != 0 {
+        return 1
+    }
+    println("  OK: n_iter increases monotonically as tol tightens")
+    return 0
+}
+
+# Stopping early must not change the answer. tol 0.0 can never satisfy
+# delta < tol, so that fit runs the full 200 iterations and gives the
+# reference loadings. The default-tolerance fit stops far earlier and must
+# agree with it.
+function test_i460_early_stop_matches_full_run() -> i32 {
+    println("Test: SparsePCA early stop reproduces the full-length fit")
+    let X: Matrix = _i460_two_signal_fixture()
+
+    let full: SparsePCA = sparse_pca_fit(X, 2, 0.1, 200, 0.0, 42)
+    let early: SparsePCA = sparse_pca_fit(X, 2, 0.1, 200, 0.0001, 42)
+
+    let mut failures: i32 = 0
+
+    if full.n_iter != 200 {
+        print("  FAIL: tol 0.0 should never stop early, got n_iter ")
+        println(full.n_iter)
+        failures = failures + 1
+    }
+    if early.n_iter >= full.n_iter {
+        print("  FAIL: default tol did not stop early, n_iter ")
+        println(early.n_iter)
+        failures = failures + 1
+    }
+
+    let mut worst: f32 = 0.0
+    for c in 0 to 2 {
+        for j in 0 to 4 {
+            let d: f32 = fabs((full.components[c][j] - early.components[c][j]) as f64) as f32
+            if d > worst {
+                worst = d
+            }
+        }
+    }
+    if worst > 0.001 {
+        print("  FAIL: early-stopped loadings differ from the full run by ")
+        println(worst)
+        failures = failures + 1
+    }
+
+    let e_iter: i32 = early.n_iter
+    sparse_pca_free(full)
+    sparse_pca_free(early)
+    matrix_free(X)
+
+    if failures != 0 {
+        return 1
+    }
+
+    print("  OK: stopped at ")
+    print(e_iter)
+    print(" of 200 iterations, max loading difference ")
+    println(worst)
+    return 0
+}
+
+# The mini-batch variant carries the same criterion. Its gradient is sampled,
+# so the iterate sequence depends on how many rand() draws the batch sampler
+# has made; the ordering still holds for a single component, where the draw
+# history is the same up to the stopping point.
+function test_i460_minibatch_tol_alive() -> i32 {
+    println("Test: MiniBatchSparsePCA tol controls the iteration count")
+    let X: Matrix = _i460_smooth_fixture()
+
+    let loose: MiniBatchSparsePCA = minibatch_sparse_pca_fit(X, 1, 0.0, 500, 20, 0.001, 5)
+    let tight: MiniBatchSparsePCA = minibatch_sparse_pca_fit(X, 1, 0.0, 500, 20, 0.0000001, 5)
+
+    let n_loose: i32 = loose.n_iter
+    let n_tight: i32 = tight.n_iter
+
+    minibatch_sparse_pca_free(loose)
+    minibatch_sparse_pca_free(tight)
+    matrix_free(X)
+
+    if n_loose >= n_tight {
+        print("  FAIL: loose tol ran ")
+        print(n_loose)
+        print(" iterations, tight tol ran ")
+        println(n_tight)
+        return 1
+    }
+
+    print("  OK: tol 0.001 stopped at ")
+    print(n_loose)
+    print(" iterations, tol 0.0000001 ran to ")
+    println(n_tight)
+    return 0
+}
+
+function main() -> i32 {
+    println("=== SparsePCA convergence tolerance tests (issue #460) ===")
+    let mut failures: i32 = 0
+
+    if test_i460_tol_changes_n_iter() != 0 { failures = failures + 1 }
+    if test_i460_early_stop_matches_full_run() != 0 { failures = failures + 1 }
+    if test_i460_minibatch_tol_alive() != 0 { failures = failures + 1 }
+
+    println("")
+    if failures != 0 {
+        print("FAILED: ")
+        print(failures)
+        println(" test(s)")
+        return 1
+    }
+    println("All SparsePCA tolerance tests passed!")
+    return 0
+}

@@ -765,6 +765,32 @@ export function fast_ica_free(model: FastICA) -> void {
 # SparsePCA
 # ============================================================================
 
+# Convergence statistic shared by sparse_pca_fit and minibatch_sparse_pca_fit
+# (issue #460). Returns the largest absolute change in any coordinate of the
+# component across one full update pass: gradient step, soft-threshold,
+# renormalize.
+#
+# Max rather than mean: the solution of an L1-penalized objective is sparse, so
+# most coordinates sit at exactly zero and stop moving early. A mean over p
+# would divide that handful of still-moving active coordinates by the full
+# feature count and report convergence while the support is still shifting. The
+# max is what the iteration actually has to drive to zero.
+#
+# Both arguments are live buffers owned by the caller; nothing here reads freed
+# memory (issue #378).
+#
+# Module-unique name per compiler bug #465.
+function _spca_max_abs_delta(prev: ptr<f32>, cur: ptr<f32>, p: i32) -> f32 {
+    let mut worst: f32 = 0.0
+    for j in 0 to p {
+        let d: f32 = fabs((cur[j] - prev[j]) as f64) as f32
+        if d > worst {
+            worst = d
+        }
+    }
+    return worst
+}
+
 export struct SparsePCA {
     components: ptr<ptr<f32> >,
     n_components: i32,
@@ -816,8 +842,14 @@ export function sparse_pca_fit(X: Matrix, n_components: i32, alpha: f32, max_ite
             }
         }
 
+        let prev: ptr<f32> = array_new_f32(p)
+
         for iter in 0 to max_iter {
             n_iter = iter + 1
+
+            for j in 0 to p {
+                prev[j] = components[c][j]
+            }
 
             let grad: ptr<f32> = array_new_f32(p)
             for i in 0 to n {
@@ -860,19 +892,20 @@ export function sparse_pca_fit(X: Matrix, n_components: i32, alpha: f32, max_ite
                 }
             }
 
-            if iter > 0 && iter % 10 == 0 {
-                let mut change: f32 = 0.0
-                for j in 0 to p {
-                    change = change + fabs((grad[j]) as f64) as f32
-                }
-                if change / (p as f32) < tol {
-                    array_free_f32(grad)
-                    break
-                }
-            }
+            # Issue #460: stop on the change in the parameters, not on the
+            # gradient magnitude. The gradient of an L1 objective does not
+            # vanish at a soft-thresholded solution, so the old test could
+            # never reach tol and every fit ran the full max_iter.
+            let delta: f32 = _spca_max_abs_delta(prev, components[c], p)
 
             array_free_f32(grad)
+
+            if delta < tol {
+                break
+            }
         }
+
+        array_free_f32(prev)
     }
 
     matrix_free(Xc)
@@ -969,8 +1002,14 @@ export function minibatch_sparse_pca_fit(
             }
         }
 
+        let prev: ptr<f32> = array_new_f32(p)
+
         for iter in 0 to max_iter {
             n_iter = iter + 1
+
+            for j in 0 to p {
+                prev[j] = components[c][j]
+            }
 
             # Sample mini-batch
             let actual_batch: i32 = batch_size
@@ -1020,19 +1059,19 @@ export function minibatch_sparse_pca_fit(
                 }
             }
 
-            if iter > 0 && iter % 10 == 0 {
-                let mut change: f32 = 0.0
-                for j in 0 to p {
-                    change = change + fabs((grad[j]) as f64) as f32
-                }
-                if change / (p as f32) < tol {
-                    array_free_f32(grad)
-                    break
-                }
-            }
+            # Issue #460: same parameter-change criterion as sparse_pca_fit.
+            # The mini-batch gradient is noisier still, so a gradient-magnitude
+            # test is even less meaningful here.
+            let delta: f32 = _spca_max_abs_delta(prev, components[c], p)
 
             array_free_f32(grad)
+
+            if delta < tol {
+                break
+            }
         }
+
+        array_free_f32(prev)
     }
 
     matrix_free(Xc)
