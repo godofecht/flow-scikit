@@ -1,0 +1,311 @@
+# Tests for the rank-reduced least squares fit (Issue #448).
+# Run: flow run tests/test_linear_collinear_fit.flow
+#
+# Before the fix, _solve_lstsq_qr used an absolute 1e-15 pivot cutoff. On
+# X = [x, 2x] with x = 1..5 the second pivot landed just above it, the solver
+# divided by it, and the f32 store of the resulting 9.86e14 / -4.93e14 pair
+# cancelled the signal. Every prediction came back as 2.875, the mean of y,
+# with fitted = true and no warning.
+#
+# The cutoff is now 1e-11 * max|R_ii| floored at 1e-15, the same rule
+# ols_inference_fit uses. A pivot below it means the coordinate is dropped and
+# the reduced problem is solved on the surviving columns.
+#
+# What the numbers below are. On any exactly collinear pair spanning the
+# direction of x, the least squares fit of y = 2,4,5,4,5 on x = 1..5 is
+# slope 0.6, intercept 2.2, so the predictions are 2.8, 3.4, 4.0, 4.6, 5.2.
+# The reduced solve parks the whole slope on the first column and leaves the
+# second at exactly zero. sklearn reaches the same predictions through an SVD
+# minimum-norm solution, which splits the slope across the pair instead; the
+# predictions agree, the individual coefficients do not.
+#
+# The near-collinear expectations come from numpy lstsq on the same design.
+
+import "lib/scikit/scikit.flow"
+
+function t448_close(got: f32, want: f32, tol: f32) -> bool {
+    let d: f32 = fabs((got - want) as f64) as f32
+    return d <= tol
+}
+
+function t448_report(label: string, got: f32, want: f32) -> void {
+    print("  ")
+    print(label)
+    print(" got ")
+    printf("%.6f", got)
+    print(" want ")
+    printf("%.6f", want)
+    println("")
+}
+
+# Builds the 5 x 2 design [x, scale * x + offset[i]] with x = 1..5.
+function t448_design(scale: f32, o0: f32, o1: f32, o2: f32, o3: f32, o4: f32) -> Matrix {
+    let X: Matrix = matrix_new(5, 2)
+    let off: ptr<f32> = array_new_f32(8)
+    off[0] = o0
+    off[1] = o1
+    off[2] = o2
+    off[3] = o3
+    off[4] = o4
+    for i in 0 to 5 {
+        let xv: f32 = (i + 1) as f32
+        matrix_set(X, i, 0, xv)
+        matrix_set(X, i, 1, scale * xv + off[i])
+    }
+    array_free_f32(off)
+    return X
+}
+
+function t448_response() -> ptr<f32> {
+    let y: ptr<f32> = array_new_f32(8)
+    y[0] = 2.0
+    y[1] = 4.0
+    y[2] = 5.0
+    y[3] = 4.0
+    y[4] = 5.0
+    return y
+}
+
+# Shared body for the two exactly collinear designs. The fit must land on the
+# true line, the second coordinate must be exactly zero, and the first must be
+# a small finite number rather than the 1e14-scale pair the old solver made.
+function t448_check_reduced(label: string, scale: f32) -> i32 {
+    println(label)
+    let X: Matrix = t448_design(scale, 0.0, 0.0, 0.0, 0.0, 0.0)
+    let y: ptr<f32> = t448_response()
+    let model: LinearRegression = linear_regression_fit(X, y, penalty_none())
+
+    let mut failures: i32 = 0
+
+    t448_report("w0", model.weights[0], 0.6)
+    t448_report("w1", model.weights[1], 0.0)
+    t448_report("bias", model.bias, 2.2)
+
+    if model.fitted == false {
+        println("  FAIL: fit reported not fitted")
+        failures = failures + 1
+    }
+    if model.weights[1] != 0.0 {
+        println("  FAIL: dependent coordinate is not exactly zero")
+        failures = failures + 1
+    }
+    if t448_close(model.weights[0], 0.6, 0.0005) == false {
+        println("  FAIL: surviving coordinate does not carry the slope")
+        failures = failures + 1
+    }
+    if t448_close(model.bias, 2.2, 0.0005) == false {
+        println("  FAIL: intercept is wrong")
+        failures = failures + 1
+    }
+    # A coefficient anywhere near the old 9.86e14 fails this outright.
+    let w0mag: f32 = fabs((model.weights[0]) as f64) as f32
+    let w1mag: f32 = fabs((model.weights[1]) as f64) as f32
+    if w0mag > 1000.0 || w1mag > 1000.0 {
+        println("  FAIL: coefficients blew up")
+        failures = failures + 1
+    }
+
+    let preds: ptr<f32> = linear_regression_predict(model, X)
+    let want: ptr<f32> = array_new_f32(8)
+    want[0] = 2.8
+    want[1] = 3.4
+    want[2] = 4.0
+    want[3] = 4.6
+    want[4] = 5.2
+    for i in 0 to 5 {
+        t448_report("pred", preds[i], want[i])
+        if t448_close(preds[i], want[i], 0.001) == false {
+            println("  FAIL: prediction is off the true line")
+            failures = failures + 1
+        }
+    }
+
+    if failures == 0 {
+        println("  OK: collinear design reduces to the true line")
+    }
+
+    array_free_f32(want)
+    array_free_f32(preds)
+    linear_regression_free(model)
+    array_free_f32(y)
+    matrix_free(X)
+    return failures
+}
+
+# The design from the issue: the second column is twice the first.
+function test_collinear_scaled_column() -> i32 {
+    return t448_check_reduced("Test: collinear fit, x2 = 2 * x1", 2.0)
+}
+
+# The exact duplicate column, the other shape the same failure takes.
+function test_collinear_duplicate_column() -> i32 {
+    return t448_check_reduced("Test: collinear fit, x2 = x1", 1.0)
+}
+
+# Near collinear, not collinear. The second pivot is small but far above
+# 1e-11 * max|R_ii|, so the cutoff must not fire and both coefficients must
+# survive. Expected values are numpy lstsq on the same design:
+#   w = -3.2967033, 1.97802198   bias = 2.02197802
+#   preds = 2.87912088, 3.14285714, 4.3956044, 4.26373626, 5.31868132
+function test_near_collinear_stays_full_rank() -> i32 {
+    println("Test: near-collinear fit stays full rank")
+    let X: Matrix = t448_design(2.0, 0.1, -0.1, 0.2, -0.2, 0.0)
+    let y: ptr<f32> = t448_response()
+    let model: LinearRegression = linear_regression_fit(X, y, penalty_none())
+
+    let mut failures: i32 = 0
+
+    t448_report("w0", model.weights[0], -3.2967033)
+    t448_report("w1", model.weights[1], 1.97802198)
+    t448_report("bias", model.bias, 2.02197802)
+
+    if model.weights[1] == 0.0 {
+        println("  FAIL: near-collinear column was dropped")
+        failures = failures + 1
+    }
+    if t448_close(model.weights[0], -3.2967033, 0.005) == false {
+        println("  FAIL: w0 does not match the full-rank solution")
+        failures = failures + 1
+    }
+    if t448_close(model.weights[1], 1.97802198, 0.005) == false {
+        println("  FAIL: w1 does not match the full-rank solution")
+        failures = failures + 1
+    }
+    if t448_close(model.bias, 2.02197802, 0.005) == false {
+        println("  FAIL: intercept does not match the full-rank solution")
+        failures = failures + 1
+    }
+
+    let preds: ptr<f32> = linear_regression_predict(model, X)
+    let want: ptr<f32> = array_new_f32(8)
+    want[0] = 2.87912088
+    want[1] = 3.14285714
+    want[2] = 4.3956044
+    want[3] = 4.26373626
+    want[4] = 5.31868132
+    for i in 0 to 5 {
+        t448_report("pred", preds[i], want[i])
+        if t448_close(preds[i], want[i], 0.002) == false {
+            println("  FAIL: prediction does not match the full-rank solution")
+            failures = failures + 1
+        }
+    }
+
+    if failures == 0 {
+        println("  OK: near-collinear design solved at full rank")
+    }
+
+    array_free_f32(want)
+    array_free_f32(preds)
+    linear_regression_free(model)
+    array_free_f32(y)
+    matrix_free(X)
+    return failures
+}
+
+# A well-conditioned two-feature design, to show the relative cutoff leaves an
+# ordinary fit alone. x1 = 1..5, x2 = 5,3,4,1,2, y = 2,4,5,4,5.
+# numpy lstsq: w = 0.77777778, 0.22222222, bias = 1.0.
+function test_well_conditioned_unchanged() -> i32 {
+    println("Test: well-conditioned two-feature fit")
+    let X: Matrix = matrix_new(5, 2)
+    let x2: ptr<f32> = array_new_f32(8)
+    x2[0] = 5.0
+    x2[1] = 3.0
+    x2[2] = 4.0
+    x2[3] = 1.0
+    x2[4] = 2.0
+    for i in 0 to 5 {
+        matrix_set(X, i, 0, (i + 1) as f32)
+        matrix_set(X, i, 1, x2[i])
+    }
+    let y: ptr<f32> = t448_response()
+    let model: LinearRegression = linear_regression_fit(X, y, penalty_none())
+
+    let mut failures: i32 = 0
+    t448_report("w0", model.weights[0], 0.77777778)
+    t448_report("w1", model.weights[1], 0.22222222)
+    t448_report("bias", model.bias, 1.0)
+
+    if t448_close(model.weights[0], 0.77777778, 0.0005) == false {
+        println("  FAIL: w0 moved")
+        failures = failures + 1
+    }
+    if t448_close(model.weights[1], 0.22222222, 0.0005) == false {
+        println("  FAIL: w1 moved")
+        failures = failures + 1
+    }
+    if t448_close(model.bias, 1.0, 0.0005) == false {
+        println("  FAIL: intercept moved")
+        failures = failures + 1
+    }
+    if failures == 0 {
+        println("  OK: well-conditioned fit is unchanged")
+    }
+
+    linear_regression_free(model)
+    array_free_f32(y)
+    array_free_f32(x2)
+    matrix_free(X)
+    return failures
+}
+
+# Issue #448 changes the fit, not the inference. ols_inference_fit still has to
+# refuse on the same design: a reduced solve gives usable predictions, but the
+# split of the slope across the collinear pair is arbitrary, so a standard
+# error on either coordinate would be meaningless.
+function test_inference_still_refuses() -> i32 {
+    println("Test: inference still refuses the collinear design")
+    let X: Matrix = t448_design(2.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    let y: ptr<f32> = t448_response()
+    let model: LinearRegression = linear_regression_fit(X, y, penalty_none())
+    let inf: OLSInference = ols_inference_fit(model, X, y)
+
+    let mut failures: i32 = 0
+    print("  rank ")
+    print(inf.rank)
+    println("")
+
+    if inf.fitted {
+        println("  FAIL: inference reported on a rank-deficient design")
+        failures = failures + 1
+    }
+    if inf.rank_deficient == false {
+        println("  FAIL: rank deficiency was not flagged")
+        failures = failures + 1
+    }
+    if inf.rank != 1 {
+        println("  FAIL: numerical rank should be 1")
+        failures = failures + 1
+    }
+    if failures == 0 {
+        println("  OK: inference still refuses and says why")
+    }
+
+    ols_inference_free(inf)
+    linear_regression_free(model)
+    array_free_f32(y)
+    matrix_free(X)
+    return failures
+}
+
+function main() -> i32 {
+    println("=== Rank-reduced least squares fit (Issue #448) ===")
+    let mut failures: i32 = 0
+    failures = failures + test_collinear_scaled_column()
+    failures = failures + test_collinear_duplicate_column()
+    failures = failures + test_near_collinear_stays_full_rank()
+    failures = failures + test_well_conditioned_unchanged()
+    failures = failures + test_inference_still_refuses()
+
+    println("")
+    print("failures: ")
+    print(failures)
+    println("")
+    if failures != 0 {
+        println("FAILED")
+        return 1
+    }
+    println("ALL PASSED")
+    return 0
+}

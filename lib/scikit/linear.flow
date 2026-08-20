@@ -158,6 +158,33 @@ export function _solve_f64(A: ptr<f64>, b: ptr<f64>, n: i32) -> void {
 # dgemv(trans) and dger over a sub-block addressed by an explicit leading
 # dimension, with the reflector read as a strided column. The old code walked
 # the whole trailing block once per column in scalar f64.
+#
+# Rank deficiency (Issue #448). Back substitution needs a rule for when a
+# diagonal entry of R counts as zero. An absolute cutoff cannot express that:
+# whether a pivot is negligible depends on the scale of the design. On
+# X = [x, 2x] with x = 1..5 the second pivot lands just above an absolute
+# 1e-15, so the old code divided by it and returned coefficients near 9.86e14
+# and -4.93e14. Storing that pair in f32 cancelled the signal and every
+# prediction collapsed to the mean of y, silently, with fitted = true.
+#
+# The cutoff is therefore relative: 1e-11 * max|R_ii|, floored at 1e-15 so a
+# design whose pivots are all tiny in absolute terms is not declared deficient
+# on rounding noise. This is the same rule and the same two constants
+# ols_inference_fit uses (see lin353_invert_upper), deliberately, so that one
+# file does not carry two definitions of rank.
+#
+# A coordinate whose pivot falls below the cutoff is set to zero and the
+# remaining coordinates are solved against the leading triangular block, which
+# is the reduced problem: the zeroed columns contribute nothing to the sums
+# above them. On the collinear design that returns 0.6 on the first column,
+# 0.0 on the second and the correct intercept, so predictions follow the true
+# line. numpy lstsq and sklearn both keep the fit rather than refusing here.
+# They reach the minimum-norm solution through an SVD, which spreads the weight
+# over the collinear pair instead of parking it on one column; the predictions
+# agree, the individual coefficients do not.
+#
+# On a full-rank design the relative cutoff is never reached, so the arithmetic
+# is untouched: same reflectors, same order, same divisions.
 export function _solve_lstsq_qr(X: ptr<f64>, y: ptr<f64>, m: i32, n: i32) -> void {
     let dots: ptr<f64> = array_new_f64(n)
 
@@ -202,7 +229,19 @@ export function _solve_lstsq_qr(X: ptr<f64>, y: ptr<f64>, m: i32, n: i32) -> voi
 
     array_free_f64(dots)
 
-    # Back-substitution: R * w = y(0..n-1)
+    # Rank cutoff, relative to the largest pivot and floored at the old
+    # absolute value so it can never be looser than the code it replaces.
+    let mut maxdiag: f64 = 0.0
+    for d in 0 to n {
+        let dd: f64 = fabs(X[d * n + d])
+        if dd > maxdiag { maxdiag = dd }
+    }
+    let mut tol: f64 = 0.00000000001 * maxdiag
+    if tol < 0.000000000000001 { tol = 0.000000000000001 }
+
+    # Back-substitution: R * w = y(0..n-1). A coordinate whose pivot is below
+    # tol is set to zero, which drops its column out of every sum above it and
+    # leaves the reduced problem to the surviving pivots.
     let mut i: i32 = n - 1
     while i >= 0 {
         let mut s: f64 = y[i]
@@ -213,7 +252,7 @@ export function _solve_lstsq_qr(X: ptr<f64>, y: ptr<f64>, m: i32, n: i32) -> voi
         }
         let pv: f64 = X[i * n + i]
         let abs_pv: f64 = fabs(pv)
-        if abs_pv < 0.000000000000001 {
+        if abs_pv < tol {
             y[i] = 0.0
         } else {
             y[i] = s / pv
