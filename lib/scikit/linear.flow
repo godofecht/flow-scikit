@@ -315,7 +315,107 @@ export struct LinearRegression {
     bias: f32,
     n_features: i32,
     penalty: Penalty,
-    fitted: bool
+    fitted: bool,
+    inference: LinearRegressionInference
+}
+
+export struct LinearRegressionInference {
+    residual_std_err: f32,
+    cov_matrix: ptr<f32>,
+    std_errors: ptr<f32>,
+    t_stats: ptr<f32>
+}
+
+function _ols_compute_inference(Xc: ptr<f64>, yc: ptr<f64>, m: i32, n: i32, weights: ptr<f32>) -> LinearRegressionInference {
+    let mut rss: f64 = 0.0
+    let mut i_rss: i32 = n
+    while i_rss < m {
+        let val: f64 = yc[i_rss]
+        rss = rss + val * val
+        i_rss = i_rss + 1
+    }
+
+    let dof: f64 = (m as f64) - (n as f64) - 1.0
+    let mut rse: f64 = 0.0
+    if dof > 0.0 {
+        rse = sqrt(rss / dof)
+    }
+
+    let U: ptr<f64> = array_new_f64(n * n)
+    let mut singular: bool = false
+    for i in 0 to n {
+        for j in 0 to n { U[i * n + j] = 0.0 }
+        let rii: f64 = Xc[i * n + i]
+        let abs_rii: f64 = fabs(rii)
+        if abs_rii < 0.000000000000001 {
+            singular = true
+        } else {
+            U[i * n + i] = 1.0 / rii
+        }
+    }
+
+    if singular == false {
+        for j in 0 to n {
+            let mut i: i32 = j - 1
+            while i >= 0 {
+                let mut sum: f64 = 0.0
+                let mut k: i32 = i + 1
+                while k <= j {
+                    sum = sum + Xc[i * n + k] * U[k * n + j]
+                    k = k + 1
+                }
+                U[i * n + j] = (0.0 - sum) * U[i * n + i]
+                i = i - 1
+            }
+        }
+    }
+
+    let cov_matrix: ptr<f32> = array_new_f32(n * n)
+    let std_errors: ptr<f32> = array_new_f32(n)
+    let t_stats: ptr<f32> = array_new_f32(n)
+
+    for i in 0 to n {
+        for j in 0 to n {
+            cov_matrix[i * n + j] = 0.0
+        }
+        std_errors[i] = 0.0
+        t_stats[i] = 0.0
+    }
+
+    if singular == false {
+        let rse_sq: f64 = rse * rse
+        for i in 0 to n {
+            for j in 0 to n {
+                let mut start_k: i32 = i
+                if j > start_k { start_k = j }
+
+                let mut sum_cov: f64 = 0.0
+                let mut k_c: i32 = start_k
+                while k_c < n {
+                    sum_cov = sum_cov + U[i * n + k_c] * U[j * n + k_c]
+                    k_c = k_c + 1
+                }
+                cov_matrix[i * n + j] = (sum_cov * rse_sq) as f32
+            }
+        }
+
+        for i in 0 to n {
+            let var_i: f32 = cov_matrix[i * n + i]
+            if var_i > 0.0 {
+                std_errors[i] = sqrt((var_i as f64)) as f32
+                t_stats[i] = weights[i] / std_errors[i]
+            }
+        }
+    }
+
+    array_free_f64(U)
+
+    return LinearRegressionInference {
+        residual_std_err: rse as f32,
+        cov_matrix: cov_matrix,
+        std_errors: std_errors,
+        t_stats: t_stats
+    }
 }
 
 export function linear_regression_fit(X: Matrix, y: ptr<f32>, penalty: Penalty) -> LinearRegression {
@@ -392,7 +492,8 @@ export function linear_regression_fit(X: Matrix, y: ptr<f32>, penalty: Penalty) 
         array_free_f64(x_mean)
         array_free_f64(XtX)
         array_free_f64(Xty)
-        return LinearRegression { weights: weights, bias: bias, n_features: n, penalty: penalty, fitted: true }
+        let empty_inf: LinearRegressionInference = LinearRegressionInference { residual_std_err: 0.0, cov_matrix: null as ptr<f32>, std_errors: null as ptr<f32>, t_stats: null as ptr<f32> }
+        return LinearRegression { weights: weights, bias: bias, n_features: n, penalty: penalty, fitted: true, inference: empty_inf }
     }
 
     # No regularization: use QR decomposition for accuracy
@@ -409,11 +510,13 @@ export function linear_regression_fit(X: Matrix, y: ptr<f32>, penalty: Penalty) 
         weights[j] = yc[j] as f32
     }
 
+    let inf_stats: LinearRegressionInference = _ols_compute_inference(Xc, yc, m, n, weights)
+
     free(Xc as ptr<void>)
     array_free_f64(yc)
     array_free_f64(x_mean)
 
-    return LinearRegression { weights: weights, bias: bias_d as f32, n_features: n, penalty: penalty, fitted: true }
+    return LinearRegression { weights: weights, bias: bias_d as f32, n_features: n, penalty: penalty, fitted: true, inference: inf_stats }
 }
 
 # Predictions are y = X * w + b. X is contiguous row-major, so the whole batch
@@ -453,6 +556,9 @@ export function linear_regression_predict(model: LinearRegression, X: Matrix) ->
 
 export function linear_regression_free(model: LinearRegression) -> void {
     array_free_f32(model.weights)
+    if model.inference.cov_matrix != (null as ptr<f32>) { array_free_f32(model.inference.cov_matrix) }
+    if model.inference.std_errors != (null as ptr<f32>) { array_free_f32(model.inference.std_errors) }
+    if model.inference.t_stats != (null as ptr<f32>) { array_free_f32(model.inference.t_stats) }
 }
 
 # ============================================================================

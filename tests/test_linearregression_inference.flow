@@ -1,0 +1,71 @@
+import "lib/scikit/linear.flow"
+import "lib/scikit/matrix.flow"
+import "lib/scikit/validation.flow"
+
+extern {
+    function printf(format: ptr<i8>, ...) -> i32
+    function fabs(x: f64) -> f64
+}
+
+function abs_f32(x: f32) -> f32 {
+    return fabs((x as f64)) as f32
+}
+
+function assert_approx_equal(actual: f32, expected: f32, tol: f32, msg: ptr<i8>, failures: ptr<i32>) -> void {
+    if abs_f32(actual - expected) > tol {
+        printf("FAIL: %s. Expected %f, got %f\n", msg, expected as f64, actual as f64)
+        failures[0] = failures[0] + 1
+    }
+}
+
+export function main() -> i32 {
+    let failures: ptr<i32> = malloc(4) as ptr<i32>
+    failures[0] = 0
+
+    let X1: Matrix = matrix_new(3, 1)
+    X1.data[0] = 1.0; X1.data[1] = 2.0; X1.data[2] = 3.0
+    let y1: ptr<f32> = array_new_f32(3)
+    y1[0] = 2.0; y1[1] = 4.0; y1[2] = 5.0
+
+    let pen: Penalty = penalty_none()
+    let m1: LinearRegression = linear_regression_fit(X1, y1, pen)
+
+    assert_approx_equal(m1.inference.residual_std_err, 0.408248, 0.0001, "Simple RSE", failures)
+    assert_approx_equal(m1.inference.std_errors[0], 0.288675, 0.0001, "Simple StdErr", failures)
+    assert_approx_equal(m1.inference.t_stats[0], 5.19615, 0.0001, "Simple T-Stat", failures)
+    assert_approx_equal(m1.inference.cov_matrix[0], 0.083333, 0.0001, "Simple Covariance", failures)
+
+    matrix_free(X1)
+    array_free_f32(y1)
+    linear_regression_free(m1)
+
+    # 2. Degenerate case (collinear features)
+    let X2: Matrix = matrix_new(4, 2)
+    # Col 2 is exactly 2 * Col 1
+    X2.data[0] = 1.0; X2.data[1] = 2.0
+    X2.data[2] = 2.0; X2.data[3] = 4.0
+    X2.data[4] = 3.0; X2.data[5] = 6.0
+    X2.data[6] = 4.0; X2.data[7] = 8.0
+
+    let y2: ptr<f32> = array_new_f32(4)
+    y2[0] = 2.0; y2[1] = 4.0; y2[2] = 6.0; y2[3] = 8.0
+
+    let m2: LinearRegression = linear_regression_fit(X2, y2, pen)
+
+    assert_approx_equal(m2.inference.std_errors[0], 0.0, 0.0001, "Degenerate StdErr 0", failures)
+    assert_approx_equal(m2.inference.std_errors[1], 0.0, 0.0001, "Degenerate StdErr 1", failures)
+    assert_approx_equal(m2.inference.cov_matrix[0], 0.0, 0.0001, "Degenerate Cov 0,0", failures)
+    assert_approx_equal(m2.inference.t_stats[0], 0.0, 0.0001, "Degenerate T-Stat 0", failures)
+
+    matrix_free(X2)
+    array_free_f32(y2)
+    linear_regression_free(m2)
+
+    if failures[0] == 0 {
+        printf("OK: test_linearregression_inference\n")
+    }
+
+    let ret: i32 = failures[0]
+    free(failures as ptr<void>)
+    return ret
+}
