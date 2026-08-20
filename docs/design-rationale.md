@@ -44,6 +44,8 @@ Flow structs pass by value. Every estimator fit function returns a fitted struct
 
 The `predict` functions return probabilities. The `decide` functions take an explicit threshold.
 
+For a binary target the probability is P(`classes[1]`), which is the column scikit-learn's `predict_proba` puts it in, so raising the threshold makes `classes[1]` rarer.
+
 The codebase contains nine `*_decide` functions:
 - `random_forest_classifier_decide`
 - `logistic_decide`
@@ -71,3 +73,4 @@ Recorded here so this page is not one-sided.
 
 - Issue #355: a bootstrap cross-validator now exists. `BootstrapOOB` in `lib/scikit/model_selection.flow` implements plain out-of-bag bootstrap and names the variant, since scikit-learn removed its own `Bootstrap` class for inventing non-standard semantics under a misleading name.
 - Issue #356: `pipeline_fit` now returns a fitted `Pipeline` instead of mutating.
+- Issue #435: `logistic_predict_proba` returned P(`classes[0]`) while `logistic_decide` labelled a probability above the threshold `classes[1]`, so the two composed to an inverted binary label. The probability is now P(`classes[1]`).
