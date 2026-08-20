@@ -29,20 +29,26 @@ function optpp_reference(w: ptr<f32>, bias: f32, nf: i32, X: Matrix, out: ptr<f3
 function main() -> i32 {
     let pen: Penalty = penalty_l2(0.0)
 
-    let w1: ptr<f32> = array_new_f32(3)
-    w1[0] = 2.0
-    w1[1] = -1.0
-    w1[2] = 0.5
+    # Issue #435: a fitted binary model carries both one-vs-rest rows, and the
+    # positive class is classes[1], so the pinned coefficients live in row 1.
+    # Row 0 is the classes[0] model, which for a binary fit is its negation.
+    let w1: ptr<f32> = array_new_f32(6)
+    w1[0] = -2.0
+    w1[1] = 1.0
+    w1[2] = -0.5
+    w1[3] = 2.0
+    w1[4] = -1.0
+    w1[5] = 0.5
     let b1: ptr<f32> = array_new_f32(2)
-    b1[0] = 0.25
-    b1[1] = 0.0
+    b1[0] = -0.25
+    b1[1] = 0.25
     let cls1: ptr<f32> = array_new_f32(2)
     cls1[0] = 0.0
     cls1[1] = 1.0
 
     let m1: LogisticRegression = LogisticRegression {
         weights: w1,
-        bias: 0.25,
+        bias: -0.25,
         biases: b1,
         n_features: 3,
         classes: cls1,
@@ -125,7 +131,11 @@ function main() -> i32 {
     let model4: LogisticRegression = logistic_regression_fit(X4, y4, 2, 200, 0.1, pen)
     let proba4: ptr<f32> = logistic_predict_proba(model4, X4)
     let expect4: ptr<f32> = array_new_f32(n_rows)
-    optpp_reference(model4.weights, model4.bias, model4.n_features, X4, expect4)
+    # Issue #435: the binary decision score is the classes[1] one-vs-rest
+    # model, which the fit stores in weights row 1 with biases[1].
+    let pos_w4: ptr<f32> = model4.weights + model4.n_features
+    let pos_b4: f32 = model4.biases[1]
+    optpp_reference(pos_w4, pos_b4, model4.n_features, X4, expect4)
 
     let mut worst: f32 = 0.0
     for i in 0 to n_rows {
