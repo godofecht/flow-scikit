@@ -28,7 +28,7 @@ That makes classical ML particularly interesting for native applications, embedd
 
 Performance claims in this repository are generated from committed benchmark artifacts rather than selected examples.
 
-The current canonical v2 result is [`benchmarks/headline_result_v2.json`](benchmarks/headline_result_v2.json): **19 of 19 rows are parity-eligible and measurement-resolved**. In that committed run, **Flow wins 10 of 19 end-to-end fit + predict comparisons and scikit-learn wins 8 of 19**. There are no parity-unresolved or measurement-unresolved rows.
+The current canonical v2 result is [`benchmarks/headline_result_v2.json`](benchmarks/headline_result_v2.json): **19 of 19 rows are parity-eligible and measurement-resolved**. In that committed run, **Flow wins 8 of 19 end-to-end fit + predict comparisons and scikit-learn wins 11 of 19**. There are no parity-unresolved or measurement-unresolved rows.
 
 Canonical v2 uses explicit `TIMING_UNIT|ms` markers, persisted identical train/test fixtures, repeated timing aggregation and estimator-specific numerical parity gates. Unsupervised rows are not forced into classifier-style metrics: KMeans uses adjusted Rand index and inertia, while PCA additionally checks explained variance, singular values, reconstruction error and sign-aligned components.
 

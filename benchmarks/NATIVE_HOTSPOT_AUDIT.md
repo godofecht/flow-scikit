@@ -2,8 +2,8 @@
 
 | Estimator | Operation | Class | Owner | Disposition | Priority |
 |---|---|---|---|---|---:|
-| `KMeans` | `fit` | mixed | sklearn | already-equivalent | 72.2 |
-| `LogisticRegression` | `fit` | mixed | external | retain-native | 71.9 |
+| `KMeans` | `fit` | mixed | sklearn | already-equivalent | 71.9 |
+| `LogisticRegression` | `fit` | mixed | external | retain-native | 71.8 |
 | `LinearRegression` | `fit` | mixed | sklearn | already-equivalent | 68.5 |
 | `DecisionTreeClassifier` | `fit` | mixed | sklearn | already-equivalent | 48.0 |
 | `DecisionTreeClassifier` | `predict` | mixed | sklearn | already-equivalent | 48.0 |
@@ -139,7 +139,7 @@
 | `TweedieRegressor` | `predict` | cython-bound | sklearn | already-equivalent | 34.5 |
 | `TfidfTransformer` | `fit` | mixed | sklearn | low-value | 34.0 |
 | `KernelRidge` | `fit` | mixed | sklearn | already-equivalent | 33.6 |
-| `SVC` | `fit` | external-native-bound | external | retain-native | 30.4 |
+| `SVC` | `fit` | external-native-bound | external | retain-native | 30.5 |
 | `MiniBatchSparsePCA` | `transform` | blas-lapack-bound | sklearn | retain-native | 17.0 |
 | `Nystroem` | `fit` | blas-lapack-bound | sklearn | retain-native | 17.0 |
 | `SparsePCA` | `transform` | blas-lapack-bound | sklearn | retain-native | 17.0 |
