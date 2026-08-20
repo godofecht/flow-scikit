@@ -23,7 +23,7 @@ extern {
 # blocks holding a known byte pattern, so the next request of that size gets one
 # of them back rather than a fresh zero page.
 function _t359_dirty(n_rows: i32, pattern: i32) -> void {
-    let nbytes: i64 = ((2 * n_rows + 1) as i64) * 36
+    let nbytes: i64 = ((2 * n_rows + 1) as i64) * 64
     let blocks: ptr<ptr<void> > = malloc(64 * 8) as ptr<ptr<void> >
     for i in 0 to 64 {
         let p: ptr<void> = malloc(nbytes)

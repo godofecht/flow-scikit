@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Categorical splits in decision trees (#354)
+
+`DecisionTreeClassifier` and `DecisionTreeRegressor` can now split a
+feature on a subset of its levels instead of on a threshold, through
+`decision_tree_classifier_fit_categorical` and
+`decision_tree_regressor_fit_categorical`. Both take an `X.cols` mask,
+non-zero marking a categorical column whose values are whole numbers in
+0..127 read as level indices.
+
+The search is Breiman's, not an enumeration: at each node the levels
+present there are ordered by mean response and only the k-1 prefixes of
+that ordering are scored. That is O(k log k) rather than O(2^(k-1)), and
+it is exact for regression and for two-class classification. Beyond two
+classes the ordering is a heuristic, and the code says so.
+
+A categorical split is stored in `TreeNode` as `cat_kind` plus a 128-bit
+inline left set, `cat_mask0` through `cat_mask3`. `cat_kind` is 0 for the
+numeric splits every other builder produces, and node arrays are
+calloc'd, so nothing existing changed shape. A level absent from the
+training data goes right at every node it reaches.
+
+`RandomForest`, the Bagging estimators and the ExtraTree builders are
+unchanged and remain numeric only. The canonical DecisionTree and
+RandomForest digits rows are bit-identical, verified node by node rather
+than by accuracy.
+
 ### Estimator hot-path optimization pass
 
 65 pull requests, one per roadmap entry, each carrying a regression test
