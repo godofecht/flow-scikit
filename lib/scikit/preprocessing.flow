@@ -34,6 +34,18 @@ export function standard_scaler_fit(X: Matrix) -> StandardScaler {
     let std: ptr<f32> = array_new_f32(n)
 
     for j in 0 to n {
+        # Issue #461: mean and variance accumulate in f64 and the variance uses
+        # the two-pass form, mean first and then squared deviations. Do not
+        # narrow either accumulator to f32 and do not switch to E[x^2] - E[x]^2.
+        #
+        # Measured on the canonical digits training split (1437 rows, 64 cols),
+        # against the exact value from rational arithmetic over the integer
+        # pixels: this f64 code reproduces the correctly rounded f32 mean and std
+        # in all 64 columns. An f32 two-pass moves the rounded std in 61 of 64
+        # columns, and an f32 E[x^2] - E[x]^2 moves it in 23 of 64. The exact std
+        # sits at worst 4.9e-10 (relative) from an f32 rounding boundary, so an
+        # f32 accumulator leaves the last bit of the result decided by summation
+        # order, and the compiler is free to vary that order per platform.
         # Compute mean and std in f64 for precision
         let mut sum: f64 = 0.0
         for i in 0 to X.rows {
@@ -556,15 +568,18 @@ export function normalizer_transform(normalizer: Normalizer, X: Matrix) -> Matri
     let result: Matrix = matrix_new(X.rows, X.cols)
     for i in 0 to X.rows {
         if normalizer.norm == NORM_L1 {
-            let mut sum: f32 = 0.0
+            # Issue #461: accumulate the row norm in f64 so the f32 result does
+            # not depend on summation order across platforms.
+            let mut sum_d: f64 = 0.0
             for j in 0 to X.cols {
-                let val: f32 = matrix_at(X, i, j)
+                let val: f64 = matrix_at(X, i, j) as f64
                 if val < 0.0 {
-                    sum = sum - val
+                    sum_d = sum_d - val
                 } else {
-                    sum = sum + val
+                    sum_d = sum_d + val
                 }
             }
+            let sum: f32 = sum_d as f32
             if sum < 0.0000000001 {
                 sum = 1.0
             }
@@ -572,12 +587,12 @@ export function normalizer_transform(normalizer: Normalizer, X: Matrix) -> Matri
                 matrix_set(result, i, j, matrix_at(X, i, j) / sum)
             }
         } elif normalizer.norm == NORM_L2 {
-            let mut sum_sq: f32 = 0.0
+            let mut sum_sq: f64 = 0.0
             for j in 0 to X.cols {
-                let val: f32 = matrix_at(X, i, j)
+                let val: f64 = matrix_at(X, i, j) as f64
                 sum_sq = sum_sq + val * val
             }
-            let norm_val: f32 = sqrt(sum_sq as f64) as f32
+            let norm_val: f32 = sqrt(sum_sq) as f32
             if norm_val < 0.0000000001 {
                 norm_val = 1.0
             }
@@ -924,7 +939,9 @@ export function kbins_discretizer_fit(X: Matrix, n_bins: i32, strategy: i32) -> 
                 centroids[b] = col[idx]
             }
             for _ in 0 to 10 {
-                let sums: ptr<f32> = array_new_f32(n_bins)
+                # Issue #461: bin sums run over every row, so they get the same
+                # f64 accumulator rule as StandardScaler.fit.
+                let sums: ptr<f64> = array_new_f64(n_bins)
                 let counts: ptr<i32> = malloc((n_bins as i64) * 4) as ptr<i32>
                 for b in 0 to n_bins {
                     counts[b] = 0
@@ -939,15 +956,15 @@ export function kbins_discretizer_fit(X: Matrix, n_bins: i32, strategy: i32) -> 
                             best = b
                         }
                     }
-                    sums[best] = sums[best] + col[i]
+                    sums[best] = sums[best] + (col[i] as f64)
                     counts[best] = counts[best] + 1
                 }
                 for b in 0 to n_bins {
                     if counts[b] > 0 {
-                        centroids[b] = sums[b] / (counts[b] as f32)
+                        centroids[b] = (sums[b] / (counts[b] as f64)) as f32
                     }
                 }
-                array_free_f32(sums)
+                array_free_f64(sums)
                 free(counts as ptr<void>)
             }
             _insertion_sort(centroids, n_bins)
@@ -1262,19 +1279,22 @@ export function power_transformer_fit(X: Matrix, method: i32) -> PowerTransforme
     let lambdas_to_try: array<f32, 9> = [-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0, 0.25]
 
     for j in 0 to p {
-        let best_ll: f32 = -10000000000.0
+        let best_ll: f64 = -10000000000.0
         let best_lambda: f32 = 0.0
 
         for li in 0 to 9 {
             let lambda: f32 = lambdas_to_try[li]
-            let mut ll: f32 = 0.0
+            # Issue #461: the log-likelihood sums n terms and then decides which
+            # lambda wins by comparison, so an f32 running total can flip the
+            # choice. Accumulate in f64.
+            let mut ll: f64 = 0.0
             let mut valid: bool = true
 
             for i in 0 to n {
                 let x: f32 = matrix_at(X, i, j)
                 let transformed: f32 = _yeo_johnson(x, lambda)
                 if transformed > 0.0000000001 || transformed < -0.0000000001 {
-                    ll = ll + log((fabs((transformed) as f64)) as f64) as f32
+                    ll = ll + log(fabs((transformed) as f64))
                 } else {
                     valid = false
                 }
@@ -1304,18 +1324,21 @@ export function power_transformer_transform(model: PowerTransformer, X: Matrix) 
     }
 
     for j in 0 to model.n_features {
-        let mut mean: f32 = 0.0
+        # Issue #461: same standardisation shape as StandardScaler.fit, so the
+        # same rule applies. Accumulate in f64 and two-pass, narrow at the end.
+        let mut sum_d: f64 = 0.0
         for i in 0 to X.rows {
-            mean = mean + matrix_at(result, i, j)
+            sum_d = sum_d + (matrix_at(result, i, j) as f64)
         }
-        mean = mean / (X.rows as f32)
+        let mean_d: f64 = sum_d / (X.rows as f64)
+        let mean: f32 = mean_d as f32
 
-        let mut std: f32 = 0.0
+        let mut sq_sum: f64 = 0.0
         for i in 0 to X.rows {
-            let d: f32 = matrix_at(result, i, j) - mean
-            std = std + d * d
+            let d: f64 = (matrix_at(result, i, j) as f64) - mean_d
+            sq_sum = sq_sum + d * d
         }
-        std = sqrt((std / (X.rows as f32)) as f64) as f32
+        let std: f32 = sqrt(sq_sum / (X.rows as f64)) as f32
         if std < 0.0000000001 { std = 1.0 }
 
         for i in 0 to X.rows {
@@ -1503,12 +1526,12 @@ export struct TargetEncoder {
 export function target_encoder_fit(X: Matrix, y: ptr<f32>, n_samples: i32, smoothing: f32) -> TargetEncoder {
     let n_features: i32 = X.cols
 
-    # Global mean of y
-    let mut total_sum: f32 = 0.0
+    # Global mean of y. Issue #461: accumulate in f64, narrow once at the end.
+    let mut total_sum: f64 = 0.0
     for i in 0 to n_samples {
-        total_sum = total_sum + y[i]
+        total_sum = total_sum + (y[i] as f64)
     }
-    let global_mean: f32 = total_sum / (n_samples as f32)
+    let global_mean: f32 = (total_sum / (n_samples as f64)) as f32
 
     let categories: ptr<ptr<f32> > = malloc((n_features as i64) * 8) as ptr<ptr<f32> >
     let encodings: ptr<ptr<f32> > = malloc((n_features as i64) * 8) as ptr<ptr<f32> >
@@ -1539,16 +1562,16 @@ export function target_encoder_fit(X: Matrix, y: ptr<f32>, n_samples: i32, smoot
         for k in 0 to n_unique {
             categories[j][k] = unique_vals[k]
             # Compute smoothed mean of y for this category
-            let mut sum_y: f32 = 0.0
+            let mut sum_y: f64 = 0.0
             let mut count: i32 = 0
             for i in 0 to n_samples {
                 if matrix_at(X, i, j) == unique_vals[k] {
-                    sum_y = sum_y + y[i]
+                    sum_y = sum_y + (y[i] as f64)
                     count = count + 1
                 }
             }
             # Smoothed encoding: (count * mean + smoothing * global_mean) / (count + smoothing)
-            let cat_mean: f32 = sum_y / (count as f32)
+            let cat_mean: f32 = (sum_y / (count as f64)) as f32
             let smooth_count: f32 = (count as f32) + smoothing
             encodings[j][k] = ((count as f32) * cat_mean + smoothing * global_mean) / smooth_count
         }

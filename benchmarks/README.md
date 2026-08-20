@@ -77,6 +77,41 @@ regardless of the order Flow discovered the classes in.
 Emission happens outside the timing windows and reads only fitted state, so it
 does not move any canonical metric or timing.
 
+### When a diagnostic differs from the committed snapshot
+
+Both runners read the same fixture bytes. A `DETAIL` field that disagrees
+between a local run and the committed evidence therefore means one side computed
+a different number from the same input.
+
+Issue #461 recorded one such disagreement.
+`DETAIL|RandomForest|digits|unanimous_vote_fraction` is `0.197222222` in the
+committed `sklearn_results_v2.txt` and was observed as `0.205556` locally, three
+of 360 test rows, with the per-tree node counts matching exactly. Summation order
+in the scaler was the suspected cause. It turns out to be the dtype the sklearn
+side scales in.
+
+`standard_scaler_fit` accumulates the mean and the variance in f64 and uses the
+two-pass form, mean first and then squared deviations. On the digits fixture its
+f32 `mean` and `std` are bit-identical in all 64 columns to the values obtained
+from exact rational arithmetic over the integer pixel data. The tightest column's
+exact std sits 4.9e-10 (relative) from an f32 rounding boundary, roughly four
+orders of magnitude above the error an f64 sum over 1437 rows can carry, so no
+reassociation of that sum can move the rounded f32 result. The margin is not
+generous. An f32 two-pass over the same data moves the rounded std in 61 of 64
+columns, and an f32 E[x^2] - E[x]^2 moves it in 23 of 64.
+
+`bench_sklearn_v2.py` casts the digits matrix to float32 before fitting, so
+`StandardScaler.transform` evaluates `(x - mean_) / scale_` in float32 with a
+single rounding, and the forest then votes unanimously on 71 of 360 rows:
+`0.197222222`, the committed value. Scaling the same split in float64 and
+rounding to float32 afterwards changes 7412 of the 23040 test cells in their
+last bits, three rows flip, and the fraction becomes `0.205555556`. Both are
+reproducible on demand and neither depends on the platform. `mean_` and `scale_`
+themselves are float64 in both cases and agree bit for bit.
+
+So the committed snapshot is correct as recorded. A local run that disagrees
+with it should be checked first for the dtype of the array it scaled.
+
 ## Running the canonical benchmark
 
 ```bash
