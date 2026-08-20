@@ -1,0 +1,358 @@
+# Issue #449: cross-validation and Pipeline thresholded class labels as if they
+# were probabilities.
+#
+# logistic_predict returns argmax class labels. Seven call sites handed those
+# labels to logistic_decide, which thresholds P(classes[1]). For classes {0, 1}
+# the threshold at 0.5 is the identity, so every fixture in the repository
+# passed. For classes {2, 7} both labels sit above 0.5, so every sample came
+# out as classes[1] and a perfectly separable problem scored 0.5.
+#
+# Every case below uses labels 2 and 7 so nothing can pass by coincidence, and
+# each one is checked against the same geometry labelled 0 and 1. A relabelling
+# of the classes cannot change the accuracy of a fit.
+#
+# Helper names carry the issue number because non-exported functions sharing a
+# name across modules collide in the generated C (compiler bug #465).
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+}
+
+# Separable 1-D problem with the two classes interleaved, so every contiguous
+# cross-validation fold holds both of them. x = -1 is low, x = +1 is high.
+function cvp449_fixture(X: Matrix, y: ptr<f32>, n: i32, low: f32, high: f32) -> void {
+    for i in 0 to n {
+        if i % 2 == 0 {
+            matrix_set(X, i, 0, -1.0)
+            y[i] = low
+        } else {
+            matrix_set(X, i, 0, 1.0)
+            y[i] = high
+        }
+    }
+}
+
+# What cross_validate_score should report: the same contiguous folds, the same
+# penalty, scored against logistic_predict's labels with no threshold anywhere.
+function cvp449_reference_cv(X: Matrix, y: ptr<f32>, n_classes: i32, n_folds: i32, epochs: i32, lr: f32) -> f32 {
+    let n: i32 = X.rows
+    let fold_size: i32 = n / n_folds
+    let mut total: f32 = 0.0
+
+    for fold in 0 to n_folds {
+        let test_start: i32 = fold * fold_size
+        let mut test_end: i32 = test_start + fold_size
+        if fold == n_folds - 1 {
+            test_end = n
+        }
+        let n_test: i32 = test_end - test_start
+        let n_train: i32 = n - n_test
+
+        let X_train: Matrix = matrix_new(n_train, X.cols)
+        let y_train: ptr<f32> = array_new_f32(n_train)
+        let mut train_pos: i32 = 0
+        for i in 0 to n {
+            if i < test_start || i >= test_end {
+                y_train[train_pos] = y[i]
+                for j in 0 to X.cols {
+                    matrix_set(X_train, train_pos, j, matrix_at(X, i, j))
+                }
+                train_pos = train_pos + 1
+            }
+        }
+
+        let X_test: Matrix = matrix_new(n_test, X.cols)
+        let y_test: ptr<f32> = array_new_f32(n_test)
+        for i in 0 to n_test {
+            y_test[i] = y[test_start + i]
+            for j in 0 to X.cols {
+                matrix_set(X_test, i, j, matrix_at(X, test_start + i, j))
+            }
+        }
+
+        let penalty: Penalty = penalty_l2(0.01)
+        let model: LogisticRegression = logistic_regression_fit(X_train, y_train, n_classes, epochs, lr, penalty)
+        let preds: ptr<f32> = logistic_predict(model, X_test)
+        total = total + accuracy_score(y_test, preds, n_test)
+
+        array_free_f32(preds)
+        logistic_regression_free(model)
+        matrix_free(X_train)
+        matrix_free(X_test)
+        array_free_f32(y_train)
+        array_free_f32(y_test)
+    }
+
+    return total / (n_folds as f32)
+}
+
+# The test the issue asks for.
+function test_cross_validation_labels_2_7() -> i32 {
+    println("Test: cross_validate_score with class labels 2 and 7")
+
+    let n: i32 = 12
+    let X: Matrix = matrix_new(n, 1)
+    let y: ptr<f32> = array_new_f32(n)
+    cvp449_fixture(X, y, n, 2.0, 7.0)
+
+    let cv: CVResult = cross_validate_score(X, y, 2, 3, 300, 0.5)
+    let reference: f32 = cvp449_reference_cv(X, y, 2, 3, 300, 0.5)
+
+    let mut failed: i32 = 0
+    printf("  reported mean: %.6f  direct predict reference: %.6f\n", cv.mean_score, reference)
+
+    if cv.mean_score != reference {
+        println("  FAIL: cross-validation disagrees with logistic_predict on the same folds")
+        failed = 1
+    }
+    if cv.mean_score < 0.999 {
+        println("  FAIL: a separable problem must not be degenerate under labels 2 and 7")
+        failed = 1
+    }
+
+    cv_result_free(cv)
+    array_free_f32(y)
+    matrix_free(X)
+
+    if failed == 0 { println("  OK") }
+    return failed
+}
+
+# Relabelling the classes cannot change the accuracy of the same fit.
+function test_cross_validation_relabelling_invariance() -> i32 {
+    println("Test: cross_validate_score is invariant to the class label values")
+
+    let n: i32 = 12
+    let X01: Matrix = matrix_new(n, 1)
+    let y01: ptr<f32> = array_new_f32(n)
+    cvp449_fixture(X01, y01, n, 0.0, 1.0)
+
+    let X27: Matrix = matrix_new(n, 1)
+    let y27: ptr<f32> = array_new_f32(n)
+    cvp449_fixture(X27, y27, n, 2.0, 7.0)
+
+    let cv01: CVResult = cross_validate_score(X01, y01, 2, 3, 300, 0.5)
+    let cv27: CVResult = cross_validate_score(X27, y27, 2, 3, 300, 0.5)
+
+    let mut failed: i32 = 0
+    printf("  labels {0,1}: %.6f   labels {2,7}: %.6f\n", cv01.mean_score, cv27.mean_score)
+    if cv01.mean_score != cv27.mean_score {
+        println("  FAIL: the reported accuracy depends on the numeric class labels")
+        failed = 1
+    }
+
+    cv_result_free(cv01)
+    cv_result_free(cv27)
+    array_free_f32(y01)
+    array_free_f32(y27)
+    matrix_free(X01)
+    matrix_free(X27)
+
+    if failed == 0 { println("  OK") }
+    return failed
+}
+
+# learning_curve and validation_curve carry four of the seven call sites.
+function test_curves_labels_2_7() -> i32 {
+    println("Test: learning_curve and validation_curve with class labels 2 and 7")
+
+    let n: i32 = 20
+    let X: Matrix = matrix_new(n, 1)
+    let y: ptr<f32> = array_new_f32(n)
+    cvp449_fixture(X, y, n, 2.0, 7.0)
+
+    let sizes: ptr<i32> = malloc(8) as ptr<i32>
+    sizes[0] = 8
+    sizes[1] = 12
+
+    let lc: LearningCurveResult = learning_curve(X, y, 2, sizes, 2, 300, 0.5)
+
+    let mut failed: i32 = 0
+    for i in 0 to 2 {
+        printf("  learning_curve size %d: train %.6f  test %.6f\n", sizes[i], lc.train_scores[i], lc.test_scores[i])
+        if lc.train_scores[i] < 0.999 || lc.test_scores[i] < 0.999 {
+            println("  FAIL: learning_curve is degenerate under labels 2 and 7")
+            failed = 1
+        }
+    }
+
+    let alphas: ptr<f32> = array_new_f32(2)
+    alphas[0] = 0.001
+    alphas[1] = 0.01
+
+    let vc: ValidationCurveResult = validation_curve(X, y, 2, alphas, 2, 300, 0.5)
+    for i in 0 to 2 {
+        printf("  validation_curve alpha %.4f: train %.6f  test %.6f\n", alphas[i], vc.train_scores[i], vc.test_scores[i])
+        if vc.train_scores[i] < 0.999 || vc.test_scores[i] < 0.999 {
+            println("  FAIL: validation_curve is degenerate under labels 2 and 7")
+            failed = 1
+        }
+    }
+
+    learning_curve_free(lc)
+    validation_curve_free(vc)
+    array_free_f32(alphas)
+    free(sizes as ptr<void>)
+    array_free_f32(y)
+    matrix_free(X)
+
+    if failed == 0 { println("  OK") }
+    return failed
+}
+
+# pipeline_predict_proba returned argmax labels. It now returns P(classes[1]),
+# which has to be a probability and has to be the estimator's own.
+function test_pipeline_predict_proba_binary() -> i32 {
+    println("Test: pipeline_predict_proba returns P(classes[1])")
+
+    let n: i32 = 12
+    let X: Matrix = matrix_new(n, 1)
+    let y: ptr<f32> = array_new_f32(n)
+    cvp449_fixture(X, y, n, 0.0, 1.0)
+
+    let steps: array<PipelineStep, 2> = [
+        step_standard_scaler("scaler"),
+        step_logistic_regression("classifier", 2, 300, 0.5, penalty_none())
+    ]
+    let mut pipeline: Pipeline = pipeline_new(steps, 2)
+    pipeline = pipeline_fit(pipeline, X, y)
+
+    let probs: ptr<f32> = pipeline_predict_proba(pipeline, X)
+    let labels: ptr<f32> = pipeline_decide(pipeline, X, 0.5)
+
+    # The same probability computed by hand: scale, then ask the fitted
+    # estimator directly.
+    let scaled: Matrix = standard_scaler_transform(pipeline.steps[0].scaler, X)
+    let direct: ptr<f32> = logistic_predict_proba(pipeline.steps[1].logistic_reg, scaled)
+
+    let mut failed: i32 = 0
+    for i in 0 to n {
+        printf("  y=%.1f  proba=%.6f  direct=%.6f  decided=%.1f\n", y[i], probs[i], direct[i], labels[i])
+        if probs[i] <= 0.0 || probs[i] >= 1.0 {
+            println("  FAIL: pipeline_predict_proba left the open unit interval")
+            failed = 1
+        }
+        if probs[i] != direct[i] {
+            println("  FAIL: pipeline_predict_proba disagrees with logistic_predict_proba")
+            failed = 1
+        }
+        if labels[i] != y[i] {
+            println("  FAIL: pipeline_decide lost the separable fixture")
+            failed = 1
+        }
+    }
+
+    array_free_f32(direct)
+    matrix_free(scaled)
+    array_free_f32(labels)
+    array_free_f32(probs)
+    pipeline_free(pipeline)
+    array_free_f32(y)
+    matrix_free(X)
+
+    if failed == 0 { println("  OK") }
+    return failed
+}
+
+# The pipeline path with labels that are not 0 and 1.
+function test_pipeline_labels_2_7() -> i32 {
+    println("Test: pipeline predict and decide with class labels 2 and 7")
+
+    let n: i32 = 12
+    let X: Matrix = matrix_new(n, 1)
+    let y: ptr<f32> = array_new_f32(n)
+    cvp449_fixture(X, y, n, 2.0, 7.0)
+
+    let steps: array<PipelineStep, 2> = [
+        step_standard_scaler("scaler"),
+        step_logistic_regression("classifier", 2, 300, 0.5, penalty_none())
+    ]
+    let mut pipeline: Pipeline = pipeline_new(steps, 2)
+    pipeline = pipeline_fit(pipeline, X, y)
+
+    let preds: ptr<f32> = pipeline_predict(pipeline, X)
+    let labels: ptr<f32> = pipeline_decide(pipeline, X, 0.5)
+    let probs: ptr<f32> = pipeline_predict_proba(pipeline, X)
+
+    let mut failed: i32 = 0
+    let pred_acc: f32 = accuracy_score(y, preds, n)
+    let decide_acc: f32 = accuracy_score(y, labels, n)
+    printf("  pipeline_predict accuracy: %.6f  pipeline_decide accuracy: %.6f\n", pred_acc, decide_acc)
+
+    if pred_acc < 0.999 {
+        println("  FAIL: pipeline_predict is degenerate under labels 2 and 7")
+        failed = 1
+    }
+    if decide_acc < 0.999 {
+        println("  FAIL: pipeline_decide is degenerate under labels 2 and 7")
+        failed = 1
+    }
+
+    for i in 0 to n {
+        if preds[i] != 2.0 && preds[i] != 7.0 {
+            println("  FAIL: pipeline_predict returned something that is not a class label")
+            failed = 1
+        }
+        if probs[i] <= 0.0 || probs[i] >= 1.0 {
+            println("  FAIL: pipeline_predict_proba left the open unit interval")
+            failed = 1
+        }
+    }
+
+    # Raising the threshold must make classes[1] rarer, which is only meaningful
+    # if the thing being thresholded is a probability.
+    let all_low: ptr<f32> = pipeline_decide(pipeline, X, 0.0)
+    let all_high: ptr<f32> = pipeline_decide(pipeline, X, 1.5)
+    for i in 0 to n {
+        if all_low[i] != 7.0 {
+            println("  FAIL: threshold 0.0 must label everything classes[1]")
+            failed = 1
+        }
+        if all_high[i] != 2.0 {
+            println("  FAIL: threshold above 1.0 must label everything classes[0]")
+            failed = 1
+        }
+    }
+
+    array_free_f32(all_low)
+    array_free_f32(all_high)
+    array_free_f32(probs)
+    array_free_f32(labels)
+    array_free_f32(preds)
+    pipeline_free(pipeline)
+    array_free_f32(y)
+    matrix_free(X)
+
+    if failed == 0 { println("  OK") }
+    return failed
+}
+
+function main() -> i32 {
+    println("Running issue #449 label-as-probability tests...")
+    println("===============================================")
+    println("")
+
+    let mut failures: i32 = 0
+
+    if test_cross_validation_labels_2_7() != 0 { failures = failures + 1 }
+    println("")
+    if test_cross_validation_relabelling_invariance() != 0 { failures = failures + 1 }
+    println("")
+    if test_curves_labels_2_7() != 0 { failures = failures + 1 }
+    println("")
+    if test_pipeline_predict_proba_binary() != 0 { failures = failures + 1 }
+    println("")
+    if test_pipeline_labels_2_7() != 0 { failures = failures + 1 }
+
+    println("")
+    if failures == 0 {
+        println("All issue #449 tests passed!")
+        return 0
+    }
+    print("FAILED: ")
+    print(failures)
+    println(" tests")
+    return 1
+}
