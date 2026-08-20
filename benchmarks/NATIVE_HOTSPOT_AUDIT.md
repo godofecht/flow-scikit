@@ -2,7 +2,7 @@
 
 | Estimator | Operation | Class | Owner | Disposition | Priority |
 |---|---|---|---|---|---:|
-| `KMeans` | `fit` | mixed | sklearn | already-equivalent | 71.9 |
+| `KMeans` | `fit` | mixed | sklearn | already-equivalent | 72.1 |
 | `LogisticRegression` | `fit` | mixed | external | retain-native | 71.8 |
 | `LinearRegression` | `fit` | mixed | sklearn | already-equivalent | 68.5 |
 | `DecisionTreeClassifier` | `fit` | mixed | sklearn | already-equivalent | 48.0 |
@@ -125,7 +125,7 @@
 | `VarianceThreshold` | `fit` | mixed | sklearn | already-equivalent | 40.5 |
 | `VotingClassifier` | `predict_proba` | mixed | sklearn | already-equivalent | 40.5 |
 | `VotingClassifier` | `transform` | mixed | sklearn | already-equivalent | 40.5 |
-| `Lasso` | `fit` | mixed | sklearn | already-equivalent | 38.4 |
+| `Lasso` | `fit` | mixed | sklearn | already-equivalent | 37.8 |
 | `BisectingKMeans` | `predict` | cython-bound | sklearn | already-equivalent | 34.5 |
 | `GammaRegressor` | `predict` | cython-bound | sklearn | already-equivalent | 34.5 |
 | `GradientBoostingClassifier` | `predict_proba` | cython-bound | sklearn | already-equivalent | 34.5 |
