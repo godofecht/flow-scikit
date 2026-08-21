@@ -6,9 +6,10 @@ fetch('disparity-history.json').then(r=>r.json()).then(h=>{
   if(!host) return;
   if(snaps.length<2){ host.innerHTML='<p class="label">Only one freeze recorded so far; a trajectory needs at least two.</p>'; return; }
   const last=snaps[snaps.length-1], prev=snaps[snaps.length-2];
-  if(warn && last.environment_id!==prev.environment_id){
+  const hostOf=s=>s.runtime_environment_id||s.environment_id;
+  if(warn && hostOf(last)!==hostOf(prev)){
     warn.innerHTML='<p style="border-left:3px solid var(--coral);padding:10px 16px;margin:0 0 18px;color:#5d6982;line-height:1.6">'+
-      '<strong>The measurement environment changed between the last two freezes.</strong> '+
+      '<strong>The last two freezes ran on different machines.</strong> '+
       'Flow’s own times are stable across runners; scikit-learn’s swing with the runner’s BLAS threading '+
       '(up to 10× on some rows), so a speedup change between these two freezes may come from the '+
       'denominator rather than from either implementation’s code.</p>';
