@@ -13,7 +13,7 @@
         "python-control-loops:4"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 72.187,
+      "priority_score": 72.002,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -32,7 +32,7 @@
         "python-control-loops:2"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 71.837,
+      "priority_score": 71.974,
       "disposition": "retain-native",
       "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
     },
@@ -52,7 +52,39 @@
         "python-control-loops:5"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 68.511,
+      "priority_score": 68.545,
+      "disposition": "already-equivalent",
+      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
+    },
+    {
+      "module": "sklearn.tree._classes",
+      "estimator": "DecisionTreeClassifier",
+      "operation": "fit",
+      "execution_class": "mixed",
+      "ownership": "sklearn",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
+      "evidence": [
+        "numpy-bound:np.",
+        "python-control-loops:2"
+      ],
+      "flow_scikit_status": "present",
+      "priority_score": 48.0,
+      "disposition": "already-equivalent",
+      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
+    },
+    {
+      "module": "sklearn.tree._classes",
+      "estimator": "DecisionTreeClassifier",
+      "operation": "predict",
+      "execution_class": "mixed",
+      "ownership": "sklearn",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
+      "evidence": [
+        "numpy-bound:np.",
+        "python-control-loops:3"
+      ],
+      "flow_scikit_status": "present",
+      "priority_score": 48.0,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -105,38 +137,6 @@
       ],
       "flow_scikit_status": "present",
       "priority_score": 48.0,
-      "disposition": "already-equivalent",
-      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
-    },
-    {
-      "module": "sklearn.tree._classes",
-      "estimator": "DecisionTreeClassifier",
-      "operation": "fit",
-      "execution_class": "mixed",
-      "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
-      "evidence": [
-        "numpy-bound:np.",
-        "python-control-loops:2"
-      ],
-      "flow_scikit_status": "present",
-      "priority_score": 47.943,
-      "disposition": "already-equivalent",
-      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
-    },
-    {
-      "module": "sklearn.tree._classes",
-      "estimator": "DecisionTreeClassifier",
-      "operation": "predict",
-      "execution_class": "mixed",
-      "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
-      "evidence": [
-        "numpy-bound:np.",
-        "python-control-loops:3"
-      ],
-      "flow_scikit_status": "present",
-      "priority_score": 47.943,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -2040,7 +2040,7 @@
         "python-control-loops:4"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 37.587,
+      "priority_score": 38.532,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -2235,22 +2235,6 @@
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
     {
-      "module": "sklearn.kernel_ridge",
-      "estimator": "KernelRidge",
-      "operation": "fit",
-      "execution_class": "mixed",
-      "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/kernel_ridge.py",
-      "evidence": [
-        "blas-lapack-bound:cholesky",
-        "numpy-bound:np."
-      ],
-      "flow_scikit_status": "present",
-      "priority_score": 33.583,
-      "disposition": "already-equivalent",
-      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
-    },
-    {
       "module": "sklearn.svm._classes",
       "estimator": "SVC",
       "operation": "fit",
@@ -2262,9 +2246,25 @@
         "numpy-bound:np."
       ],
       "flow_scikit_status": "present",
-      "priority_score": 32.654,
+      "priority_score": 33.526,
       "disposition": "retain-native",
       "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
+    },
+    {
+      "module": "sklearn.kernel_ridge",
+      "estimator": "KernelRidge",
+      "operation": "fit",
+      "execution_class": "mixed",
+      "ownership": "sklearn",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/kernel_ridge.py",
+      "evidence": [
+        "blas-lapack-bound:cholesky",
+        "numpy-bound:np."
+      ],
+      "flow_scikit_status": "present",
+      "priority_score": 33.521,
+      "disposition": "already-equivalent",
+      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
     {
       "module": "sklearn.decomposition._sparse_pca",
@@ -2387,7 +2387,7 @@
         "numpy-bound:np."
       ],
       "flow_scikit_status": "present",
-      "priority_score": 7.258,
+      "priority_score": 7.247,
       "disposition": "retain-native",
       "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
     }
