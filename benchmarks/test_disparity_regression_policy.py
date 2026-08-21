@@ -44,7 +44,7 @@ def row(algorithm="Ridge", dataset="diabetes", metric="r2", score_abs_diff=1.79e
 
 def report(rows, environment_id="env", runtime_environment_id="host-a"):
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "environment_id": environment_id,
         "runtime_environment_id": runtime_environment_id,
         "counts": {"rows": len(rows)},

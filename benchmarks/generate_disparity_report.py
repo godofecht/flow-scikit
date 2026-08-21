@@ -5,6 +5,12 @@ Parity eligibility is intentionally not treated as identity. This report keeps
 raw numerical differences, contract tolerances, configuration differences,
 semantic exceptions, learned-state diagnostics and runtime ratios visible after
 a row becomes eligible.
+
+Configuration is compared through the declared equivalences in
+`config_equivalence.py`, so a setting the two projects record under different
+names stops reading as a difference. Every applied equivalence is written into
+the row's `configuration_equivalences`, which keeps the evidence rather than
+dropping it.
 """
 from __future__ import annotations
 
@@ -13,18 +19,33 @@ import json
 import math
 from pathlib import Path
 
+from config_equivalence import compare_configs
+
 ROOT = Path(__file__).resolve().parent
 BASE_DIAGNOSTIC_FIELDS = {"algorithm", "dataset", "metric", "parity_status", "score_abs_diff"}
 
 
-def config_diff(flow: dict, sklearn: dict) -> list[dict]:
-    out = []
-    for key in sorted(set(flow) | set(sklearn)):
-        fv = flow.get(key, "<missing>")
-        sv = sklearn.get(key, "<missing>")
-        if fv != sv:
-            out.append({"parameter": key, "flow": fv, "sklearn": sv})
-    return out
+def load_train_sizes(path: Path) -> dict[str, int]:
+    """Training-set size per dataset, from the canonical split fixture.
+
+    Some cross-vocabulary conversions carry n_train (`l2 = 1 / (C * n_train)`),
+    so the comparator needs the real split rather than a constant per dataset
+    name. Missing or unreadable fixtures leave the size unknown, which makes
+    those conversions unverifiable and keeps the pair reported.
+    """
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text())
+    sizes: dict[str, int] = {}
+    for dataset, row in data.items():
+        if not isinstance(row, dict):
+            continue
+        n_train = row.get("n_train")
+        if n_train is None and isinstance(row.get("train_idx"), list):
+            n_train = len(row["train_idx"])
+        if isinstance(n_train, int):
+            sizes[dataset] = n_train
+    return sizes
 
 
 def model_state_diagnostics(diag: dict) -> dict:
@@ -160,6 +181,7 @@ def main() -> int:
     p.add_argument("--sklearn-raw", type=Path, default=ROOT / "sklearn_results_v2.txt")
     p.add_argument("--flow-raw", type=Path, default=ROOT / "flow_results_v2.txt")
     p.add_argument("--host-environment", type=Path, default=ROOT / "headline_environment.json")
+    p.add_argument("--splits", type=Path, default=ROOT / "split_indices.json")
     p.add_argument("--output", type=Path, default=ROOT / "disparity_report.json")
     args = p.parse_args()
 
@@ -170,6 +192,7 @@ def main() -> int:
     sklearn_details = parse_details(args.sklearn_raw)
     flow_details = parse_details(args.flow_raw)
     host_env = json.loads(args.host_environment.read_text()) if args.host_environment.exists() else {}
+    train_sizes = load_train_sizes(args.splits)
 
     diag_by_key = {(r["algorithm"], r["dataset"], r["metric"]): r for r in diagnostics}
     contract_by_key = {(r["algorithm"], r["dataset"], r["metric"]): r for r in contract_doc["rows"]}
@@ -211,7 +234,11 @@ def main() -> int:
                 },
             ])
 
-        config = config_diff(contract.get("flow", {}), contract.get("sklearn", {}))
+        config, config_equivalences = compare_configs(
+            contract.get("flow", {}),
+            contract.get("sklearn", {}),
+            train_sizes.get(row["dataset"]),
+        )
         state = enrich_state_from_raw_details(
             key,
             model_state_diagnostics(diag),
@@ -263,6 +290,10 @@ def main() -> int:
             "sklearn_total_ms": _total_ms(row, "sklearn"),
             "runtime_log2_ratio": runtime_log2_ratio,
             "configuration_differences": config,
+            # Settings the two projects record under different names, or that
+            # only one side's solver has. Kept rather than dropped so removing
+            # them from `configuration_differences` hides nothing.
+            "configuration_equivalences": config_equivalences,
             "semantic_differences": semantic,
             "model_state_diagnostics": state,
             "diagnostics": {k: v for k, v in diag.items() if k not in BASE_DIAGNOSTIC_FIELDS},
@@ -271,7 +302,7 @@ def main() -> int:
         })
 
     payload = {
-        "schema_version": 3,
+        "schema_version": 4,
         "environment_id": headline.get("environment_id"),
         # Hardware plus BLAS thread configuration. environment_id only covers the
         # software stack, so it cannot tell two runner machines apart; wall-clock
@@ -284,6 +315,7 @@ def main() -> int:
             "rows_with_tracked_disparity": sum(r["has_tracked_disparity"] for r in rows),
         "rows_with_substantive_disparity": sum(1 for r in rows if any(d != "runtime" for d in r["disparity_dimensions"])),
             "rows_with_configuration_difference": sum(bool(r["configuration_differences"]) for r in rows),
+            "rows_with_configuration_equivalence": sum(bool(r["configuration_equivalences"]) for r in rows),
             "rows_with_semantic_difference": sum(bool(r["semantic_differences"]) for r in rows),
             "rows_with_model_state_diagnostics": sum(bool(r["model_state_diagnostics"]) for r in rows),
             "strict_final_status_disagreements": sum(r["strict_diagnostic_status"] != r["final_parity_status"] for r in rows),

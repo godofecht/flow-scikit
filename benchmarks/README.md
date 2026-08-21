@@ -28,6 +28,30 @@ Canonical v2 consumes persisted train/test fixtures shared by Python and Flow. C
 
 Digits KMeans is classified as `approximately equivalent` under the tolerances declared in `parity_contract.json`, with no estimator-specific exception. [`audit_kmeans_semantics.py`](audit_kmeans_semantics.py) re-derives Flow's initial centre indices from a Python mirror of Flow's own MT19937 and greedy k-means++ and checks them against scikit-learn's initializer for all ten `n_init` restarts. It also records the differences that survive that alignment: the convergence statistic, the point at which inertia is reported, empty-cluster relocation and the `n_init` selection rule. Each was substituted in turn and none moves a canonical row.
 
+## Configuration comparison
+
+Each contract row records its configuration twice, once in Flow's vocabulary and
+once in scikit-learn's. Comparing the two dictionaries key by key reported a
+difference every time the two projects spelled the same setting differently, and
+the differences that were real sat buried among them.
+
+[`config_equivalence.py`](config_equivalence.py) holds the equivalences the
+comparator may apply, and `generate_disparity_report.py` records every applied
+one in that row's `configuration_equivalences` so nothing is dropped silently.
+Three rules:
+
+| Rule | Example | Condition |
+| --- | --- | --- |
+| Cross-vocabulary mapping | sklearn `C=1.0` against Flow `l2=0.008333333` | the recorded numbers satisfy `l2 = 1 / (C * n_train)` to 1e-5 relative, with `n_train` read from `split_indices.json` |
+| Absent equals explicitly disabled | Flow `penalty=none` on LinearRegression | one side records the feature off and the other has no such parameter |
+| Solver-private parameter | Flow `learning_rate` against sklearn lbfgs; sklearn `dual` against Flow's LinearSVC | the knob belongs to one side's solver and the counterpart's solver does not have it |
+
+All three apply only to a parameter present on exactly one side. When both sides
+record a parameter, the values are compared and any difference is reported, so
+`max_iter 200 vs 1000` and `optimizer lbfgs_no_line_search vs lbfgs` stay
+visible. A cross-vocabulary mapping that does not hold numerically is reported
+with the value the relation demanded attached; that is the mismatch #430 found.
+
 ## Learned-state diagnostics
 
 A score tolerance says two implementations agree on the answer. It says nothing
