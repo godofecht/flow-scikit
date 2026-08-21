@@ -1,10 +1,10 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "environment_id": "3f884007c2946e39",
-  "runtime_environment_id": "fbf1f8c6c83be917",
+  "runtime_environment_id": "b965978821002826",
   "host": {
     "machine": "x86_64",
-    "cpu_model": "INTEL(R) XEON(R) PLATINUM 8573C",
+    "cpu_model": "Intel(R) Xeon(R) 6973P-C",
     "logical_cpus": 4,
     "thread_limits": {
       "OPENBLAS_NUM_THREADS": "4",
@@ -19,7 +19,8 @@
     "rows": 19,
     "rows_with_tracked_disparity": 19,
     "rows_with_substantive_disparity": 14,
-    "rows_with_configuration_difference": 9,
+    "rows_with_configuration_difference": 5,
+    "rows_with_configuration_equivalence": 7,
     "rows_with_semantic_difference": 1,
     "rows_with_model_state_diagnostics": 19,
     "strict_final_status_disagreements": 0
@@ -36,26 +37,11 @@
       "declared_score_tolerance": 0.02,
       "effective_score_tolerance": 0.02,
       "score_tolerance_fraction": 1.9999999989472883e-07,
-      "runtime_ratio_sklearn_over_flow": 11.71138004006729,
-      "flow_total_ms": 0.320108003,
-      "sklearn_total_ms": 3.748906477,
-      "runtime_log2_ratio": 3.549839184360205,
+      "runtime_ratio_sklearn_over_flow": 9.154381914784478,
+      "flow_total_ms": 0.275938011,
+      "sklearn_total_ms": 2.5260419375,
+      "runtime_log2_ratio": 3.194462481481075,
       "configuration_differences": [
-        {
-          "parameter": "C",
-          "flow": "<missing>",
-          "sklearn": 1.0
-        },
-        {
-          "parameter": "l2",
-          "flow": 0.008333333,
-          "sklearn": "<missing>"
-        },
-        {
-          "parameter": "learning_rate",
-          "flow": 0.1,
-          "sklearn": "<missing>"
-        },
         {
           "parameter": "max_iter",
           "flow": 200,
@@ -65,6 +51,29 @@
           "parameter": "optimizer",
           "flow": "lbfgs_no_line_search",
           "sklearn": "lbfgs"
+        }
+      ],
+      "configuration_equivalences": [
+        {
+          "rule": "cross-vocabulary mapping",
+          "parameter": "l2",
+          "flow_parameter": "l2",
+          "flow": 0.008333333,
+          "sklearn_parameter": "C",
+          "sklearn": 1.0,
+          "relation": "l2 = 1 / (C * n_train)",
+          "n_train": 120,
+          "expected_flow_value": 0.008333333333333333,
+          "relative_difference": 3.9999999978945766e-08,
+          "why": "flow-scikit states regularization as an explicit penalty strength on a mean-loss objective; scikit-learn states it as the inverse strength C on a sum-loss objective. #430 derived the conversion and it carries n_train."
+        },
+        {
+          "rule": "solver-private parameter",
+          "parameter": "learning_rate",
+          "declared_by": "flow",
+          "value": 0.1,
+          "counterpart_solver": "lbfgs",
+          "why": "a step size exists only for a first-order iterative solver. Every scikit-learn counterpart in the canonical set solves without one: LogisticRegression uses line-searched lbfgs, Ridge a direct factorization, Lasso coordinate descent."
         }
       ],
       "semantic_differences": [],
@@ -102,15 +111,19 @@
       "declared_score_tolerance": 0.02,
       "effective_score_tolerance": 0.02,
       "score_tolerance_fraction": 1.199999999368373e-06,
-      "runtime_ratio_sklearn_over_flow": 0.7222342514977151,
-      "flow_total_ms": 1.2430969399999998,
-      "sklearn_total_ms": 0.8978071879999999,
-      "runtime_log2_ratio": -0.46946125408827366,
-      "configuration_differences": [
+      "runtime_ratio_sklearn_over_flow": 0.6751716175018477,
+      "flow_total_ms": 0.9212510279999999,
+      "sklearn_total_ms": 0.6220025467,
+      "runtime_log2_ratio": -0.5666738367989885,
+      "configuration_differences": [],
+      "configuration_equivalences": [
         {
+          "rule": "solver-private parameter",
           "parameter": "dual",
-          "flow": "<missing>",
-          "sklearn": "auto"
+          "declared_by": "sklearn",
+          "value": "auto",
+          "counterpart_solver": null,
+          "why": "scikit-learn's LinearSVC picks between the primal and dual liblinear formulations. flow-scikit implements one formulation and has no such switch, so there is nothing on its side for the value to disagree with."
         }
       ],
       "semantic_differences": [],
@@ -131,7 +144,6 @@
       },
       "diagnostics": {},
       "disparity_dimensions": [
-        "configuration",
         "model-state",
         "runtime"
       ],
@@ -148,10 +160,10 @@
       "declared_score_tolerance": 0.03,
       "effective_score_tolerance": 0.03,
       "score_tolerance_fraction": 9.333333328420679e-07,
-      "runtime_ratio_sklearn_over_flow": 0.7886568973443342,
-      "flow_total_ms": 1.247908939,
-      "sklearn_total_ms": 0.984171992,
-      "runtime_log2_ratio": -0.34253029801578244,
+      "runtime_ratio_sklearn_over_flow": 0.693617844334043,
+      "flow_total_ms": 0.963292032,
+      "sklearn_total_ms": 0.6681565427,
+      "runtime_log2_ratio": -0.5277870804091039,
       "configuration_differences": [
         {
           "parameter": "max_iter",
@@ -159,6 +171,7 @@
           "sklearn": 1000
         }
       ],
+      "configuration_equivalences": [],
       "semantic_differences": [],
       "model_state_diagnostics": {
         "C_abs_diff": 0.0,
@@ -210,11 +223,12 @@
       "declared_score_tolerance": 0.04,
       "effective_score_tolerance": 0.04,
       "score_tolerance_fraction": 9.999999994736442e-08,
-      "runtime_ratio_sklearn_over_flow": 6.066111850093533,
-      "flow_total_ms": 0.133331994,
-      "sklearn_total_ms": 0.8088067887999999,
-      "runtime_log2_ratio": 2.6007720993612895,
+      "runtime_ratio_sklearn_over_flow": 5.247359783215623,
+      "flow_total_ms": 0.101828002,
+      "sklearn_total_ms": 0.5343281625,
+      "runtime_log2_ratio": 2.391591711205437,
       "configuration_differences": [],
+      "configuration_equivalences": [],
       "semantic_differences": [],
       "model_state_diagnostics": {
         "depth1_splits_max_abs_diff": 2.9999999928698173e-08,
@@ -264,11 +278,12 @@
       "declared_score_tolerance": 0.04,
       "effective_score_tolerance": 0.04,
       "score_tolerance_fraction": 6.999999996315509e-07,
-      "runtime_ratio_sklearn_over_flow": 9.266589083254617,
-      "flow_total_ms": 1.16882803,
-      "sklearn_total_ms": 10.831049063,
-      "runtime_log2_ratio": 3.2120383983733656,
+      "runtime_ratio_sklearn_over_flow": 8.531206511703223,
+      "flow_total_ms": 0.859921008,
+      "sklearn_total_ms": 7.3361637029999995,
+      "runtime_log2_ratio": 3.0927497867208773,
       "configuration_differences": [],
+      "configuration_equivalences": [],
       "semantic_differences": [],
       "model_state_diagnostics": {
         "bootstrap_index_sums_max_abs_diff": 969.0,
@@ -327,11 +342,12 @@
       "declared_score_tolerance": 0.001,
       "effective_score_tolerance": 0.001,
       "score_tolerance_fraction": 2.7999999985262036e-05,
-      "runtime_ratio_sklearn_over_flow": 40.96194532282798,
-      "flow_total_ms": 0.018911,
-      "sklearn_total_ms": 0.774631348,
-      "runtime_log2_ratio": 5.356212326850127,
+      "runtime_ratio_sklearn_over_flow": 37.257165940257984,
+      "flow_total_ms": 0.01473,
+      "sklearn_total_ms": 0.5487980543000001,
+      "runtime_log2_ratio": 5.2194460311250594,
       "configuration_differences": [],
+      "configuration_equivalences": [],
       "semantic_differences": [],
       "model_state_diagnostics": {
         "class_priors_max_abs_diff": 0.0,
@@ -372,11 +388,12 @@
       "declared_score_tolerance": 0.05,
       "effective_score_tolerance": 0.05,
       "score_tolerance_fraction": 5.400000002708794e-07,
-      "runtime_ratio_sklearn_over_flow": 6.209730309251257,
-      "flow_total_ms": 1.050214,
-      "sklearn_total_ms": 6.521545707,
-      "runtime_log2_ratio": 2.6345306130585366,
+      "runtime_ratio_sklearn_over_flow": 5.701233205981953,
+      "flow_total_ms": 0.7575230039999999,
+      "sklearn_total_ms": 4.318815304699999,
+      "runtime_log2_ratio": 2.511274015368978,
       "configuration_differences": [],
+      "configuration_equivalences": [],
       "semantic_differences": [],
       "model_state_diagnostics": {
         "inertia_relative_diff": 6.352359536342324e-08,
@@ -409,10 +426,10 @@
       "declared_score_tolerance": 0.005,
       "effective_score_tolerance": 0.005,
       "score_tolerance_fraction": 1.199999999368373e-05,
-      "runtime_ratio_sklearn_over_flow": 9.540978235748526,
-      "flow_total_ms": 0.037977000999999996,
-      "sklearn_total_ms": 0.36233773999999996,
-      "runtime_log2_ratio": 3.254137193223525,
+      "runtime_ratio_sklearn_over_flow": 9.152343968941858,
+      "flow_total_ms": 0.02769,
+      "sklearn_total_ms": 0.25342840450000004,
+      "runtime_log2_ratio": 3.1941412733752057,
       "configuration_differences": [
         {
           "parameter": "solver",
@@ -420,6 +437,7 @@
           "sklearn": "auto"
         }
       ],
+      "configuration_equivalences": [],
       "semantic_differences": [],
       "model_state_diagnostics": {
         "explained_variance_ratio_abs_diff": 5.999999996841865e-08,
@@ -466,26 +484,11 @@
       "declared_score_tolerance": 0.02,
       "effective_score_tolerance": 0.02,
       "score_tolerance_fraction": 0.1388900999999998,
-      "runtime_ratio_sklearn_over_flow": 0.2865830561549095,
-      "flow_total_ms": 63.159678,
-      "sklearn_total_ms": 18.100493547,
-      "runtime_log2_ratio": -1.8029747802067202,
+      "runtime_ratio_sklearn_over_flow": 0.254168023574921,
+      "flow_total_ms": 49.1709982,
+      "sklearn_total_ms": 12.4976954297,
+      "runtime_log2_ratio": -1.976145556014482,
       "configuration_differences": [
-        {
-          "parameter": "C",
-          "flow": "<missing>",
-          "sklearn": 1.0
-        },
-        {
-          "parameter": "l2",
-          "flow": 0.000695894,
-          "sklearn": "<missing>"
-        },
-        {
-          "parameter": "learning_rate",
-          "flow": 0.1,
-          "sklearn": "<missing>"
-        },
         {
           "parameter": "max_iter",
           "flow": 200,
@@ -495,6 +498,29 @@
           "parameter": "optimizer",
           "flow": "lbfgs_no_line_search",
           "sklearn": "lbfgs"
+        }
+      ],
+      "configuration_equivalences": [
+        {
+          "rule": "cross-vocabulary mapping",
+          "parameter": "l2",
+          "flow_parameter": "l2",
+          "flow": 0.000695894,
+          "sklearn_parameter": "C",
+          "sklearn": 1.0,
+          "relation": "l2 = 1 / (C * n_train)",
+          "n_train": 1437,
+          "expected_flow_value": 0.0006958942240779402,
+          "relative_difference": 3.220000001115386e-07,
+          "why": "flow-scikit states regularization as an explicit penalty strength on a mean-loss objective; scikit-learn states it as the inverse strength C on a sum-loss objective. #430 derived the conversion and it carries n_train."
+        },
+        {
+          "rule": "solver-private parameter",
+          "parameter": "learning_rate",
+          "declared_by": "flow",
+          "value": 0.1,
+          "counterpart_solver": "lbfgs",
+          "why": "a step size exists only for a first-order iterative solver. Every scikit-learn counterpart in the canonical set solves without one: LogisticRegression uses line-searched lbfgs, Ridge a direct factorization, Lasso coordinate descent."
         }
       ],
       "semantic_differences": [],
@@ -533,15 +559,19 @@
       "declared_score_tolerance": 0.02,
       "effective_score_tolerance": 0.02,
       "score_tolerance_fraction": 1.0000000272292198e-07,
-      "runtime_ratio_sklearn_over_flow": 0.22987822696335705,
-      "flow_total_ms": 1144.53277706,
-      "sklearn_total_ms": 263.103165492,
-      "runtime_log2_ratio": -2.1210582679767147,
-      "configuration_differences": [
+      "runtime_ratio_sklearn_over_flow": 0.28158348523632726,
+      "flow_total_ms": 839.976156977,
+      "sklearn_total_ms": 236.523413797,
+      "runtime_log2_ratio": -1.828365371943134,
+      "configuration_differences": [],
+      "configuration_equivalences": [
         {
+          "rule": "solver-private parameter",
           "parameter": "dual",
-          "flow": "<missing>",
-          "sklearn": "auto"
+          "declared_by": "sklearn",
+          "value": "auto",
+          "counterpart_solver": null,
+          "why": "scikit-learn's LinearSVC picks between the primal and dual liblinear formulations. flow-scikit implements one formulation and has no such switch, so there is nothing on its side for the value to disagree with."
         }
       ],
       "semantic_differences": [],
@@ -562,7 +592,6 @@
       },
       "diagnostics": {},
       "disparity_dimensions": [
-        "configuration",
         "model-state",
         "runtime"
       ],
@@ -579,11 +608,12 @@
       "declared_score_tolerance": 0.03,
       "effective_score_tolerance": 0.03,
       "score_tolerance_fraction": 3.9999999978945766e-07,
-      "runtime_ratio_sklearn_over_flow": 0.5558163255068097,
-      "flow_total_ms": 110.86123090000001,
-      "sklearn_total_ms": 61.618482,
-      "runtime_log2_ratio": -0.8473198847069046,
+      "runtime_ratio_sklearn_over_flow": 0.6069453763200662,
+      "flow_total_ms": 83.5508795,
+      "sklearn_total_ms": 50.71082,
+      "runtime_log2_ratio": -0.7203614117807001,
       "configuration_differences": [],
+      "configuration_equivalences": [],
       "semantic_differences": [],
       "model_state_diagnostics": {
         "C_abs_diff": 0.0,
@@ -634,11 +664,12 @@
       "declared_score_tolerance": 0.04,
       "effective_score_tolerance": 0.04,
       "score_tolerance_fraction": 0.4861106000000004,
-      "runtime_ratio_sklearn_over_flow": 0.5059850717088461,
-      "flow_total_ms": 27.024559599,
-      "sklearn_total_ms": 13.6740237266,
-      "runtime_log2_ratio": -0.9828332737806638,
+      "runtime_ratio_sklearn_over_flow": 0.5029480894430496,
+      "flow_total_ms": 19.4662504,
+      "sklearn_total_ms": 9.790513447299999,
+      "runtime_log2_ratio": -0.9915185914128228,
       "configuration_differences": [],
+      "configuration_equivalences": [],
       "semantic_differences": [],
       "model_state_diagnostics": {
         "depth1_splits_max_abs_diff": 6.000000007944095e-08,
@@ -690,11 +721,12 @@
       "declared_score_tolerance": 0.04,
       "effective_score_tolerance": 0.04,
       "score_tolerance_fraction": 0.4861111750000008,
-      "runtime_ratio_sklearn_over_flow": 0.3178156498141551,
-      "flow_total_ms": 82.964051888,
-      "sklearn_total_ms": 26.367274062,
-      "runtime_log2_ratio": -1.6537379275534323,
+      "runtime_ratio_sklearn_over_flow": 0.3068347272262633,
+      "flow_total_ms": 59.8767176,
+      "sklearn_total_ms": 18.372256312,
+      "runtime_log2_ratio": -1.7044663201239945,
       "configuration_differences": [],
+      "configuration_equivalences": [],
       "semantic_differences": [],
       "model_state_diagnostics": {
         "bootstrap_index_sums_max_abs_diff": 57369.0,
@@ -754,11 +786,12 @@
       "declared_score_tolerance": 0.001,
       "effective_score_tolerance": 0.001,
       "score_tolerance_fraction": 8.000000106811456e-06,
-      "runtime_ratio_sklearn_over_flow": 0.656135581192371,
-      "flow_total_ms": 2.72055197,
-      "sklearn_total_ms": 1.7850509479999999,
-      "runtime_log2_ratio": -0.6079341365939341,
+      "runtime_ratio_sklearn_over_flow": 0.6513128545173489,
+      "flow_total_ms": 2.008866074,
+      "sklearn_total_ms": 1.308400297,
+      "runtime_log2_ratio": -0.618577394444648,
       "configuration_differences": [],
+      "configuration_equivalences": [],
       "semantic_differences": [],
       "model_state_diagnostics": {
         "class_priors_max_abs_diff": 0.0,
@@ -799,11 +832,12 @@
       "declared_score_tolerance": 0.05,
       "effective_score_tolerance": 0.05,
       "score_tolerance_fraction": 2.5999999930803597e-07,
-      "runtime_ratio_sklearn_over_flow": 0.15865344209540194,
-      "flow_total_ms": 306.960473002,
-      "sklearn_total_ms": 48.700335629,
-      "runtime_log2_ratio": -2.656049273032398,
+      "runtime_ratio_sklearn_over_flow": 0.15319504377710716,
+      "flow_total_ms": 228.0073,
+      "sklearn_total_ms": 34.929588305,
+      "runtime_log2_ratio": -2.7065584714747057,
       "configuration_differences": [],
+      "configuration_equivalences": [],
       "semantic_differences": [
         {
           "dimension": "initialization",
@@ -844,11 +878,11 @@
         }
       ],
       "model_state_diagnostics": {
-        "inertia_relative_diff": 0.0,
+        "inertia_relative_diff": 7.06058916797641e-08,
         "center_l2_norms_sorted_max_abs_diff": 1.6999999985500835e-06,
-        "center_l2_norms_sorted_max_relative_diff": 2.758117900563336e-07,
+        "center_l2_norms_sorted_max_relative_diff": 2.659301101044332e-07,
         "center_l2_norms_sorted_first_divergent_index": -1,
-        "inertia_abs_diff": 0.0,
+        "inertia_abs_diff": 0.003899999996065162,
         "n_iter_abs_diff": 0.0,
         "n_iter_relative_diff": 0.0,
         "train_cluster_sizes_sorted_max_abs_diff": 0.0,
@@ -856,7 +890,7 @@
         "train_cluster_sizes_sorted_first_divergent_index": -1
       },
       "diagnostics": {
-        "inertia_relative_diff": 0.0
+        "inertia_relative_diff": 7.06058916797641e-08
       },
       "disparity_dimensions": [
         "semantic",
@@ -875,20 +909,25 @@
       "declared_score_tolerance": 0.02,
       "effective_score_tolerance": 0.02,
       "score_tolerance_fraction": 2.3849999999936422e-05,
-      "runtime_ratio_sklearn_over_flow": 5.8830429826366535,
-      "flow_total_ms": 0.106941997,
-      "sklearn_total_ms": 0.629144365,
-      "runtime_log2_ratio": 2.5565625768954834,
+      "runtime_ratio_sklearn_over_flow": 5.249812263372263,
+      "flow_total_ms": 0.082143001,
+      "sklearn_total_ms": 0.431235334,
+      "runtime_log2_ratio": 2.392265832008361,
       "configuration_differences": [
-        {
-          "parameter": "learning_rate",
-          "flow": 0.01,
-          "sklearn": "<missing>"
-        },
         {
           "parameter": "max_iter",
           "flow": 1000,
           "sklearn": "<missing>"
+        }
+      ],
+      "configuration_equivalences": [
+        {
+          "rule": "solver-private parameter",
+          "parameter": "learning_rate",
+          "declared_by": "flow",
+          "value": 0.01,
+          "counterpart_solver": null,
+          "why": "a step size exists only for a first-order iterative solver. Every scikit-learn counterpart in the canonical set solves without one: LogisticRegression uses line-searched lbfgs, Ridge a direct factorization, Lasso coordinate descent."
         }
       ],
       "semantic_differences": [],
@@ -924,15 +963,19 @@
       "declared_score_tolerance": 0.02,
       "effective_score_tolerance": 0.02,
       "score_tolerance_fraction": 0.0005841000000006424,
-      "runtime_ratio_sklearn_over_flow": 0.9467004485007496,
-      "flow_total_ms": 0.6939850160000001,
-      "sklearn_total_ms": 0.6569959259,
-      "runtime_log2_ratio": -0.07902008928528095,
-      "configuration_differences": [
+      "runtime_ratio_sklearn_over_flow": 0.888429665462784,
+      "flow_total_ms": 0.5021470020000001,
+      "sklearn_total_ms": 0.446122293,
+      "runtime_log2_ratio": -0.1706705283177537,
+      "configuration_differences": [],
+      "configuration_equivalences": [
         {
+          "rule": "solver-private parameter",
           "parameter": "learning_rate",
-          "flow": 0.01,
-          "sklearn": "<missing>"
+          "declared_by": "flow",
+          "value": 0.01,
+          "counterpart_solver": null,
+          "why": "a step size exists only for a first-order iterative solver. Every scikit-learn counterpart in the canonical set solves without one: LogisticRegression uses line-searched lbfgs, Ridge a direct factorization, Lasso coordinate descent."
         }
       ],
       "semantic_differences": [],
@@ -951,7 +994,6 @@
       },
       "diagnostics": {},
       "disparity_dimensions": [
-        "configuration",
         "model-state",
         "runtime"
       ],
@@ -968,15 +1010,18 @@
       "declared_score_tolerance": 0.005,
       "effective_score_tolerance": 0.005,
       "score_tolerance_fraction": 2.3800000004126076e-05,
-      "runtime_ratio_sklearn_over_flow": 6.440604255704117,
-      "flow_total_ms": 0.08935799800000001,
-      "sklearn_total_ms": 0.5755195022,
-      "runtime_log2_ratio": 2.6871960479381056,
-      "configuration_differences": [
+      "runtime_ratio_sklearn_over_flow": 5.2531872961854456,
+      "flow_total_ms": 0.071558003,
+      "sklearn_total_ms": 0.3759075923,
+      "runtime_log2_ratio": 2.3931930229964973,
+      "configuration_differences": [],
+      "configuration_equivalences": [
         {
+          "rule": "absent equals explicitly disabled",
           "parameter": "penalty",
-          "flow": "none",
-          "sklearn": "<missing>"
+          "declared_by": "flow",
+          "value": "none",
+          "why": "flow records penalty='none', which declares the feature off; the other side has no such parameter. Same configuration."
         }
       ],
       "semantic_differences": [],
@@ -995,7 +1040,6 @@
       },
       "diagnostics": {},
       "disparity_dimensions": [
-        "configuration",
         "model-state",
         "runtime"
       ],
@@ -1012,11 +1056,12 @@
       "declared_score_tolerance": 0.005,
       "effective_score_tolerance": 0.005,
       "score_tolerance_fraction": 0.0,
-      "runtime_ratio_sklearn_over_flow": 0.1186368513761491,
-      "flow_total_ms": 55.50542595,
-      "sklearn_total_ms": 6.584988968999999,
-      "runtime_log2_ratio": -3.075375880622554,
+      "runtime_ratio_sklearn_over_flow": 0.16624318152462042,
+      "flow_total_ms": 38.60838719,
+      "sklearn_total_ms": 6.41838112,
+      "runtime_log2_ratio": -2.588632925295165,
       "configuration_differences": [],
+      "configuration_equivalences": [],
       "semantic_differences": [],
       "model_state_diagnostics": {
         "alpha_abs_diff": 0.0,
