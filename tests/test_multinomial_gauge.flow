@@ -1,0 +1,249 @@
+# Issue #470: the multinomial softmax gauge.
+#
+# Softmax scores are invariant to adding the same constant to every class, so
+# (W, b) and (W + 1 c^T, b + d 1) are the same model written two ways. The
+# parameters are identified only up to that shift. scikit-learn reports the
+# sum-to-zero representative; lin433_multinomial_fit now does too.
+#
+# Three checks:
+#   1. A fitted multinomial model sums to zero across classes, in every feature
+#      column and in the intercept vector. The bound is a few float32 ulps of
+#      the largest coefficient, which is all the f32 store can leave behind
+#      once the means are removed in f64.
+#   2. The invariance itself: shifting a fitted model by an arbitrary per-class
+#      constant leaves every softmax probability and every predicted label
+#      unchanged. This is what makes check 1 free to impose.
+#   3. Removing the class mean from the shifted model returns it to the fitted
+#      parameters, so centring picks out one representative of the family and
+#      always the same one.
+#
+# The fixture is 8 classes over 32 features, large enough that the LBFGS run
+# accumulates visible f32 drift out of the zero-sum subspace. Without the
+# centring the fit lands about an order of magnitude further off the gauge, and
+# check 1 fails: verified by deleting the centring block and rerunning.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+}
+
+function mgz470_abs(x: f32) -> f32 {
+    if x < 0.0 { return -x }
+    return x
+}
+
+# Softmax of one score row in place. exp() lives here because the transpiler
+# miscompiles it inside a nested while loop (compiler bug #421).
+function mgz470_softmax_row(row: ptr<f32>, nc: i32) -> void {
+    let mut max_val: f32 = row[0]
+    for c in 1 to nc {
+        if row[c] > max_val { max_val = row[c] }
+    }
+    let mut total: f32 = 0.0
+    for c in 0 to nc {
+        let e: f32 = exp((row[c] - max_val) as f64) as f32
+        row[c] = e
+        total = total + e
+    }
+    if total > 0.0 {
+        let inv: f32 = 1.0 / total
+        for c in 0 to nc { row[c] = row[c] * inv }
+    }
+}
+
+# Softmax probabilities of an explicit (W, b) against X, row-major rows x nc.
+function mgz470_probs(W: ptr<f32>, b: ptr<f32>, nc: i32, nf: i32, X: Matrix, out: ptr<f32>) -> void {
+    for i in 0 to X.rows {
+        for c in 0 to nc {
+            let mut z: f32 = b[c]
+            for j in 0 to nf {
+                z = z + W[c * nf + j] * matrix_at(X, i, j)
+            }
+            out[i * nc + c] = z
+        }
+        mgz470_softmax_row(out + i * nc, nc)
+    }
+}
+
+function main() -> i32 {
+    let nc: i32 = 8
+    let nf: i32 = 32
+    let m: i32 = 400
+
+    let X: Matrix = matrix_new(m, nf)
+    let y: ptr<f32> = array_new_f32(m)
+    for i in 0 to m {
+        let cls: i32 = i % nc
+        y[i] = cls as f32
+        for j in 0 to nf {
+            let mut v: f32 = ((((i * 31 + j * 7 + cls * 13) % 29) as f32) / 14.0) - 1.0
+            if j % nc == cls { v = v + 1.5 }
+            matrix_set(X, i, j, v)
+        }
+    }
+
+    let model: LogisticRegression = logistic_regression_fit(X, y, nc, 200, 0.1, penalty_l2_from_c(1.0, m))
+    if model.n_classes != nc {
+        println("FAIL: multinomial fit did not find eight classes")
+        return 1
+    }
+
+    # ---- 1. the fitted parameters sum to zero across classes ----
+    let mut max_coef: f32 = 0.0
+    for k in 0 to nc * nf {
+        let a: f32 = mgz470_abs(model.weights[k])
+        if a > max_coef { max_coef = a }
+    }
+    let mut max_intercept: f32 = 0.0
+    for c in 0 to nc {
+        let a: f32 = mgz470_abs(model.biases[c])
+        if a > max_intercept { max_intercept = a }
+    }
+
+    # Rounding one already-centred f64 value to f32 costs at most half an ulp,
+    # and nc of them are summed, so the residual cannot exceed
+    # nc * ulp(max) / 2, with 2^-23 the float32 mantissa step. The bound below
+    # is twice that, which leaves the check room for summation order and still
+    # bites: without the centring this fixture reports 1.74e-06 against a
+    # coefficient bound of 1.10e-06 and 6.24e-07 against an intercept bound of
+    # 6.92e-08.
+    let coef_bound: f32 = (nc as f32) * max_coef * 0.00000011920929
+    let intercept_bound: f32 = (nc as f32) * max_intercept * 0.00000011920929
+
+    let mut worst_coef_sum: f32 = 0.0
+    for j in 0 to nf {
+        let mut s: f64 = 0.0
+        for c in 0 to nc {
+            s = s + (model.weights[c * nf + j]) as f64
+        }
+        let a: f32 = mgz470_abs(s as f32)
+        if a > worst_coef_sum { worst_coef_sum = a }
+    }
+    let mut bs: f64 = 0.0
+    for c in 0 to nc {
+        bs = bs + (model.biases[c]) as f64
+    }
+    let intercept_sum: f32 = mgz470_abs(bs as f32)
+
+    printf("  max coefficient %.7f, worst class sum %.9g, bound %.9g\n", max_coef, worst_coef_sum, coef_bound)
+    printf("  max intercept %.7f, class sum %.9g, bound %.9g\n", max_intercept, intercept_sum, intercept_bound)
+
+    if worst_coef_sum > coef_bound {
+        println("FAIL: fitted coefficients are not centred across classes")
+        return 1
+    }
+    if intercept_sum > intercept_bound {
+        println("FAIL: fitted intercepts are not centred across classes")
+        return 1
+    }
+    println("  OK: the fitted multinomial parameters sum to zero across classes")
+
+    # ---- 2. an arbitrary per-class shift changes nothing observable ----
+    let shifted_w: ptr<f32> = array_new_f32(nc * nf)
+    let shifted_b: ptr<f32> = array_new_f32(nc)
+    for j in 0 to nf {
+        let shift: f32 = 0.25 + 0.125 * ((j % 5) as f32)
+        for c in 0 to nc {
+            shifted_w[c * nf + j] = model.weights[c * nf + j] + shift
+        }
+    }
+    for c in 0 to nc {
+        shifted_b[c] = model.biases[c] + 0.75
+    }
+
+    let probs_fit: ptr<f32> = array_new_f32(m * nc)
+    let probs_shifted: ptr<f32> = array_new_f32(m * nc)
+    mgz470_probs(model.weights, model.biases, nc, nf, X, probs_fit)
+    mgz470_probs(shifted_w, shifted_b, nc, nf, X, probs_shifted)
+
+    let mut worst_prob: f32 = 0.0
+    for k in 0 to m * nc {
+        let d: f32 = mgz470_abs(probs_fit[k] - probs_shifted[k])
+        if d > worst_prob { worst_prob = d }
+    }
+
+    let pred_fit: ptr<f32> = logistic_predict(model, X)
+    let shifted_model: LogisticRegression = LogisticRegression {
+        weights: shifted_w,
+        bias: shifted_b[0],
+        biases: shifted_b,
+        n_features: nf,
+        classes: model.classes,
+        n_classes: nc,
+        penalty: model.penalty,
+        fitted: true,
+        n_iter: model.n_iter
+    }
+    let pred_shifted: ptr<f32> = logistic_predict(shifted_model, X)
+    let mut flips: i32 = 0
+    for i in 0 to m {
+        if pred_fit[i] != pred_shifted[i] { flips = flips + 1 }
+    }
+
+    printf("  shifted model: worst probability gap %.9g, label flips %d\n", worst_prob, flips)
+    if worst_prob > 0.00002 {
+        println("FAIL: a per-class shift moved the softmax probabilities")
+        return 1
+    }
+    if flips != 0 {
+        println("FAIL: a per-class shift moved a predicted label")
+        return 1
+    }
+    println("  OK: a per-class shift leaves probabilities and labels unchanged")
+
+    # ---- 3. centring the shifted model returns the fitted parameters ----
+    let inv_nc: f64 = 1.0 / (nc as f64)
+    for j in 0 to nf {
+        let mut s: f64 = 0.0
+        for c in 0 to nc {
+            s = s + (shifted_w[c * nf + j]) as f64
+        }
+        let mean: f64 = s * inv_nc
+        for c in 0 to nc {
+            shifted_w[c * nf + j] = (((shifted_w[c * nf + j]) as f64) - mean) as f32
+        }
+    }
+    let mut sb: f64 = 0.0
+    for c in 0 to nc {
+        sb = sb + (shifted_b[c]) as f64
+    }
+    let mean_b: f64 = sb * inv_nc
+    for c in 0 to nc {
+        shifted_b[c] = (((shifted_b[c]) as f64) - mean_b) as f32
+    }
+
+    let mut worst_w: f32 = 0.0
+    for k in 0 to nc * nf {
+        let d: f32 = mgz470_abs(shifted_w[k] - model.weights[k])
+        if d > worst_w { worst_w = d }
+    }
+    let mut worst_b: f32 = 0.0
+    for c in 0 to nc {
+        let d: f32 = mgz470_abs(shifted_b[c] - model.biases[c])
+        if d > worst_b { worst_b = d }
+    }
+    printf("  recentred: worst coefficient gap %.9g, worst intercept gap %.9g\n", worst_w, worst_b)
+    if worst_w > 0.00002 {
+        println("FAIL: centring the shifted model did not restore the fitted coefficients")
+        return 1
+    }
+    if worst_b > 0.00002 {
+        println("FAIL: centring the shifted model did not restore the fitted intercepts")
+        return 1
+    }
+    println("  OK: centring recovers the fitted parameters from a shifted model")
+
+    array_free_f32(probs_fit)
+    array_free_f32(probs_shifted)
+    array_free_f32(pred_fit)
+    array_free_f32(pred_shifted)
+    array_free_f32(shifted_w)
+    array_free_f32(shifted_b)
+    array_free_f32(y)
+    matrix_free(X)
+    logistic_regression_free(model)
+
+    println("All issue #470 multinomial gauge tests passed!")
+    return 0
+}
