@@ -118,6 +118,31 @@ def enrich_state_from_raw_details(
 
 
 
+
+# Relative diffs are scale-free; 1e-5 sits two orders above f32 ulp noise in
+# accumulated norms. A relative diff on a near-zero quantity can explode on
+# pure noise, so it only counts when its paired absolute diff also clears a
+# floor. A non-negative first_divergent_index is exact divergence by
+# construction and needs no floor.
+_STATE_REL_FLOOR = 1e-5
+_STATE_ABS_FLOOR = 1e-7
+
+
+def _model_state_diverges(state: dict) -> bool:
+    if not state:
+        return False
+    for key, value in state.items():
+        if key.endswith("_first_divergent_index"):
+            if isinstance(value, (int, float)) and value >= 0:
+                return True
+        elif key.endswith("_relative_diff"):
+            if not isinstance(value, (int, float)) or value <= _STATE_REL_FLOOR:
+                continue
+            paired = state.get(key[: -len("_relative_diff")] + "_abs_diff")
+            if paired is None or (isinstance(paired, (int, float)) and paired > _STATE_ABS_FLOOR):
+                return True
+    return False
+
 def _total_ms(row: dict, side: str):
     """Fit plus predict for one side of a headline row, or None if unresolved."""
     fit = row.get(f"{side}_fit_ms")
@@ -198,13 +223,21 @@ def main() -> int:
         tolerance_fraction = score_diff / effective_score_tol if effective_score_tol > 0 else None
 
         dimensions = []
-        if score_diff > 0:
+        # Floors, so a dimension means divergence rather than existence.
+        # Without them every row was flagged: any nonzero f32 score diff set
+        # "numerical" (2.8e-8 against a declared tolerance of 1e-3), and
+        # "model-state" tested the diagnostics dict for truthiness, so the
+        # moment coverage reached 19/19 every row became "disparate". The
+        # numerical floor follows the disparity-gate precedent: noise below
+        # max(1e-6, 1% of the row's declared tolerance) is not a finding.
+        numerical_floor = max(1e-6, 0.01 * score_tol)
+        if score_diff > numerical_floor:
             dimensions.append("numerical")
         if config:
             dimensions.append("configuration")
         if semantic:
             dimensions.append("semantic")
-        if state:
+        if _model_state_diverges(state):
             dimensions.append("model-state")
         if diag.get("parity_status") != row.get("parity_status"):
             dimensions.append("strict-vs-final-parity-decision")
@@ -249,6 +282,7 @@ def main() -> int:
         "counts": {
             "rows": len(rows),
             "rows_with_tracked_disparity": sum(r["has_tracked_disparity"] for r in rows),
+        "rows_with_substantive_disparity": sum(1 for r in rows if any(d != "runtime" for d in r["disparity_dimensions"])),
             "rows_with_configuration_difference": sum(bool(r["configuration_differences"]) for r in rows),
             "rows_with_semantic_difference": sum(bool(r["semantic_differences"]) for r in rows),
             "rows_with_model_state_diagnostics": sum(bool(r["model_state_diagnostics"]) for r in rows),
