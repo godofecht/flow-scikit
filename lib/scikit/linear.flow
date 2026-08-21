@@ -1166,6 +1166,51 @@ function lin433_multinomial_fit(X: Matrix, y: ptr<f32>, classes: ptr<f32>, nc: i
         all_biases[c] = theta[base + n]
     }
 
+    # Issue #470: pin the softmax gauge to sum-to-zero across classes.
+    #
+    # Softmax scores are invariant to adding the same constant to every class,
+    # so (W, b) and (W + 1 c^T, b + d 1) describe the same model. The
+    # parameters are identified only up to that shift. scikit-learn reports the
+    # sum-to-zero representative, so anything comparing coefficients against it
+    # needs Flow to report the same one.
+    #
+    # This loop is close to a no-op in practice, and deliberately so. theta
+    # starts at zero, and the gradient of the softmax cross-entropy sums to
+    # zero across classes for every feature and for the intercept, because
+    # sum_c (p_ic - t_ic) = 0. The L2 term is linear in theta and so preserves
+    # that. Every LBFGS direction is a linear combination of gradients and of
+    # earlier steps, so in exact arithmetic each iterate stays in the
+    # sum-to-zero subspace it started in. What is left is f32 accumulation
+    # drift: measured at 1.1e-05 on digits and 1.0e-06 on iris, against
+    # coefficients up to 1.83 and 2.49. Centring removes that drift and makes
+    # the gauge a property of the returned model rather than of the starting
+    # point, which is what a warm start or a different initialisation would
+    # otherwise break.
+    #
+    # The means are accumulated in f64 before the f32 store, for the reason
+    # PR #443 moved its line-search objective to f64.
+    if nc > 0 {
+        let inv_nc: f64 = 1.0 / (nc as f64)
+        for j in 0 to n {
+            let mut w_total: f64 = 0.0
+            for c in 0 to nc {
+                w_total = w_total + (all_weights[c * n + j]) as f64
+            }
+            let w_mean: f64 = w_total * inv_nc
+            for c in 0 to nc {
+                all_weights[c * n + j] = (((all_weights[c * n + j]) as f64) - w_mean) as f32
+            }
+        }
+        let mut b_total: f64 = 0.0
+        for c in 0 to nc {
+            b_total = b_total + (all_biases[c]) as f64
+        }
+        let b_mean: f64 = b_total * inv_nc
+        for c in 0 to nc {
+            all_biases[c] = (((all_biases[c]) as f64) - b_mean) as f32
+        }
+    }
+
     free(X_aug as ptr<void>)
     free(tgt as ptr<void>)
     free(Z as ptr<void>)
