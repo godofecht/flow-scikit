@@ -672,11 +672,20 @@ function msd207_ksvc_state(dataset: string, m: KernelSVCMulti) -> void {
         let p: i32 = order[k]
         let la: f32 = m.classes[m.pair_a[p]]
         let lb: f32 = m.classes[m.pair_b[p]]
+        # Issue #471: kernel_svc_multi_fit pairs classes by discovery slot, so
+        # for a pair whose slot order is descending by label the +1 side is the
+        # higher label and the whole decision function, intercept included, is
+        # the negative of libsvm's. Reorient here so the emitted intercept is
+        # the one for the pair oriented (lo, hi) with lo as +1, which is what
+        # sklearn's intercept_ holds. Nothing about the fitted model changes;
+        # predictions use the model's own orientation and are untouched.
         let mut lo: f32 = la
         let mut hi: f32 = lb
+        let mut orient: f32 = 1.0
         if lb < la {
             lo = lb
             hi = la
+            orient = -1.0
         }
         class_a[k] = lo
         class_b[k] = hi
@@ -696,7 +705,7 @@ function msd207_ksvc_state(dataset: string, m: KernelSVCMulti) -> void {
         n_support[k] = sv
         n_bounded[k] = bounded
         dual_abs_sum[k] = total as f32
-        intercepts[k] = m.models[p].b
+        intercepts[k] = orient * m.models[p].b
         total_support = total_support + sv
     }
 
@@ -819,7 +828,12 @@ function main() -> i32 {
     array_free_f32(lsvc_i_pred); linear_svc_multi_free(lsvc_i)
 
     t0 = now_ns()
-    let ksvc_i: KernelSVCMulti = kernel_svc_multi_fit(Xi_tr, si.y_train, 3, 0.25, 1.0, 200)
+    # Issue #471: the cap is a backstop, not a schedule. max_iter multiplies
+    # into an SMO step budget of max_iter * n; every iris pair exits on the
+    # libsvm KKT rule after at most 80 steps, one sweep-equivalent at n = 80.
+    # Declared 200 here and 1000 on digits; sklearn declares 1000 on both.
+    # 1000 matches the sklearn side and leaves the fit bit-identical.
+    let ksvc_i: KernelSVCMulti = kernel_svc_multi_fit(Xi_tr, si.y_train, 3, 0.25, 1.0, 1000)
     t1 = now_ns()
     let ksvc_i_pred: ptr<f32> = kernel_svc_multi_predict(ksvc_i, Xi_te)
     t2 = now_ns()
