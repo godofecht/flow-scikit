@@ -2,6 +2,22 @@
   "schema_version": 1,
   "rows": [
     {
+      "module": "sklearn.cluster._kmeans",
+      "estimator": "KMeans",
+      "operation": "fit",
+      "execution_class": "mixed",
+      "ownership": "sklearn",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/cluster/_kmeans.py",
+      "evidence": [
+        "numpy-bound:np.",
+        "python-control-loops:4"
+      ],
+      "flow_scikit_status": "present",
+      "priority_score": 72.039,
+      "disposition": "already-equivalent",
+      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
+    },
+    {
       "module": "sklearn.linear_model._logistic",
       "estimator": "LogisticRegression",
       "operation": "fit",
@@ -16,25 +32,9 @@
         "python-control-loops:2"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 71.764,
+      "priority_score": 71.839,
       "disposition": "retain-native",
       "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
-    },
-    {
-      "module": "sklearn.cluster._kmeans",
-      "estimator": "KMeans",
-      "operation": "fit",
-      "execution_class": "mixed",
-      "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/cluster/_kmeans.py",
-      "evidence": [
-        "numpy-bound:np.",
-        "python-control-loops:4"
-      ],
-      "flow_scikit_status": "present",
-      "priority_score": 71.697,
-      "disposition": "already-equivalent",
-      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
     {
       "module": "sklearn.linear_model._base",
@@ -52,7 +52,7 @@
         "python-control-loops:5"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 68.583,
+      "priority_score": 68.649,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -2040,7 +2040,7 @@
         "python-control-loops:4"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 37.838,
+      "priority_score": 37.174,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -2246,7 +2246,7 @@
         "numpy-bound:np."
       ],
       "flow_scikit_status": "present",
-      "priority_score": 33.836,
+      "priority_score": 33.451,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -2262,7 +2262,7 @@
         "numpy-bound:np."
       ],
       "flow_scikit_status": "present",
-      "priority_score": 33.411,
+      "priority_score": 33.267,
       "disposition": "retain-native",
       "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
     },
@@ -2387,7 +2387,7 @@
         "numpy-bound:np."
       ],
       "flow_scikit_status": "present",
-      "priority_score": 7.579,
+      "priority_score": 7.177,
       "disposition": "retain-native",
       "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
     }
