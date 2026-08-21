@@ -101,6 +101,28 @@ regardless of the order Flow discovered the classes in.
 Emission happens outside the timing windows and reads only fitted state, so it
 does not move any canonical metric or timing.
 
+### Diabetes linear-family coefficient diagnostics
+
+The committed `model_state_diagnostics` for Ridge, Lasso and LinearRegression
+on diabetes record coefficient differences of 7e-5, 6.9% and one index past
+the 1e-6 threshold. Issue #472 traced all three to the scikit-learn side of
+the comparison, measured against f64 references recomputed from the committed
+fixtures:
+
+- Lasso: Flow's objective sits 3e-12 from the exact optimum; sklearn stopped
+  at 246 iterations with its duality gap 1750x inside its own threshold,
+  7.7e-5 above the optimum. The 6.9% is the smallest coefficient, where Flow
+  matches the optimum to all printed digits.
+- Ridge: the conventions match to 2e-14 in f64. sklearn's f32 Cholesky lands
+  964 ulps from the exact solution at the divergent index; Flow lands 8.5.
+- LinearRegression: the centred design has condition number 20.7 through the
+  collinear S1/S2 pair, and f32-ulp jitter in the inputs reproduces the
+  observed per-index divergence. Flow is closer to the exact solution at 9 of
+  10 indices. Flow's QR runs in f64; sklearn's `lstsq` ran on the f32 input.
+
+All three rows pass their score gates. The full measurements are in
+[#472](https://github.com/godofecht/flow-scikit/issues/472#issuecomment-5369310942).
+
 ### When a diagnostic differs from the committed snapshot
 
 Both runners read the same fixture bytes. A `DETAIL` field that disagrees
