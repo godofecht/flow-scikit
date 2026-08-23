@@ -135,10 +135,13 @@ def test_canonical_contract() -> None:
     splits = json.loads((ROOT / "split_indices.json").read_text())
     sizes = {name: row["n_train"] for name, row in splits.items()}
 
+    # #475 aligned KernelSVC_RBF/iris max_iter to 1000 on both sides, so that
+    # row now has no surviving configuration difference. Keep it in the map to
+    # pin the absence explicitly rather than silently dropping coverage.
     expected = {
         ("LogisticRegression", "iris"): ["max_iter", "optimizer"],
         ("LogisticRegression", "digits"): ["max_iter", "optimizer"],
-        ("KernelSVC_RBF", "iris"): ["max_iter"],
+        ("KernelSVC_RBF", "iris"): [],
         ("PCA", "iris"): ["solver"],
         ("Ridge", "diabetes"): ["max_iter"],
         ("LinearSVC", "iris"): [],
@@ -158,7 +161,7 @@ def test_canonical_contract() -> None:
     check("surviving configuration differences on the canonical rows", actual, expected)
 
     unresolved = sum(1 for key, params in actual.items() if params)
-    check("rows still carrying a configuration difference", unresolved, 5)
+    check("rows still carrying a configuration difference", unresolved, 4)
 
 
 def main() -> int:
