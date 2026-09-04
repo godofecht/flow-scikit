@@ -13,6 +13,7 @@ import "lib/scikit/blas.flow"
 extern {
     function sqrt(x: f64) -> f64
     function log(x: f64) -> f64
+    function expf(x: f32) -> f32
 }
 
 function sqrt_f32(x: f32) -> f32 {
@@ -904,7 +905,8 @@ export const LOGISTIC_SOLVER_LBFGS: i32 = 0
 export const LOGISTIC_SOLVER_NEWTON: i32 = 1
 export const LOGISTIC_SOLVER_IRLS: i32 = 1
 
-# Issue #433: turns one row of logits into softmax probabilities in place.
+# Issue #433: turns an m x nc block of logits into softmax probabilities in
+# place.
 #
 # The row maximum is subtracted before exponentiating. Raw logits pass 300
 # whenever the gradient at the origin is small enough that LBFGS takes a large
@@ -913,26 +915,59 @@ export const LOGISTIC_SOLVER_IRLS: i32 = 1
 # largest exponent at exactly 1.0 and cannot overflow for any finite input.
 # tests/test_multinomial_logistic.flow pins a fixture that reaches that range.
 #
-# The exp() call lives here rather than at the call site because the transpiler
-# miscompiles exp() inside a nested while loop (compiler bug #421). The name
-# carries the module and issue number because non-exported functions sharing a
-# name across modules collide in the generated C (compiler bug #465).
-function lin433_softmax_row(row: ptr<f32>, nc: i32) -> void {
-    if nc <= 0 { return }
-    let mut max_val: f32 = row[0]
-    for c in 1 to nc {
-        if row[c] > max_val { max_val = row[c] }
-    }
-    let mut sum: f32 = 0.0
-    for c in 0 to nc {
-        let e: f32 = exp((row[c] - max_val) as f64) as f32
-        row[c] = e
-        sum = sum + e
-    }
-    if sum > 0.0 {
-        let inv: f32 = 1.0 / sum
+# The exponential lives in this function rather than at the call site because
+# the transpiler miscompiles exp() inside a nested while loop (compiler bug
+# #421). The name carries the module and issue number because non-exported
+# functions sharing a name across modules collide in the generated C (compiler
+# bug #465).
+#
+# This was a per-row helper called once per sample from the LBFGS loop, which
+# on digits is 12570 exponentials per iteration for up to 100 iterations, and
+# measured at half the whole fit. Two changes take that down.
+#
+# The exponential is expf rather than exp on a widened f64 argument. The result
+# was narrowed straight back to f32, so the extra precision never reached the
+# caller; it only bought a slower libm call.
+#
+# The shifts, the exponentials and the reciprocal scaling run as three passes
+# over the block rather than interleaved per row. The exponential pass is a
+# flat contiguous loop over m * nc floats carrying no reduction, which is the
+# shape clang vectorises and the shape -fveclib can map onto a vector exp. The
+# row maxima and the row sums stay in their own passes because they are
+# reductions of width nc.
+#
+# The arithmetic per element is unchanged: subtract the row max, exponentiate,
+# divide by the row sum, in that order.
+function lin433_softmax_block(Z: ptr<f32>, m: i32, nc: i32) -> void {
+    if m <= 0 || nc <= 0 { return }
+    let total: i32 = m * nc
+
+    for i in 0 to m {
+        let base: i32 = i * nc
+        let mut max_val: f32 = Z[base]
+        for c in 1 to nc {
+            if Z[base + c] > max_val { max_val = Z[base + c] }
+        }
         for c in 0 to nc {
-            row[c] = row[c] * inv
+            Z[base + c] = Z[base + c] - max_val
+        }
+    }
+
+    for idx in 0 to total {
+        Z[idx] = expf(Z[idx])
+    }
+
+    for i in 0 to m {
+        let base: i32 = i * nc
+        let mut sum: f32 = 0.0
+        for c in 0 to nc {
+            sum = sum + Z[base + c]
+        }
+        if sum > 0.0 {
+            let inv: f32 = 1.0 / sum
+            for c in 0 to nc {
+                Z[base + c] = Z[base + c] * inv
+            }
         }
     }
 }
@@ -1001,7 +1036,6 @@ function lin433_multinomial_fit(X: Matrix, y: ptr<f32>, classes: ptr<f32>, nc: i
     # Z holds the m x nc logits, then the softmax probabilities, then the
     # residual p - t, all in the same buffer.
     let Z: ptr<f32> = malloc((m as i64) * (nc as i64) * 4) as ptr<f32>
-    let col: ptr<f32> = array_new_f32(m)
 
     let mem: i32 = 10
     let s_hist: ptr<f32> = malloc((mem as i64) * (dim as i64) * 4) as ptr<f32>
@@ -1024,21 +1058,13 @@ function lin433_multinomial_fit(X: Matrix, y: ptr<f32>, classes: ptr<f32>, nc: i
 
     # Gradient at the starting point. Each later iteration ends by evaluating
     # the gradient at the theta it stepped to, so the loop carries it forward.
-    for c in 0 to nc {
-        blas_matvec(X_aug, m, d, theta + c * d, col, 1.0, 0.0)
-        for i in 0 to m {
-            Z[i * nc + c] = col[i]
-        }
-    }
+    blas_matmat_nt(X_aug, theta, Z, m, nc, d, d, d, 1.0, 0.0)
+    lin433_softmax_block(Z, m, nc)
     for i in 0 to m {
-        lin433_softmax_row(Z + i * nc, nc)
         Z[i * nc + tgt[i]] = Z[i * nc + tgt[i]] - 1.0
     }
+    cblas_sgemm(101, 112, 111, nc, d, m, inv_m, Z, nc, X_aug, d, 0.0, grad, d)
     for c in 0 to nc {
-        for i in 0 to m {
-            col[i] = Z[i * nc + c]
-        }
-        blas_matvec_trans(X_aug, m, d, col, grad + c * d, inv_m, 0.0)
         let base: i32 = c * d
         for j in 0 to n {
             grad[base + j] = grad[base + j] + l2_coeff * theta[base + j]
@@ -1121,21 +1147,13 @@ function lin433_multinomial_fit(X: Matrix, y: ptr<f32>, classes: ptr<f32>, nc: i
 
         for j in 0 to dim { theta[j] = theta_prev[j] + step * direction[j] }
 
-        for c in 0 to nc {
-            blas_matvec(X_aug, m, d, theta + c * d, col, 1.0, 0.0)
-            for i in 0 to m {
-                Z[i * nc + c] = col[i]
-            }
-        }
+        blas_matmat_nt(X_aug, theta, Z, m, nc, d, d, d, 1.0, 0.0)
+        lin433_softmax_block(Z, m, nc)
         for i in 0 to m {
-            lin433_softmax_row(Z + i * nc, nc)
             Z[i * nc + tgt[i]] = Z[i * nc + tgt[i]] - 1.0
         }
+        cblas_sgemm(101, 112, 111, nc, d, m, inv_m, Z, nc, X_aug, d, 0.0, grad, d)
         for c in 0 to nc {
-            for i in 0 to m {
-                col[i] = Z[i * nc + c]
-            }
-            blas_matvec_trans(X_aug, m, d, col, grad + c * d, inv_m, 0.0)
             let base: i32 = c * d
             for j in 0 to n {
                 grad[base + j] = grad[base + j] + l2_coeff * theta[base + j]
@@ -1214,7 +1232,6 @@ function lin433_multinomial_fit(X: Matrix, y: ptr<f32>, classes: ptr<f32>, nc: i
     free(X_aug as ptr<void>)
     free(tgt as ptr<void>)
     free(Z as ptr<void>)
-    array_free_f32(col)
     array_free_f32(theta)
     array_free_f32(grad)
     array_free_f32(grad_prev)
@@ -1424,6 +1441,25 @@ function lin357_newton_fit(X: Matrix, y: ptr<f32>, classes: ptr<f32>, nc: i32, e
     let hess: ptr<f64> = malloc((d as i64) * (d as i64) * 8 + 128) as ptr<f64>
     let hcopy: ptr<f64> = malloc((d as i64) * (d as i64) * 8 + 128) as ptr<f64>
 
+    # The Hessian is X_aug^T diag(w) X_aug, which is a dgemm. Above a work
+    # threshold it is assembled that way, which needs the design in f64 and a
+    # row-scaled copy of it. X_aug never changes, so its f64 copy is taken once
+    # for the whole fit and shared by every class and every Newton iteration.
+    # Below the threshold the scalar triple loop still runs: it is bit-identical
+    # to the previous code and skips the BLAS thread dispatch, which costs more
+    # than the whole assembly on a small problem. The gate is m * d * d, the
+    # actual FMA count, at the same 65536 the rest of the library uses.
+    let use_blas_hess: bool = (m as i64) * (d as i64) * (d as i64) >= 65536
+    let mut Xd: ptr<f64> = null
+    let mut Xw: ptr<f64> = null
+    if use_blas_hess {
+        Xd = malloc((m as i64) * (d as i64) * 8 + 128) as ptr<f64>
+        Xw = malloc((m as i64) * (d as i64) * 8 + 128) as ptr<f64>
+        for idx in 0 to m * d {
+            Xd[idx] = X_aug[idx] as f64
+        }
+    }
+
     let l2_coeff: f32 = 0.0
     if penalty.kind == PENALTY_L2 || penalty.kind == PENALTY_ELASTICNET {
         l2_coeff = penalty.alpha * (1.0 - penalty.l1_ratio)
@@ -1481,22 +1517,36 @@ function lin357_newton_fit(X: Matrix, y: ptr<f32>, classes: ptr<f32>, nc: i32, e
             gnorm = sqrt(gnorm)
             if gnorm < 0.000001 { converged = true; break }
 
-            for j in 0 to d * d { hess[j] = 0.0 }
-            for i in 0 to m {
-                let base: i32 = i * d
-                let wi: f64 = wt_arr[i] as f64
-                for j in 0 to d {
-                    let xw: f64 = (X_aug[base + j] as f64) * wi
-                    for k in j to d {
-                        hess[j * d + k] = hess[j * d + k] + xw * (X_aug[base + k] as f64)
+            if use_blas_hess {
+                # Scale each row of the design by its IRLS weight, then contract
+                # the scaled design against the unscaled one. dgemm writes both
+                # triangles, so no symmetrisation pass is needed.
+                for i in 0 to m {
+                    let base: i32 = i * d
+                    let wi: f64 = wt_arr[i] as f64
+                    for j in 0 to d {
+                        Xw[base + j] = Xd[base + j] * wi
                     }
                 }
-            }
-            for j in 0 to d {
-                for k in j to d {
-                    let v: f64 = hess[j * d + k] * inv_m
-                    hess[j * d + k] = v
-                    hess[k * d + j] = v
+                blas_gemm_tn_f64(Xw, Xd, hess, m, d, d, d, d, d, inv_m, 0.0)
+            } else {
+                for j in 0 to d * d { hess[j] = 0.0 }
+                for i in 0 to m {
+                    let base: i32 = i * d
+                    let wi: f64 = wt_arr[i] as f64
+                    for j in 0 to d {
+                        let xw: f64 = (X_aug[base + j] as f64) * wi
+                        for k in j to d {
+                            hess[j * d + k] = hess[j * d + k] + xw * (X_aug[base + k] as f64)
+                        }
+                    }
+                }
+                for j in 0 to d {
+                    for k in j to d {
+                        let v: f64 = hess[j * d + k] * inv_m
+                        hess[j * d + k] = v
+                        hess[k * d + j] = v
+                    }
                 }
             }
             for j in 0 to n { hess[j * d + j] = hess[j * d + j] + l2_f64 }
@@ -1568,6 +1618,10 @@ function lin357_newton_fit(X: Matrix, y: ptr<f32>, classes: ptr<f32>, nc: i32, e
     free(delta as ptr<void>)
     free(hess as ptr<void>)
     free(hcopy as ptr<void>)
+    if use_blas_hess {
+        free(Xd as ptr<void>)
+        free(Xw as ptr<void>)
+    }
 
     let first_bias: f32 = all_biases[0]
     return LogisticRegression {

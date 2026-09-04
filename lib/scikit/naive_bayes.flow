@@ -2,6 +2,7 @@
 # Implements GaussianNB for continuous features.
 
 import "lib/scikit/matrix.flow"
+import "lib/scikit/blas.flow"
 
 export struct GaussianNB {
     classes: ptr<f32>,
@@ -48,31 +49,43 @@ export function gaussian_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, var_smoo
     let means: ptr<ptr<f32> > = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
     let variances: ptr<ptr<f32> > = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
     let priors: ptr<f32> = array_new_f32(n_classes)
-    let global_mean: ptr<f32> = array_new_f32(p)
-    let global_var: ptr<f32> = array_new_f32(p)
-    let class_sums: ptr<f32> = array_new_f32(n_classes * p)
-    let class_var_sums: ptr<f32> = array_new_f32(n_classes * p)
+    let global_sum: ptr<f64> = array_new_f64(p)
+    let global_sq_sum: ptr<f64> = array_new_f64(p)
+    let class_sums: ptr<f64> = array_new_f64(n_classes * p)
+    let class_sq_sums: ptr<f64> = array_new_f64(n_classes * p)
 
     for c in 0 to n_classes {
         means[c] = array_new_f32(p)
         variances[c] = array_new_f32(p)
     }
 
-    # First contiguous pass: global and per-class sufficient statistics.
+    # Single contiguous pass: global and per-class sums and squared sums in f64.
     for i in 0 to n {
         let c: i32 = class_indices[i]
         let row_base: i32 = i * p
         let class_base: i32 = c * p
+        let x_row: ptr<f32> = X.data + row_base
+        let class_row: ptr<f64> = class_sums + class_base
+        let class_sq_row: ptr<f64> = class_sq_sums + class_base
         for j in 0 to p {
-            let value: f32 = X.data[row_base + j]
-            global_mean[j] = global_mean[j] + value
-            class_sums[class_base + j] = class_sums[class_base + j] + value
+            let value: f64 = x_row[j] as f64
+            let v2: f64 = value * value
+            global_sum[j] = global_sum[j] + value
+            global_sq_sum[j] = global_sq_sum[j] + v2
+            class_row[j] = class_row[j] + value
+            class_sq_row[j] = class_sq_row[j] + v2
         }
     }
 
+    let mut max_var: f32 = 0.0
     if n > 0 {
+        let inv_n: f64 = 1.0 / (n as f64)
         for j in 0 to p {
-            global_mean[j] = global_mean[j] / (n as f32)
+            let m: f64 = global_sum[j] * inv_n
+            let mut v: f64 = global_sq_sum[j] * inv_n - m * m
+            if v < 0.0 { v = 0.0 }
+            let vf: f32 = v as f32
+            if vf > max_var { max_var = vf }
         }
     }
 
@@ -84,52 +97,23 @@ export function gaussian_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, var_smoo
         }
         if count > 0 {
             let base: i32 = c * p
+            let inv_c: f64 = 1.0 / (count as f64)
             for j in 0 to p {
-                means[c][j] = class_sums[base + j] / (count as f32)
+                let m: f64 = class_sums[base + j] * inv_c
+                let mut v: f64 = class_sq_sums[base + j] * inv_c - m * m
+                if v < 0.0 { v = 0.0 }
+                means[c][j] = m as f32
+                variances[c][j] = (v as f32) + var_smoothing * max_var
             }
-        }
-    }
-
-    # Second contiguous pass: squared deviations.  This preserves the existing
-    # ddof=0 population-variance semantics without temporary column/value arrays.
-    for i in 0 to n {
-        let c: i32 = class_indices[i]
-        let row_base: i32 = i * p
-        let class_base: i32 = c * p
-        for j in 0 to p {
-            let value: f32 = X.data[row_base + j]
-            let gd: f32 = value - global_mean[j]
-            let cd: f32 = value - means[c][j]
-            global_var[j] = global_var[j] + gd * gd
-            class_var_sums[class_base + j] = class_var_sums[class_base + j] + cd * cd
-        }
-    }
-
-    if n > 0 {
-        for j in 0 to p {
-            global_var[j] = global_var[j] / (n as f32)
-        }
-    }
-    let max_var: f32 = array_max_val(global_var, p)
-
-    for c in 0 to n_classes {
-        let count: i32 = class_counts[c]
-        let base: i32 = c * p
-        for j in 0 to p {
-            let class_var: f32 = 0.0
-            if count > 0 {
-                class_var = class_var_sums[base + j] / (count as f32)
-            }
-            variances[c][j] = class_var + var_smoothing * max_var
         }
     }
 
     free(class_counts as ptr<void>)
     free(class_indices as ptr<void>)
-    array_free_f32(global_mean)
-    array_free_f32(global_var)
-    array_free_f32(class_sums)
-    array_free_f32(class_var_sums)
+    array_free_f64(global_sum)
+    array_free_f64(global_sq_sum)
+    array_free_f64(class_sums)
+    array_free_f64(class_sq_sums)
 
     return GaussianNB {
         classes: classes,
@@ -144,24 +128,24 @@ export function gaussian_nb_fit(X: Matrix, y: ptr<f32>, n_classes: i32, var_smoo
 }
 
 # Precompute the terms that are constant for every sample in a prediction call.
-# Keeping them out of the sample/class/feature hot loop avoids repeated log()
-# evaluation while leaving fit latency and the public model layout unchanged.
 function _gaussian_nb_prepare_terms(
     model: GaussianNB,
-    class_log_prior: ptr<f32>,
-    log_norm: ptr<f32>,
+    class_const: ptr<f32>,
     inv_two_var: ptr<f32>
 ) -> void {
     let log_two_pi: f32 = log((2.0 * 3.14159265358979) as f64) as f32
     let p: i32 = model.n_features
     for c in 0 to model.n_classes {
-        class_log_prior[c] = log(model.priors[c] as f64) as f32
+        let mut sum_log_norm: f32 = log(model.priors[c] as f64) as f32
         let base: i32 = c * p
+        let var_c: ptr<f32> = model.variances[c]
         for j in 0 to p {
-            let var: f32 = model.variances[c][j]
-            log_norm[base + j] = -0.5 * log_two_pi - 0.5 * (log(var as f64) as f32)
+            let var: f32 = var_c[j]
+            let term: f32 = -0.5 * log_two_pi - 0.5 * (log(var as f64) as f32)
+            sum_log_norm = sum_log_norm + term
             inv_two_var[base + j] = 1.0 / (2.0 * var)
         }
+        class_const[c] = sum_log_norm
     }
 }
 
@@ -169,24 +153,25 @@ export function gaussian_nb_predict(model: GaussianNB, X: Matrix) -> ptr<f32> {
     let preds: ptr<f32> = array_new_f32(X.rows)
     let p: i32 = model.n_features
     let terms: i32 = model.n_classes * p
-    let class_log_prior: ptr<f32> = array_new_f32(model.n_classes)
-    let log_norm: ptr<f32> = array_new_f32(terms)
+    let class_const: ptr<f32> = array_new_f32(model.n_classes)
     let inv_two_var: ptr<f32> = array_new_f32(terms)
-    _gaussian_nb_prepare_terms(model, class_log_prior, log_norm, inv_two_var)
+    _gaussian_nb_prepare_terms(model, class_const, inv_two_var)
 
     for i in 0 to X.rows {
         let mut best_class: i32 = 0
         let mut best_log_prob: f32 = -9999999999.0
         let row_base: i32 = i * p
+        let x_row: ptr<f32> = X.data + row_base
 
         for c in 0 to model.n_classes {
-            let mut log_prob: f32 = class_log_prior[c]
-            let class_base: i32 = c * p
+            let means_c: ptr<f32> = model.means[c]
+            let inv_var_c: ptr<f32> = inv_two_var + c * p
+            let mut sum_diff_sq: f32 = 0.0
             for j in 0 to p {
-                let diff: f32 = X.data[row_base + j] - model.means[c][j]
-                let term_idx: i32 = class_base + j
-                log_prob = log_prob + log_norm[term_idx] - diff * diff * inv_two_var[term_idx]
+                let diff: f32 = x_row[j] - means_c[j]
+                sum_diff_sq = sum_diff_sq + diff * diff * inv_var_c[j]
             }
+            let log_prob: f32 = class_const[c] - sum_diff_sq
 
             if log_prob > best_log_prob {
                 best_log_prob = log_prob
@@ -197,8 +182,7 @@ export function gaussian_nb_predict(model: GaussianNB, X: Matrix) -> ptr<f32> {
         preds[i] = model.classes[best_class]
     }
 
-    array_free_f32(class_log_prior)
-    array_free_f32(log_norm)
+    array_free_f32(class_const)
     array_free_f32(inv_two_var)
     return preds
 }
@@ -207,25 +191,26 @@ export function gaussian_nb_predict_proba(model: GaussianNB, X: Matrix) -> Matri
     let probs: Matrix = matrix_new(X.rows, model.n_classes)
     let p: i32 = model.n_features
     let terms: i32 = model.n_classes * p
-    let class_log_prior: ptr<f32> = array_new_f32(model.n_classes)
-    let log_norm: ptr<f32> = array_new_f32(terms)
+    let class_const: ptr<f32> = array_new_f32(model.n_classes)
     let inv_two_var: ptr<f32> = array_new_f32(terms)
     let log_probs: ptr<f32> = array_new_f32(model.n_classes)
-    _gaussian_nb_prepare_terms(model, class_log_prior, log_norm, inv_two_var)
+    _gaussian_nb_prepare_terms(model, class_const, inv_two_var)
 
     for i in 0 to X.rows {
         let mut max_lp: f32 = -9999999999.0
         let row_base: i32 = i * p
         let prob_base: i32 = i * model.n_classes
+        let x_row: ptr<f32> = X.data + row_base
 
         for c in 0 to model.n_classes {
-            let mut lp: f32 = class_log_prior[c]
-            let class_base: i32 = c * p
+            let means_c: ptr<f32> = model.means[c]
+            let inv_var_c: ptr<f32> = inv_two_var + c * p
+            let mut sum_diff_sq: f32 = 0.0
             for j in 0 to p {
-                let diff: f32 = X.data[row_base + j] - model.means[c][j]
-                let term_idx: i32 = class_base + j
-                lp = lp + log_norm[term_idx] - diff * diff * inv_two_var[term_idx]
+                let diff: f32 = x_row[j] - means_c[j]
+                sum_diff_sq = sum_diff_sq + diff * diff * inv_var_c[j]
             }
+            let lp: f32 = class_const[c] - sum_diff_sq
             log_probs[c] = lp
             if lp > max_lp {
                 max_lp = lp
@@ -244,8 +229,7 @@ export function gaussian_nb_predict_proba(model: GaussianNB, X: Matrix) -> Matri
         }
     }
 
-    array_free_f32(class_log_prior)
-    array_free_f32(log_norm)
+    array_free_f32(class_const)
     array_free_f32(inv_two_var)
     array_free_f32(log_probs)
     return probs

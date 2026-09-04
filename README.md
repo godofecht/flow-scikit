@@ -14,7 +14,7 @@ The goal is not a line-for-line port. The project implements familiar estimators
 
 ## Why traditional machine learning still matters
 
-A useful practitioner snapshot appears in the r/datascience discussion [“Do people not use sci-kit learn / other traditional libraries anymore?”](https://www.reddit.com/r/datascience/comments/16lu9ni/do_people_not_use_scikit_learn_other_traditional/). It is anecdotal rather than a survey, but the recurring sentiment is clear: regression, trees, SVMs, clustering and other conventional methods remain routine production tools, especially for tabular and business workloads where larger neural models are unnecessary.
+A useful practitioner snapshot appears in the r/datascience discussion ["Do people not use sci-kit learn / other traditional libraries anymore?"](https://www.reddit.com/r/datascience/comments/16lu9ni/do_people_not_use_scikit_learn_other_traditional/). It is anecdotal rather than a survey, but the recurring sentiment is clear: regression, trees, SVMs, clustering and other conventional methods remain routine production tools, especially for tabular and business workloads where larger neural models are unnecessary.
 
 The other recurring point is that scikit-learn's value is larger than any individual estimator. Its common estimator interface makes preprocessing, fitting, evaluation, tuning and composition unusually coherent. flow-scikit is interested in preserving that practical model while testing a different runtime boundary.
 
@@ -28,7 +28,7 @@ That makes classical ML particularly interesting for native applications, embedd
 
 Performance claims in this repository are generated from committed benchmark artifacts rather than selected examples.
 
-The current canonical v2 result is [`benchmarks/headline_result_v2.json`](benchmarks/headline_result_v2.json): **19 of 19 rows are parity-eligible and measurement-resolved**. In that committed run, **Flow wins 8 of 19 end-to-end fit + predict comparisons and scikit-learn wins 11 of 19**. There are no parity-unresolved or measurement-unresolved rows.
+The current canonical v2 result is [`benchmarks/headline_result_v2.json`](benchmarks/headline_result_v2.json): **19 of 19 rows are parity-eligible and measurement-resolved**. In that committed run, **Flow wins 18 of 19 end-to-end fit + predict comparisons and scikit-learn wins 1 of 19**. There are no parity-unresolved or measurement-unresolved rows.
 
 Canonical v2 uses explicit `TIMING_UNIT|ms` markers, persisted identical train/test fixtures, repeated timing aggregation and estimator-specific numerical parity gates. Unsupervised rows are not forced into classifier-style metrics: KMeans uses adjusted Rand index and inertia, while PCA additionally checks explained variance, singular values, reconstruction error and sign-aligned components.
 
@@ -40,7 +40,7 @@ See the [full canonical benchmark report](https://godofecht.github.io/flow-sciki
 
 ## What sklearn actually executes
 
-“Python versus compiled” is too crude a performance model for scikit-learn. Its public API is Python, but estimator hot paths may execute in Python orchestration, NumPy/SciPy, BLAS/LAPACK, sklearn-owned Cython/native code or external native libraries such as liblinear and libsvm.
+"Python versus compiled" is too crude a performance model for scikit-learn. Its public API is Python, but estimator hot paths may execute in Python orchestration, NumPy/SciPy, BLAS/LAPACK, sklearn-owned Cython/native code or external native libraries such as liblinear and libsvm.
 
 flow-scikit now maintains a generated execution map rather than inferring opportunity from file extensions. The current committed evidence contains:
 
@@ -51,7 +51,11 @@ flow-scikit now maintains a generated execution map rather than inferring opport
 - **8 whole-estimator experiments**
 - substrate and speedup joins for **all 19 canonical benchmark rows**
 
-The current grouped headline evidence is descriptive rather than causal: Flow wins **75% of Python-bound rows**, about **45% of mixed rows**, and **0% of external-native-bound rows** in the committed architecture map. That pattern is useful enough to guide engineering: optimize Python/boundary-heavy paths aggressively, treat sklearn-owned compiled code as a direct implementation contest, and retain mature BLAS/LAPACK/liblinear/libsvm kernels unless measurements justify replacement.
+The current grouped headline evidence is descriptive rather than causal: Flow wins **100% of Python-bound rows** at a mean of 23.04x, **91% of mixed rows** at 6.00x, and **100% of external-native-bound rows** at 3.78x in the committed architecture map.
+
+An earlier reading of this table, when the Flow side was still built unoptimized, showed Flow losing every external-native-bound row and concluded that sklearn-owned compiled code was out of reach. That conclusion was an artifact of the build, so treat the substrate grouping as a guide to where the Python boundary costs most rather than as a ceiling.
+
+The single remaining scikit-learn win is `RandomForest` on digits at 0.85x. Its split search sorts one gathered column per candidate feature per node, and the ten trees are independent work that Flow runs on one core. Threading them needs a Flow callback that a C dispatcher can call, which is blocked on Flow compiler issue #843.
 
 Detailed artifacts:
 
@@ -83,11 +87,27 @@ cd flow-scikit
 # link step with undefined cblas_* symbols.
 export FLOW_HOST=python
 export FLOW_OPT_LEVEL=0
-export FLOW_LDFLAGS="-framework Accelerate"   # macOS
-# export FLOW_LDFLAGS="-lm -lopenblas"        # Linux, matching CI
+export FLOW_LDFLAGS="-framework Accelerate lib/scikit/flow_time.c"   # macOS
+# export FLOW_LDFLAGS="-lm -lopenblas lib/scikit/flow_time.c"        # Linux, matching CI
 
 python tools/run_all.py
 ```
+
+Benchmarks are compiled at `-O3` and link the timing shim:
+
+```bash
+export FLOW_OPT_LEVEL=3
+export FLOW_LDFLAGS="-framework Accelerate lib/scikit/flow_time.c"   # macOS
+# export FLOW_LDFLAGS="-lm -lopenblas lib/scikit/flow_time.c"        # Linux, matching CI
+
+python benchmarks/run_headline.py --repeats 7
+```
+
+scikit-learn is measured as a released wheel, which ships optimized. Building
+the Flow side at `-O0` measured the two at different optimization levels and
+understated every row; the canonical contract now compiles both sides
+optimized. `lib/scikit/flow_time.c` supplies the monotonic clock every timing
+harness uses, and must be linked for the tests as well as the benchmarks.
 
 `tools/run_all.py` is what the full CI suite exercises. A single file runs with
 `flow run tests/test_new_features.flow` under the same environment.

@@ -64,52 +64,51 @@ export function linear_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, e
     let w: ptr<f64> = array_new_f64(n_aug)
     let C64: f64 = C as f64
 
-    # Precompute x_i^T x_i for each sample (augmented)
-    let x_norm_sq: ptr<f64> = array_new_f64(n_samples)
-    for i in 0 to n_samples {
-        let mut s: f64 = 0.0
-        for j in 0 to n_features {
-            let xv: f64 = (matrix_at(X, i, j)) as f64
-            s = s + xv * xv
-        }
-        s = s + 1.0  # bias term
-        x_norm_sq[i] = s
-    }
+    let n2: i32 = n_aug
+    let stride: i32 = n2 + 1
+    let margins: ptr<f64> = array_new_f64(n_samples)
+    let active: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
+    let base_dot: ptr<f64> = array_new_f64(n_samples)
+    let d_dot: ptr<f64> = array_new_f64(n_samples)
+    let g: ptr<f64> = array_new_f64(n_aug)
+    let H: ptr<f64> = malloc((n2 as i64) * (stride as i64) * 8) as ptr<f64>
+    let d: ptr<f64> = array_new_f64(n2)
 
     let mut iter: i32 = 0
     while iter < epochs {
         # Compute margins y_i * w^T x_i and identify active set
         # Active set I = {i : y_i * w^T x_i < 1}
-        let margins: ptr<f64> = array_new_f64(n_samples)
-        let active: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
         let mut n_active: i32 = 0
         for i in 0 to n_samples {
+            let xrow: ptr<f32> = X.data + i * n_features
             let mut dot: f64 = 0.0
             for j in 0 to n_features {
-                dot = dot + w[j] * (matrix_at(X, i, j)) as f64
+                dot = dot + w[j] * (xrow[j] as f64)
             }
             dot = dot + w[n_features]  # bias weight
             let m: f64 = (y_dual[i]) as f64 * dot
             margins[i] = m
             if m < 1.0 {
                 active[n_active] = i
+                base_dot[n_active] = dot
                 n_active = n_active + 1
             }
         }
 
         # Gradient: g_j = w_j - 2*C * sum_{i in I} y_i*(1 - m_i) * x_ij
-        let g: ptr<f64> = array_new_f64(n_aug)
         for j in 0 to n_aug {
             g[j] = w[j]
         }
         for k in 0 to n_active {
             let i: i32 = active[k]
+            let xrow: ptr<f32> = X.data + i * n_features
             let yi: f64 = (y_dual[i]) as f64
             let residual: f64 = 1.0 - margins[i]
+            let factor: f64 = 2.0 * C64 * yi * residual
             for j in 0 to n_features {
-                g[j] = g[j] - 2.0 * C64 * yi * residual * (matrix_at(X, i, j)) as f64
+                g[j] = g[j] - factor * (xrow[j] as f64)
             }
-            g[n_features] = g[n_features] - 2.0 * C64 * yi * residual  # bias term
+            g[n_features] = g[n_features] - factor  # bias term
         }
 
         # Check gradient norm
@@ -118,18 +117,10 @@ export function linear_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, e
             g_norm = g_norm + g[j] * g[j]
         }
         if g_norm < 0.000001 {
-            free(active as ptr<void>)
-            array_free_f64(margins)
-            array_free_f64(g)
             break
         }
 
         # Hessian: H_jk = delta_jk + 2*C * sum_{i in I} x_ij * x_ik
-        # For small n_aug, build and solve directly with Gaussian elimination.
-        # The augmented matrix has n2 rows and (n2+1) columns (last col = -g).
-        let n2: i32 = n_aug
-        let stride: i32 = n2 + 1
-        let H: ptr<f64> = malloc((n2 as i64) * (stride as i64) * 8) as ptr<f64>
         for j in 0 to n2 {
             for k in 0 to n2 {
                 if j == k {
@@ -141,17 +132,23 @@ export function linear_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, e
         }
         for kk in 0 to n_active {
             let i: i32 = active[kk]
+            let xrow: ptr<f32> = X.data + i * n_features
             for j in 0 to n_features {
-                let xij: f64 = (matrix_at(X, i, j)) as f64
-                for k in 0 to n_features {
-                    H[j * stride + k] = H[j * stride + k] + 2.0 * C64 * xij * ((matrix_at(X, i, k)) as f64)
+                let xij: f64 = xrow[j] as f64
+                let c_xij: f64 = 2.0 * C64 * xij
+                for k in j to n_features {
+                    H[j * stride + k] = H[j * stride + k] + c_xij * (xrow[k] as f64)
                 }
-                # bias column/row
-                H[j * stride + n_features] = H[j * stride + n_features] + 2.0 * C64 * xij
-                H[n_features * stride + j] = H[n_features * stride + j] + 2.0 * C64 * xij
+                H[j * stride + n_features] = H[j * stride + n_features] + c_xij
             }
-            H[n_features * stride + n_features] = H[n_features * stride + n_features] + 2.0 * C64
         }
+        for j in 0 to n_features {
+            for k in 0 to j {
+                H[j * stride + k] = H[k * stride + j]
+            }
+            H[n_features * stride + j] = H[j * stride + n_features]
+        }
+        H[n_features * stride + n_features] = H[n_features * stride + n_features] + 2.0 * C64 * (n_active as f64)
 
         # Solve H * d = -g using Gaussian elimination with partial pivoting
         # Augment H with -g as the last column
@@ -205,7 +202,6 @@ export function linear_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, e
         }
 
         # Back substitution
-        let d: ptr<f64> = array_new_f64(n2)
         let mut row: i32 = n2 - 1
         while row >= 0 {
             let mut sum: f64 = H[row * stride + n2]
@@ -219,8 +215,18 @@ export function linear_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, e
         }
 
         # Line search: find step size beta that minimizes objective
-        # f(w + beta*d) = (1/2)||w+beta*d||^2 + C*sum max(0, 1 - y_i*(w+beta*d)^T x_i)^2
-        # Use backtracking with Wolfe-like conditions
+        # Precompute d^T x_i for each active sample
+        for k in 0 to n_active {
+            let i: i32 = active[k]
+            let xrow: ptr<f32> = X.data + i * n_features
+            let mut dot_d: f64 = 0.0
+            for j in 0 to n_features {
+                dot_d = dot_d + d[j] * (xrow[j] as f64)
+            }
+            dot_d = dot_d + d[n_features]
+            d_dot[k] = dot_d
+        }
+
         let mut beta: f64 = 1.0
         let mut best_beta: f64 = 0.0
         let mut best_obj: f64 = 0.0
@@ -229,11 +235,7 @@ export function linear_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, e
         for k in 0 to n_active {
             let i: i32 = active[k]
             let yi: f64 = (y_dual[i]) as f64
-            let mut dot: f64 = 0.0
-            for j in 0 to n_features {
-                dot = dot + w[j] * (matrix_at(X, i, j)) as f64
-            }
-            dot = dot + w[n_features]
+            let dot: f64 = base_dot[k]
             let loss: f64 = 1.0 - yi * dot
             if loss > 0.0 { best_obj = best_obj + C64 * loss * loss }
         }
@@ -250,11 +252,7 @@ export function linear_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, e
             for k in 0 to n_active {
                 let i: i32 = active[k]
                 let yi: f64 = (y_dual[i]) as f64
-                let mut dot: f64 = 0.0
-                for j in 0 to n_features {
-                    dot = dot + (w[j] + b * d[j]) * (matrix_at(X, i, j)) as f64
-                }
-                dot = dot + (w[n_features] + b * d[n_features])
+                let dot: f64 = base_dot[k] + b * d_dot[k]
                 let loss: f64 = 1.0 - yi * dot
                 if loss > 0.0 { obj = obj + C64 * loss * loss }
             }
@@ -271,14 +269,16 @@ export function linear_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, e
             w[j] = w[j] + best_beta * d[j]
         }
 
-        free(H as ptr<void>)
-        free(active as ptr<void>)
-        array_free_f64(margins)
-        array_free_f64(g)
-        array_free_f64(d)
-
         iter = iter + 1
     }
+
+    free(H as ptr<void>)
+    free(active as ptr<void>)
+    array_free_f64(margins)
+    array_free_f64(base_dot)
+    array_free_f64(d_dot)
+    array_free_f64(g)
+    array_free_f64(d)
 
     # Extract weights and bias
     for j in 0 to n_features {
@@ -288,8 +288,6 @@ export function linear_svc_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: f32, e
 
     array_free_f32(y_dual)
     array_free_f64(w)
-    array_free_f64(x_norm_sq)
-
     return LinearSVC {
         weights: weights,
         bias: bias,
@@ -516,16 +514,21 @@ export function linear_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, C: 
 
 export function linear_svc_multi_decision_function(model: LinearSVCMulti, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
-    let scores: ptr<f32> = array_new_f32(n * model.n_classes)
+    let p: i32 = model.n_features
+    let nc: i32 = model.n_classes
+    let scores: ptr<f32> = array_new_f32(n * nc)
 
     let mut c: i32 = 0
-    while c < model.n_classes {
+    while c < nc {
+        let wc: ptr<f32> = model.weights[c]
+        let bc: f32 = model.biases[c]
         for i in 0 to n {
-            let mut z: f32 = model.biases[c]
-            for j in 0 to model.n_features {
-                z = z + model.weights[c][j] * matrix_at(X, i, j)
+            let xrow: ptr<f32> = X.data + i * p
+            let mut z: f32 = bc
+            for j in 0 to p {
+                z = z + wc[j] * xrow[j]
             }
-            scores[i * model.n_classes + c] = z
+            scores[i * nc + c] = z
         }
         c = c + 1
     }
@@ -755,11 +758,16 @@ function _kernel_svc_smo_precomputed(
     for i in 0 to n {
         let gi: i32 = idx_map[i]
         let yi: f64 = y_d[i]
-        for j in 0 to n {
+        let k_row: ptr<f64> = kernel_full + gi * n_total
+        let q_row: ptr<f64> = Q + i * n
+        q_row[i] = k_row[gi]
+        QD[i] = q_row[i]
+        for j in i + 1 to n {
             let gj: i32 = idx_map[j]
-            Q[i * n + j] = yi * y_d[j] * kernel_full[gi * n_total + gj]
+            let v: f64 = yi * y_d[j] * k_row[gj]
+            q_row[j] = v
+            Q[j * n + i] = v
         }
-        QD[i] = Q[i * n + i]
     }
 
     # Maintain gradient incrementally: G[i] = sum_j Q[i,j] * alpha_j - 1
@@ -985,49 +993,49 @@ function _rbf_exp_f64(neg_gamma_sum: f64) -> f64 {
 # K[i,j] = exp(-gamma * ||x1_i - x2_j||^2)
 # Uses the identity: ||a-b||^2 = ||a||^2 + ||b||^2 - 2*a^T*b
 # The cross term a^T*b is computed via cblas_sgemm.
+# The cross term a^T*b is computed via cblas_sgemm.
 function _rbf_kernel_blas(X1: Matrix, X2: Matrix, gamma: f32) -> Matrix {
     let n1: i32 = X1.rows
     let n2: i32 = X2.rows
     let nf: i32 = X1.cols
     let result: Matrix = matrix_new(n1, n2)
 
-    # Compute squared norms of X1 and X2
+    let x1_data: ptr<f32> = X1.data
+    let x2_data: ptr<f32> = X2.data
+
     let x1_sq: ptr<f32> = array_new_f32(n1)
     let x2_sq: ptr<f32> = array_new_f32(n2)
     for i in 0 to n1 {
+        let r: ptr<f32> = x1_data + i * nf
         let mut s: f32 = 0.0
         for k in 0 to nf {
-            let v: f32 = matrix_at(X1, i, k)
+            let v: f32 = r[k]
             s = s + v * v
         }
         x1_sq[i] = s
     }
     for j in 0 to n2 {
+        let r: ptr<f32> = x2_data + j * nf
         let mut s: f32 = 0.0
         for k in 0 to nf {
-            let v: f32 = matrix_at(X2, j, k)
+            let v: f32 = r[k]
             s = s + v * v
         }
         x2_sq[j] = s
     }
 
-    # Cross term: X1 * X2^T via cblas_sgemm
-    # X1 is n1 x nf (row-major), X2 is n2 x nf (row-major)
-    # We need X1 * X2^T which is n1 x n2.
-    # cblas_sgemm with transb=CblasTrans computes C = alpha * X1 * X2^T + beta * C
-    let gamma_f: f32 = gamma
     let cross: ptr<f32> = malloc((n1 as i64) * (n2 as i64) * 4) as ptr<f32>
-    # Use the BLAS matmat wrapper with transposed B
-    # But our wrapper doesn't support trans. Call cblas_sgemm directly.
-    cblas_sgemm(CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, CBLAS_TRANS, n1, n2, nf, 1.0, X1.data, nf, X2.data, nf, 0.0, cross, n2)
+    cblas_sgemm(101, 111, 112, n1, n2, nf, 1.0, x1_data, nf, x2_data, nf, 0.0, cross, n2)
 
-    # Combine: sq_dist = x1_sq + x2_sq - 2*cross, then exp(-gamma * sq_dist)
     let gamma_d: f64 = gamma as f64
     for i in 0 to n1 {
+        let x1_val: f32 = x1_sq[i]
+        let cross_row: ptr<f32> = cross + i * n2
+        let res_row: ptr<f32> = result.data + i * n2
         for j in 0 to n2 {
-            let sq: f32 = x1_sq[i] + x2_sq[j] - 2.0 * cross[i * n2 + j]
-            let val: f32 = _rbf_exp_f64(0.0 - gamma_d * (sq as f64)) as f32
-            matrix_set(result, i, j, val)
+            let mut sq: f64 = (x1_val + x2_sq[j] - 2.0 * cross_row[j]) as f64
+            if sq < 0.0 { sq = 0.0 }
+            res_row[j] = _rbf_exp_f64(0.0 - gamma_d * sq) as f32
         }
     }
 
@@ -1045,21 +1053,25 @@ function _rbf_kernel_blas_f64(X1: Matrix, X2: Matrix, gamma: f32) -> ptr<f64> {
     let n2: i32 = X2.rows
     let nf: i32 = X1.cols
 
-    # Compute squared norms in f32 (cheap)
+    let x1_data: ptr<f32> = X1.data
+    let x2_data: ptr<f32> = X2.data
+
     let x1_sq: ptr<f32> = array_new_f32(n1)
     let x2_sq: ptr<f32> = array_new_f32(n2)
     for i in 0 to n1 {
+        let r: ptr<f32> = x1_data + i * nf
         let mut s: f32 = 0.0
         for k in 0 to nf {
-            let v: f32 = matrix_at(X1, i, k)
+            let v: f32 = r[k]
             s = s + v * v
         }
         x1_sq[i] = s
     }
     for j in 0 to n2 {
+        let r: ptr<f32> = x2_data + j * nf
         let mut s: f32 = 0.0
         for k in 0 to nf {
-            let v: f32 = matrix_at(X2, j, k)
+            let v: f32 = r[k]
             s = s + v * v
         }
         x2_sq[j] = s
@@ -1067,15 +1079,19 @@ function _rbf_kernel_blas_f64(X1: Matrix, X2: Matrix, gamma: f32) -> ptr<f64> {
 
     # Cross term: X1 * X2^T via f32 cblas_sgemm (much faster than dgemm)
     let cross: ptr<f32> = malloc((n1 as i64) * (n2 as i64) * 4) as ptr<f32>
-    cblas_sgemm(CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, CBLAS_TRANS, n1, n2, nf, 1.0, X1.data, nf, X2.data, nf, 0.0, cross, n2)
+    cblas_sgemm(101, 111, 112, n1, n2, nf, 1.0, x1_data, nf, x2_data, nf, 0.0, cross, n2)
 
     # Combine and apply exp in f64
     let gamma_d: f64 = gamma as f64
     let result: ptr<f64> = malloc((n1 as i64) * (n2 as i64) * 8) as ptr<f64>
     for i in 0 to n1 {
+        let x1_val: f32 = x1_sq[i]
+        let cross_row: ptr<f32> = cross + i * n2
+        let res_row: ptr<f64> = result + i * n2
         for j in 0 to n2 {
-            let sq: f64 = (x1_sq[i] + x2_sq[j] - 2.0 * cross[i * n2 + j]) as f64
-            result[i * n2 + j] = _rbf_exp_f64(0.0 - gamma_d * sq)
+            let mut sq: f64 = (x1_val + x2_sq[j] - 2.0 * cross_row[j]) as f64
+            if sq < 0.0 { sq = 0.0 }
+            res_row[j] = _rbf_exp_f64(0.0 - gamma_d * sq)
         }
     }
 
@@ -1155,8 +1171,40 @@ export function kernel_svc_free(model: KernelSVC) -> void {
 
 # Build full RBF kernel matrix. Always use BLAS because cblas_sgemm is faster
 # than the scalar nested loop even for small arrays like 100-500.
-function _build_full_kernel(X: Matrix, n: i32, n_features: i32, gamma: f32) -> ptr<f64> {
-    return _rbf_kernel_blas_f64(X, X, gamma)
+function _build_full_kernel(X: Matrix, n: i32, nf: i32, gamma: f32) -> ptr<f64> {
+    let x_data: ptr<f32> = X.data
+    let x_sq: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let r: ptr<f32> = x_data + i * nf
+        let mut s: f32 = 0.0
+        for k in 0 to nf {
+            let v: f32 = r[k]
+            s = s + v * v
+        }
+        x_sq[i] = s
+    }
+
+    let cross: ptr<f32> = malloc((n as i64) * (n as i64) * 4) as ptr<f32>
+    cblas_sgemm(101, 111, 112, n, n, nf, 1.0, x_data, nf, x_data, nf, 0.0, cross, n)
+
+    let gamma_d: f64 = gamma as f64
+    let result: ptr<f64> = malloc((n as i64) * (n as i64) * 8) as ptr<f64>
+    for i in 0 to n {
+        result[i * n + i] = 1.0
+        let xi_sq: f32 = x_sq[i]
+        let cross_row: ptr<f32> = cross + i * n
+        for j in i + 1 to n {
+            let mut sq: f64 = (xi_sq + x_sq[j] - 2.0 * cross_row[j]) as f64
+            if sq < 0.0 { sq = 0.0 }
+            let v: f64 = _kr_exp_f64(0.0 - gamma_d * sq)
+            result[i * n + j] = v
+            result[j * n + i] = v
+        }
+    }
+
+    free(cross as ptr<void>)
+    array_free_f32(x_sq)
+    return result
 }
 
 # ============================================================================
@@ -1209,42 +1257,68 @@ export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gam
     let coef_all: ptr<f32> = array_new_f32(n * n_pairs)
     let bias_all: ptr<f32> = array_new_f32(n_pairs)
 
+    # Pre-index samples by class to avoid scanning the entire dataset on every pair.
+    let class_counts: ptr<i32> = malloc((n_found as i64) * 4) as ptr<i32>
+    for c in 0 to n_found { class_counts[c] = 0 }
+    for i in 0 to n {
+        for c in 0 to n_found {
+            if y[i] == classes[c] {
+                class_counts[c] = class_counts[c] + 1
+            }
+        }
+    }
+    let class_rows: ptr<ptr<i32> > = malloc((n_found as i64) * 8) as ptr<ptr<i32> >
+    let class_ptrs: ptr<i32> = malloc((n_found as i64) * 4) as ptr<i32>
+    for c in 0 to n_found {
+        class_rows[c] = malloc((class_counts[c] as i64) * 4) as ptr<i32>
+        class_ptrs[c] = 0
+    }
+    for i in 0 to n {
+        for c in 0 to n_found {
+            if y[i] == classes[c] {
+                let pos: i32 = class_ptrs[c]
+                class_rows[c][pos] = i
+                class_ptrs[c] = pos + 1
+            }
+        }
+    }
+    free(class_ptrs as ptr<void>)
+
     let mut pair_idx: i32 = 0
     let mut a: i32 = 0
     while a < n_found {
         let mut b: i32 = a + 1
         while b < n_found {
-            # Collect samples belonging to class a or class b
-            let mut count: i32 = 0
-            for i in 0 to n {
-                if y[i] == classes[a] || y[i] == classes[b] {
-                    count = count + 1
-                }
-            }
+            let count_a: i32 = class_counts[a]
+            let count_b: i32 = class_counts[b]
+            let count: i32 = count_a + count_b
 
-            let X_sub: Matrix = matrix_new(count, n_features)
             let y_dual: ptr<f32> = array_new_f32(count)
             let idx_map: ptr<i32> = malloc((count as i64) * 4) as ptr<i32>
-            let mut idx: i32 = 0
-            for i in 0 to n {
-                if y[i] == classes[a] || y[i] == classes[b] {
-                    for j in 0 to n_features {
-                        matrix_set(X_sub, idx, j, matrix_at(X, i, j))
-                    }
-                    if y[i] == classes[a] {
-                        y_dual[idx] = 1.0
-                    } else {
-                        y_dual[idx] = -1.0
-                    }
-                    idx_map[idx] = i
-                    idx = idx + 1
-                }
+
+            let rows_a: ptr<i32> = class_rows[a]
+            for i in 0 to count_a {
+                idx_map[i] = rows_a[i]
+                y_dual[i] = 1.0
+            }
+            let rows_b: ptr<i32> = class_rows[b]
+            for i in 0 to count_b {
+                idx_map[count_a + i] = rows_b[i]
+                y_dual[count_a + i] = -1.0
             }
 
+            let sub_X: Matrix = matrix_new(count, n_features)
+            for i in 0 to count {
+                let row_idx: i32 = idx_map[i]
+                for j in 0 to n_features {
+                    matrix_set(sub_X, i, j, matrix_at(X, row_idx, j))
+                }
+            }
             let binary_classes: ptr<f32> = array_new_f32(2)
             binary_classes[0] = -1.0
             binary_classes[1] = 1.0
-            models[pair_idx] = _kernel_svc_smo_precomputed(X_sub, y_dual, binary_classes, 2, C, gamma, max_iter, kernel_full, idx_map, n)
+            models[pair_idx] = _kernel_svc_smo_precomputed(sub_X, y_dual, binary_classes, 2, C, gamma, max_iter, kernel_full, idx_map, n)
+            matrix_free(sub_X)
             pair_a[pair_idx] = a
             pair_b[pair_idx] = b
 
@@ -1255,16 +1329,19 @@ export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gam
             }
             bias_all[pair_idx] = pm.b
 
-            # idx_map is consumed by the solver (it copies the kernel slice).
             free(idx_map as ptr<void>)
-            # X_sub is stored in the model (matrix_copy inside solver).
-            matrix_free(X_sub)
 
             pair_idx = pair_idx + 1
             b = b + 1
         }
         a = a + 1
     }
+
+    for c in 0 to n_found {
+        free(class_rows[c] as ptr<void>)
+    }
+    free(class_rows as ptr<void>)
+    free(class_counts as ptr<void>)
 
     free(kernel_full as ptr<void>)
 
@@ -1301,9 +1378,12 @@ export function kernel_svc_multi_decision_function(model: KernelSVCMulti, X: Mat
     let dec: ptr<f32> = array_new_f32(n * np)
     blas_matmat(K.data, model.coef_all, dec, n, np, nt, 1.0, 0.0)
     matrix_free(K)
+
+    let bias: ptr<f32> = model.bias_all
     for i in 0 to n {
+        let dec_row: ptr<f32> = dec + i * np
         for p in 0 to np {
-            dec[i * np + p] = dec[i * np + p] + model.bias_all[p]
+            dec_row[p] = dec_row[p] + bias[p]
         }
     }
     return dec
@@ -1311,47 +1391,42 @@ export function kernel_svc_multi_decision_function(model: KernelSVCMulti, X: Mat
 
 export function kernel_svc_multi_predict(model: KernelSVCMulti, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
-    let total_votes: i32 = n * model.n_classes
-    let votes: ptr<i32> = malloc((total_votes as i64) * 4) as ptr<i32>
-    for i in 0 to total_votes {
-        votes[i] = 0
-    }
-
+    let nc: i32 = model.n_classes
     let np: i32 = model.n_pairs
     let dec: ptr<f32> = kernel_svc_multi_decision_function(model, X)
+    let preds: ptr<f32> = array_new_f32(n)
+    let row_votes: ptr<i32> = malloc((nc as i64) * 4) as ptr<i32>
 
-    let mut p: i32 = 0
-    while p < np {
-        let a: i32 = model.pair_a[p]
-        let b: i32 = model.pair_b[p]
-        for i in 0 to n {
-            if dec[i * np + p] > 0.0 {
-                votes[i * model.n_classes + a] = votes[i * model.n_classes + a] + 1
+    let pair_a: ptr<i32> = model.pair_a
+    let pair_b: ptr<i32> = model.pair_b
+
+    for i in 0 to n {
+        for c in 0 to nc { row_votes[c] = 0 }
+        let dec_row: ptr<f32> = dec + i * np
+        for p in 0 to np {
+            if dec_row[p] > 0.0 {
+                let a: i32 = pair_a[p]
+                row_votes[a] = row_votes[a] + 1
             } else {
-                votes[i * model.n_classes + b] = votes[i * model.n_classes + b] + 1
+                let b: i32 = pair_b[p]
+                row_votes[b] = row_votes[b] + 1
             }
         }
-        p = p + 1
-    }
-    array_free_f32(dec)
 
-    let preds: ptr<f32> = array_new_f32(n)
-    for i in 0 to n {
         let mut best_c: i32 = 0
-        let mut best_votes: i32 = votes[i * model.n_classes]
-        let mut c: i32 = 1
-        while c < model.n_classes {
-            let v: i32 = votes[i * model.n_classes + c]
+        let mut best_votes: i32 = row_votes[0]
+        for c in 1 to nc {
+            let v: i32 = row_votes[c]
             if v > best_votes {
                 best_votes = v
                 best_c = c
             }
-            c = c + 1
         }
         preds[i] = model.classes[best_c]
     }
 
-    free(votes as ptr<void>)
+    free(row_votes as ptr<void>)
+    array_free_f32(dec)
     return preds
 }
 

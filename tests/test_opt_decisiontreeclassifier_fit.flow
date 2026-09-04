@@ -21,19 +21,14 @@
 import "lib/scikit/scikit.flow"
 
 extern {
-    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+    function flow_now_ns() -> i64
     function printf(fmt: string, ...) -> i32
     function calloc(count: i64, size: i64) -> ptr<void>
 }
 
-const DTCF_TIME_UTC: i32 = 1
 
 function dtcf_now_ns() -> i64 {
-    let ts: ptr<i64> = malloc(16) as ptr<i64>
-    timespec_get(ts, DTCF_TIME_UTC)
-    let value: i64 = ts[0] * 1000000000 + ts[1]
-    free(ts as ptr<void>)
-    return value
+    return flow_now_ns()
 }
 
 # --------------------------------------------------------------------------

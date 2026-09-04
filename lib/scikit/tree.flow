@@ -10,6 +10,7 @@ extern {
     function free(p: ptr<void>) -> void
     function fabs(x: f64) -> f64
     function printf(fmt: string, ...) -> i32
+    function memcpy(dst: ptr<void>, src: ptr<void>, n: i64) -> ptr<void>
 }
 
 export const TREE_MAX_DEPTH: i32 = 50
@@ -218,6 +219,225 @@ function _sort_pairs(values: ptr<f32>, companions: ptr<i32>, n: i32) -> void {
     }
 }
 
+# Introsort: sort values ascending, keeping a companion i32 array in sync.
+#
+# The shell sort below is O(n^1.3) with a serial dependence through every gap
+# pass. The classifier split search calls this once per candidate feature per
+# node, so on digits the RandomForest fit spent most of its time here. This is
+# the same hybrid scikit-learn's splitter uses: median-of-three quicksort,
+# insertion sort once a range is short, and a heapsort fallback when the
+# recursion depth suggests an adversarial pivot sequence, which keeps the worst
+# case at O(n log n).
+#
+# The partition is unstable, so equal values can come out in a different order
+# than the shell sort produced. That is safe exactly where the note on
+# _build_classifier_tree says it is: the split scan reads counts only at
+# boundaries where consecutive values differ, and at such a boundary the set of
+# samples on the left is the same whatever order the equal values came in. The
+# counts are integers, so the chosen feature and threshold are unchanged.
+#
+# That argument is about counts. It does NOT hold for the regressor, which
+# accumulates f32 sums in sorted position order, so _build_regressor_tree keeps
+# _sort_pairs_f32 and its stable gap sequence.
+#
+# The range stack is explicit rather than recursive, and the larger side of
+# each partition is looped on while the smaller side is pushed, so the stack
+# depth stays at O(log n).
+# 32 rather than the usual 16. The split search calls this once per candidate
+# feature per node, and a depth-10 tree spends most of its calls on small
+# nodes, where insertion sort finishes before the partition machinery has paid
+# for the one allocation below.
+const _INTROSORT_INSERTION_MAX: i32 = 32
+const _INTROSORT_STACK: i32 = 128
+
+function _introsort_swap(values: ptr<f32>, companions: ptr<i32>, a: i32, b: i32) -> void {
+    let tv: f32 = values[a]
+    values[a] = values[b]
+    values[b] = tv
+    let tc: i32 = companions[a]
+    companions[a] = companions[b]
+    companions[b] = tc
+}
+
+# Insertion sort over [lo, hi]. Used for short ranges, where its lack of
+# overhead beats any partitioning scheme.
+function _introsort_insertion(values: ptr<f32>, companions: ptr<i32>, lo: i32, hi: i32) -> void {
+    let mut i: i32 = lo + 1
+    while i <= hi {
+        let key_v: f32 = values[i]
+        let key_c: i32 = companions[i]
+        let mut j: i32 = i - 1
+        while j >= lo && values[j] > key_v {
+            values[j + 1] = values[j]
+            companions[j + 1] = companions[j]
+            j = j - 1
+        }
+        values[j + 1] = key_v
+        companions[j + 1] = key_c
+        i = i + 1
+    }
+}
+
+# Sift one element down a max-heap rooted at `root`, within [lo, lo + count).
+function _introsort_sift(values: ptr<f32>, companions: ptr<i32>, lo: i32, count: i32, root: i32) -> void {
+    let mut r: i32 = root
+    while true {
+        let mut largest: i32 = r
+        let left: i32 = 2 * r + 1
+        let right: i32 = left + 1
+        if left < count && values[lo + left] > values[lo + largest] { largest = left }
+        if right < count && values[lo + right] > values[lo + largest] { largest = right }
+        if largest == r { return }
+        _introsort_swap(values, companions, lo + r, lo + largest)
+        r = largest
+    }
+}
+
+# Heapsort over [lo, hi]. The depth-limit fallback, so the worst case stays
+# O(n log n) instead of quicksort's O(n^2).
+function _introsort_heap(values: ptr<f32>, companions: ptr<i32>, lo: i32, hi: i32) -> void {
+    let count: i32 = hi - lo + 1
+    if count < 2 { return }
+    let mut start: i32 = count / 2 - 1
+    while start >= 0 {
+        _introsort_sift(values, companions, lo, count, start)
+        start = start - 1
+    }
+    let mut end: i32 = count - 1
+    while end > 0 {
+        _introsort_swap(values, companions, lo, lo + end)
+        _introsort_sift(values, companions, lo, end, 0)
+        end = end - 1
+    }
+}
+
+# Put the median of first, middle and last at `lo` to use as the pivot. A
+# sorted or reverse-sorted column is the common case in a presorted tree
+# builder, and median-of-three turns both of those from worst case into best.
+function _introsort_median3(values: ptr<f32>, companions: ptr<i32>, lo: i32, hi: i32) -> void {
+    let mid: i32 = lo + (hi - lo) / 2
+    if values[mid] < values[lo] { _introsort_swap(values, companions, mid, lo) }
+    if values[hi] < values[lo] { _introsort_swap(values, companions, hi, lo) }
+    if values[hi] < values[mid] { _introsort_swap(values, companions, hi, mid) }
+    _introsort_swap(values, companions, mid, lo)
+}
+
+# An LSD radix sort over the float bit patterns was tried here and removed.
+# In isolation it looked decisive: benchmarks/zzprof_sortab.flow timed it at
+# 2.9x the introsort at n=1257 and 1.5x at n=64, interleaved in one process.
+# End to end it lost. Building the RandomForest digits row against four
+# thresholds as four separate binaries and running them round-robin gave a
+# clean monotonic result, best of 8 runs each: radix off 15.12 ms, on above
+# 512 rows 15.47 ms, above 128 rows 15.97 ms, above 64 rows 16.88 ms. The
+# split search calls this once per candidate feature per node, thousands of
+# times per fit with a different length each time, and the radix pass needs
+# four buffers and a histogram where the introsort needs a small stack. The
+# microbenchmark sorted one hot array in a tight loop, so it measured neither
+# the allocation nor the cache traffic that decides the real case.
+#
+# Keep the measurement honest: a sort benchmark that reuses one buffer does
+# not predict a tree builder.
+function _sort_pairs_fast(values: ptr<f32>, companions: ptr<i32>, n: i32) -> void {
+    if n < 2 { return }
+    if n <= _INTROSORT_INSERTION_MAX {
+        _introsort_insertion(values, companions, 0, n - 1)
+        return
+    }
+
+    # 2 * floor(log2(n)) is the standard introsort depth limit.
+    let mut depth_limit: i32 = 0
+    let mut probe: i32 = n
+    while probe > 1 {
+        depth_limit = depth_limit + 1
+        probe = probe / 2
+    }
+    depth_limit = depth_limit * 2
+
+    # One allocation carved into three ranges. Three separate mallocs cost more
+    # than the whole sort on a small node.
+    let stack_buf: ptr<i32> = malloc((_INTROSORT_STACK as i64) * 12) as ptr<i32>
+    let stack_lo: ptr<i32> = stack_buf
+    let stack_hi: ptr<i32> = stack_buf + _INTROSORT_STACK
+    let stack_dp: ptr<i32> = stack_buf + 2 * _INTROSORT_STACK
+    let mut top: i32 = 0
+    stack_lo[0] = 0
+    stack_hi[0] = n - 1
+    stack_dp[0] = depth_limit
+    top = 1
+
+    while top > 0 {
+        top = top - 1
+        let mut lo: i32 = stack_lo[top]
+        let mut hi: i32 = stack_hi[top]
+        let mut depth: i32 = stack_dp[top]
+
+        while lo < hi {
+            if hi - lo + 1 <= _INTROSORT_INSERTION_MAX {
+                _introsort_insertion(values, companions, lo, hi)
+                lo = hi
+            } else {
+                if depth <= 0 {
+                    _introsort_heap(values, companions, lo, hi)
+                    lo = hi
+                } else {
+                    depth = depth - 1
+                    _introsort_median3(values, companions, lo, hi)
+                    let pivot: f32 = values[lo]
+                    let mut i: i32 = lo
+                    let mut j: i32 = hi + 1
+                    # Hoare partition. Both scans move before any swap, so a
+                    # run of values equal to the pivot is split between the two
+                    # sides instead of piling up on one, which is what keeps a
+                    # low-cardinality column such as a digit pixel from
+                    # degenerating.
+                    while true {
+                        i = i + 1
+                        while i < hi && values[i] < pivot { i = i + 1 }
+                        j = j - 1
+                        while j > lo && values[j] > pivot { j = j - 1 }
+                        if i >= j { break }
+                        _introsort_swap(values, companions, i, j)
+                    }
+                    _introsort_swap(values, companions, lo, j)
+
+                    # Loop on the larger side, push the smaller one, so the
+                    # stack cannot exceed log2(n) entries and 128 slots are
+                    # unreachable in practice. If it ever did fill, heapsort
+                    # the range in place rather than drop it: a silently
+                    # unsorted column would give a wrong split with no error.
+                    if j - lo < hi - j {
+                        if j + 1 < hi {
+                            if top < _INTROSORT_STACK {
+                                stack_lo[top] = j + 1
+                                stack_hi[top] = hi
+                                stack_dp[top] = depth
+                                top = top + 1
+                            } else {
+                                _introsort_heap(values, companions, j + 1, hi)
+                            }
+                        }
+                        hi = j - 1
+                    } else {
+                        if lo < j - 1 {
+                            if top < _INTROSORT_STACK {
+                                stack_lo[top] = lo
+                                stack_hi[top] = j - 1
+                                stack_dp[top] = depth
+                                top = top + 1
+                            } else {
+                                _introsort_heap(values, companions, lo, j - 1)
+                            }
+                        }
+                        lo = j + 1
+                    }
+                }
+            }
+        }
+    }
+
+    free(stack_buf as ptr<void>)
+}
+
 # Shell sort: sort values array, keeping companion f32 array in sync.
 function _sort_pairs_f32(values: ptr<f32>, companions: ptr<f32>, n: i32) -> void {
     let mut gap: i32 = n / 2
@@ -415,6 +635,15 @@ export function decision_tree_classifier_fit(X: Matrix, y: ptr<f32>, n_classes: 
 # this same contract, and ensemble.flow evaluates cat_kind at every traversal.
 # The one thing still numeric only is the boosting family: GradientBoosting,
 # AdaBoost and the histogram estimators.
+struct TreeScratch {
+    sort_values: ptr<f32>,
+    sort_classes: ptr<i32>,
+    left_counts: ptr<i32>,
+    right_counts: ptr<i32>,
+    total_counts: ptr<i32>,
+    present: ptr<i32>
+}
+
 export function decision_tree_classifier_fit_categorical(X: Matrix, y: ptr<f32>, n_classes: i32, max_depth: i32, criterion: i32, categorical: ptr<i32>) -> DecisionTreeClassifier {
     # Issue #398: this used to append at classes[n_found] with no check against
     # n_classes, which wrote past the allocation whenever y carried more
@@ -455,7 +684,7 @@ export function decision_tree_classifier_fit_categorical(X: Matrix, y: ptr<f32>,
             sort_v[i] = x_data[i * x_cols + f]
             sort_r[i] = i
         }
-        _sort_pairs(sort_v, sort_r, n_rows)
+        _sort_pairs_fast(sort_v, sort_r, n_rows)
         let base: i32 = f * n_rows
         for i in 0 to n_rows {
             order[base + i] = sort_r[i]
@@ -467,21 +696,25 @@ export function decision_tree_classifier_fit_categorical(X: Matrix, y: ptr<f32>,
     # Scratch marking each row's side of the current split, indexed by row.
     let side: ptr<i32> = malloc((n_rows as i64) * 4) as ptr<i32>
 
+    let scratch: TreeScratch = TreeScratch {
+        sort_values: array_new_f32(n_rows),
+        sort_classes: malloc((n_rows as i64) * 4) as ptr<i32>,
+        left_counts: malloc((n_classes as i64) * 4) as ptr<i32>,
+        right_counts: malloc((n_classes as i64) * 4) as ptr<i32>,
+        total_counts: malloc((n_classes as i64) * 4) as ptr<i32>,
+        present: malloc((n_classes as i64) * 4) as ptr<i32>
+    }
+
     # Categorical bookkeeping. cat_card[f] is 0 for a numeric feature, so with
     # no categorical features max_card is 0, the builder's categorical branch
     # is unreachable, and these two allocations are 16 bytes and one float.
-    #
-    # The scratch is allocated once here rather than per node so the numeric
-    # path picks up no extra allocation at all. Nothing in it survives across
-    # the recursive calls: a node fills it, picks its split and partitions
-    # before it descends.
     let cat_card: ptr<i32> = _tree_cat_cardinalities(X, categorical)
     let max_card: i32 = _tree_cat_max_card(cat_card, x_cols)
     let ccap: i64 = max_card as i64
     let cat_iscratch: ptr<i32> = malloc((ccap * 4 + ccap * (n_classes as i64)) * 4 + 16) as ptr<i32>
     let cat_mean: ptr<f32> = array_new_f32(max_card + 1)
 
-    let final_n_nodes: i32 = _build_classifier_tree(nodes, n_nodes_ptr, X, y, order, n_rows, 0, max_depth, criterion, classes, n_classes, class_of_row, side, cat_card, max_card, cat_iscratch, cat_mean)
+    let final_n_nodes: i32 = _build_classifier_tree(nodes, n_nodes_ptr, X, y, order, n_rows, 0, max_depth, criterion, classes, n_classes, class_of_row, side, cat_card, max_card, cat_iscratch, cat_mean, scratch)
 
     free(order as ptr<void>)
     free(side as ptr<void>)
@@ -489,6 +722,12 @@ export function decision_tree_classifier_fit_categorical(X: Matrix, y: ptr<f32>,
     free(cat_card as ptr<void>)
     free(cat_iscratch as ptr<void>)
     array_free_f32(cat_mean)
+    array_free_f32(scratch.sort_values)
+    free(scratch.sort_classes as ptr<void>)
+    free(scratch.left_counts as ptr<void>)
+    free(scratch.right_counts as ptr<void>)
+    free(scratch.total_counts as ptr<void>)
+    free(scratch.present as ptr<void>)
     let n_nodes: i32 = n_nodes_ptr[0]
     free(n_nodes_ptr as ptr<void>)
 
@@ -540,7 +779,8 @@ function _build_classifier_tree(
     cat_card: ptr<i32>,
     max_card: i32,
     cat_iscratch: ptr<i32>,
-    cat_mean: ptr<f32>
+    cat_mean: ptr<f32>,
+    scratch: TreeScratch
 ) -> i32 {
     let node_idx: i32 = n_nodes[0]
     n_nodes[0] = n_nodes[0] + 1
@@ -581,7 +821,7 @@ function _build_classifier_tree(
     let cat_class: ptr<i32> = cat_iscratch + 4 * max_card
 
     # Node class histogram, over any block since all blocks hold the same rows.
-    let total_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    let total_counts: ptr<i32> = scratch.total_counts
     for c in 0 to n_classes { total_counts[c] = 0 }
     for i in 0 to n_indices {
         let c: i32 = class_of_row[order[i]]
@@ -591,7 +831,7 @@ function _build_classifier_tree(
     # Ascending list of the classes that actually occur at this node. A class
     # with no samples here has no samples on either side of any split below,
     # so its impurity term is 0.0 and dropping it is exact.
-    let present: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    let present: ptr<i32> = scratch.present
     let mut n_present: i32 = 0
     for c in 0 to n_classes {
         if total_counts[c] > 0 {
@@ -600,13 +840,22 @@ function _build_classifier_tree(
         }
     }
 
+    if n_present <= 1 {
+        nodes[node_idx].is_leaf = true
+        nodes[node_idx].value = classes[present[0]]
+        nodes[node_idx].n_samples = n_indices
+        nodes[node_idx].left = -1
+        nodes[node_idx].right = -1
+        nodes[node_idx].impurity = 0.0
+        return node_idx
+    }
+
     let parent_impurity: f32 = _tree_gini_present(total_counts, present, n_present, n_indices)
 
-    # Allocated once, reused across features.
-    let sort_values: ptr<f32> = array_new_f32(n_indices)
-    let sort_classes: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
-    let left_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
-    let right_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    let sort_values: ptr<f32> = scratch.sort_values
+    let sort_classes: ptr<i32> = scratch.sort_classes
+    let left_counts: ptr<i32> = scratch.left_counts
+    let right_counts: ptr<i32> = scratch.right_counts
 
     for f in 0 to x_cols {
         let card: i32 = cat_card[f]
@@ -688,33 +937,48 @@ function _build_classifier_tree(
             continue
         }
 
-        # Gather this feature's values and classes in the order block f already
-        # holds, which is ascending by construction.
+        # Check for constant column before gathering. Sorted ascending, that is
+        # a single comparison of the first and last element in the order block.
         let base: i32 = f * n_indices
-        for i in 0 to n_indices {
-            let row: i32 = order[base + i]
+        let first_row: i32 = order[base]
+        let last_row: i32 = order[base + n_indices - 1]
+        let v_first: f32 = x_data[first_row * x_cols + f]
+        let v_last: f32 = x_data[last_row * x_cols + f]
+        if v_first == v_last { continue }
+
+        sort_values[0] = v_first
+        sort_classes[0] = class_of_row[first_row]
+        sort_values[n_indices - 1] = v_last
+        sort_classes[n_indices - 1] = class_of_row[last_row]
+        let base_ptr: ptr<i32> = order + base
+        for i in 1 to n_indices - 1 {
+            let row: i32 = base_ptr[i]
             sort_values[i] = x_data[row * x_cols + f]
             sort_classes[i] = class_of_row[row]
         }
 
-        # Constant column: the scan would hit sort_values[i] == sort_values[i+1]
-        # at every position and evaluate no candidate at all. Sorted, that is a
-        # single comparison of the ends.
-        if sort_values[0] == sort_values[n_indices - 1] { continue }
-
         # right_counts starts as the node's full class histogram; left_counts
         # starts empty. Seeding from the histogram replaces a second pass over
         # every sample.
+        let mut sum_sq_left: i32 = 0
+        let mut sum_sq_right: i32 = 0
         for pi in 0 to n_present {
             let c: i32 = present[pi]
             left_counts[c] = 0
-            right_counts[c] = total_counts[c]
+            let cnt: i32 = total_counts[c]
+            right_counts[c] = cnt
+            sum_sq_right = sum_sq_right + cnt * cnt
         }
 
         # Sweep sorted values, moving one sample at a time to left.
         for i in 0 to n_indices - 1 {
-            left_counts[sort_classes[i]] = left_counts[sort_classes[i]] + 1
-            right_counts[sort_classes[i]] = right_counts[sort_classes[i]] - 1
+            let c: i32 = sort_classes[i]
+            let L: i32 = left_counts[c]
+            let R: i32 = right_counts[c]
+            sum_sq_left = sum_sq_left + 2 * L + 1
+            left_counts[c] = L + 1
+            sum_sq_right = sum_sq_right + 1 - 2 * R
+            right_counts[c] = R - 1
 
             # Skip duplicate values.
             if sort_values[i] == sort_values[i + 1] {
@@ -763,13 +1027,6 @@ function _build_classifier_tree(
             }
         }
     }
-
-    array_free_f32(sort_values)
-    free(sort_classes as ptr<void>)
-    free(left_counts as ptr<void>)
-    free(right_counts as ptr<void>)
-    free(present as ptr<void>)
-    free(total_counts as ptr<void>)
 
     if best_feature < 0 || best_impurity >= parent_impurity - 0.0000000001 {
         let y_sub: ptr<f32> = array_new_f32(n_indices)
@@ -822,18 +1079,18 @@ function _build_classifier_tree(
     let right_order: ptr<i32> = malloc(((x_cols as i64) * (right_n as i64) + 1) * 4) as ptr<i32>
 
     for f in 0 to x_cols {
-        let sbase: i32 = f * n_indices
-        let lbase: i32 = f * left_n
-        let rbase: i32 = f * right_n
+        let sbase_ptr: ptr<i32> = order + f * n_indices
+        let lbase_ptr: ptr<i32> = left_order + f * left_n
+        let rbase_ptr: ptr<i32> = right_order + f * right_n
         let mut li: i32 = 0
         let mut ri: i32 = 0
         for i in 0 to n_indices {
-            let row: i32 = order[sbase + i]
+            let row: i32 = sbase_ptr[i]
             if side[row] == 0 {
-                left_order[lbase + li] = row
+                lbase_ptr[li] = row
                 li = li + 1
             } else {
-                right_order[rbase + ri] = row
+                rbase_ptr[ri] = row
                 ri = ri + 1
             }
         }
@@ -845,8 +1102,8 @@ function _build_classifier_tree(
     nodes[node_idx].n_samples = n_indices
     nodes[node_idx].impurity = parent_impurity
 
-    let left_idx: i32 = _build_classifier_tree(nodes, n_nodes, X, y, left_order, left_n, depth + 1, max_depth, criterion, classes, n_classes, class_of_row, side, cat_card, max_card, cat_iscratch, cat_mean)
-    let right_idx: i32 = _build_classifier_tree(nodes, n_nodes, X, y, right_order, right_n, depth + 1, max_depth, criterion, classes, n_classes, class_of_row, side, cat_card, max_card, cat_iscratch, cat_mean)
+    let left_idx: i32 = _build_classifier_tree(nodes, n_nodes, X, y, left_order, left_n, depth + 1, max_depth, criterion, classes, n_classes, class_of_row, side, cat_card, max_card, cat_iscratch, cat_mean, scratch)
+    let right_idx: i32 = _build_classifier_tree(nodes, n_nodes, X, y, right_order, right_n, depth + 1, max_depth, criterion, classes, n_classes, class_of_row, side, cat_card, max_card, cat_iscratch, cat_mean, scratch)
 
     nodes[node_idx].left = left_idx
     nodes[node_idx].right = right_idx
@@ -855,6 +1112,18 @@ function _build_classifier_tree(
     free(right_order as ptr<void>)
 
     return node_idx
+}
+
+struct RFScratch {
+    sort_values: ptr<f32>,
+    sort_classes: ptr<i32>,
+    left_counts: ptr<i32>,
+    right_counts: ptr<i32>,
+    total_counts: ptr<i32>,
+    present: ptr<i32>,
+    row_base: ptr<i32>,
+    class_idx: ptr<i32>,
+    feature_mask: ptr<i32>
 }
 
 # Tree builder with feature subsampling for RandomForest.
@@ -884,12 +1153,14 @@ function _build_classifier_tree_rf(
     criterion: i32,
     classes: ptr<f32>,
     n_classes: i32,
+    class_of_row: ptr<i32>,
     max_features: i32,
     prng_state: ptr<u32>,
     cat_card: ptr<i32>,
     max_card: i32,
     cat_iscratch: ptr<i32>,
-    cat_mean: ptr<f32>
+    cat_mean: ptr<f32>,
+    scratch: RFScratch
 ) -> i32 {
     let node_idx: i32 = n_nodes[0]
     n_nodes[0] = n_nodes[0] + 1
@@ -932,30 +1203,25 @@ function _build_classifier_tree_rf(
     let x_data: ptr<f32> = X.data
     let x_cols: i32 = X.cols
     let class_bytes: i64 = (n_indices as i64) * 4
-    let row_base: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
+    let row_base: ptr<i32> = scratch.row_base
     for i in 0 to n_indices {
         row_base[i] = indices[i] * x_cols
     }
 
-    let class_idx: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
-    for i in 0 to n_indices {
-        let mut ci: i32 = 0
-        let yi: f32 = y[indices[i]]
-        for c in 0 to n_classes {
-            if yi == classes[c] { ci = c }
-        }
-        class_idx[i] = ci
-    }
-
-    let total_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    let class_idx: ptr<i32> = scratch.class_idx
+    let total_counts: ptr<i32> = scratch.total_counts
     for c in 0 to n_classes { total_counts[c] = 0 }
-    for i in 0 to n_indices { total_counts[class_idx[i]] = total_counts[class_idx[i]] + 1 }
+    for i in 0 to n_indices {
+        let ci: i32 = class_of_row[indices[i]]
+        class_idx[i] = ci
+        total_counts[ci] = total_counts[ci] + 1
+    }
 
     # Ascending list of the classes that actually occur at this node. A class
     # with no samples here has no samples on either side of any split below,
     # so its impurity term is 0.0 and dropping it is exact. Every count loop in
     # the split scan walks this list instead of the whole label set.
-    let present: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    let present: ptr<i32> = scratch.present
     let mut n_present: i32 = 0
     for c in 0 to n_classes {
         if total_counts[c] > 0 {
@@ -966,14 +1232,14 @@ function _build_classifier_tree_rf(
 
     let parent_impurity: f32 = _tree_gini_present(total_counts, present, n_present, n_indices)
 
-    let sort_values: ptr<f32> = array_new_f32(n_indices)
-    let sort_classes: ptr<i32> = malloc((n_indices as i64) * 4) as ptr<i32>
-    let left_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
-    let right_counts: ptr<i32> = malloc((n_classes as i64) * 4) as ptr<i32>
+    let sort_values: ptr<f32> = scratch.sort_values
+    let sort_classes: ptr<i32> = scratch.sort_classes
+    let left_counts: ptr<i32> = scratch.left_counts
+    let right_counts: ptr<i32> = scratch.right_counts
 
     # Determine which features to try at this node
     let n_features: i32 = X.cols
-    let feature_mask: ptr<i32> = malloc((n_features as i64) * 4) as ptr<i32>
+    let feature_mask: ptr<i32> = scratch.feature_mask
     for f in 0 to n_features { feature_mask[f] = 0 }
 
     if max_features >= n_features {
@@ -1087,20 +1353,29 @@ function _build_classifier_tree_rf(
         if is_constant { continue }
 
         memcpy(sort_classes as ptr<void>, class_idx as ptr<void>, class_bytes)
-        _sort_pairs(sort_values, sort_classes, n_indices)
+        _sort_pairs_fast(sort_values, sort_classes, n_indices)
 
         # right_counts starts as the node's full class histogram, which is
         # exactly total_counts; left_counts starts empty. Seeding from the
         # histogram replaces a second pass over every sample.
+        let mut sum_sq_left: i32 = 0
+        let mut sum_sq_right: i32 = 0
         for pi in 0 to n_present {
             let c: i32 = present[pi]
             left_counts[c] = 0
-            right_counts[c] = total_counts[c]
+            let cnt: i32 = total_counts[c]
+            right_counts[c] = cnt
+            sum_sq_right = sum_sq_right + cnt * cnt
         }
 
         for i in 0 to n_indices - 1 {
-            left_counts[sort_classes[i]] = left_counts[sort_classes[i]] + 1
-            right_counts[sort_classes[i]] = right_counts[sort_classes[i]] - 1
+            let c: i32 = sort_classes[i]
+            let L: i32 = left_counts[c]
+            let R: i32 = right_counts[c]
+            sum_sq_left = sum_sq_left + 2 * L + 1
+            left_counts[c] = L + 1
+            sum_sq_right = sum_sq_right + 1 - 2 * R
+            right_counts[c] = R - 1
 
             if sort_values[i] == sort_values[i + 1] { continue }
 
@@ -1128,15 +1403,6 @@ function _build_classifier_tree_rf(
         }
     }
 
-    free(feature_mask as ptr<void>)
-    array_free_f32(sort_values)
-    free(sort_classes as ptr<void>)
-    free(left_counts as ptr<void>)
-    free(right_counts as ptr<void>)
-    free(class_idx as ptr<void>)
-    free(present as ptr<void>)
-    free(total_counts as ptr<void>)
-
     if best_feature < 0 || best_impurity >= parent_impurity - 0.0000000001 {
         let y_sub: ptr<f32> = array_new_f32(n_indices)
         for i in 0 to n_indices {
@@ -1149,7 +1415,6 @@ function _build_classifier_tree_rf(
         nodes[node_idx].right = -1
         nodes[node_idx].impurity = parent_impurity
         array_free_f32(y_sub)
-        free(row_base as ptr<void>)
         return node_idx
     }
 
@@ -1185,16 +1450,14 @@ function _build_classifier_tree_rf(
         }
     }
 
-    free(row_base as ptr<void>)
-
     nodes[node_idx].is_leaf = false
     nodes[node_idx].feature = best_feature
     nodes[node_idx].threshold = best_threshold
     nodes[node_idx].n_samples = n_indices
     nodes[node_idx].impurity = parent_impurity
 
-    let left_idx: i32 = _build_classifier_tree_rf(nodes, n_nodes, X, y, left_indices, left_n, depth + 1, max_depth, criterion, classes, n_classes, max_features, prng_state, cat_card, max_card, cat_iscratch, cat_mean)
-    let right_idx: i32 = _build_classifier_tree_rf(nodes, n_nodes, X, y, right_indices, right_n, depth + 1, max_depth, criterion, classes, n_classes, max_features, prng_state, cat_card, max_card, cat_iscratch, cat_mean)
+    let left_idx: i32 = _build_classifier_tree_rf(nodes, n_nodes, X, y, left_indices, left_n, depth + 1, max_depth, criterion, classes, n_classes, class_of_row, max_features, prng_state, cat_card, max_card, cat_iscratch, cat_mean, scratch)
+    let right_idx: i32 = _build_classifier_tree_rf(nodes, n_nodes, X, y, right_indices, right_n, depth + 1, max_depth, criterion, classes, n_classes, class_of_row, max_features, prng_state, cat_card, max_card, cat_iscratch, cat_mean, scratch)
 
     nodes[node_idx].left = left_idx
     nodes[node_idx].right = right_idx
@@ -1240,6 +1503,28 @@ export function decision_tree_classifier_fit_rf_categorical(X: Matrix, y: ptr<f3
     let indices: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
     for i in 0 to X.rows { indices[i] = i }
 
+    let class_of_row: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
+    for i in 0 to X.rows {
+        let mut ci: i32 = 0
+        let yi: f32 = y[i]
+        for c in 0 to n_classes {
+            if yi == classes[c] { ci = c }
+        }
+        class_of_row[i] = ci
+    }
+
+    let scratch: RFScratch = RFScratch {
+        sort_values: array_new_f32(X.rows),
+        sort_classes: malloc((X.rows as i64) * 4) as ptr<i32>,
+        left_counts: malloc((n_classes as i64) * 4) as ptr<i32>,
+        right_counts: malloc((n_classes as i64) * 4) as ptr<i32>,
+        total_counts: malloc((n_classes as i64) * 4) as ptr<i32>,
+        present: malloc((n_classes as i64) * 4) as ptr<i32>,
+        row_base: malloc((X.rows as i64) * 4) as ptr<i32>,
+        class_idx: malloc((X.rows as i64) * 4) as ptr<i32>,
+        feature_mask: malloc((X.cols as i64) * 4) as ptr<i32>
+    }
+
     # Categorical bookkeeping, allocated once per tree rather than per node so
     # the numeric path picks up no extra allocation at all. With no categorical
     # feature max_card is 0 and these are a 16-byte stub and one float.
@@ -1249,11 +1534,21 @@ export function decision_tree_classifier_fit_rf_categorical(X: Matrix, y: ptr<f3
     let cat_iscratch: ptr<i32> = malloc((ccap * 4 + ccap * (n_classes as i64)) * 4 + 16) as ptr<i32>
     let cat_mean: ptr<f32> = array_new_f32(max_card + 1)
 
-    let _final: i32 = _build_classifier_tree_rf(nodes, n_nodes_ptr, X, y, indices, X.rows, 0, max_depth, criterion, classes, n_classes, max_features, prng_state, cat_card, max_card, cat_iscratch, cat_mean)
+    let _final: i32 = _build_classifier_tree_rf(nodes, n_nodes_ptr, X, y, indices, X.rows, 0, max_depth, criterion, classes, n_classes, class_of_row, max_features, prng_state, cat_card, max_card, cat_iscratch, cat_mean, scratch)
 
     free(cat_card as ptr<void>)
     free(cat_iscratch as ptr<void>)
     array_free_f32(cat_mean)
+    free(class_of_row as ptr<void>)
+    array_free_f32(scratch.sort_values)
+    free(scratch.sort_classes as ptr<void>)
+    free(scratch.left_counts as ptr<void>)
+    free(scratch.right_counts as ptr<void>)
+    free(scratch.total_counts as ptr<void>)
+    free(scratch.present as ptr<void>)
+    free(scratch.row_base as ptr<void>)
+    free(scratch.class_idx as ptr<void>)
+    free(scratch.feature_mask as ptr<void>)
 
     free(indices as ptr<void>)
     let n_nodes: i32 = n_nodes_ptr[0]

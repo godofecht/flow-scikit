@@ -19,6 +19,10 @@ extern {
     function cblas_ddot(n: i32, x: ptr<f64>, incx: i32, y: ptr<f64>, incy: i32) -> f64
     function cblas_daxpy(n: i32, alpha: f64, x: ptr<f64>, incx: i32, y: ptr<f64>, incy: i32) -> void
     function cblas_dger(order: i32, m: i32, n: i32, alpha: f64, x: ptr<f64>, incx: i32, y: ptr<f64>, incy: i32, a: ptr<f64>, lda: i32) -> void
+    function cblas_dtrsv(order: i32, uplo: i32, trans: i32, diag: i32, n: i32, a: ptr<f64>, lda: i32, x: ptr<f64>, incx: i32) -> void
+    function cblas_strsv(order: i32, uplo: i32, trans: i32, diag: i32, n: i32, a: ptr<f32>, lda: i32, x: ptr<f32>, incx: i32) -> void
+    function dpotrf_(uplo: ptr<u8>, n: ptr<i32>, a: ptr<f64>, lda: ptr<i32>, info: ptr<i32>) -> void
+    function spotrf_(uplo: ptr<u8>, n: ptr<i32>, a: ptr<f32>, lda: ptr<i32>, info: ptr<i32>) -> void
 }
 
 # Matrix-vector multiply: y = alpha * A * x + beta * y
@@ -97,4 +101,13 @@ export function blas_dot_strided_f64(n: i32, x: ptr<f64>, incx: i32, y: ptr<f64>
 # Double-precision y = alpha * x + y with explicit strides.
 export function blas_axpy_strided_f64(n: i32, alpha: f64, x: ptr<f64>, incx: i32, y: ptr<f64>, incy: i32) -> void {
     cblas_daxpy(n, alpha, x, incx, y, incy)
+}
+
+# Double-precision C = alpha * A^T * B + beta * C.
+# A is row-major m x n with lda per row, B is row-major m x k with ldb per row,
+# C is row-major n x k with ldc per row. The shared m is the contracted
+# dimension, so this is the normal-equations shape: pass the same matrix twice
+# to get a Gram matrix, or a weighted copy to get X^T diag(w) X.
+export function blas_gemm_tn_f64(A: ptr<f64>, B: ptr<f64>, C: ptr<f64>, m: i32, n: i32, k: i32, lda: i32, ldb: i32, ldc: i32, alpha: f64, beta: f64) -> void {
+    cblas_dgemm(CBLAS_ROW_MAJOR, CBLAS_TRANS, CBLAS_NO_TRANS, n, k, m, alpha, A, lda, B, ldb, beta, C, ldc)
 }

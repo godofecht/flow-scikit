@@ -1,30 +1,36 @@
 {
-  "environment_id": "3f884007c2946e39",
-  "runtime_environment_id": "62bbfa3c5cb5bb10",
+  "environment_id": "c012023a7229bbbe",
+  "runtime_environment_id": "3b0ca4fc939208fa",
   "host": {
-    "machine": "x86_64",
-    "cpu_model": "Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz",
-    "logical_cpus": 4,
+    "machine": "arm64",
+    "cpu_model": "Apple M4 Max",
+    "logical_cpus": 14,
     "thread_limits": {
       "OPENBLAS_NUM_THREADS": "4",
       "OMP_NUM_THREADS": "4",
       "MKL_NUM_THREADS": "4",
-      "VECLIB_MAXIMUM_THREADS": null,
+      "VECLIB_MAXIMUM_THREADS": "4",
       "NUMEXPR_NUM_THREADS": null
+    },
+    "flow_build": {
+      "FLOW_OPT_LEVEL": "3",
+      "FLOW_CFLAGS": null,
+      "FLOW_LDFLAGS": "-framework Accelerate lib/scikit/flow_time.c",
+      "FLOW_HOST": "python"
     }
   },
   "metadata": {
     "sklearn": {
       "implementation": "sklearn",
-      "process_repeats": 5,
-      "environment": "{\"impl\":\"sklearn\",\"numpy\":\"2.5.2\",\"platform\":\"Linux-6.17.0-1022-azure-x86_64-with-glibc2.39\",\"python\":\"3.12.14\",\"sklearn\":\"1.9.0\"}",
+      "process_repeats": 11,
+      "environment": "{\"impl\":\"sklearn\",\"numpy\":\"2.4.3\",\"platform\":\"macOS-26.2-arm64-arm-64bit\",\"python\":\"3.12.12\",\"sklearn\":\"1.9.0\"}",
       "mode": "end_to_end",
       "fixture": "benchmarks/split_indices.json"
     },
     "flow": {
       "implementation": "flow",
-      "process_repeats": 5,
-      "environment": "{\"impl\":\"flow\",\"timer\":\"timespec_get\"}",
+      "process_repeats": 11,
+      "environment": "{\"impl\":\"flow\",\"timer\":\"clock_gettime_monotonic\"}",
       "mode": "end_to_end",
       "fixture": "benchmarks/split_*.bin"
     }
