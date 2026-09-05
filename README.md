@@ -51,6 +51,8 @@ flow-scikit now maintains a generated execution map rather than inferring opport
 - **8 whole-estimator experiments**
 - substrate and speedup joins for **all 19 canonical benchmark rows**
 
+The win count is machine-dependent and the committed artifact says which machine it came from. The run committed here was measured on an Apple M4 Max with Accelerate and wins all 19 rows. The same commit on CI, a 4-core Intel Xeon with OpenBLAS, wins 18 and loses `LogisticRegression` on digits at 0.94x, a row that is 1.18x on the Mac. Rows whose margin is near 1x can land either way on a different BLAS and core count, and the parity contract gates on correctness and measurement resolution rather than on the win count. CI freezes its own measurement onto `main` after a merge, so the committed numbers there are the runner's.
+
 The current grouped headline evidence is descriptive rather than causal: Flow wins every row in all three substrate groups, at a mean of 20.99x on Python-bound rows, 6.84x on mixed rows and 3.96x on external-native-bound rows in the committed architecture map.
 
 Two earlier readings of this table were wrong, and both were artifacts of how Flow was built rather than of the substrate. While the Flow side was compiled unoptimized, external-native-bound rows all lost, which read as sklearn-owned compiled code being out of reach. The grouping is a guide to where the Python boundary costs most. It is not a ceiling.
