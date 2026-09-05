@@ -28,7 +28,7 @@ That makes classical ML particularly interesting for native applications, embedd
 
 Performance claims in this repository are generated from committed benchmark artifacts rather than selected examples.
 
-The current canonical v2 result is [`benchmarks/headline_result_v2.json`](benchmarks/headline_result_v2.json): **19 of 19 rows are parity-eligible and measurement-resolved**. In that committed run, **Flow wins 18 of 19 end-to-end fit + predict comparisons and scikit-learn wins 1 of 19**. There are no parity-unresolved or measurement-unresolved rows.
+The current canonical v2 result is [`benchmarks/headline_result_v2.json`](benchmarks/headline_result_v2.json): **19 of 19 rows are parity-eligible and measurement-resolved**. In that committed run, **Flow wins 19 of 19 end-to-end fit + predict comparisons and scikit-learn wins 0 of 19**. There are no parity-unresolved or measurement-unresolved rows.
 
 Canonical v2 uses explicit `TIMING_UNIT|ms` markers, persisted identical train/test fixtures, repeated timing aggregation and estimator-specific numerical parity gates. Unsupervised rows are not forced into classifier-style metrics: KMeans uses adjusted Rand index and inertia, while PCA additionally checks explained variance, singular values, reconstruction error and sign-aligned components.
 
@@ -51,11 +51,11 @@ flow-scikit now maintains a generated execution map rather than inferring opport
 - **8 whole-estimator experiments**
 - substrate and speedup joins for **all 19 canonical benchmark rows**
 
-The current grouped headline evidence is descriptive rather than causal: Flow wins **100% of Python-bound rows** at a mean of 23.04x, **91% of mixed rows** at 6.00x, and **100% of external-native-bound rows** at 3.78x in the committed architecture map.
+The current grouped headline evidence is descriptive rather than causal: Flow wins every row in all three substrate groups, at a mean of 26.55x on Python-bound rows, 7.13x on mixed rows and 3.79x on external-native-bound rows in the committed architecture map.
 
-An earlier reading of this table, when the Flow side was still built unoptimized, showed Flow losing every external-native-bound row and concluded that sklearn-owned compiled code was out of reach. That conclusion was an artifact of the build, so treat the substrate grouping as a guide to where the Python boundary costs most rather than as a ceiling.
+Two earlier readings of this table were wrong, and both were artifacts of how Flow was built or measured rather than of the substrate. While the Flow side was compiled unoptimized, external-native-bound rows all lost, which read as sklearn-owned compiled code being out of reach. The grouping is a guide to where the Python boundary costs most. It is not a ceiling.
 
-The single remaining scikit-learn win is `RandomForest` on digits at 0.85x. Its split search sorts one gathered column per candidate feature per node, and the ten trees are independent work that Flow runs on one core. Threading them needs a Flow callback that a C dispatcher can call, which is blocked on Flow compiler issue #843.
+The comparison holds scikit-learn at `n_jobs=1`. RandomForest is the row where that matters: its trees are independent work, and Flow runs them on one core because a Flow callback cannot yet be handed to a C dispatcher (Flow compiler issue #843).
 
 Detailed artifacts:
 

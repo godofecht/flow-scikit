@@ -130,6 +130,23 @@ export function random_forest_classifier_fit_categorical(X: Matrix, y: ptr<f32>,
     let x_data: ptr<f32> = X.data
     let boot_data: ptr<f32> = X_boot.data
 
+    # Bin the design once for the whole forest.
+    #
+    # The split search needs each candidate feature's class histogram per
+    # distinct value. Sorting the node's samples produces that per feature per
+    # node; binning produces it from one linear pass. The bins depend only on
+    # the values a column holds, and a bootstrap sample draws from those same
+    # values, so one binning of X serves every tree. Doing it per tree would
+    # cost more than the sort it replaces.
+    #
+    # Each tree's rows are then a gather of bin indices, the same shape as the
+    # row copy above it.
+    let bin_card: ptr<i32> = malloc((n_cols as i64) * 4) as ptr<i32>
+    let bin_vals: ptr<f32> = array_new_f32(tree_bins_values_len(n_cols))
+    let bin_of: ptr<u8> = malloc((n_cols as i64) * (n_samples as i64)) as ptr<u8>
+    let boot_bins: ptr<u8> = malloc((n_cols as i64) * (n_samples as i64)) as ptr<u8>
+    tree_build_bins(X, bin_card, bin_vals, bin_of)
+
     for t in 0 to n_trees {
         for i in 0 to n_samples {
             let res: PRNGResult = prng_int(prng, n_samples)
@@ -146,14 +163,26 @@ export function random_forest_classifier_fit_categorical(X: Matrix, y: ptr<f32>,
             dst = dst + n_cols
         }
 
+        for f in 0 to n_cols {
+            let src_col: ptr<u8> = bin_of + f * n_samples
+            let dst_col: ptr<u8> = boot_bins + f * n_samples
+            for i in 0 to n_samples {
+                dst_col[i] = src_col[bootstrap_indices[i]]
+            }
+        }
+
         # Set PRNG state for this tree's feature subsampling
         let res: PRNGResult = prng_int(prng, 2147483647)
         prng = PRNG { state: res.state }
         prng_state[0] = res.state
 
-        trees[t] = decision_tree_classifier_fit_rf_categorical(X_boot, y_boot, n_classes, max_depth, CRITERION_GINI, max_features, prng_state, categorical)
+        trees[t] = decision_tree_classifier_fit_rf_binned(X_boot, y_boot, n_classes, max_depth, CRITERION_GINI, max_features, prng_state, categorical, bin_card, bin_vals, boot_bins)
     }
 
+    free(bin_card as ptr<void>)
+    array_free_f32(bin_vals)
+    free(bin_of as ptr<void>)
+    free(boot_bins as ptr<void>)
     free(bootstrap_indices as ptr<void>)
     matrix_free(X_boot)
     array_free_f32(y_boot)

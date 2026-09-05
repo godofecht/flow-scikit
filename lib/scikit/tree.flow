@@ -960,14 +960,11 @@ function _build_classifier_tree(
         # right_counts starts as the node's full class histogram; left_counts
         # starts empty. Seeding from the histogram replaces a second pass over
         # every sample.
-        let mut sum_sq_left: i32 = 0
-        let mut sum_sq_right: i32 = 0
         for pi in 0 to n_present {
             let c: i32 = present[pi]
             left_counts[c] = 0
             let cnt: i32 = total_counts[c]
             right_counts[c] = cnt
-            sum_sq_right = sum_sq_right + cnt * cnt
         }
 
         # Sweep sorted values, moving one sample at a time to left.
@@ -975,9 +972,7 @@ function _build_classifier_tree(
             let c: i32 = sort_classes[i]
             let L: i32 = left_counts[c]
             let R: i32 = right_counts[c]
-            sum_sq_left = sum_sq_left + 2 * L + 1
             left_counts[c] = L + 1
-            sum_sq_right = sum_sq_right + 1 - 2 * R
             right_counts[c] = R - 1
 
             # Skip duplicate values.
@@ -1114,7 +1109,102 @@ function _build_classifier_tree(
     return node_idx
 }
 
+# Value binning for the RandomForest split search.
+#
+# The split search needs, for each candidate feature, the class histogram at
+# every distinct value in ascending order. Sorting the node's samples produces
+# that, at O(n log n) per feature per node. Precomputing which distinct value
+# each sample carries produces the same thing from one linear histogram pass.
+#
+# A bin is an exact distinct value, never a quantile bucket, so the candidate
+# thresholds are unchanged: the sort scan evaluates a split wherever two
+# consecutive sorted values differ, and the bin scan evaluates one between
+# consecutive non-empty bins. Those are the same boundaries with the same
+# counts, so the chosen feature, the threshold and the tie-break all match.
+#
+# A feature with more than TREE_MAX_BINS distinct values is left unbinned and
+# keeps the sort path. That is the continuous-data case, where a bin per value
+# would cost more to clear than the sort costs to run.
+const TREE_MAX_BINS: i32 = 256
+
+# Length of the bin_vals buffer the caller must allocate.
+export function tree_bins_values_len(n_features: i32) -> i32 {
+    return n_features * TREE_MAX_BINS
+}
+
+# Fills bin_card[f] with feature f's distinct-value count (0 when the feature
+# is unbinnable), bin_vals[f * TREE_MAX_BINS ..] with those values ascending,
+# and bin_of[f * n_rows + i] with the bin sample i falls in.
+#
+# bin_of is feature-major so the split search reads one contiguous column.
+export function tree_build_bins(X: Matrix, bin_card: ptr<i32>, bin_vals: ptr<f32>, bin_of: ptr<u8>) -> void {
+    let n_rows: i32 = X.rows
+    let n_cols: i32 = X.cols
+    let data: ptr<f32> = X.data
+
+    for f in 0 to n_cols {
+        let vals: ptr<f32> = bin_vals + f * TREE_MAX_BINS
+        let mut card: i32 = 0
+        let mut overflow: bool = false
+
+        # Collect the distinct values, kept sorted by insertion. The array is
+        # short by construction, so the shift is cheaper than a full sort and
+        # the lookup is a binary search over it.
+        for i in 0 to n_rows {
+            let v: f32 = data[i * n_cols + f]
+            # NaN orders inconsistently and would corrupt the search. Hand the
+            # whole feature to the sort path, which is where it was before.
+            if v != v { overflow = true; break }
+            let mut lo: i32 = 0
+            let mut hi: i32 = card
+            while lo < hi {
+                let mid: i32 = (lo + hi) / 2
+                if vals[mid] < v { lo = mid + 1 } else { hi = mid }
+            }
+            let seen: bool = lo < card && vals[lo] == v
+            if not seen {
+                if card >= TREE_MAX_BINS { overflow = true; break }
+                let mut k: i32 = card
+                while k > lo {
+                    vals[k] = vals[k - 1]
+                    k = k - 1
+                }
+                vals[lo] = v
+                card = card + 1
+            }
+        }
+
+        if overflow {
+            bin_card[f] = 0
+        } else {
+            bin_card[f] = card
+            let col: ptr<u8> = bin_of + f * n_rows
+            for i in 0 to n_rows {
+                let v: f32 = data[i * n_cols + f]
+                let mut lo: i32 = 0
+                let mut hi: i32 = card
+                while lo < hi {
+                    let mid: i32 = (lo + hi) / 2
+                    if vals[mid] < v { lo = mid + 1 } else { hi = mid }
+                }
+                col[i] = lo as u8
+            }
+        }
+    }
+}
+
 struct RFScratch {
+    # Precomputed value bins, or null pointers with bin_card null when the
+    # caller did not supply them, in which case every feature takes the sort
+    # path. See tree_build_bins.
+    bin_card: ptr<i32>,
+    bin_vals: ptr<f32>,
+    # One byte per (feature, sample). TREE_MAX_BINS caps a bin index at 255, so
+    # a byte holds it, and a feature's whole column of bins stays small enough
+    # to sit in cache while the histogram pass gathers it.
+    bin_of: ptr<u8>,
+    bin_rows: i32,
+    hist: ptr<i32>,
     sort_values: ptr<f32>,
     sort_classes: ptr<i32>,
     left_counts: ptr<i32>,
@@ -1209,6 +1299,7 @@ function _build_classifier_tree_rf(
     }
 
     let class_idx: ptr<i32> = scratch.class_idx
+    let bin_card: ptr<i32> = scratch.bin_card
     let total_counts: ptr<i32> = scratch.total_counts
     for c in 0 to n_classes { total_counts[c] = 0 }
     for i in 0 to n_indices {
@@ -1337,6 +1428,75 @@ function _build_classifier_tree_rf(
             continue
         }
 
+        # Binned split search. One linear pass fills this node's class
+        # histogram per distinct value, then the candidates are read straight
+        # off the bins in ascending order. No sort, and no second pass over the
+        # samples: the scan is over bins rather than over rows.
+        #
+        # A candidate is evaluated between consecutive non-empty bins, with the
+        # left side holding every bin at or below the previous one. Those are
+        # the same split points, with the same integer counts, that the sort
+        # scan below reaches wherever two consecutive sorted values differ, so
+        # the tree is unchanged. n_left and n_right are both at least one
+        # whenever a candidate is evaluated, because the previous bin has been
+        # moved left and the current one has not, so the sort path's emptiness
+        # check has no counterpart here.
+        #
+        # The gate keeps the bin scan from costing more than the sort it
+        # replaces: clearing the histogram is bcard * n_classes, so a feature
+        # with more distinct values than the node has samples goes to the sort.
+        let mut bcard: i32 = 0
+        if bin_card != null { bcard = bin_card[f] }
+        if bcard > 0 && bcard <= n_indices {
+            let bcol: ptr<u8> = scratch.bin_of + f * scratch.bin_rows
+            let hist: ptr<i32> = scratch.hist
+            for k in 0 to bcard * n_classes { hist[k] = 0 }
+            for i in 0 to n_indices {
+                let hpos: i32 = (bcol[indices[i]] as i32) * n_classes + class_idx[i]
+                hist[hpos] = hist[hpos] + 1
+            }
+
+            for pi in 0 to n_present {
+                let c: i32 = present[pi]
+                left_counts[c] = 0
+                right_counts[c] = total_counts[c]
+            }
+
+            let bvals: ptr<f32> = scratch.bin_vals + f * TREE_MAX_BINS
+            let nf_bin: f32 = n_indices as f32
+            let mut n_left_bin: i32 = 0
+            let mut prev_b: i32 = 0 - 1
+            for b in 0 to bcard {
+                let hbase: i32 = b * n_classes
+                let mut bc: i32 = 0
+                for pi in 0 to n_present { bc = bc + hist[hbase + present[pi]] }
+                if bc == 0 { continue }
+
+                if prev_b >= 0 {
+                    let n_right_bin: i32 = n_indices - n_left_bin
+                    let gl: f32 = _tree_gini_present(left_counts, present, n_present, n_left_bin)
+                    let gr: f32 = _tree_gini_present(right_counts, present, n_present, n_right_bin)
+                    let weighted: f32 = (n_left_bin as f32) / nf_bin * gl + (n_right_bin as f32) / nf_bin * gr
+                    if weighted < best_impurity {
+                        best_impurity = weighted
+                        best_feature = f
+                        best_threshold = (bvals[prev_b] + bvals[b]) / 2.0
+                        best_is_cat = false
+                    }
+                }
+
+                for pi in 0 to n_present {
+                    let c: i32 = present[pi]
+                    let h: i32 = hist[hbase + c]
+                    left_counts[c] = left_counts[c] + h
+                    right_counts[c] = right_counts[c] - h
+                }
+                n_left_bin = n_left_bin + bc
+                prev_b = b
+            }
+            continue
+        }
+
         # Gather and check for a constant column in one pass. If every sample
         # shares a value, the scan below hits `sort_values[i] == sort_values[i+1]`
         # at every position and evaluates no candidate at all, so skipping the
@@ -1358,23 +1518,18 @@ function _build_classifier_tree_rf(
         # right_counts starts as the node's full class histogram, which is
         # exactly total_counts; left_counts starts empty. Seeding from the
         # histogram replaces a second pass over every sample.
-        let mut sum_sq_left: i32 = 0
-        let mut sum_sq_right: i32 = 0
         for pi in 0 to n_present {
             let c: i32 = present[pi]
             left_counts[c] = 0
             let cnt: i32 = total_counts[c]
             right_counts[c] = cnt
-            sum_sq_right = sum_sq_right + cnt * cnt
         }
 
         for i in 0 to n_indices - 1 {
             let c: i32 = sort_classes[i]
             let L: i32 = left_counts[c]
             let R: i32 = right_counts[c]
-            sum_sq_left = sum_sq_left + 2 * L + 1
             left_counts[c] = L + 1
-            sum_sq_right = sum_sq_right + 1 - 2 * R
             right_counts[c] = R - 1
 
             if sort_values[i] == sort_values[i + 1] { continue }
@@ -1488,7 +1643,13 @@ export function decision_tree_classifier_fit_rf(X: Matrix, y: ptr<f32>, n_classe
 # the same 128-level cap applies. It is scoped by max_features exactly as the
 # threshold sweep is: a categorical feature that was not drawn at a node is not
 # scanned there.
-export function decision_tree_classifier_fit_rf_categorical(X: Matrix, y: ptr<f32>, n_classes: i32, max_depth: i32, criterion: i32, max_features: i32, prng_state: ptr<u32>, categorical: ptr<i32>) -> DecisionTreeClassifier {
+# RandomForest tree fit taking value bins precomputed by tree_build_bins.
+#
+# The forest bins its design once and hands every tree the same bin values with
+# that tree's bootstrap rows, so the O(n_features * n_rows) binning pass is paid
+# once rather than per tree. Pass a null bin_card to fit without bins, which
+# puts every feature on the sort path.
+export function decision_tree_classifier_fit_rf_binned(X: Matrix, y: ptr<f32>, n_classes: i32, max_depth: i32, criterion: i32, max_features: i32, prng_state: ptr<u32>, categorical: ptr<i32>, bin_card: ptr<i32>, bin_vals: ptr<f32>, bin_of: ptr<u8>) -> DecisionTreeClassifier {
     # Issue #398: this used to append at classes[n_found] with no check against
     # n_classes, which wrote past the allocation whenever y carried more
     # distinct labels than the caller declared.
@@ -1513,7 +1674,15 @@ export function decision_tree_classifier_fit_rf_categorical(X: Matrix, y: ptr<f3
         class_of_row[i] = ci
     }
 
+    # The histogram is only touched for a binned feature, and TREE_MAX_BINS
+    # caps a bin count, so this is the largest it can ever need to be.
+    let hist_len: i32 = TREE_MAX_BINS * n_classes
     let scratch: RFScratch = RFScratch {
+        bin_card: bin_card,
+        bin_vals: bin_vals,
+        bin_of: bin_of,
+        bin_rows: X.rows,
+        hist: malloc((hist_len as i64) * 4) as ptr<i32>,
         sort_values: array_new_f32(X.rows),
         sort_classes: malloc((X.rows as i64) * 4) as ptr<i32>,
         left_counts: malloc((n_classes as i64) * 4) as ptr<i32>,
@@ -1540,6 +1709,7 @@ export function decision_tree_classifier_fit_rf_categorical(X: Matrix, y: ptr<f3
     free(cat_iscratch as ptr<void>)
     array_free_f32(cat_mean)
     free(class_of_row as ptr<void>)
+    free(scratch.hist as ptr<void>)
     array_free_f32(scratch.sort_values)
     free(scratch.sort_classes as ptr<void>)
     free(scratch.left_counts as ptr<void>)
@@ -1563,6 +1733,12 @@ export function decision_tree_classifier_fit_rf_categorical(X: Matrix, y: ptr<f3
         classes: classes,
         fitted: true
     }
+}
+
+# RandomForest tree fit without precomputed bins. Every feature takes the sort
+# path, which is what this did before binning existed.
+export function decision_tree_classifier_fit_rf_categorical(X: Matrix, y: ptr<f32>, n_classes: i32, max_depth: i32, criterion: i32, max_features: i32, prng_state: ptr<u32>, categorical: ptr<i32>) -> DecisionTreeClassifier {
+    return decision_tree_classifier_fit_rf_binned(X, y, n_classes, max_depth, criterion, max_features, prng_state, categorical, null, null, null)
 }
 
 export function decision_tree_classifier_predict_one(model: DecisionTreeClassifier, x: ptr<f32>) -> f32 {
