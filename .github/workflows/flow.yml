@@ -109,7 +109,7 @@ jobs:
           FLOW_BIN: ${{ github.workspace }}/.flow-toolchain/flow
           FLOW_HOST: python
           FLOW_OPT_LEVEL: "0"
-          FLOW_LDFLAGS: "-lm -lopenblas lib/scikit/flow_time.c"
+          FLOW_LDFLAGS: "-lm -lopenblas lib/scikit/flow_time.c lib/scikit/flow_parallel.c"
         run: python tools/run_all.py
 
   benchmark-contract:
@@ -147,7 +147,7 @@ jobs:
         env:
           FLOW_HOST: python
           FLOW_OPT_LEVEL: "3"
-          FLOW_LDFLAGS: "-lm -lopenblas lib/scikit/flow_time.c"
+          FLOW_LDFLAGS: "-lm -lopenblas lib/scikit/flow_time.c lib/scikit/flow_parallel.c"
           FLOW_HEADLINE_COMMAND: ${{ github.workspace }}/.flow-toolchain/flow run benchmarks/bench_flow_v2.flow
         run: python benchmarks/run_headline.py --repeats 5
 
@@ -196,7 +196,7 @@ jobs:
         env:
           FLOW_HOST: python
           FLOW_OPT_LEVEL: "3"
-          FLOW_LDFLAGS: "-lm -lopenblas lib/scikit/flow_time.c"
+          FLOW_LDFLAGS: "-lm -lopenblas lib/scikit/flow_time.c lib/scikit/flow_parallel.c"
         run: |
           rm -f benchmarks/scaled_flow_samples.txt
           for repeat in 1 2 3; do

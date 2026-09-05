@@ -75,6 +75,16 @@ Filed issues so far:
 - Flow structs are passed by value. Mutating functions must return the struct.
 - Use generous allocation sizes (128+ bytes per struct) on arm64.
 
+## Toolchain requirement
+
+RandomForest fits its trees concurrently, which needs a Flow compiler that can
+take a function's address. Before Flow commit `d62789dd` a function named as a
+value emitted the source-level name and the generated C failed with
+`use of undeclared identifier`. That was Flow issue #843.
+
+`.github/workflows/flow.yml` pins the toolchain by commit. The pin has to name
+a commit containing that fix or `lib/scikit/ensemble.flow` will not compile.
+
 ## Build and test
 
 BLAS linkage is required. Without `FLOW_LDFLAGS` the build fails at the
@@ -84,7 +94,7 @@ macOS:
 ```
 export FLOW_HOST=python
 export FLOW_OPT_LEVEL=0
-export FLOW_LDFLAGS="-framework Accelerate lib/scikit/flow_time.c"
+export FLOW_LDFLAGS="-framework Accelerate lib/scikit/flow_time.c lib/scikit/flow_parallel.c"
 flow run tests/test_new_features.flow
 ```
 
@@ -92,7 +102,7 @@ Linux, matching CI:
 ```
 export FLOW_HOST=python
 export FLOW_OPT_LEVEL=0
-export FLOW_LDFLAGS="-lm -lopenblas lib/scikit/flow_time.c"
+export FLOW_LDFLAGS="-lm -lopenblas lib/scikit/flow_time.c lib/scikit/flow_parallel.c"
 flow run tests/test_new_features.flow
 ```
 
@@ -105,8 +115,8 @@ Benchmarks are compiled at `-O3` and link the timing shim:
 
 ```bash
 export FLOW_OPT_LEVEL=3
-export FLOW_LDFLAGS="-framework Accelerate lib/scikit/flow_time.c"   # macOS
-# export FLOW_LDFLAGS="-lm -lopenblas lib/scikit/flow_time.c"        # Linux, matching CI
+export FLOW_LDFLAGS="-framework Accelerate lib/scikit/flow_time.c lib/scikit/flow_parallel.c"   # macOS
+# export FLOW_LDFLAGS="-lm -lopenblas lib/scikit/flow_time.c lib/scikit/flow_parallel.c"        # Linux, matching CI
 
 python benchmarks/run_headline.py --repeats 7
 ```

@@ -11,6 +11,75 @@ import "lib/scikit/prng.flow"
 
 extern {
     function sqrt(x: f64) -> f64
+    # Runs tasks 0..n_tasks across threads: GCD on macOS, pthreads elsewhere.
+    # Implemented in lib/scikit/flow_parallel.c, which must be linked.
+    function flow_parallel_for(n_tasks: i32, callback: ptr<void>, ctx: ptr<void>) -> void
+}
+
+# Everything one worker needs to fit one tree. The forest fills this once and
+# every task reads it; only trees[t], seeds[t] and this task's own scratch are
+# written, and each task owns a distinct t.
+struct RFForestJob {
+    X: Matrix,
+    y: ptr<f32>,
+    trees: ptr<DecisionTreeClassifier>,
+    boot_idx: ptr<i32>,
+    seeds: ptr<u32>,
+    bin_card: ptr<i32>,
+    bin_vals: ptr<f32>,
+    bin_of: ptr<u8>,
+    categorical: ptr<i32>,
+    n_samples: i32,
+    n_cols: i32,
+    n_classes: i32,
+    max_depth: i32,
+    max_features: i32
+}
+
+# Fits tree `idx`. Its bootstrap row indices and feature seed were drawn on one
+# thread before any of this ran, so the forest does not depend on the order the
+# tasks happen to complete in.
+#
+# The scratch is allocated here rather than shared, because two trees fitting
+# at once would otherwise write the same buffers. It is one allocation set per
+# tree, not per node, so it does not show up against the fit.
+function rf_fit_one_tree(ctx: ptr<void>, idx: i64) -> void {
+    let job: ptr<RFForestJob> = ctx as ptr<RFForestJob>
+    let t: i32 = idx as i32
+    let n_samples: i32 = job.n_samples
+    let n_cols: i32 = job.n_cols
+    let row_bytes: i64 = (n_cols as i64) * 4
+
+    let X_boot: Matrix = matrix_new(n_samples, n_cols)
+    let y_boot: ptr<f32> = array_new_f32(n_samples)
+    let boot_bins: ptr<u8> = malloc((n_cols as i64) * (n_samples as i64)) as ptr<u8>
+    let prng_state: ptr<u32> = malloc(4) as ptr<u32>
+    prng_state[0] = job.seeds[t]
+
+    let rows: ptr<i32> = job.boot_idx + t * n_samples
+    let x_data: ptr<f32> = job.X.data
+    let boot_data: ptr<f32> = X_boot.data
+    let mut dst: i32 = 0
+    for i in 0 to n_samples {
+        let src: i32 = rows[i]
+        y_boot[i] = job.y[src]
+        memcpy((boot_data + dst) as ptr<void>, (x_data + src * n_cols) as ptr<void>, row_bytes)
+        dst = dst + n_cols
+    }
+    for fcol in 0 to n_cols {
+        let src_col: ptr<u8> = job.bin_of + fcol * n_samples
+        let dst_col: ptr<u8> = boot_bins + fcol * n_samples
+        for i in 0 to n_samples {
+            dst_col[i] = src_col[rows[i]]
+        }
+    }
+
+    job.trees[t] = decision_tree_classifier_fit_rf_binned(X_boot, y_boot, job.n_classes, job.max_depth, CRITERION_GINI, job.max_features, prng_state, job.categorical, job.bin_card, job.bin_vals, boot_bins)
+
+    free(prng_state as ptr<void>)
+    free(boot_bins as ptr<void>)
+    array_free_f32(y_boot)
+    matrix_free(X_boot)
 }
 
 extern {
@@ -110,25 +179,18 @@ export function random_forest_classifier_fit_categorical(X: Matrix, y: ptr<f32>,
     let max_features: i32 = (max_features_f64 as i32)
     if max_features < 1 { max_features = 1 }
 
-    # Shared PRNG state pointer for the RF tree builder
-    let prng_state: ptr<u32> = malloc(4) as ptr<u32>
-
-    # Bootstrap scratch, allocated once and reused by every tree. The old loop
-    # allocated and freed the index array, the bootstrap design matrix and the
-    # bootstrap target vector on each iteration. Every tree overwrites all three
-    # in full before reading them, so reuse is safe.
+    # Every tree's bootstrap rows and feature seed are drawn here, on one
+    # thread, before any tree is fitted.
     #
-    # The draw order is deliberately untouched: n_samples indices are drawn for
-    # the bootstrap, then one draw seeds this tree's feature subsampling, in that
-    # order, exactly as before. Issue #205 owns the sampling scheme itself.
+    # The draw order is deliberately untouched: n_samples indices for the
+    # bootstrap, then one draw to seed that tree's feature subsampling, per
+    # tree, in that order, exactly as the sequential loop did. Issue #205 owns
+    # the sampling scheme itself. Drawing up front is what lets the fits run
+    # concurrently without the forest depending on which tree finishes first.
     let n_samples: i32 = X.rows
     let n_cols: i32 = X.cols
-    let row_bytes: i64 = (n_cols as i64) * 4
-    let bootstrap_indices: ptr<i32> = malloc((n_samples as i64) * 4) as ptr<i32>
-    let X_boot: Matrix = matrix_new(n_samples, n_cols)
-    let y_boot: ptr<f32> = array_new_f32(n_samples)
-    let x_data: ptr<f32> = X.data
-    let boot_data: ptr<f32> = X_boot.data
+    let bootstrap_indices: ptr<i32> = malloc((n_trees as i64) * (n_samples as i64) * 4) as ptr<i32>
+    let tree_seeds: ptr<u32> = malloc((n_trees as i64) * 4) as ptr<u32>
 
     # Bin the design once for the whole forest.
     #
@@ -144,49 +206,47 @@ export function random_forest_classifier_fit_categorical(X: Matrix, y: ptr<f32>,
     let bin_card: ptr<i32> = malloc((n_cols as i64) * 4) as ptr<i32>
     let bin_vals: ptr<f32> = array_new_f32(tree_bins_values_len(n_cols))
     let bin_of: ptr<u8> = malloc((n_cols as i64) * (n_samples as i64)) as ptr<u8>
-    let boot_bins: ptr<u8> = malloc((n_cols as i64) * (n_samples as i64)) as ptr<u8>
     tree_build_bins(X, bin_card, bin_vals, bin_of)
 
     for t in 0 to n_trees {
+        let tree_rows: ptr<i32> = bootstrap_indices + t * n_samples
         for i in 0 to n_samples {
             let res: PRNGResult = prng_int(prng, n_samples)
             prng = PRNG { state: res.state }
-            bootstrap_indices[i] = res.value
+            tree_rows[i] = res.value
         }
-
-        # Row-major memcpy instead of n_samples * n_cols accessor call pairs.
-        let mut dst: i32 = 0
-        for i in 0 to n_samples {
-            let src: i32 = bootstrap_indices[i]
-            y_boot[i] = y[src]
-            memcpy((boot_data + dst) as ptr<void>, (x_data + src * n_cols) as ptr<void>, row_bytes)
-            dst = dst + n_cols
-        }
-
-        for f in 0 to n_cols {
-            let src_col: ptr<u8> = bin_of + f * n_samples
-            let dst_col: ptr<u8> = boot_bins + f * n_samples
-            for i in 0 to n_samples {
-                dst_col[i] = src_col[bootstrap_indices[i]]
-            }
-        }
-
-        # Set PRNG state for this tree's feature subsampling
         let res: PRNGResult = prng_int(prng, 2147483647)
         prng = PRNG { state: res.state }
-        prng_state[0] = res.state
-
-        trees[t] = decision_tree_classifier_fit_rf_binned(X_boot, y_boot, n_classes, max_depth, CRITERION_GINI, max_features, prng_state, categorical, bin_card, bin_vals, boot_bins)
+        tree_seeds[t] = res.state
     }
+
+    # One task per tree. Trees are independent once their rows and seed are
+    # drawn: each writes only its own slot in `trees` and its own scratch, and
+    # reads the shared bins without touching them. With one task the dispatcher
+    # runs it inline, so a single-tree forest pays nothing for this.
+    let job: ptr<RFForestJob> = malloc(256) as ptr<RFForestJob>
+    job.X = X
+    job.y = y
+    job.trees = trees
+    job.boot_idx = bootstrap_indices
+    job.seeds = tree_seeds
+    job.bin_card = bin_card
+    job.bin_vals = bin_vals
+    job.bin_of = bin_of
+    job.categorical = categorical
+    job.n_samples = n_samples
+    job.n_cols = n_cols
+    job.n_classes = n_classes
+    job.max_depth = max_depth
+    job.max_features = max_features
+    flow_parallel_for(n_trees, rf_fit_one_tree as ptr<void>, job as ptr<void>)
+    free(job as ptr<void>)
 
     free(bin_card as ptr<void>)
     array_free_f32(bin_vals)
     free(bin_of as ptr<void>)
-    free(boot_bins as ptr<void>)
     free(bootstrap_indices as ptr<void>)
-    matrix_free(X_boot)
-    array_free_f32(y_boot)
-    free(prng_state as ptr<void>)
+    free(tree_seeds as ptr<void>)
 
     return RandomForestClassifier {
         trees: trees,

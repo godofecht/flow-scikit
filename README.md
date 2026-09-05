@@ -51,11 +51,11 @@ flow-scikit now maintains a generated execution map rather than inferring opport
 - **8 whole-estimator experiments**
 - substrate and speedup joins for **all 19 canonical benchmark rows**
 
-The current grouped headline evidence is descriptive rather than causal: Flow wins every row in all three substrate groups, at a mean of 26.55x on Python-bound rows, 7.13x on mixed rows and 3.79x on external-native-bound rows in the committed architecture map.
+The current grouped headline evidence is descriptive rather than causal: Flow wins every row in all three substrate groups, at a mean of 20.99x on Python-bound rows, 6.84x on mixed rows and 3.96x on external-native-bound rows in the committed architecture map.
 
-Two earlier readings of this table were wrong, and both were artifacts of how Flow was built or measured rather than of the substrate. While the Flow side was compiled unoptimized, external-native-bound rows all lost, which read as sklearn-owned compiled code being out of reach. The grouping is a guide to where the Python boundary costs most. It is not a ceiling.
+Two earlier readings of this table were wrong, and both were artifacts of how Flow was built rather than of the substrate. While the Flow side was compiled unoptimized, external-native-bound rows all lost, which read as sklearn-owned compiled code being out of reach. The grouping is a guide to where the Python boundary costs most. It is not a ceiling.
 
-The comparison holds scikit-learn at `n_jobs=1`. RandomForest is the row where that matters: its trees are independent work, and Flow runs them on one core because a Flow callback cannot yet be handed to a C dispatcher (Flow compiler issue #843).
+One row is not a like-for-like comparison, and the disparity report records it. Flow fits a forest's trees concurrently; scikit-learn's default is one worker, and the benchmark leaves it at its default. Both RandomForest rows therefore carry a declared `n_jobs` difference. Single-threaded, RandomForest on digits runs at 1.82x rather than 5.01x, so the row wins either way. Asking scikit-learn for all cores does not close the gap on this workload: at `n_jobs=-1` its own fit measured slower than at `n_jobs=1`, because joblib's pool costs more than ten small trees save.
 
 Detailed artifacts:
 
@@ -87,8 +87,8 @@ cd flow-scikit
 # link step with undefined cblas_* symbols.
 export FLOW_HOST=python
 export FLOW_OPT_LEVEL=0
-export FLOW_LDFLAGS="-framework Accelerate lib/scikit/flow_time.c"   # macOS
-# export FLOW_LDFLAGS="-lm -lopenblas lib/scikit/flow_time.c"        # Linux, matching CI
+export FLOW_LDFLAGS="-framework Accelerate lib/scikit/flow_time.c lib/scikit/flow_parallel.c"   # macOS
+# export FLOW_LDFLAGS="-lm -lopenblas lib/scikit/flow_time.c lib/scikit/flow_parallel.c"        # Linux, matching CI
 
 python tools/run_all.py
 ```
@@ -97,8 +97,8 @@ Benchmarks are compiled at `-O3` and link the timing shim:
 
 ```bash
 export FLOW_OPT_LEVEL=3
-export FLOW_LDFLAGS="-framework Accelerate lib/scikit/flow_time.c"   # macOS
-# export FLOW_LDFLAGS="-lm -lopenblas lib/scikit/flow_time.c"        # Linux, matching CI
+export FLOW_LDFLAGS="-framework Accelerate lib/scikit/flow_time.c lib/scikit/flow_parallel.c"   # macOS
+# export FLOW_LDFLAGS="-lm -lopenblas lib/scikit/flow_time.c lib/scikit/flow_parallel.c"        # Linux, matching CI
 
 python benchmarks/run_headline.py --repeats 7
 ```
