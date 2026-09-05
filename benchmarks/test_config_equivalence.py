@@ -138,12 +138,20 @@ def test_canonical_contract() -> None:
     # #475 aligned KernelSVC_RBF/iris max_iter to 1000 on both sides, so that
     # row now has no surviving configuration difference. Keep it in the map to
     # pin the absence explicitly rather than silently dropping coverage.
+    #
+    # Both RandomForest rows carry n_jobs. Flow fits a forest's trees
+    # concurrently and scikit-learn's default is a single worker, which the
+    # benchmark leaves at its default. That is a real difference in what the
+    # two sides are doing, so it is declared on both sides of the contract and
+    # reported here rather than mapped away as an equivalence.
     expected = {
         ("LogisticRegression", "iris"): ["max_iter", "optimizer"],
         ("LogisticRegression", "digits"): ["max_iter", "optimizer"],
         ("KernelSVC_RBF", "iris"): [],
         ("PCA", "iris"): ["solver"],
         ("Ridge", "diabetes"): ["max_iter"],
+        ("RandomForest", "iris"): ["n_jobs"],
+        ("RandomForest", "digits"): ["n_jobs"],
         ("LinearSVC", "iris"): [],
         ("LinearSVC", "digits"): [],
         ("Lasso", "diabetes"): [],
@@ -161,7 +169,7 @@ def test_canonical_contract() -> None:
     check("surviving configuration differences on the canonical rows", actual, expected)
 
     unresolved = sum(1 for key, params in actual.items() if params)
-    check("rows still carrying a configuration difference", unresolved, 4)
+    check("rows still carrying a configuration difference", unresolved, 6)
 
 
 def main() -> int:
