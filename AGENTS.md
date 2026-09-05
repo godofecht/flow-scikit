@@ -39,11 +39,12 @@ Filed issues so far:
   code generation for regression and clustering. Ridge R2 jumps from 0.33
   to 0.61, KMeans iris drops from 0.80 to 0.47. Workaround: import prng.flow
   directly from cluster.flow and ensemble.flow instead of through scikit.flow.
-- #843: A function name used as a value emits the bare Flow name in the
-  generated C, which does not exist, so a Flow callback cannot be handed to
-  a C dispatcher. `lib/scikit/threading.flow` wraps `flow_parallel_for` and
-  still has no caller because of it. Workaround: none within Flow. KMeans
-  n_init restarts and RandomForest trees stay single-threaded.
+- #843: FIXED in Flow commit `5a0af023` (PR #846). A function name used as a value
+  emitted the bare Flow name in the generated C, which does not exist, so a
+  Flow callback could not be handed to a C dispatcher and
+  `lib/scikit/threading.flow` had no caller. RandomForest now fits its trees
+  through `flow_parallel_for`. KMeans n_init restarts are still sequential
+  and are the obvious next use of it.
 - #547: RETRACTED, closed as invalid. This was reported as dead code in an
   uncalled module deciding whether an unrelated program corrupts its heap.
   It was not a compiler bug. `examples/regression_demo.flow` hardcoded
@@ -78,12 +79,15 @@ Filed issues so far:
 ## Toolchain requirement
 
 RandomForest fits its trees concurrently, which needs a Flow compiler that can
-take a function's address. Before Flow commit `d62789dd` a function named as a
+take a function's address. Before Flow commit `5a0af023` a function named as a
 value emitted the source-level name and the generated C failed with
 `use of undeclared identifier`. That was Flow issue #843.
 
-`.github/workflows/flow.yml` pins the toolchain by commit. The pin has to name
-a commit containing that fix or `lib/scikit/ensemble.flow` will not compile.
+`.github/workflows/flow.yml` and `remaining-issues.yml` pin the toolchain by
+commit. The pin has to name a commit containing that fix or
+`lib/scikit/ensemble.flow` will not compile. It currently names `5a0af023`,
+the head of Flow PR #846. Move it to a commit on Flow `main` once that PR
+merges.
 
 ## Build and test
 
