@@ -135,6 +135,12 @@ def test_canonical_contract() -> None:
     splits = json.loads((ROOT / "split_indices.json").read_text())
     sizes = {name: row["n_train"] for name, row in splits.items()}
 
+    # The optimizer difference on the two LogisticRegression rows is gone.
+    # Flow's multinomial fit now backtracks on the Armijo condition and stops
+    # on the largest gradient component at the tolerance it declares, which is
+    # what scipy's L-BFGS-B does, so both sides record plain lbfgs. max_iter
+    # still differs and stays reported.
+    #
     # #475 aligned KernelSVC_RBF/iris max_iter to 1000 on both sides, so that
     # row now has no surviving configuration difference. Keep it in the map to
     # pin the absence explicitly rather than silently dropping coverage.
@@ -145,8 +151,8 @@ def test_canonical_contract() -> None:
     # two sides are doing, so it is declared on both sides of the contract and
     # reported here rather than mapped away as an equivalence.
     expected = {
-        ("LogisticRegression", "iris"): ["max_iter", "optimizer"],
-        ("LogisticRegression", "digits"): ["max_iter", "optimizer"],
+        ("LogisticRegression", "iris"): ["max_iter"],
+        ("LogisticRegression", "digits"): ["max_iter"],
         ("KernelSVC_RBF", "iris"): [],
         ("PCA", "iris"): ["solver"],
         ("Ridge", "diabetes"): ["max_iter"],

@@ -14,6 +14,7 @@ extern {
     function sqrt(x: f64) -> f64
     function log(x: f64) -> f64
     function expf(x: f32) -> f32
+    function logf(x: f32) -> f32
 }
 
 function sqrt_f32(x: f32) -> f32 {
@@ -993,6 +994,47 @@ function lin433_softmax_block(Z: ptr<f32>, m: i32, nc: i32) -> void {
 # Returns weights in the same nc x n row-major layout the caller expects, so
 # logistic_predict and logistic_decide need no change: argmax over the softmax
 # is argmax over the linear scores.
+# Mean cross-entropy of the softmax fit plus the L2 term, which is the
+# objective lin433_multinomial_fit descends.
+#
+# Z is overwritten with the probabilities at theta, which is exactly what the
+# gradient step needs next, so an accepted line-search evaluation feeds
+# straight into the gradient and costs nothing extra. Only a rejected step
+# repeats work.
+#
+# The probability is floored before the log. Softmax subtracts the row maximum,
+# so a probability can underflow to zero for a class whose logit is far below
+# the best one, and log(0) would poison the whole objective with -inf.
+function lin433_multinomial_objective(X_aug: ptr<f32>, theta: ptr<f32>, tgt: ptr<i32>, Z: ptr<f32>, m: i32, nc: i32, d: i32, n: i32, l2_coeff: f32, inv_m: f32) -> f32 {
+    blas_matmat_nt(X_aug, theta, Z, m, nc, d, d, d, 1.0, 0.0)
+    lin433_softmax_block(Z, m, nc)
+
+    # logf rather than log on a widened argument, for the reason the softmax
+    # uses expf: the result is narrowed straight back to f32, so the extra
+    # precision never reaches the caller and only buys a slower libm call. The
+    # sum itself stays in f64, where the precision does matter.
+    let mut total: f64 = 0.0
+    for i in 0 to m {
+        let mut p: f32 = Z[i * nc + tgt[i]]
+        if p < 0.000000000000001 { p = 0.000000000000001 }
+        total = total - (logf(p) as f64)
+    }
+    let mut loss: f32 = ((total * (inv_m as f64)) as f32)
+
+    if l2_coeff > 0.0 {
+        let mut reg: f64 = 0.0
+        for c in 0 to nc {
+            let base: i32 = c * d
+            for j in 0 to n {
+                let w: f64 = theta[base + j] as f64
+                reg = reg + w * w
+            }
+        }
+        loss = loss + 0.5 * l2_coeff * (reg as f32)
+    }
+    return loss
+}
+
 function lin433_multinomial_fit(X: Matrix, y: ptr<f32>, classes: ptr<f32>, nc: i32, epochs: i32, penalty: Penalty) -> LogisticRegression {
     let n: i32 = X.cols
     let m: i32 = X.rows
@@ -1071,19 +1113,42 @@ function lin433_multinomial_fit(X: Matrix, y: ptr<f32>, classes: ptr<f32>, nc: i
         }
     }
 
+    # The objective at the current point, carried across iterations so the line
+    # search compares against it without recomputing.
+    let mut fobj: f32 = lin433_multinomial_objective(X_aug, theta, tgt, Z, m, nc, d, n, l2_coeff, inv_m)
+
     let mut iter: i32 = 0
     let mut converged: bool = false
     let mut hist_size: i32 = 0
     let mut hist_idx: i32 = 0
 
     while iter < max_iter && not converged {
+        # Stop on the largest gradient component, which is the rule scipy's
+        # L-BFGS-B applies as pgtol and therefore the rule scikit-learn's
+        # LogisticRegression stops on, at the same 1e-4 its tol declares.
+        #
+        # This tested the L2 norm of the whole gradient instead. Over 650
+        # parameters that norm is roughly an order of magnitude above the
+        # largest single component, so the fit was being held to a far tighter
+        # standard than the tolerance names: it ran to its 100-iteration cap
+        # with the norm still falling, while scikit-learn reached its own
+        # tolerance on the same data in 31 iterations. Both objectives are the
+        # mean loss with l2 = 1 / (C * n_samples), so the two gradients are on
+        # the same scale and the same threshold means the same thing.
         let mut gnorm: f32 = 0.0
         for j in 0 to dim {
             let g: f32 = grad[j]
             gnorm = gnorm + g * g
         }
         gnorm = sqrt_f32(gnorm)
-        if gnorm < 0.0001 { converged = true; break }
+
+        let mut gmax: f32 = 0.0
+        for j in 0 to dim {
+            let mut ag: f32 = grad[j]
+            if ag < 0.0 { ag = 0.0 - ag }
+            if ag > gmax { gmax = ag }
+        }
+        if gmax < 0.0001 { converged = true; break }
 
         for j in 0 to dim {
             grad_prev[j] = grad[j]
@@ -1138,6 +1203,22 @@ function lin433_multinomial_fit(X: Matrix, y: ptr<f32>, classes: ptr<f32>, nc: i
             for j in 0 to dim { direction[j] = -r_lb[j] }
         }
 
+        # Backtracking line search on the Armijo condition.
+        #
+        # This used to take the raw LBFGS step of 1.0 with no line search,
+        # which is why the fit ran to its iteration cap without converging:
+        # the gradient norm was still falling at iteration 100. scikit-learn
+        # runs L-BFGS-B with a Wolfe search and reaches its own tolerance in 31
+        # iterations on the same data. Accepting only a step that reduces the
+        # objective by a fraction of what the slope predicts recovers most of
+        # that, which is both closer to the reference optimizer and less work.
+        #
+        # A rejected step costs one objective evaluation. An accepted one costs
+        # nothing extra, because the evaluation leaves Z holding the
+        # probabilities at the new theta, which is what the gradient needs.
+        let mut slope: f32 = 0.0
+        for j in 0 to dim { slope = slope + grad[j] * direction[j] }
+
         let mut step: f32 = 1.0
         if iter == 0 {
             let mut gnorm2: f32 = 0.0
@@ -1145,10 +1226,30 @@ function lin433_multinomial_fit(X: Matrix, y: ptr<f32>, classes: ptr<f32>, nc: i
             if gnorm2 > 0.0000001 { step = 1.0 / gnorm2 }
         }
 
-        for j in 0 to dim { theta[j] = theta_prev[j] + step * direction[j] }
+        let mut accepted: bool = false
+        let mut bt: i32 = 0
+        while bt < 24 && not accepted {
+            for j in 0 to dim { theta[j] = theta_prev[j] + step * direction[j] }
+            let f_new: f32 = lin433_multinomial_objective(X_aug, theta, tgt, Z, m, nc, d, n, l2_coeff, inv_m)
+            # The NaN test is f_new == f_new, which is false only for NaN.
+            if f_new == f_new && f_new <= fobj + 0.0001 * step * slope {
+                fobj = f_new
+                accepted = true
+            } else {
+                step = step * 0.5
+            }
+            bt = bt + 1
+        }
 
-        blas_matmat_nt(X_aug, theta, Z, m, nc, d, d, d, 1.0, 0.0)
-        lin433_softmax_block(Z, m, nc)
+        # No step reduced the objective. The iterate is left where the last
+        # evaluation put it and the loop stops, rather than stepping to a point
+        # known to be worse.
+        if not accepted {
+            for j in 0 to dim { theta[j] = theta_prev[j] }
+            converged = true
+            break
+        }
+
         for i in 0 to m {
             Z[i * nc + tgt[i]] = Z[i * nc + tgt[i]] - 1.0
         }
@@ -1786,14 +1887,25 @@ export function logistic_regression_fit_solver(X: Matrix, y: ptr<f32>, n_classes
 
         while iter < max_iter && not converged {
             # Check convergence
+            # Largest gradient component, the same rule the multinomial fit
+            # uses and the same one scipy's L-BFGS-B applies as pgtol. See the
+            # note there: testing the L2 norm holds the fit to a far tighter
+            # standard than the tolerance names, and the two paths should stop
+            # on the same criterion.
             let mut gnorm: f32 = 0.0
             for j in 0 to d {
                 let g: f32 = grad[j]
                 gnorm = gnorm + g * g
             }
-            # Approximate sqrt via repeated multiply
             gnorm = sqrt_f32(gnorm)
-            if gnorm < 0.0001 { converged = true; break }
+
+            let mut gmax: f32 = 0.0
+            for j in 0 to d {
+                let mut ag: f32 = grad[j]
+                if ag < 0.0 { ag = 0.0 - ag }
+                if ag > gmax { gmax = ag }
+            }
+            if gmax < 0.0001 { converged = true; break }
 
             # Save gradient and theta for history
             for j in 0 to d {
