@@ -39,7 +39,7 @@ Filed issues so far:
   code generation for regression and clustering. Ridge R2 jumps from 0.33
   to 0.61, KMeans iris drops from 0.80 to 0.47. Workaround: import prng.flow
   directly from cluster.flow and ensemble.flow instead of through scikit.flow.
-- #843: FIXED in Flow commit `5a0af023` (PR #846). A function name used as a value
+- #843: FIXED in Flow, merged as `144fd168` (PR #846). A function name used as a value
   emitted the bare Flow name in the generated C, which does not exist, so a
   Flow callback could not be handed to a C dispatcher and
   `lib/scikit/threading.flow` had no caller. RandomForest now fits its trees
@@ -79,15 +79,14 @@ Filed issues so far:
 ## Toolchain requirement
 
 RandomForest fits its trees concurrently, which needs a Flow compiler that can
-take a function's address. Before Flow commit `5a0af023` a function named as a
-value emitted the source-level name and the generated C failed with
+take a function's address. Before Flow PR #846 a function named as a value
+emitted the source-level name and the generated C failed with
 `use of undeclared identifier`. That was Flow issue #843.
 
 `.github/workflows/flow.yml` and `remaining-issues.yml` pin the toolchain by
 commit. The pin has to name a commit containing that fix or
-`lib/scikit/ensemble.flow` will not compile. It currently names `5a0af023`,
-the head of Flow PR #846. Move it to a commit on Flow `main` once that PR
-merges.
+`lib/scikit/ensemble.flow` will not compile. It names `144fd168`, the commit
+that merged #846 into Flow `main`.
 
 ## Build and test
 
