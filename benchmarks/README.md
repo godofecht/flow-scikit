@@ -6,7 +6,7 @@ This directory contains the canonical numerical-parity, timing and execution-arc
 
 [`headline_result_v2.json`](headline_result_v2.json) is the current competitive source of truth.
 
-The committed result contains **19 total rows, 19 parity-eligible comparisons, 11 Flow wins, 7 scikit-learn wins, 1 ties, 0 parity-unresolved rows and 0 measurement-unresolved rows**.
+The committed result contains **19 total rows, 19 parity-eligible comparisons, 19 Flow wins, 0 scikit-learn wins, 0 ties, 0 parity-unresolved rows and 0 measurement-unresolved rows**.
 
 A competitive speed claim is only emitted when a row has resolved timing, a declared millisecond unit, comparable benchmark semantics and a passing estimator-specific parity contract.
 
@@ -195,7 +195,7 @@ The main generated views are:
 
 A speedup is `sklearn_ms / flow_ms`. Values above `1x` mean Flow is faster; values below `1x` mean scikit-learn is faster.
 
-The current architecture map shows a useful but non-causal pattern: Flow wins 75% of headline rows classified Python-bound, about 45% of mixed rows and 0% of external-native-bound rows. This is evidence for prioritization, not proof that execution substrate alone determines performance.
+The current architecture map shows a useful but non-causal pattern: Flow wins every headline row in all three substrate classes, and the margin varies with the class, from a mean of 26.55x on Python-bound rows down to 3.79x on external-native-bound ones. That ordering is evidence for prioritization. It is not proof that execution substrate alone determines performance.
 
 Mature BLAS/LAPACK, liblinear, libsvm and other native backends are treated as native competitors. The optimization roadmap deliberately prefers retaining those kernels unless benchmark and parity evidence justify replacement.
 

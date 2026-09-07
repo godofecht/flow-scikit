@@ -1,0 +1,123 @@
+# Gate for the introsort that replaced the shell sort in the tree split
+# search. Checks ascending order, that the companion array stays a
+# permutation, and that the value sequence is identical to the shell sort
+# the classifier split scan was verified against.
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+}
+
+function main() -> i32 {
+    let mut failures: i32 = 0
+    let mut state: u32 = 12345
+
+    # Cover empty, single, already-sorted, reverse-sorted, all-equal,
+    # two-valued, and pseudo-random inputs across sizes that straddle the
+    # insertion-sort cutoff and the stack-pushing partition sizes.
+    for case_id in 0 to 7 {
+        for size_idx in 0 to 9 {
+            let sizes: ptr<i32> = malloc(9 * 4) as ptr<i32>
+            sizes[0] = 0
+            sizes[1] = 1
+            sizes[2] = 2
+            sizes[3] = 15
+            sizes[4] = 16
+            sizes[5] = 17
+            sizes[6] = 64
+            sizes[7] = 1257
+            sizes[8] = 4096
+            let n: i32 = sizes[size_idx]
+            free(sizes as ptr<void>)
+
+            let v: ptr<f32> = array_new_f32(n + 1)
+            let c: ptr<i32> = malloc(((n + 1) as i64) * 4) as ptr<i32>
+            for i in 0 to n {
+                state = state * 1103515245 + 12345
+                let r: i32 = ((state / 65536) % 1000) as i32
+                if case_id == 0 { v[i] = i as f32 }
+                if case_id == 1 { v[i] = (n - i) as f32 }
+                if case_id == 2 { v[i] = 7.0 }
+                if case_id == 3 { v[i] = (i % 2) as f32 }
+                if case_id == 4 { v[i] = r as f32 }
+                if case_id == 5 { v[i] = (r % 5) as f32 }
+                if case_id == 6 { v[i] = (0.0 - (r as f32)) / 3.0 }
+                c[i] = i
+            }
+
+            _sort_pairs_fast(v, c, n)
+
+            # Ascending order.
+            for i in 1 to n {
+                if v[i - 1] > v[i] {
+                    printf("FAIL order case=%d n=%d at %d\n", case_id, n, i)
+                    failures = failures + 1
+                }
+            }
+            # Companions must still be a permutation of 0..n.
+            let seen: ptr<i32> = malloc(((n + 1) as i64) * 4) as ptr<i32>
+            for i in 0 to n { seen[i] = 0 }
+            for i in 0 to n {
+                if c[i] < 0 || c[i] >= n {
+                    printf("FAIL companion range case=%d n=%d\n", case_id, n)
+                    failures = failures + 1
+                } else {
+                    seen[c[i]] = seen[c[i]] + 1
+                }
+            }
+            for i in 0 to n {
+                if seen[i] != 1 {
+                    printf("FAIL companion perm case=%d n=%d idx=%d count=%d\n", case_id, n, i, seen[i])
+                    failures = failures + 1
+                }
+            }
+            free(seen as ptr<void>)
+            array_free_f32(v)
+            free(c as ptr<void>)
+        }
+    }
+
+    # The value sequence must match the shell sort exactly, which is the
+    # property the classifier split scan depends on.
+    # Mixed signs and mixed magnitudes, which is what the radix key mapping
+    # has to get right: negatives invert every bit, non-negatives only the
+    # sign bit. Standardized features are routinely negative.
+    for trial in 0 to 40 {
+        let n: i32 = 500
+        let a: ptr<f32> = array_new_f32(n)
+        let b: ptr<f32> = array_new_f32(n)
+        let ca: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+        let cb: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+        for i in 0 to n {
+            state = state * 1103515245 + 12345
+            let raw: i32 = ((state / 65536) % 4001) as i32
+            let mut val: f32 = ((raw - 2000) as f32) / 7.0
+            if trial % 4 == 1 { val = 0.0 - (((raw % 37) as f32) / 3.0) }
+            if trial % 4 == 2 { val = ((raw % 37) as f32) / 3.0 }
+            if trial % 4 == 3 { val = ((raw % 5) as f32) - 2.0 }
+            a[i] = val
+            b[i] = val
+            ca[i] = i
+            cb[i] = i
+        }
+        _sort_pairs(a, ca, n)
+        _sort_pairs_fast(b, cb, n)
+        for i in 0 to n {
+            if a[i] != b[i] {
+                printf("FAIL sequence trial=%d idx=%d %f vs %f\n", trial, i, a[i] as f64, b[i] as f64)
+                failures = failures + 1
+            }
+        }
+        array_free_f32(a)
+        array_free_f32(b)
+        free(ca as ptr<void>)
+        free(cb as ptr<void>)
+    }
+
+    if failures == 0 {
+        printf("SORT OK\n")
+        return 0
+    }
+    printf("SORT FAILURES: %d\n", failures)
+    return 1
+}

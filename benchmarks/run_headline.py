@@ -27,6 +27,16 @@ THREAD_LIMIT_VARS = (
     "NUMEXPR_NUM_THREADS",
 )
 
+# How the Flow side was compiled. scikit-learn is measured as an optimized
+# wheel, so the optimization level Flow is built at decides what the comparison
+# is between. It belongs with the rest of the measurement environment.
+BUILD_VARS = (
+    "FLOW_OPT_LEVEL",
+    "FLOW_CFLAGS",
+    "FLOW_LDFLAGS",
+    "FLOW_HOST",
+)
+
 
 def cpu_model() -> str:
     """Best-effort CPU identification for the current host."""
@@ -60,6 +70,7 @@ def host_fingerprint() -> dict:
         "cpu_model": cpu_model(),
         "logical_cpus": os.cpu_count(),
         "thread_limits": {var: os.environ.get(var) for var in THREAD_LIMIT_VARS},
+        "flow_build": {var: os.environ.get(var) for var in BUILD_VARS},
     }
 
 
