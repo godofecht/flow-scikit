@@ -14,7 +14,7 @@ The goal is not a line-for-line port. The project implements familiar estimators
 
 ## Why traditional machine learning still matters
 
-A useful practitioner snapshot appears in the r/datascience discussion [“Do people not use sci-kit learn / other traditional libraries anymore?”](https://www.reddit.com/r/datascience/comments/16lu9ni/do_people_not_use_scikit_learn_other_traditional/). It is anecdotal rather than a survey, but the recurring sentiment is clear: regression, trees, SVMs, clustering and other conventional methods remain routine production tools, especially for tabular and business workloads where larger neural models are unnecessary.
+A useful practitioner snapshot appears in the r/datascience discussion ["Do people not use sci-kit learn / other traditional libraries anymore?"](https://www.reddit.com/r/datascience/comments/16lu9ni/do_people_not_use_scikit_learn_other_traditional/). It is anecdotal rather than a survey, but the recurring sentiment is clear: regression, trees, SVMs, clustering and other conventional methods remain routine production tools, especially for tabular and business workloads where larger neural models are unnecessary.
 
 The other recurring point is that scikit-learn's value is larger than any individual estimator. Its common estimator interface makes preprocessing, fitting, evaluation, tuning and composition unusually coherent. flow-scikit is interested in preserving that practical model while testing a different runtime boundary.
 
@@ -28,7 +28,7 @@ That makes classical ML particularly interesting for native applications, embedd
 
 Performance claims in this repository are generated from committed benchmark artifacts rather than selected examples.
 
-The current canonical v2 result is [`benchmarks/headline_result_v2.json`](benchmarks/headline_result_v2.json): **19 of 19 rows are parity-eligible and measurement-resolved**. In that committed run, **Flow wins 11 of 19 end-to-end fit + predict comparisons and scikit-learn wins 7 of 19**. There are no parity-unresolved or measurement-unresolved rows.
+The current canonical v2 result is [`benchmarks/headline_result_v2.json`](benchmarks/headline_result_v2.json): **19 of 19 rows are parity-eligible and measurement-resolved**. In that committed run, **Flow wins 19 of 19 end-to-end fit + predict comparisons and scikit-learn wins 0 of 19**. There are no parity-unresolved or measurement-unresolved rows.
 
 Canonical v2 uses explicit `TIMING_UNIT|ms` markers, persisted identical train/test fixtures, repeated timing aggregation and estimator-specific numerical parity gates. Unsupervised rows are not forced into classifier-style metrics: KMeans uses adjusted Rand index and inertia, while PCA additionally checks explained variance, singular values, reconstruction error and sign-aligned components.
 
@@ -40,7 +40,7 @@ See the [full canonical benchmark report](https://godofecht.github.io/flow-sciki
 
 ## What sklearn actually executes
 
-“Python versus compiled” is too crude a performance model for scikit-learn. Its public API is Python, but estimator hot paths may execute in Python orchestration, NumPy/SciPy, BLAS/LAPACK, sklearn-owned Cython/native code or external native libraries such as liblinear and libsvm.
+"Python versus compiled" is too crude a performance model for scikit-learn. Its public API is Python, but estimator hot paths may execute in Python orchestration, NumPy/SciPy, BLAS/LAPACK, sklearn-owned Cython/native code or external native libraries such as liblinear and libsvm.
 
 flow-scikit now maintains a generated execution map rather than inferring opportunity from file extensions. The current committed evidence contains:
 
@@ -51,7 +51,15 @@ flow-scikit now maintains a generated execution map rather than inferring opport
 - **8 whole-estimator experiments**
 - substrate and speedup joins for **all 19 canonical benchmark rows**
 
-The current grouped headline evidence is descriptive rather than causal: Flow wins **75% of Python-bound rows**, about **45% of mixed rows**, and **0% of external-native-bound rows** in the committed architecture map. That pattern is useful enough to guide engineering: optimize Python/boundary-heavy paths aggressively, treat sklearn-owned compiled code as a direct implementation contest, and retain mature BLAS/LAPACK/liblinear/libsvm kernels unless measurements justify replacement.
+The win count is machine-dependent and the committed artifact says which machine it came from. This matters enough to have changed a verdict once: an earlier run of this work won all 19 rows on an Apple M4 Max with Accelerate while CI, on an Intel Xeon with OpenBLAS, won 18 and lost `LogisticRegression` on digits at 0.94x. That row was 1.18x on the Mac, close enough to 1x for a different BLAS and core count to take it the other way. After the convergence fix it has been measured winning on four machines: 3.18x on the M4 Max, 2.87x on an Intel Xeon Platinum 8370C, and 23x on two AMD EPYC 7763 runners.
+
+Do not read that 23x as a property of the library. scikit-learn's own fit of that row takes about 25 ms on the Intel runner and about 181 ms on the AMD one, for the same code and the same data, so the AMD figure is measuring an OpenBLAS path that suits that machine badly rather than anything Flow does well. Flow's own time on the two runners is 8.9 ms and 7.5 ms. The Intel ratio is the honest one to quote, and a row whose margin sits near 1x can still land either way. The parity contract gates on correctness and measurement resolution rather than on the win count.
+
+The current grouped headline evidence is descriptive rather than causal: Flow wins every row in all three substrate groups, at a mean of 20.99x on Python-bound rows, 6.84x on mixed rows and 3.96x on external-native-bound rows in the committed architecture map.
+
+Two earlier readings of this table were wrong, and both were artifacts of how Flow was built rather than of the substrate. While the Flow side was compiled unoptimized, external-native-bound rows all lost, which read as sklearn-owned compiled code being out of reach. The grouping is a guide to where the Python boundary costs most. It is not a ceiling.
+
+One row is not a like-for-like comparison, and the disparity report records it. Flow fits a forest's trees concurrently; scikit-learn's default is one worker, and the benchmark leaves it at its default. Both RandomForest rows therefore carry a declared `n_jobs` difference. Single-threaded, RandomForest on digits runs at 1.82x rather than 5.01x, so the row wins either way. Asking scikit-learn for all cores does not close the gap on this workload: at `n_jobs=-1` its own fit measured slower than at `n_jobs=1`, because joblib's pool costs more than ten small trees save.
 
 Detailed artifacts:
 
@@ -83,11 +91,27 @@ cd flow-scikit
 # link step with undefined cblas_* symbols.
 export FLOW_HOST=python
 export FLOW_OPT_LEVEL=0
-export FLOW_LDFLAGS="-framework Accelerate"   # macOS
-# export FLOW_LDFLAGS="-lm -lopenblas"        # Linux, matching CI
+export FLOW_LDFLAGS="-framework Accelerate lib/scikit/flow_time.c lib/scikit/flow_parallel.c"   # macOS
+# export FLOW_LDFLAGS="-lm -lopenblas lib/scikit/flow_time.c lib/scikit/flow_parallel.c"        # Linux, matching CI
 
 python tools/run_all.py
 ```
+
+Benchmarks are compiled at `-O3` and link the timing shim:
+
+```bash
+export FLOW_OPT_LEVEL=3
+export FLOW_LDFLAGS="-framework Accelerate lib/scikit/flow_time.c lib/scikit/flow_parallel.c"   # macOS
+# export FLOW_LDFLAGS="-lm -lopenblas lib/scikit/flow_time.c lib/scikit/flow_parallel.c"        # Linux, matching CI
+
+python benchmarks/run_headline.py --repeats 7
+```
+
+scikit-learn is measured as a released wheel, which ships optimized. Building
+the Flow side at `-O0` measured the two at different optimization levels and
+understated every row; the canonical contract now compiles both sides
+optimized. `lib/scikit/flow_time.c` supplies the monotonic clock every timing
+harness uses, and must be linked for the tests as well as the benchmarks.
 
 `tools/run_all.py` is what the full CI suite exercises. A single file runs with
 `flow run tests/test_new_features.flow` under the same environment.

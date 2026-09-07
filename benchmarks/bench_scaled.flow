@@ -6,18 +6,12 @@ import "lib/scikit/scikit.flow"
 
 extern {
     function printf(fmt: string, ...) -> i32
-    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+    function flow_now_ns() -> i64
 }
 
-const TIME_UTC: i32 = 1
 
 function now_ns() -> i64 {
-    let ts: ptr<i64> = malloc(16) as ptr<i64>
-    if ts == null { return 0 }
-    timespec_get(ts, TIME_UTC)
-    let v: i64 = ts[0] * 1000000000 + ts[1]
-    free(ts as ptr<void>)
-    return v
+    return flow_now_ns()
 }
 
 function elapsed_ms(start: i64, finish: i64) -> f32 {

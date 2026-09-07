@@ -12,17 +12,12 @@
 import "lib/scikit/scikit.flow"
 
 extern {
-    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+    function flow_now_ns() -> i64
 }
 
-const CTOPT_TIME_UTC: i32 = 1
 
 function ctopt_now_ns() -> i64 {
-    let ts: ptr<i64> = malloc(16) as ptr<i64>
-    timespec_get(ts, CTOPT_TIME_UTC)
-    let value: i64 = ts[0] * 1000000000 + ts[1]
-    free(ts as ptr<void>)
-    return value
+    return flow_now_ns()
 }
 
 function ctopt_reference_extract(X: Matrix, columns: ptr<i32>, n_columns: i32) -> Matrix {

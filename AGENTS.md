@@ -39,6 +39,12 @@ Filed issues so far:
   code generation for regression and clustering. Ridge R2 jumps from 0.33
   to 0.61, KMeans iris drops from 0.80 to 0.47. Workaround: import prng.flow
   directly from cluster.flow and ensemble.flow instead of through scikit.flow.
+- #843: FIXED in Flow, merged as `88aac509` (PR #846). A function name used as a value
+  emitted the bare Flow name in the generated C, which does not exist, so a
+  Flow callback could not be handed to a C dispatcher and
+  `lib/scikit/threading.flow` had no caller. RandomForest now fits its trees
+  through `flow_parallel_for`. KMeans n_init restarts are still sequential
+  and are the obvious next use of it.
 - #547: RETRACTED, closed as invalid. This was reported as dead code in an
   uncalled module deciding whether an unrelated program corrupts its heap.
   It was not a compiler bug. `examples/regression_demo.flow` hardcoded
@@ -70,6 +76,18 @@ Filed issues so far:
 - Flow structs are passed by value. Mutating functions must return the struct.
 - Use generous allocation sizes (128+ bytes per struct) on arm64.
 
+## Toolchain requirement
+
+RandomForest fits its trees concurrently, which needs a Flow compiler that can
+take a function's address. Before Flow PR #846 a function named as a value
+emitted the source-level name and the generated C failed with
+`use of undeclared identifier`. That was Flow issue #843.
+
+`.github/workflows/flow.yml` and `remaining-issues.yml` pin the toolchain by
+commit. The pin has to name a commit containing that fix or
+`lib/scikit/ensemble.flow` will not compile. It names `88aac509`, the commit
+that merged #846 into Flow `main`.
+
 ## Build and test
 
 BLAS linkage is required. Without `FLOW_LDFLAGS` the build fails at the
@@ -79,7 +97,7 @@ macOS:
 ```
 export FLOW_HOST=python
 export FLOW_OPT_LEVEL=0
-export FLOW_LDFLAGS="-framework Accelerate"
+export FLOW_LDFLAGS="-framework Accelerate lib/scikit/flow_time.c lib/scikit/flow_parallel.c"
 flow run tests/test_new_features.flow
 ```
 
@@ -87,7 +105,7 @@ Linux, matching CI:
 ```
 export FLOW_HOST=python
 export FLOW_OPT_LEVEL=0
-export FLOW_LDFLAGS="-lm -lopenblas"
+export FLOW_LDFLAGS="-lm -lopenblas lib/scikit/flow_time.c lib/scikit/flow_parallel.c"
 flow run tests/test_new_features.flow
 ```
 
@@ -95,6 +113,22 @@ Run everything the way CI does:
 ```
 python tools/run_all.py
 ```
+
+Benchmarks are compiled at `-O3` and link the timing shim:
+
+```bash
+export FLOW_OPT_LEVEL=3
+export FLOW_LDFLAGS="-framework Accelerate lib/scikit/flow_time.c lib/scikit/flow_parallel.c"   # macOS
+# export FLOW_LDFLAGS="-lm -lopenblas lib/scikit/flow_time.c lib/scikit/flow_parallel.c"        # Linux, matching CI
+
+python benchmarks/run_headline.py --repeats 7
+```
+
+scikit-learn is measured as a released wheel, which ships optimized. Building
+the Flow side at `-O0` measured the two at different optimization levels and
+understated every row; the canonical contract now compiles both sides
+optimized. `lib/scikit/flow_time.c` supplies the monotonic clock every timing
+harness uses, and must be linked for the tests as well as the benchmarks.
 
 `tools/run_all.py` passes a file purely on its process exit code. A test
 that prints `FAIL` and returns 0 is invisible. New tests must count

@@ -54,15 +54,28 @@ export function kmeans_fit_init(X: Matrix, init_centers: Matrix, n_clusters: i32
 struct KMeansScratch {
     cbuf: ptr<f32>,
     cnorm: ptr<f32>,
+    xnorm: ptr<f32>,
     cross: ptr<f32>,
     best_out: ptr<f32>,
     sums: ptr<f32>,
     counts: ptr<i32>
 }
 
-function _kmeans_scratch_new(n: i32, n_clusters: i32, n_features: i32) -> KMeansScratch {
+function _kmeans_scratch_new(X: Matrix, n_clusters: i32, n_features: i32) -> KMeansScratch {
+    let n: i32 = X.rows
     let cbuf: ptr<f32> = array_new_f32(n_clusters * n_features)
     let cnorm: ptr<f32> = array_new_f32(n_clusters)
+    let xnorm: ptr<f32> = array_new_f32(n)
+    let x_data: ptr<f32> = X.data
+    for i in 0 to n {
+        let xbase: i32 = i * n_features
+        let mut s: f32 = 0.0
+        for j in 0 to n_features {
+            let v: f32 = x_data[xbase + j]
+            s = s + v * v
+        }
+        xnorm[i] = s
+    }
     # malloc, not calloc: sgemm with beta = 0 overwrites every element.
     let cross: ptr<f32> = malloc(((n as i64) * (n_clusters as i64)) * 4) as ptr<f32>
     let best_out: ptr<f32> = array_new_f32(32)
@@ -71,6 +84,7 @@ function _kmeans_scratch_new(n: i32, n_clusters: i32, n_features: i32) -> KMeans
     let scratch: KMeansScratch = KMeansScratch {
         cbuf: cbuf,
         cnorm: cnorm,
+        xnorm: xnorm,
         cross: cross,
         best_out: best_out,
         sums: sums,
@@ -82,6 +96,7 @@ function _kmeans_scratch_new(n: i32, n_clusters: i32, n_features: i32) -> KMeans
 function _kmeans_scratch_free(scratch: KMeansScratch) -> void {
     array_free_f32(scratch.cbuf)
     array_free_f32(scratch.cnorm)
+    array_free_f32(scratch.xnorm)
     free(scratch.cross as ptr<void>)
     array_free_f32(scratch.best_out)
     array_free_f32(scratch.sums)
@@ -92,8 +107,9 @@ function _kmeans_scratch_free(scratch: KMeansScratch) -> void {
 # order as the original per-pair loop.
 function _kmeans_sqdist(x_data: ptr<f32>, x_base: i32, crow: ptr<f32>, n_features: i32) -> f32 {
     let mut dist: f32 = 0.0
+    let xrow: ptr<f32> = x_data + x_base
     for j in 0 to n_features {
-        let d: f32 = x_data[x_base + j] - crow[j]
+        let d: f32 = xrow[j] - crow[j]
         dist = dist + d * d
     }
     return dist
@@ -112,7 +128,7 @@ function _kmeans_sqdist(x_data: ptr<f32>, x_base: i32, crow: ptr<f32>, n_feature
 # is then recomputed directly, in the original accumulation order, so the
 # inertia this returns is bit-identical to the old triple loop. Cost per
 # iteration drops from n*k*d scalar operations to one gemm plus n*d.
-function _kmeans_assign(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, n_features: i32, labels: ptr<i32>, scratch: KMeansScratch) -> f32 {
+function _kmeans_assign(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, n_features: i32, labels: ptr<i32>, scratch: KMeansScratch, compute_inertia: bool) -> f32 {
     let n: i32 = X.rows
     if n <= 0 || n_clusters <= 0 || n_features <= 0 {
         return 0.0
@@ -132,7 +148,9 @@ function _kmeans_assign(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, n
         for i in 0 to n {
             let best_k: i32 = _kmeans_nearest_centroid(x_data, i * x_stride, centroids, n_clusters, n_features, best_out)
             labels[i] = best_k
-            small_inertia = small_inertia + best_out[0]
+            if compute_inertia {
+                small_inertia = small_inertia + best_out[0]
+            }
         }
         return small_inertia
     }
@@ -158,7 +176,7 @@ function _kmeans_assign(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, n
     let mut inertia: f32 = 0.0
     for i in 0 to n {
         let xbase: i32 = i * x_stride
-        let xs: f32 = blas_dot(n_features, x_data + xbase, x_data + xbase)
+        let xs: f32 = scratch.xnorm[i]
         let rbase: i32 = i * n_clusters
         let mut best: f32 = cnorm[0] + cross[rbase]
         let mut best_k: i32 = 0
@@ -177,33 +195,38 @@ function _kmeans_assign(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, n
         }
 
         let guard: f32 = (xs + cnorm_max) * 0.0001 + 0.000001
-        let mut best_dist: f32 = 0.0
-        if second - best > guard {
-            best_dist = _kmeans_sqdist(x_data, xbase, centroids[best_k], n_features)
-        } else {
+        if second - best <= guard {
             best_k = _kmeans_nearest_centroid(x_data, xbase, centroids, n_clusters, n_features, best_out)
-            best_dist = best_out[0]
         }
         labels[i] = best_k
-        inertia = inertia + best_dist
+        if compute_inertia {
+            let crow: ptr<f32> = centroids[best_k]
+            let mut d_exact: f32 = 0.0
+            for j in 0 to n_features {
+                let diff: f32 = x_data[xbase + j] - crow[j]
+                d_exact = d_exact + diff * diff
+            }
+            inertia = inertia + d_exact
+        }
     }
     return inertia
 }
 
 function _kmeans_run(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, max_iter: i32, tol: f32) -> KMeans {
     let n_features: i32 = X.cols
+    let n: i32 = X.rows
 
-    let labels: ptr<i32> = malloc((X.rows as i64) * 4) as ptr<i32>
+    let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
     let mut inertia: f32 = 0.0
     let mut n_iter_run: i32 = 0
-    let scratch: KMeansScratch = _kmeans_scratch_new(X.rows, n_clusters, n_features)
+    let scratch: KMeansScratch = _kmeans_scratch_new(X, n_clusters, n_features)
     let sums: ptr<f32> = scratch.sums
     let counts: ptr<i32> = scratch.counts
     let x_data: ptr<f32> = X.data
 
     for iter in 0 to max_iter {
         n_iter_run = iter + 1
-        let new_inertia: f32 = _kmeans_assign(X, centroids, n_clusters, n_features, labels, scratch)
+        _kmeans_assign(X, centroids, n_clusters, n_features, labels, scratch, false)
 
         for idx in 0 to n_clusters * n_features {
             sums[idx] = 0.0
@@ -211,46 +234,35 @@ function _kmeans_run(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, max_
         for k in 0 to n_clusters {
             counts[k] = 0
         }
-
-        for i in 0 to X.rows {
+        for i in 0 to n {
             let k: i32 = labels[i]
             counts[k] = counts[k] + 1
-            let sbase: i32 = k * n_features
-            let xbase: i32 = i * n_features
-            for j in 0 to n_features {
-                sums[sbase + j] = sums[sbase + j] + x_data[xbase + j]
-            }
+            let srow: ptr<f32> = sums + k * n_features
+            let xrow: ptr<f32> = x_data + i * n_features
+            cblas_saxpy(n_features, 1.0, xrow, 1, srow, 1)
         }
 
         let mut max_shift: f32 = 0.0
         for k in 0 to n_clusters {
             let crow: ptr<f32> = centroids[k]
-            let sbase: i32 = k * n_features
             if counts[k] > 0 {
+                let sbase: i32 = k * n_features
                 let count_f: f32 = counts[k] as f32
                 for j in 0 to n_features {
                     let new_val: f32 = sums[sbase + j] / count_f
                     let shift: f32 = new_val - crow[j]
                     if shift < 0.0 {
                         let abs_shift: f32 = 0.0 - shift
-                        if abs_shift > max_shift {
-                            max_shift = abs_shift
-                        }
+                        if abs_shift > max_shift { max_shift = abs_shift }
                     } else {
-                        if shift > max_shift {
-                            max_shift = shift
-                        }
+                        if shift > max_shift { max_shift = shift }
                     }
                     crow[j] = new_val
                 }
             } else {
-                # Empty cluster: relocate centroid to the point with the
-                # largest distance to its assigned centroid.
-                # Addresses sklearn #34074: KMeans can skip final label
-                # reassignment after empty-cluster relocation.
                 let mut farthest_idx: i32 = 0
                 let mut farthest_dist: f32 = -1.0
-                for i in 0 to X.rows {
+                for i in 0 to n {
                     let dist: f32 = _kmeans_sqdist(x_data, i * n_features, centroids[labels[i]], n_features)
                     if dist > farthest_dist {
                         farthest_dist = dist
@@ -263,24 +275,28 @@ function _kmeans_run(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, max_
                     let shift: f32 = new_val - crow[j]
                     if shift < 0.0 {
                         let abs_shift: f32 = 0.0 - shift
-                        if abs_shift > max_shift {
-                            max_shift = abs_shift
-                        }
+                        if abs_shift > max_shift { max_shift = abs_shift }
                     } else {
-                        if shift > max_shift {
-                            max_shift = shift
-                        }
+                        if shift > max_shift { max_shift = shift }
                     }
                     crow[j] = new_val
                 }
             }
         }
 
-        inertia = new_inertia
+        if max_shift < tol { break }
+    }
 
-        if max_shift < tol {
-            break
+    # Compute exact final inertia
+    for i in 0 to n {
+        let xbase: i32 = i * n_features
+        let crow: ptr<f32> = centroids[labels[i]]
+        let mut d_exact: f32 = 0.0
+        for j in 0 to n_features {
+            let diff: f32 = x_data[xbase + j] - crow[j]
+            d_exact = d_exact + diff * diff
         }
+        inertia = inertia + d_exact
     }
 
     _kmeans_scratch_free(scratch)
@@ -338,15 +354,56 @@ function _kmeans_sk_pp_init(X: Matrix, n_clusters: i32, rng: ptr<u32>, n_local_t
     let cand_dist: ptr<f32> = array_new_f32(n)
     let best_dist: ptr<f32> = array_new_f32(n)
 
+    # Distance from every point to one candidate centre, which is the whole
+    # cost of this routine: n_local_trials candidates per centre, k - 1 centres
+    # per restart, n_init restarts. The direct sum of squared differences is a
+    # scalar reduction over n_features that clang will not vectorise, because
+    # reordering a floating-point reduction is not a legal transform without
+    # fast-math.
+    #
+    # The squared-euclidean expansion turns the cross term into one sgemv:
+    #   ||x - c||^2 = ||x||^2 + ||c||^2 - 2 * (x . c)
+    # The point norms do not depend on the candidate, so they are taken once
+    # for the whole init. This is also what scikit-learn's own _kmeans_plusplus
+    # does, through _euclidean_distances with a precomputed X_norm_squared, so
+    # the expansion is the closer match to the reference arithmetic rather than
+    # a departure from it.
+    #
+    # Below the work threshold the direct loop still runs, bit for bit as
+    # before, because the sgemv dispatch costs more than the whole reduction on
+    # a small problem. The gate is the same rows * features product used by the
+    # rest of this module.
+    let use_blas_pp: bool = (n as i64) * (n_features as i64) >= 65536
+    let mut xnorm: ptr<f32> = null
+    let mut cross: ptr<f32> = null
+    if use_blas_pp {
+        xnorm = array_new_f32(n)
+        cross = array_new_f32(n)
+        for i in 0 to n {
+            let xrow: ptr<f32> = x_data + i * n_features
+            let mut sq: f32 = 0.0
+            for j in 0 to n_features {
+                sq = sq + xrow[j] * xrow[j]
+            }
+            xnorm[i] = sq
+        }
+    }
+
     let first: i32 = mt19937_choice_uniform(rng, n)
     let fbase: i32 = first * n_features
     for j in 0 to n_features {
         centroids[0][j] = x_data[fbase + j]
     }
 
+    let c0: ptr<f32> = centroids[0]
     let mut pot: f32 = 0.0
     for i in 0 to n {
-        let d: f32 = _kmeans_sqdist(x_data, i * n_features, centroids[0], n_features)
+        let xrow: ptr<f32> = x_data + i * n_features
+        let mut d: f32 = 0.0
+        for j in 0 to n_features {
+            let diff: f32 = xrow[j] - c0[j]
+            d = d + diff * diff
+        }
         closest[i] = d
         pot = pot + d
     }
@@ -375,14 +432,39 @@ function _kmeans_sk_pp_init(X: Matrix, n_clusters: i32, rng: ptr<u32>, n_local_t
             let cbase: i32 = cand * n_features
             let crow: ptr<f32> = x_data + cbase
             let mut cand_pot: f32 = 0.0
-            for i in 0 to n {
-                let d: f32 = _kmeans_sqdist(x_data, i * n_features, crow, n_features)
-                let mut v: f32 = d
-                if closest[i] < v {
-                    v = closest[i]
+            if use_blas_pp {
+                blas_matvec_ld(x_data, n, n_features, n_features, crow, cross, 1.0, 0.0)
+                let mut cnorm: f32 = 0.0
+                for j in 0 to n_features {
+                    cnorm = cnorm + crow[j] * crow[j]
                 }
-                cand_dist[i] = v
-                cand_pot = cand_pot + v
+                # The expansion can go slightly negative for a point sitting on
+                # the candidate, which is the point that was just drawn.
+                for i in 0 to n {
+                    let mut d: f32 = xnorm[i] + cnorm - 2.0 * cross[i]
+                    if d < 0.0 { d = 0.0 }
+                    let mut v: f32 = d
+                    if closest[i] < v {
+                        v = closest[i]
+                    }
+                    cand_dist[i] = v
+                    cand_pot = cand_pot + v
+                }
+            } else {
+                for i in 0 to n {
+                    let xrow: ptr<f32> = x_data + i * n_features
+                    let mut d: f32 = 0.0
+                    for j in 0 to n_features {
+                        let diff: f32 = xrow[j] - crow[j]
+                        d = d + diff * diff
+                    }
+                    let mut v: f32 = d
+                    if closest[i] < v {
+                        v = closest[i]
+                    }
+                    cand_dist[i] = v
+                    cand_pot = cand_pot + v
+                }
             }
 
             # np.argmin keeps the first minimum, so only a strict improvement
@@ -409,24 +491,27 @@ function _kmeans_sk_pp_init(X: Matrix, n_clusters: i32, rng: ptr<u32>, n_local_t
     array_free_f32(closest)
     array_free_f32(cand_dist)
     array_free_f32(best_dist)
+    if use_blas_pp {
+        array_free_f32(xnorm)
+        array_free_f32(cross)
+    }
     return centroids
 }
 
-# Run a single Lloyd iteration starting from given centroids.
-function _kmeans_lloyd(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, max_iter: i32, tol: f32) -> KMeans {
+# Run a single Lloyd iteration starting from given centroids with provided scratch.
+function _kmeans_lloyd_scratch(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, max_iter: i32, tol: f32, scratch: KMeansScratch) -> KMeans {
     let n: i32 = X.rows
     let n_features: i32 = X.cols
     let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
     let mut inertia: f32 = 0.0
     let mut n_iter_run: i32 = 0
-    let scratch: KMeansScratch = _kmeans_scratch_new(n, n_clusters, n_features)
     let sums: ptr<f32> = scratch.sums
     let counts: ptr<i32> = scratch.counts
     let x_data: ptr<f32> = X.data
 
     for iter in 0 to max_iter {
         n_iter_run = iter + 1
-        let new_inertia: f32 = _kmeans_assign(X, centroids, n_clusters, n_features, labels, scratch)
+        _kmeans_assign(X, centroids, n_clusters, n_features, labels, scratch, false)
 
         for idx in 0 to n_clusters * n_features {
             sums[idx] = 0.0
@@ -437,17 +522,15 @@ function _kmeans_lloyd(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, ma
         for i in 0 to n {
             let k: i32 = labels[i]
             counts[k] = counts[k] + 1
-            let sbase: i32 = k * n_features
-            let xbase: i32 = i * n_features
-            for j in 0 to n_features {
-                sums[sbase + j] = sums[sbase + j] + x_data[xbase + j]
-            }
+            let srow: ptr<f32> = sums + k * n_features
+            let xrow: ptr<f32> = x_data + i * n_features
+            cblas_saxpy(n_features, 1.0, xrow, 1, srow, 1)
         }
 
         let mut max_shift: f32 = 0.0
         for k in 0 to n_clusters {
+            let crow: ptr<f32> = centroids[k]
             if counts[k] > 0 {
-                let crow: ptr<f32> = centroids[k]
                 let sbase: i32 = k * n_features
                 let count_f: f32 = counts[k] as f32
                 for j in 0 to n_features {
@@ -461,14 +544,47 @@ function _kmeans_lloyd(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, ma
                     }
                     crow[j] = new_val
                 }
+            } else {
+                # Empty cluster: relocate centroid to the point with the
+                # largest distance to its assigned centroid.
+                let mut farthest_idx: i32 = 0
+                let mut farthest_dist: f32 = -1.0
+                for i in 0 to n {
+                    let dist: f32 = _kmeans_sqdist(x_data, i * n_features, centroids[labels[i]], n_features)
+                    if dist > farthest_dist {
+                        farthest_dist = dist
+                        farthest_idx = i
+                    }
+                }
+                let fbase: i32 = farthest_idx * n_features
+                for j in 0 to n_features {
+                    let new_val: f32 = x_data[fbase + j]
+                    let shift: f32 = new_val - crow[j]
+                    if shift < 0.0 {
+                        let abs_shift: f32 = 0.0 - shift
+                        if abs_shift > max_shift { max_shift = abs_shift }
+                    } else {
+                        if shift > max_shift { max_shift = shift }
+                    }
+                    crow[j] = new_val
+                }
             }
         }
 
-        inertia = new_inertia
         if max_shift < tol { break }
     }
 
-    _kmeans_scratch_free(scratch)
+    # Compute exact final inertia
+    for i in 0 to n {
+        let xbase: i32 = i * n_features
+        let crow: ptr<f32> = centroids[labels[i]]
+        let mut d_exact: f32 = 0.0
+        for j in 0 to n_features {
+            let diff: f32 = x_data[xbase + j] - crow[j]
+            d_exact = d_exact + diff * diff
+        }
+        inertia = inertia + d_exact
+    }
 
     return KMeans {
         centroids: centroids,
@@ -481,6 +597,14 @@ function _kmeans_lloyd(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, ma
         tol: tol,
         fitted: true
     }
+}
+
+# Run a single Lloyd iteration starting from given centroids.
+function _kmeans_lloyd(X: Matrix, centroids: ptr<ptr<f32> >, n_clusters: i32, max_iter: i32, tol: f32) -> KMeans {
+    let scratch: KMeansScratch = _kmeans_scratch_new(X, n_clusters, X.cols)
+    let result: KMeans = _kmeans_lloyd_scratch(X, centroids, n_clusters, max_iter, tol, scratch)
+    _kmeans_scratch_free(scratch)
+    return result
 }
 
 # KMeans with k-means++ initialization and n_init restarts.
@@ -499,10 +623,11 @@ export function kmeans_fit_plus_plus(X: Matrix, n_clusters: i32, max_iter: i32, 
 
     let rng: ptr<u32> = mt19937_new(seed)
     let n_local_trials: i32 = _kmeans_sk_pp_trials(n_clusters)
+    let scratch: KMeansScratch = _kmeans_scratch_new(X, n_clusters, n_features)
 
     for init in 0 to n_init {
         let centroids: ptr<ptr<f32> > = _kmeans_sk_pp_init(X, n_clusters, rng, n_local_trials)
-        let result: KMeans = _kmeans_lloyd(X, centroids, n_clusters, max_iter, tol)
+        let result: KMeans = _kmeans_lloyd_scratch(X, centroids, n_clusters, max_iter, tol, scratch)
 
         if result.inertia < best_inertia {
             best_inertia = result.inertia
@@ -525,6 +650,7 @@ export function kmeans_fit_plus_plus(X: Matrix, n_clusters: i32, max_iter: i32, 
         free(result.labels as ptr<void>)
     }
 
+    _kmeans_scratch_free(scratch)
     mt19937_free(rng)
 
     return KMeans {

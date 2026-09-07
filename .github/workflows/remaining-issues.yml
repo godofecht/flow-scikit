@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: flooooooooooow/flow
-          ref: 3f6031813912e8f77bcebe18c5b25dc35861216b
+          ref: 88aac5095488309813c7173d268c1f8260421c6e
           path: .flow-toolchain
       - uses: actions/setup-python@v5
         with:
@@ -53,7 +53,7 @@ jobs:
           FLOW_HEADLINE_COMMAND: ${{ github.workspace }}/.flow-toolchain/flow run benchmarks/bench_flow_v2.flow
           FLOW_HOST: python
           FLOW_OPT_LEVEL: "0"
-          FLOW_LDFLAGS: "-lm -lopenblas"
+          FLOW_LDFLAGS: "-lm -lopenblas lib/scikit/flow_time.c lib/scikit/flow_parallel.c"
           # Both sides call into OpenBLAS, and its thread count was left to
           # runtime detection. Pinned to 1 on a trial run, LogisticRegression on
           # digits lands at -1.88 log2 instead of the usual +1.08, which is the

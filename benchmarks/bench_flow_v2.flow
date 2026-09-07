@@ -1,29 +1,19 @@
 # Canonical 19-row Flow headline benchmark.
-# Consumes persisted split fixtures and uses C11 timespec_get for high-resolution timing.
+# Consumes persisted split fixtures and uses a monotonic nanosecond clock (lib/scikit/flow_time.c) for timing.
 
 import "lib/scikit/scikit.flow"
 
 extern {
     function printf(fmt: string, ...) -> i32
-    function timespec_get(ts: ptr<i64>, base: i32) -> i32
+    function flow_now_ns() -> i64
     function fopen(path: string, mode: string) -> ptr<void>
     function fread(dst: ptr<void>, size: i64, count: i64, stream: ptr<void>) -> i64
     function fclose(stream: ptr<void>) -> i32
 }
 
-const TIME_UTC: i32 = 1
 
 function now_ns() -> i64 {
-    let ts: ptr<i64> = malloc(16) as ptr<i64>
-    if ts == null { return 0 }
-    let ok: i32 = timespec_get(ts, TIME_UTC)
-    if ok == 0 {
-        free(ts as ptr<void>)
-        return 0
-    }
-    let value: i64 = ts[0] * 1000000000 + ts[1]
-    free(ts as ptr<void>)
-    return value
+    return flow_now_ns()
 }
 
 function elapsed_ms_ns(start: i64, finish: i64) -> f32 {
@@ -787,7 +777,7 @@ function main() -> i32 {
     printf("TIMING_UNIT|ms\n")
     printf("BENCHMARK_MODE|end_to_end\n")
     printf("FIXTURE_SOURCE|benchmarks/split_*.bin\n")
-    printf("BENCHMARK_ENV|{\"impl\":\"flow\",\"timer\":\"timespec_get\"}\n")
+    printf("BENCHMARK_ENV|{\"impl\":\"flow\",\"timer\":\"clock_gettime_monotonic\"}\n")
 
     let no_penalty: Penalty = penalty_none()
     let mut t0: i64 = 0
