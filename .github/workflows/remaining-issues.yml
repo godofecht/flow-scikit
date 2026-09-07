@@ -52,7 +52,13 @@ jobs:
         env:
           FLOW_HEADLINE_COMMAND: ${{ github.workspace }}/.flow-toolchain/flow run benchmarks/bench_flow_v2.flow
           FLOW_HOST: python
-          FLOW_OPT_LEVEL: "0"
+          # This job's artifact is what the freeze step promotes to
+          # headline_result_v2.json, so it decides the published numbers. At -O0
+          # it was publishing an unoptimized Flow against scikit-learn's
+          # optimized wheels, which is the comparison the -O3 move in flow.yml
+          # already corrected everywhere else. Left here, main froze 16 of 19
+          # while every other measurement of the same commit read 19 of 19.
+          FLOW_OPT_LEVEL: "3"
           FLOW_LDFLAGS: "-lm -lopenblas lib/scikit/flow_time.c lib/scikit/flow_parallel.c"
           # Both sides call into OpenBLAS, and its thread count was left to
           # runtime detection. Pinned to 1 on a trial run, LogisticRegression on
