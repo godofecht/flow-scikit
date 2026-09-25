@@ -1311,10 +1311,10 @@ export struct KernelSVCMulti {
     gamma: f32,
     C: f32,
     fitted: bool,
-    X_all: Matrix,
-    coef_all: ptr<f32>,
+    X_sv: Matrix,
+    coef_sv: ptr<f32>,
     bias_all: ptr<f32>,
-    n_train: i32
+    n_sv: i32
 }
 
 export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gamma: f32, C: f32, max_iter: i32) -> KernelSVCMulti {
@@ -1432,7 +1432,41 @@ export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gam
 
     _rbf_cache_free(kcache)
 
-    let X_all: Matrix = matrix_copy(X)
+    # Keep only the rows some pair gave a nonzero dual coefficient. A decision
+    # value is a kernel against the support vectors, which is what libsvm
+    # stores, and on a thousand samples most rows carry a zero coefficient in
+    # every pair. Keeping all of them made predict evaluate the kernel against
+    # the whole training set and multiply most of it by zero.
+    let sv_index: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let mut n_sv: i32 = 0
+    for i in 0 to n {
+        let mut nonzero: bool = false
+        for p in 0 to n_pairs {
+            if coef_all[i * n_pairs + p] != 0.0 { nonzero = true }
+        }
+        if nonzero {
+            sv_index[n_sv] = i
+            n_sv = n_sv + 1
+        }
+    }
+    # A fit that found no support vector still has to answer predict, and a
+    # zero-row matrix is not a shape BLAS takes. One zeroed row leaves every
+    # decision value at its bias, which is the right answer for that model.
+    let mut sv_rows: i32 = n_sv
+    if sv_rows < 1 { sv_rows = 1 }
+    let X_sv: Matrix = matrix_new(sv_rows, n_features)
+    let coef_sv: ptr<f32> = array_new_f32(sv_rows * n_pairs)
+    for s in 0 to sv_rows {
+        for p in 0 to n_pairs { coef_sv[s * n_pairs + p] = 0.0 }
+        for j in 0 to n_features { matrix_set(X_sv, s, j, 0.0) }
+    }
+    for s in 0 to n_sv {
+        let src: i32 = sv_index[s]
+        for j in 0 to n_features { matrix_set(X_sv, s, j, matrix_at(X, src, j)) }
+        for p in 0 to n_pairs { coef_sv[s * n_pairs + p] = coef_all[src * n_pairs + p] }
+    }
+    free(sv_index as ptr<void>)
+    array_free_f32(coef_all)
 
     return KernelSVCMulti {
         models: models,
@@ -1445,10 +1479,10 @@ export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gam
         gamma: gamma,
         C: C,
         fitted: true,
-        X_all: X_all,
-        coef_all: coef_all,
+        X_sv: X_sv,
+        coef_sv: coef_sv,
         bias_all: bias_all,
-        n_train: n
+        n_sv: sv_rows
     }
 }
 
@@ -1460,10 +1494,10 @@ export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gam
 export function kernel_svc_multi_decision_function(model: KernelSVCMulti, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
     let np: i32 = model.n_pairs
-    let nt: i32 = model.n_train
-    let K: Matrix = _rbf_kernel_blas(X, model.X_all, model.gamma)
+    let nt: i32 = model.n_sv
+    let K: Matrix = _rbf_kernel_blas(X, model.X_sv, model.gamma)
     let dec: ptr<f32> = array_new_f32(n * np)
-    blas_matmat(K.data, model.coef_all, dec, n, np, nt, 1.0, 0.0)
+    blas_matmat(K.data, model.coef_sv, dec, n, np, nt, 1.0, 0.0)
     matrix_free(K)
 
     let bias: ptr<f32> = model.bias_all
@@ -1527,9 +1561,9 @@ export function kernel_svc_multi_free(model: KernelSVCMulti) -> void {
     free(model.pair_a as ptr<void>)
     free(model.pair_b as ptr<void>)
     array_free_f32(model.classes)
-    array_free_f32(model.coef_all)
+    array_free_f32(model.coef_sv)
     array_free_f32(model.bias_all)
-    matrix_free(model.X_all)
+    matrix_free(model.X_sv)
 }
 
 # ============================================================================
