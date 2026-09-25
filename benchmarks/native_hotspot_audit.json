@@ -13,7 +13,7 @@
         "python-control-loops:4"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 72.178,
+      "priority_score": 71.832,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -32,7 +32,7 @@
         "python-control-loops:2"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 71.795,
+      "priority_score": 71.726,
       "disposition": "retain-native",
       "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
     },
@@ -52,7 +52,7 @@
         "python-control-loops:5"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 68.378,
+      "priority_score": 68.576,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -82,6 +82,22 @@
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
+      ],
+      "flow_scikit_status": "present",
+      "priority_score": 48.0,
+      "disposition": "already-equivalent",
+      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
+    },
+    {
+      "module": "sklearn.linear_model._coordinate_descent",
+      "estimator": "Lasso",
+      "operation": "fit",
+      "execution_class": "mixed",
+      "ownership": "sklearn",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_coordinate_descent.py",
+      "evidence": [
+        "numpy-bound:np.",
+        "python-control-loops:4"
       ],
       "flow_scikit_status": "present",
       "priority_score": 48.0,
@@ -141,6 +157,22 @@
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
     {
+      "module": "sklearn.svm._classes",
+      "estimator": "SVC",
+      "operation": "fit",
+      "execution_class": "external-native-bound",
+      "ownership": "external",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/svm/_base.py",
+      "evidence": [
+        "external-native-bound:libsvm",
+        "numpy-bound:np."
+      ],
+      "flow_scikit_status": "present",
+      "priority_score": 44.889,
+      "disposition": "retain-native",
+      "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
+    },
+    {
       "module": "sklearn.kernel_ridge",
       "estimator": "KernelRidge",
       "operation": "fit",
@@ -152,7 +184,7 @@
         "numpy-bound:np."
       ],
       "flow_scikit_status": "present",
-      "priority_score": 45.224,
+      "priority_score": 43.704,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -2045,38 +2077,6 @@
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
     {
-      "module": "sklearn.linear_model._coordinate_descent",
-      "estimator": "Lasso",
-      "operation": "fit",
-      "execution_class": "mixed",
-      "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/linear_model/_coordinate_descent.py",
-      "evidence": [
-        "numpy-bound:np.",
-        "python-control-loops:4"
-      ],
-      "flow_scikit_status": "present",
-      "priority_score": 38.237,
-      "disposition": "already-equivalent",
-      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
-    },
-    {
-      "module": "sklearn.svm._classes",
-      "estimator": "SVC",
-      "operation": "fit",
-      "execution_class": "external-native-bound",
-      "ownership": "external",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/svm/_base.py",
-      "evidence": [
-        "external-native-bound:libsvm",
-        "numpy-bound:np."
-      ],
-      "flow_scikit_status": "present",
-      "priority_score": 35.54,
-      "disposition": "retain-native",
-      "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
-    },
-    {
       "module": "sklearn.cluster._bisect_k_means",
       "estimator": "BisectingKMeans",
       "operation": "predict",
@@ -2267,6 +2267,22 @@
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
     {
+      "module": "sklearn.svm._classes",
+      "estimator": "LinearSVC",
+      "operation": "fit",
+      "execution_class": "external-native-bound",
+      "ownership": "external",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/svm/_classes.py",
+      "evidence": [
+        "external-native-bound:liblinear",
+        "numpy-bound:np."
+      ],
+      "flow_scikit_status": "present",
+      "priority_score": 20.0,
+      "disposition": "retain-native",
+      "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
+    },
+    {
       "module": "sklearn.decomposition._sparse_pca",
       "estimator": "MiniBatchSparsePCA",
       "operation": "transform",
@@ -2372,22 +2388,6 @@
       ],
       "flow_scikit_status": "present",
       "priority_score": 12.5,
-      "disposition": "retain-native",
-      "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
-    },
-    {
-      "module": "sklearn.svm._classes",
-      "estimator": "LinearSVC",
-      "operation": "fit",
-      "execution_class": "external-native-bound",
-      "ownership": "external",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/svm/_classes.py",
-      "evidence": [
-        "external-native-bound:liblinear",
-        "numpy-bound:np."
-      ],
-      "flow_scikit_status": "present",
-      "priority_score": 12.23,
       "disposition": "retain-native",
       "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
     }
