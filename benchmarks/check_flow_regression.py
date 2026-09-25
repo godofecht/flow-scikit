@@ -16,7 +16,12 @@ def main() -> int:
     parser.add_argument("current", type=Path)
     parser.add_argument("baseline", type=Path)
     parser.add_argument("--relative-tolerance", type=float, default=0.20)
-    parser.add_argument("--absolute-tolerance-ms", type=float, default=0.10)
+    # A shared CI runner moves a tenth-of-a-millisecond row by more than the
+    # row itself. KernelSVC_RBF predict at 100 rows measured 0.147, 0.160 and
+    # 0.169 ms on three consecutive runs of the same code, then 0.322 ms on the
+    # fourth. The absolute floor is what keeps the gate quiet there while the
+    # relative tolerance still holds the rows large enough to measure.
+    parser.add_argument("--absolute-tolerance-ms", type=float, default=0.25)
     args = parser.parse_args()
 
     current = indexed(json.loads(args.current.read_text()))

@@ -65,9 +65,9 @@ One row is not a like-for-like comparison, and the disparity report records it. 
 
 The 19 canonical rows sit on iris, digits and diabetes, none of which exceeds 1797 samples. A separate matrix runs five estimators at 100, 1000 and 10000 rows against 8 and 32 features, which is where an implementation that only suits small inputs would show it.
 
-On an Apple M4 Max with Accelerate, load average 5, three repeats aggregated by median, Flow wins 34 of 34 of those rows. The narrowest are `KernelSVC_RBF` at 1000 rows and 8 features (1.36x) and `KMeans` at 10000 rows and 32 features (1.85x); the widest is `GaussianNB` at 1000 rows and 8 features (30.84x). Four of those rows were losses before the coordinate-descent, Cholesky and kernel-cache changes in this repo's history, the worst at 0.24x.
+CI measures this matrix on every run, on an Intel Xeon with OpenBLAS, and Flow wins 34 of 34 of those rows. The narrowest are `LinearRegression` at 10000 rows and 8 features (1.26x) and both `KernelSVC_RBF` rows at 1000 samples (1.29x); the widest is `GaussianNB` at 100 rows and 32 features (74.4x). Four rows were losses before the coordinate-descent, Cholesky, kernel-cache and support-vector changes in this repo's history, the worst at 0.24x.
 
-CI regenerates this matrix on every run and reports it without gating, because a runner's timings move more than the differences being measured. The committed `benchmarks/scaled_flow_baseline.json` is a Flow-only self-regression gate from a GitHub Actions artifact and is now far behind the current code, by between 1.16x and 168x depending on the row. Refresh it from a CI artifact rather than from a developer machine, or the gate will read a fast laptop as the standard and fail every CI run.
+The matrix is reported without gating the build, because a shared runner moves a tenth-of-a-millisecond row by more than the row itself. What does gate is `benchmarks/scaled_flow_baseline.json`, a Flow-against-itself comparison. Refresh it from a CI artifact rather than from a developer machine, or the gate will read a fast laptop as the standard and fail every CI run.
 
 Detailed artifacts:
 
