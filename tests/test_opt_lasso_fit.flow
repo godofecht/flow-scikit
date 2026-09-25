@@ -8,6 +8,15 @@
 # carrying the residual, so a coordinate update costs O(n_features) rather than
 # O(n_samples).
 #
+# Both sides stop on the same criterion: the largest coefficient change in a
+# sweep relative to the largest coefficient, against scikit-learn's declared
+# tolerance. The gate used to be an absolute 1e-16, which tests for an exact
+# fixed point and effectively never fired, so both sides ran their full epoch
+# budget. On this test's own near-collinear case that left shrunk coefficients
+# around 1e-04 where scikit-learn puts them at zero to 3.5e-06; stopping on the
+# relative rule moves them to around 1e-07 and moves the intercept from
+# 16.1005 towards scikit-learn's 16.1222.
+#
 # What is checked is tight element-wise numerical equivalence to that
 # reference. The Gram formulation reaches the same rho by a different
 # summation, so bit identity is not a contract that a compiler is obliged to
@@ -89,6 +98,7 @@ function optlf_reference_fit(X: Matrix, y: ptr<f32>, alpha: f32, epochs: i32) ->
     let threshold: f64 = alpha_d * (m as f64)
     for epoch in 0 to epochs {
         let mut max_change: f64 = 0.0
+        let mut w_max: f64 = 0.0
         for j in 0 to n {
             if col_sq[j] < 0.0000000000000001 { continue }
 
@@ -119,8 +129,16 @@ function optlf_reference_fit(X: Matrix, y: ptr<f32>, alpha: f32, epochs: i32) ->
             if abs_change > max_change { max_change = abs_change }
 
             w_d[j] = new_w
+            let abs_w: f64 = fabs(new_w)
+            if abs_w > w_max { w_max = abs_w }
         }
-        if max_change < 0.0000000000000001 { break }
+        # The same stopping rule the library uses: the largest coefficient
+        # change in a sweep, relative to the largest coefficient, against the
+        # tolerance scikit-learn declares. The reference has to stop where the
+        # library stops, or this compares two algorithms instead of comparing
+        # two ways of computing one.
+        if w_max == 0.0 { break }
+        if max_change / w_max < 0.0001 { break }
     }
 
     let mut bias_d: f64 = y_mean

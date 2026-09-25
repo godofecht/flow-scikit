@@ -5,6 +5,10 @@
 import "lib/scikit/matrix.flow"
 import "lib/scikit/blas.flow"
 
+extern {
+    function expf(x: f32) -> f32
+}
+
 export struct KernelRidge {
     alpha: f32,
     kernel_type: i32,
@@ -183,6 +187,17 @@ export function kernel_ridge_fit(X: Matrix, y: ptr<f32>, alpha: f32, kernel_type
 
 function _kr_exp_f64(x: f64) -> f64 {
     return exp(x)
+}
+
+# RBF exponential where the argument only carries single precision.
+#
+# The squared distance behind an RBF kernel entry is assembled from f32 norms
+# and an sgemm cross term, so widening it to call the f64 exp adds no accuracy
+# and only buys a slower libm call. The full kernel evaluates this n^2 / 2
+# times, half a million at a thousand samples, and that dominates a fit whose
+# SMO converges in under a hundred steps.
+function _kr_exp_f32(x: f32) -> f32 {
+    return expf(x)
 }
 
 export function kernel_ridge_predict(model: KernelRidge, X: Matrix) -> ptr<f32> {

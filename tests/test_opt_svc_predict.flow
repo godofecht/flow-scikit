@@ -82,7 +82,11 @@ function main() -> i32 {
     # ------------------------------------------------------------------
     let km: KernelSVCMulti = kernel_svc_multi_fit(X_train, y_train, 3, gamma, C, 200)
     svcopt_assert(km.n_pairs == 3, "iris one-vs-one should produce 3 pairs")
-    svcopt_assert(km.n_train == n_train, "n_train must record the full training set")
+    # The model keeps the support vectors rather than the whole training set,
+    # so predict evaluates the kernel against those rows. The decision-value
+    # comparison below is what checks the two paths still agree.
+    svcopt_assert(km.n_sv >= 1, "the model must keep at least one row to predict from")
+    svcopt_assert(km.n_sv <= n_train, "support vectors cannot outnumber the training set")
 
     let np: i32 = km.n_pairs
     let dec: ptr<f32> = kernel_svc_multi_decision_function(km, X_test)

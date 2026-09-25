@@ -61,6 +61,14 @@ Two earlier readings of this table were wrong, and both were artifacts of how Fl
 
 One row is not a like-for-like comparison, and the disparity report records it. Flow fits a forest's trees concurrently; scikit-learn's default is one worker, and the benchmark leaves it at its default. Both RandomForest rows therefore carry a declared `n_jobs` difference. Single-threaded, RandomForest on digits runs at 1.82x rather than 5.01x, so the row wins either way. Asking scikit-learn for all cores does not close the gap on this workload: at `n_jobs=-1` its own fit measured slower than at `n_jobs=1`, because joblib's pool costs more than ten small trees save.
 
+## Larger data
+
+The 19 canonical rows sit on iris, digits and diabetes, none of which exceeds 1797 samples. A separate matrix runs five estimators at 100, 1000 and 10000 rows against 8 and 32 features, which is where an implementation that only suits small inputs would show it.
+
+CI measures this matrix on every run, on an Intel Xeon with OpenBLAS, and Flow wins 34 of 34 of those rows. The narrowest are `LinearRegression` at 10000 rows and 8 features (1.26x) and both `KernelSVC_RBF` rows at 1000 samples (1.29x); the widest is `GaussianNB` at 100 rows and 32 features (74.4x). Four rows were losses before the coordinate-descent, Cholesky, kernel-cache and support-vector changes in this repo's history, the worst at 0.24x.
+
+The matrix is reported without gating the build, because a shared runner moves a tenth-of-a-millisecond row by more than the row itself. What does gate is `benchmarks/scaled_flow_baseline.json`, a Flow-against-itself comparison. Refresh it from a CI artifact rather than from a developer machine, or the gate will read a fast laptop as the standard and fail every CI run.
+
 Detailed artifacts:
 
 - [`benchmarks/SKLEARN_EXECUTION_INVENTORY.md`](benchmarks/SKLEARN_EXECUTION_INVENTORY.md)

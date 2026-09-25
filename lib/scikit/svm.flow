@@ -705,7 +705,7 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
     let n_features: i32 = X.cols
 
     # Build kernel matrix in f64 (BLAS for large, scalar for small)
-    let kernel_d: ptr<f64> = _build_full_kernel(X, n, n_features, gamma)
+    let kcache: RbfKernelCache = _rbf_cache_new(X, n, n_features, gamma)
 
     # Identity index map
     let idx_map: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
@@ -713,9 +713,9 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
         idx_map[i] = i
     }
 
-    let result: KernelSVC = _kernel_svc_smo_precomputed(X, y_dual, classes, n_classes, C, gamma, max_iter, kernel_d, idx_map, n)
+    let result: KernelSVC = _kernel_svc_smo_precomputed(X, y_dual, classes, n_classes, C, gamma, max_iter, kcache, idx_map)
 
-    free(kernel_d as ptr<void>)
+    _rbf_cache_free(kcache)
     free(idx_map as ptr<void>)
     return result
 }
@@ -727,6 +727,25 @@ function _kernel_svc_smo(X: Matrix, y_dual: ptr<f32>, classes: ptr<f32>, n_class
 # Takes a precomputed kernel matrix (full n_total x n_total) and an index
 # array mapping local rows to kernel rows, so the multiclass wrapper can
 # build the kernel once and slice it for each OvO pair.
+# One row of Q, built on first use and kept.
+#
+# Q is the kernel with y_i * y_j folded in. Materializing all of it costs an
+# n^2 pass and an n^2 buffer, and the solver below converges in well under a
+# hundred steps on a thousand samples, each step touching two rows. So almost
+# every row that was built went unread. libsvm caches rows for the same reason.
+function _q_row_cached(q_rows: ptr<ptr<f64> >, kcache: RbfKernelCache, idx_map: ptr<i32>, y_d: ptr<f64>, n: i32, i: i32) -> ptr<f64> {
+    let existing: ptr<f64> = q_rows[i]
+    if existing != null { return existing }
+    let row: ptr<f64> = array_new_f64(n)
+    let yi: f64 = y_d[i]
+    let k_row: ptr<f64> = _rbf_row(kcache, idx_map[i])
+    for j in 0 to n {
+        row[j] = yi * y_d[j] * k_row[idx_map[j]]
+    }
+    q_rows[i] = row
+    return row
+}
+
 function _kernel_svc_smo_precomputed(
     X: Matrix,
     y_dual: ptr<f32>,
@@ -735,9 +754,8 @@ function _kernel_svc_smo_precomputed(
     C: f32,
     gamma: f32,
     max_iter: i32,
-    kernel_full: ptr<f64>,
-    idx_map: ptr<i32>,
-    n_total: i32
+    kcache: RbfKernelCache,
+    idx_map: ptr<i32>
 ) -> KernelSVC {
     let n: i32 = X.rows
     let n_features: i32 = X.cols
@@ -753,21 +771,15 @@ function _kernel_svc_smo_precomputed(
 
     # Extract the n x n sub-kernel for this pair from the full kernel.
     # Fold y_i * y_j into the kernel to get Q directly, saving one O(n^2) pass.
-    let Q: ptr<f64> = malloc((n as i64) * (n as i64) * 8) as ptr<f64>
+    # Rows are built on demand. The diagonal is needed for every candidate in
+    # the selection scan, and Q_ii is K(i,i) because y_i squared is one, so it
+    # comes straight off the kernel without building a row.
+    let q_rows: ptr<ptr<f64> > = calloc((n as i64), 8) as ptr<ptr<f64> >
     let QD: ptr<f64> = array_new_f64(n)
     for i in 0 to n {
-        let gi: i32 = idx_map[i]
-        let yi: f64 = y_d[i]
-        let k_row: ptr<f64> = kernel_full + gi * n_total
-        let q_row: ptr<f64> = Q + i * n
-        q_row[i] = k_row[gi]
-        QD[i] = q_row[i]
-        for j in i + 1 to n {
-            let gj: i32 = idx_map[j]
-            let v: f64 = yi * y_d[j] * k_row[gj]
-            q_row[j] = v
-            Q[j * n + i] = v
-        }
+        # An RBF kernel has K(i,i) = exp(0) = 1, and y_i squared is 1, so the
+        # whole diagonal is one without touching a row.
+        QD[i] = 1.0
     }
 
     # Maintain gradient incrementally: G[i] = sum_j Q[i,j] * alpha_j - 1
@@ -816,7 +828,7 @@ function _kernel_svc_smo_precomputed(
         if i_sel < 0 { break }
 
         let y_i: f64 = y_d[i_sel]
-        let row_i: i32 = i_sel * n
+        let q_i: ptr<f64> = _q_row_cached(q_rows, kcache, idx_map, y_d, n, i_sel)
         let qd_i: f64 = QD[i_sel]
 
         let mut gmax2: f64 = 0.0 - big
@@ -836,7 +848,7 @@ function _kernel_svc_smo_precomputed(
                 if ygt >= gmax2 { gmax2 = ygt }
                 let gdiff: f64 = gmax + ygt
                 if gdiff > 0.0 {
-                    let mut quad: f64 = qd_i + QD[t2] - 2.0 * y_i * y_t * Q[row_i + t2]
+                    let mut quad: f64 = qd_i + QD[t2] - 2.0 * y_i * y_t * q_i[t2]
                     if quad <= 0.0 { quad = tau }
                     let odiff: f64 = 0.0 - (gdiff * gdiff) / quad
                     if odiff <= obj_min {
@@ -856,7 +868,7 @@ function _kernel_svc_smo_precomputed(
         let aj_old: f64 = alphas_d[j_sel]
         # Curvature along the feasible direction: K_ii + K_jj - 2 K_ij, which
         # in terms of Q is QD_i + QD_j - 2 y_i y_j Q_ij.
-        let mut quad_c: f64 = qd_i + QD[j_sel] - 2.0 * y_i * y_j * Q[row_i + j_sel]
+        let mut quad_c: f64 = qd_i + QD[j_sel] - 2.0 * y_i * y_j * q_i[j_sel]
         if quad_c <= 0.0 { quad_c = tau }
 
         let mut ai_new: f64 = 0.0
@@ -923,9 +935,9 @@ function _kernel_svc_smo_precomputed(
         let d_j: f64 = aj_new - aj_old
         # Q is symmetric, so rows serve for columns and the update stays
         # row-major instead of striding down two columns.
-        let row_j: i32 = j_sel * n
+        let q_j: ptr<f64> = _q_row_cached(q_rows, kcache, idx_map, y_d, n, j_sel)
         for k in 0 to n {
-            G[k] = G[k] + Q[row_i + k] * d_i + Q[row_j + k] * d_j
+            G[k] = G[k] + q_i[k] * d_i + q_j[k] * d_j
         }
         steps = steps + 1
     }
@@ -938,7 +950,7 @@ function _kernel_svc_smo_precomputed(
             let mut fi: f64 = 0.0
             for j in 0 to n {
                 if alphas_d[j] > 0.0 {
-                    let K_ij: f64 = Q[i * n + j] * y_d[i] * y_d[j]
+                    let K_ij: f64 = _q_row_cached(q_rows, kcache, idx_map, y_d, n, i)[j] * y_d[i] * y_d[j]
                     fi = fi + alphas_d[j] * y_d[j] * K_ij
                 }
             }
@@ -950,7 +962,11 @@ function _kernel_svc_smo_precomputed(
         b = b / (n_free as f64)
     }
 
-    free(Q as ptr<void>)
+    for i in 0 to n {
+        let r: ptr<f64> = q_rows[i]
+        if r != null { array_free_f64(r) }
+    }
+    free(q_rows as ptr<void>)
     array_free_f64(QD)
     array_free_f64(G)
     array_free_f64(y_d)
@@ -1171,41 +1187,112 @@ export function kernel_svc_free(model: KernelSVC) -> void {
 
 # Build full RBF kernel matrix. Always use BLAS because cblas_sgemm is faster
 # than the scalar nested loop even for small arrays like 100-500.
-function _build_full_kernel(X: Matrix, n: i32, nf: i32, gamma: f32) -> ptr<f64> {
+# Lazily materialized RBF kernel, one row at a time.
+#
+# The solver converges in well under a hundred steps on a thousand samples and
+# touches two rows per step, so building the whole n x n kernel spent most of
+# its time on entries nothing ever read. A row is n exponentials and one sgemv
+# for the cross terms, and rows are kept so the one-vs-one pairs of a
+# multiclass fit still share the work the dense build used to give them.
+struct RbfKernelCache {
+    x_data: ptr<f32>,
+    x_sq: ptr<f32>,
+    rows: ptr<ptr<f64> >,
+    scratch: ptr<f32>,
+    gamma: f32,
+    nf: i32,
+    n: i32
+}
+
+function _rbf_cache_new(X: Matrix, n: i32, nf: i32, gamma: f32) -> RbfKernelCache {
     let x_data: ptr<f32> = X.data
     let x_sq: ptr<f32> = array_new_f32(n)
     for i in 0 to n {
         let r: ptr<f32> = x_data + i * nf
-        let mut s: f32 = 0.0
+        let mut acc: f32 = 0.0
         for k in 0 to nf {
             let v: f32 = r[k]
-            s = s + v * v
+            acc = acc + v * v
         }
-        x_sq[i] = s
+        x_sq[i] = acc
     }
-
-    let cross: ptr<f32> = malloc((n as i64) * (n as i64) * 4) as ptr<f32>
-    cblas_sgemm(101, 111, 112, n, n, nf, 1.0, x_data, nf, x_data, nf, 0.0, cross, n)
-
-    let gamma_d: f64 = gamma as f64
-    let result: ptr<f64> = malloc((n as i64) * (n as i64) * 8) as ptr<f64>
-    for i in 0 to n {
-        result[i * n + i] = 1.0
-        let xi_sq: f32 = x_sq[i]
-        let cross_row: ptr<f32> = cross + i * n
-        for j in i + 1 to n {
-            let mut sq: f64 = (xi_sq + x_sq[j] - 2.0 * cross_row[j]) as f64
-            if sq < 0.0 { sq = 0.0 }
-            let v: f64 = _kr_exp_f64(0.0 - gamma_d * sq)
-            result[i * n + j] = v
-            result[j * n + i] = v
-        }
+    return RbfKernelCache {
+        x_data: x_data,
+        x_sq: x_sq,
+        rows: calloc((n as i64), 8) as ptr<ptr<f64> >,
+        scratch: array_new_f32(n),
+        gamma: gamma,
+        nf: nf,
+        n: n
     }
-
-    free(cross as ptr<void>)
-    array_free_f32(x_sq)
-    return result
 }
+
+function _rbf_row(cache: RbfKernelCache, i: i32) -> ptr<f64> {
+    let existing: ptr<f64> = cache.rows[i]
+    if existing != null { return existing }
+
+    let n: i32 = cache.n
+    let nf: i32 = cache.nf
+    let cross: ptr<f32> = cache.scratch
+    # Cross terms against every sample at once. A one-vs-one pair on a few
+    # hundred samples at a handful of features is a few thousand flops, which
+    # is under the point where a threaded sgemv earns the cost of handing work
+    # to its threads. At 800 samples and 8 features a whole fit measured
+    # 0.38 ms through the unrolled loop against 0.96 ms through cblas_sgemv on
+    # Accelerate. Above the gate the row is large enough for BLAS to pay, and
+    # digits at 1437 samples and 64 features stays on that side of it.
+    let row_work: i64 = (n as i64) * (nf as i64)
+    if row_work >= 65536 {
+        blas_matvec(cache.x_data, n, nf, cache.x_data + i * nf, cross, 1.0, 0.0)
+    } else {
+        let xi: ptr<f32> = cache.x_data + i * nf
+        let nf4: i32 = nf - (nf % 4)
+        for j in 0 to n {
+            let rj: ptr<f32> = cache.x_data + j * nf
+            let mut a0: f32 = 0.0
+            let mut a1: f32 = 0.0
+            let mut a2: f32 = 0.0
+            let mut a3: f32 = 0.0
+            let mut k: i32 = 0
+            while k < nf4 {
+                a0 = a0 + xi[k] * rj[k]
+                a1 = a1 + xi[k + 1] * rj[k + 1]
+                a2 = a2 + xi[k + 2] * rj[k + 2]
+                a3 = a3 + xi[k + 3] * rj[k + 3]
+                k = k + 4
+            }
+            let mut acc: f32 = a0 + a1 + a2 + a3
+            while k < nf {
+                acc = acc + xi[k] * rj[k]
+                k = k + 1
+            }
+            cross[j] = acc
+        }
+    }
+
+    let row: ptr<f64> = array_new_f64(n)
+    let xi_sq: f32 = cache.x_sq[i]
+    let g: f32 = cache.gamma
+    for j in 0 to n {
+        let mut sq: f32 = xi_sq + cache.x_sq[j] - 2.0 * cross[j]
+        if sq < 0.0 { sq = 0.0 }
+        row[j] = _kr_exp_f32(0.0 - g * sq) as f64
+    }
+    row[i] = 1.0
+    cache.rows[i] = row
+    return row
+}
+
+function _rbf_cache_free(cache: RbfKernelCache) -> void {
+    for i in 0 to cache.n {
+        let r: ptr<f64> = cache.rows[i]
+        if r != null { array_free_f64(r) }
+    }
+    free(cache.rows as ptr<void>)
+    array_free_f32(cache.scratch)
+    array_free_f32(cache.x_sq)
+}
+
 
 # ============================================================================
 # Multi-class KernelSVC via One-vs-One (OvO)
@@ -1224,10 +1311,10 @@ export struct KernelSVCMulti {
     gamma: f32,
     C: f32,
     fitted: bool,
-    X_all: Matrix,
-    coef_all: ptr<f32>,
+    X_sv: Matrix,
+    coef_sv: ptr<f32>,
     bias_all: ptr<f32>,
-    n_train: i32
+    n_sv: i32
 }
 
 export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gamma: f32, C: f32, max_iter: i32) -> KernelSVCMulti {
@@ -1243,7 +1330,7 @@ export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gam
 
     # Build the full kernel matrix once in f64.
     # Use BLAS for large datasets, scalar for small (BLAS call overhead dominates below ~500 samples).
-    let kernel_full: ptr<f64> = _build_full_kernel(X, n, n_features, gamma)
+    let kcache: RbfKernelCache = _rbf_cache_new(X, n, n_features, gamma)
 
     # Count pairs: n_found * (n_found - 1) / 2
     let n_pairs: i32 = (n_found * (n_found - 1)) / 2
@@ -1317,7 +1404,7 @@ export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gam
             let binary_classes: ptr<f32> = array_new_f32(2)
             binary_classes[0] = -1.0
             binary_classes[1] = 1.0
-            models[pair_idx] = _kernel_svc_smo_precomputed(sub_X, y_dual, binary_classes, 2, C, gamma, max_iter, kernel_full, idx_map, n)
+            models[pair_idx] = _kernel_svc_smo_precomputed(sub_X, y_dual, binary_classes, 2, C, gamma, max_iter, kcache, idx_map)
             matrix_free(sub_X)
             pair_a[pair_idx] = a
             pair_b[pair_idx] = b
@@ -1343,9 +1430,43 @@ export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gam
     free(class_rows as ptr<void>)
     free(class_counts as ptr<void>)
 
-    free(kernel_full as ptr<void>)
+    _rbf_cache_free(kcache)
 
-    let X_all: Matrix = matrix_copy(X)
+    # Keep only the rows some pair gave a nonzero dual coefficient. A decision
+    # value is a kernel against the support vectors, which is what libsvm
+    # stores, and on a thousand samples most rows carry a zero coefficient in
+    # every pair. Keeping all of them made predict evaluate the kernel against
+    # the whole training set and multiply most of it by zero.
+    let sv_index: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let mut n_sv: i32 = 0
+    for i in 0 to n {
+        let mut nonzero: bool = false
+        for p in 0 to n_pairs {
+            if coef_all[i * n_pairs + p] != 0.0 { nonzero = true }
+        }
+        if nonzero {
+            sv_index[n_sv] = i
+            n_sv = n_sv + 1
+        }
+    }
+    # A fit that found no support vector still has to answer predict, and a
+    # zero-row matrix is not a shape BLAS takes. One zeroed row leaves every
+    # decision value at its bias, which is the right answer for that model.
+    let mut sv_rows: i32 = n_sv
+    if sv_rows < 1 { sv_rows = 1 }
+    let X_sv: Matrix = matrix_new(sv_rows, n_features)
+    let coef_sv: ptr<f32> = array_new_f32(sv_rows * n_pairs)
+    for s in 0 to sv_rows {
+        for p in 0 to n_pairs { coef_sv[s * n_pairs + p] = 0.0 }
+        for j in 0 to n_features { matrix_set(X_sv, s, j, 0.0) }
+    }
+    for s in 0 to n_sv {
+        let src: i32 = sv_index[s]
+        for j in 0 to n_features { matrix_set(X_sv, s, j, matrix_at(X, src, j)) }
+        for p in 0 to n_pairs { coef_sv[s * n_pairs + p] = coef_all[src * n_pairs + p] }
+    }
+    free(sv_index as ptr<void>)
+    array_free_f32(coef_all)
 
     return KernelSVCMulti {
         models: models,
@@ -1358,10 +1479,10 @@ export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gam
         gamma: gamma,
         C: C,
         fitted: true,
-        X_all: X_all,
-        coef_all: coef_all,
+        X_sv: X_sv,
+        coef_sv: coef_sv,
         bias_all: bias_all,
-        n_train: n
+        n_sv: sv_rows
     }
 }
 
@@ -1373,10 +1494,10 @@ export function kernel_svc_multi_fit(X: Matrix, y: ptr<f32>, n_classes: i32, gam
 export function kernel_svc_multi_decision_function(model: KernelSVCMulti, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
     let np: i32 = model.n_pairs
-    let nt: i32 = model.n_train
-    let K: Matrix = _rbf_kernel_blas(X, model.X_all, model.gamma)
+    let nt: i32 = model.n_sv
+    let K: Matrix = _rbf_kernel_blas(X, model.X_sv, model.gamma)
     let dec: ptr<f32> = array_new_f32(n * np)
-    blas_matmat(K.data, model.coef_all, dec, n, np, nt, 1.0, 0.0)
+    blas_matmat(K.data, model.coef_sv, dec, n, np, nt, 1.0, 0.0)
     matrix_free(K)
 
     let bias: ptr<f32> = model.bias_all
@@ -1440,9 +1561,9 @@ export function kernel_svc_multi_free(model: KernelSVCMulti) -> void {
     free(model.pair_a as ptr<void>)
     free(model.pair_b as ptr<void>)
     array_free_f32(model.classes)
-    array_free_f32(model.coef_all)
+    array_free_f32(model.coef_sv)
     array_free_f32(model.bias_all)
-    matrix_free(model.X_all)
+    matrix_free(model.X_sv)
 }
 
 # ============================================================================
