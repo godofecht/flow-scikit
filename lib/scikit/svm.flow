@@ -1234,8 +1234,41 @@ function _rbf_row(cache: RbfKernelCache, i: i32) -> ptr<f64> {
     let n: i32 = cache.n
     let nf: i32 = cache.nf
     let cross: ptr<f32> = cache.scratch
-    # Cross terms against every sample at once.
-    blas_matvec(cache.x_data, n, nf, cache.x_data + i * nf, cross, 1.0, 0.0)
+    # Cross terms against every sample at once. A one-vs-one pair on a few
+    # hundred samples at a handful of features is a few thousand flops, which
+    # is under the point where a threaded sgemv earns the cost of handing work
+    # to its threads. At 800 samples and 8 features a whole fit measured
+    # 0.38 ms through the unrolled loop against 0.96 ms through cblas_sgemv on
+    # Accelerate. Above the gate the row is large enough for BLAS to pay, and
+    # digits at 1437 samples and 64 features stays on that side of it.
+    let row_work: i64 = (n as i64) * (nf as i64)
+    if row_work >= 65536 {
+        blas_matvec(cache.x_data, n, nf, cache.x_data + i * nf, cross, 1.0, 0.0)
+    } else {
+        let xi: ptr<f32> = cache.x_data + i * nf
+        let nf4: i32 = nf - (nf % 4)
+        for j in 0 to n {
+            let rj: ptr<f32> = cache.x_data + j * nf
+            let mut a0: f32 = 0.0
+            let mut a1: f32 = 0.0
+            let mut a2: f32 = 0.0
+            let mut a3: f32 = 0.0
+            let mut k: i32 = 0
+            while k < nf4 {
+                a0 = a0 + xi[k] * rj[k]
+                a1 = a1 + xi[k + 1] * rj[k + 1]
+                a2 = a2 + xi[k + 2] * rj[k + 2]
+                a3 = a3 + xi[k + 3] * rj[k + 3]
+                k = k + 4
+            }
+            let mut acc: f32 = a0 + a1 + a2 + a3
+            while k < nf {
+                acc = acc + xi[k] * rj[k]
+                k = k + 1
+            }
+            cross[j] = acc
+        }
+    }
 
     let row: ptr<f64> = array_new_f64(n)
     let xi_sq: f32 = cache.x_sq[i]
