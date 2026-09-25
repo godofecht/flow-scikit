@@ -10,7 +10,7 @@
       "priority_score": 75.294,
       "disposition": "rewrite first",
       "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 33.366720753179216,
+      "observed_flow_speedup": 22.82865286262182,
       "factors": {
         "substrate": 1.0,
         "python_share": 0.7765539960722242,
@@ -31,7 +31,7 @@
       "priority_score": 74.265,
       "disposition": "rewrite first",
       "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 11.946837130211973,
+      "observed_flow_speedup": 16.5997720875,
       "factors": {
         "substrate": 1.0,
         "python_share": 0.7697868500134483,
@@ -52,7 +52,7 @@
       "priority_score": 73.83,
       "disposition": "rewrite first",
       "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 10.559628634790212,
+      "observed_flow_speedup": 7.229733954769041,
       "factors": {
         "substrate": 1.0,
         "python_share": 0.7717029531277353,
@@ -73,7 +73,7 @@
       "priority_score": 73.749,
       "disposition": "rewrite first",
       "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 33.366720753179216,
+      "observed_flow_speedup": 22.82865286262182,
       "factors": {
         "substrate": 1.0,
         "python_share": 0.7732010547776108,
@@ -94,7 +94,7 @@
       "priority_score": 73.542,
       "disposition": "rewrite first",
       "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 11.946837130211973,
+      "observed_flow_speedup": 16.5997720875,
       "factors": {
         "substrate": 1.0,
         "python_share": 0.7667855511804312,
@@ -115,7 +115,7 @@
       "priority_score": 73.334,
       "disposition": "rewrite first",
       "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 8.495488339253997,
+      "observed_flow_speedup": 10.207582695000001,
       "factors": {
         "substrate": 1.0,
         "python_share": 0.7606602475922508,
@@ -136,7 +136,7 @@
       "priority_score": 72.178,
       "disposition": "rewrite first",
       "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 4.8643338942633845,
+      "observed_flow_speedup": 6.841261341424369,
       "factors": {
         "substrate": 0.8,
         "python_share": 0.8421273444708518,
@@ -157,7 +157,7 @@
       "priority_score": 71.795,
       "disposition": "rewrite first",
       "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 10.559628634790212,
+      "observed_flow_speedup": 7.229733954769041,
       "factors": {
         "substrate": 0.8,
         "python_share": 0.7626008001796145,
@@ -178,12 +178,33 @@
       "priority_score": 68.378,
       "disposition": "rewrite first",
       "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 8.495488339253997,
+      "observed_flow_speedup": 10.207582695000001,
       "factors": {
         "substrate": 0.8,
         "python_share": 0.7503627570987335,
         "crossing_cost_proxy": 0.1456,
         "allocation_proxy": 0.016273375,
+        "observed_flow_speed": 1.0,
+        "implementation_readiness": 1.0,
+        "native_reuse_penalty": 0.0,
+        "complexity_penalty": 0.1
+      }
+    },
+    {
+      "module": "sklearn.svm._classes",
+      "estimator": "SVC",
+      "operation": "predict",
+      "execution_class": "numpy-bound",
+      "flow_scikit_status": "present",
+      "priority_score": 63.905,
+      "disposition": "rewrite first",
+      "hypothesis": "remove Python control/validation and specialize the complete operation",
+      "observed_flow_speedup": 3.3993089742649722,
+      "factors": {
+        "substrate": 0.55,
+        "python_share": 0.909565521893619,
+        "crossing_cost_proxy": 0.0596,
+        "allocation_proxy": 0.00703275,
         "observed_flow_speed": 1.0,
         "implementation_readiness": 1.0,
         "native_reuse_penalty": 0.0,
@@ -199,34 +220,13 @@
       "priority_score": 60.338,
       "disposition": "rewrite first",
       "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 4.8643338942633845,
+      "observed_flow_speedup": 6.841261341424369,
       "factors": {
         "substrate": 0.55,
         "python_share": 0.7774857391527188,
         "crossing_cost_proxy": 0.0356,
         "allocation_proxy": 0.004461375,
         "observed_flow_speed": 1.0,
-        "implementation_readiness": 1.0,
-        "native_reuse_penalty": 0.0,
-        "complexity_penalty": 0.1
-      }
-    },
-    {
-      "module": "sklearn.svm._classes",
-      "estimator": "SVC",
-      "operation": "predict",
-      "execution_class": "numpy-bound",
-      "flow_scikit_status": "present",
-      "priority_score": 54.525,
-      "disposition": "rewrite first",
-      "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 1.1239451997553072,
-      "factors": {
-        "substrate": 0.55,
-        "python_share": 0.909565521893619,
-        "crossing_cost_proxy": 0.0596,
-        "allocation_proxy": 0.00703275,
-        "observed_flow_speed": 0.37464839991843574,
         "implementation_readiness": 1.0,
         "native_reuse_penalty": 0.0,
         "complexity_penalty": 0.1
@@ -241,7 +241,7 @@
       "priority_score": 54.0,
       "disposition": "rewrite first",
       "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 33.366720753179216,
+      "observed_flow_speedup": 22.82865286262182,
       "factors": {
         "substrate": 1.0,
         "python_share": 0.0,
@@ -262,7 +262,70 @@
       "priority_score": 54.0,
       "disposition": "rewrite first",
       "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 4.8643338942633845,
+      "observed_flow_speedup": 6.841261341424369,
+      "factors": {
+        "substrate": 1.0,
+        "python_share": 0.0,
+        "crossing_cost_proxy": 0.0,
+        "allocation_proxy": 0.0,
+        "observed_flow_speed": 1.0,
+        "implementation_readiness": 1.0,
+        "native_reuse_penalty": 0.0,
+        "complexity_penalty": 0.1
+      }
+    },
+    {
+      "module": "sklearn.linear_model._coordinate_descent",
+      "estimator": "Lasso",
+      "operation": "predict",
+      "execution_class": "python-bound",
+      "flow_scikit_status": "present",
+      "priority_score": 54.0,
+      "disposition": "rewrite first",
+      "hypothesis": "remove Python control/validation and specialize the complete operation",
+      "observed_flow_speedup": 7.360058633333333,
+      "factors": {
+        "substrate": 1.0,
+        "python_share": 0.0,
+        "crossing_cost_proxy": 0.0,
+        "allocation_proxy": 0.0,
+        "observed_flow_speed": 1.0,
+        "implementation_readiness": 1.0,
+        "native_reuse_penalty": 0.0,
+        "complexity_penalty": 0.1
+      }
+    },
+    {
+      "module": "sklearn.svm._classes",
+      "estimator": "LinearSVC",
+      "operation": "predict",
+      "execution_class": "python-bound",
+      "flow_scikit_status": "present",
+      "priority_score": 54.0,
+      "disposition": "rewrite first",
+      "hypothesis": "remove Python control/validation and specialize the complete operation",
+      "observed_flow_speedup": 5.177985656283452,
+      "factors": {
+        "substrate": 1.0,
+        "python_share": 0.0,
+        "crossing_cost_proxy": 0.0,
+        "allocation_proxy": 0.0,
+        "observed_flow_speed": 1.0,
+        "implementation_readiness": 1.0,
+        "native_reuse_penalty": 0.0,
+        "complexity_penalty": 0.1
+      }
+    },
+    {
+      "module": "sklearn.svm._classes",
+      "estimator": "LinearSVC",
+      "operation": "decision_function",
+      "execution_class": "python-bound",
+      "flow_scikit_status": "present",
+      "priority_score": 54.0,
+      "disposition": "rewrite first",
+      "hypothesis": "remove Python control/validation and specialize the complete operation",
+      "observed_flow_speedup": 5.177985656283452,
       "factors": {
         "substrate": 1.0,
         "python_share": 0.0,
@@ -283,7 +346,7 @@
       "priority_score": 54.0,
       "disposition": "rewrite first",
       "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 10.559628634790212,
+      "observed_flow_speedup": 7.229733954769041,
       "factors": {
         "substrate": 1.0,
         "python_share": 0.0,
@@ -304,7 +367,7 @@
       "priority_score": 54.0,
       "disposition": "rewrite first",
       "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 10.559628634790212,
+      "observed_flow_speedup": 7.229733954769041,
       "factors": {
         "substrate": 1.0,
         "python_share": 0.0,
@@ -325,7 +388,7 @@
       "priority_score": 54.0,
       "disposition": "rewrite first",
       "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 7.104287482871818,
+      "observed_flow_speedup": 13.8992589375,
       "factors": {
         "substrate": 1.0,
         "python_share": 0.0,
@@ -346,7 +409,49 @@
       "priority_score": 54.0,
       "disposition": "rewrite first",
       "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 7.104287482871818,
+      "observed_flow_speedup": 13.8992589375,
+      "factors": {
+        "substrate": 1.0,
+        "python_share": 0.0,
+        "crossing_cost_proxy": 0.0,
+        "allocation_proxy": 0.0,
+        "observed_flow_speed": 1.0,
+        "implementation_readiness": 1.0,
+        "native_reuse_penalty": 0.0,
+        "complexity_penalty": 0.1
+      }
+    },
+    {
+      "module": "sklearn.svm._classes",
+      "estimator": "SVC",
+      "operation": "predict_proba",
+      "execution_class": "python-bound",
+      "flow_scikit_status": "present",
+      "priority_score": 54.0,
+      "disposition": "rewrite first",
+      "hypothesis": "remove Python control/validation and specialize the complete operation",
+      "observed_flow_speedup": 3.3993089742649722,
+      "factors": {
+        "substrate": 1.0,
+        "python_share": 0.0,
+        "crossing_cost_proxy": 0.0,
+        "allocation_proxy": 0.0,
+        "observed_flow_speed": 1.0,
+        "implementation_readiness": 1.0,
+        "native_reuse_penalty": 0.0,
+        "complexity_penalty": 0.1
+      }
+    },
+    {
+      "module": "sklearn.svm._classes",
+      "estimator": "SVC",
+      "operation": "decision_function",
+      "execution_class": "python-bound",
+      "flow_scikit_status": "present",
+      "priority_score": 54.0,
+      "disposition": "rewrite first",
+      "hypothesis": "remove Python control/validation and specialize the complete operation",
+      "observed_flow_speedup": 3.3993089742649722,
       "factors": {
         "substrate": 1.0,
         "python_share": 0.0,
@@ -367,7 +472,7 @@
       "priority_score": 48.0,
       "disposition": "compile whole estimator",
       "hypothesis": "retain useful numerical kernels while fusing validation, allocation and orchestration",
-      "observed_flow_speedup": 4.4345778248006855,
+      "observed_flow_speedup": 5.890542789141691,
       "factors": {
         "substrate": 0.8,
         "python_share": 0.0,
@@ -388,7 +493,28 @@
       "priority_score": 48.0,
       "disposition": "compile whole estimator",
       "hypothesis": "retain useful numerical kernels while fusing validation, allocation and orchestration",
-      "observed_flow_speedup": 4.4345778248006855,
+      "observed_flow_speedup": 5.890542789141691,
+      "factors": {
+        "substrate": 0.8,
+        "python_share": 0.0,
+        "crossing_cost_proxy": 0.0,
+        "allocation_proxy": 0.0,
+        "observed_flow_speed": 1.0,
+        "implementation_readiness": 1.0,
+        "native_reuse_penalty": 0.0,
+        "complexity_penalty": 0.1
+      }
+    },
+    {
+      "module": "sklearn.linear_model._coordinate_descent",
+      "estimator": "Lasso",
+      "operation": "fit",
+      "execution_class": "mixed",
+      "flow_scikit_status": "present",
+      "priority_score": 48.0,
+      "disposition": "compile whole estimator",
+      "hypothesis": "retain useful numerical kernels while fusing validation, allocation and orchestration",
+      "observed_flow_speedup": 7.360058633333333,
       "factors": {
         "substrate": 0.8,
         "python_share": 0.0,
@@ -409,7 +535,7 @@
       "priority_score": 48.0,
       "disposition": "compile whole estimator",
       "hypothesis": "retain useful numerical kernels while fusing validation, allocation and orchestration",
-      "observed_flow_speedup": 4.48296360464905,
+      "observed_flow_speedup": 10.831203001862043,
       "factors": {
         "substrate": 0.8,
         "python_share": 0.0,
@@ -430,7 +556,7 @@
       "priority_score": 48.0,
       "disposition": "compile whole estimator",
       "hypothesis": "retain useful numerical kernels while fusing validation, allocation and orchestration",
-      "observed_flow_speedup": 4.48296360464905,
+      "observed_flow_speedup": 10.831203001862043,
       "factors": {
         "substrate": 0.8,
         "python_share": 0.0,
@@ -451,7 +577,7 @@
       "priority_score": 48.0,
       "disposition": "compile whole estimator",
       "hypothesis": "retain useful numerical kernels while fusing validation, allocation and orchestration",
-      "observed_flow_speedup": 4.48296360464905,
+      "observed_flow_speedup": 10.831203001862043,
       "factors": {
         "substrate": 0.8,
         "python_share": 0.0,
@@ -5190,44 +5316,23 @@
     },
     {
       "module": "sklearn.svm._classes",
-      "estimator": "LinearSVC",
-      "operation": "predict",
-      "execution_class": "python-bound",
+      "estimator": "SVC",
+      "operation": "fit",
+      "execution_class": "external-native-bound",
       "flow_scikit_status": "present",
-      "priority_score": 46.23,
-      "disposition": "rewrite first",
-      "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 1.4460998958338305,
+      "priority_score": 44.92,
+      "disposition": "reuse optimized native kernel",
+      "hypothesis": "retain the mature backend and optimize boundary, layout and dispatch overhead around it",
+      "observed_flow_speedup": 3.3993089742649722,
       "factors": {
-        "substrate": 1.0,
-        "python_share": 0.0,
-        "crossing_cost_proxy": 0.0,
-        "allocation_proxy": 0.0,
-        "observed_flow_speed": 0.4820332986112768,
+        "substrate": 0.15,
+        "python_share": 0.8911547626024956,
+        "crossing_cost_proxy": 0.2308,
+        "allocation_proxy": 0.0333215,
+        "observed_flow_speed": 1.0,
         "implementation_readiness": 1.0,
-        "native_reuse_penalty": 0.0,
-        "complexity_penalty": 0.1
-      }
-    },
-    {
-      "module": "sklearn.svm._classes",
-      "estimator": "LinearSVC",
-      "operation": "decision_function",
-      "execution_class": "python-bound",
-      "flow_scikit_status": "present",
-      "priority_score": 46.23,
-      "disposition": "rewrite first",
-      "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 1.4460998958338305,
-      "factors": {
-        "substrate": 1.0,
-        "python_share": 0.0,
-        "crossing_cost_proxy": 0.0,
-        "allocation_proxy": 0.0,
-        "observed_flow_speed": 0.4820332986112768,
-        "implementation_readiness": 1.0,
-        "native_reuse_penalty": 0.0,
-        "complexity_penalty": 0.1
+        "native_reuse_penalty": 0.35,
+        "complexity_penalty": 0.25
       }
     },
     {
@@ -5236,79 +5341,16 @@
       "operation": "fit",
       "execution_class": "mixed",
       "flow_scikit_status": "present",
-      "priority_score": 45.224,
+      "priority_score": 43.704,
       "disposition": "compile whole estimator",
       "hypothesis": "retain useful numerical kernels while fusing validation, allocation and orchestration",
-      "observed_flow_speedup": 2.4448052160010416,
+      "observed_flow_speedup": 2.140743922902006,
       "factors": {
         "substrate": 0.8,
         "python_share": 0.0,
         "crossing_cost_proxy": 0.0,
         "allocation_proxy": 0.0,
-        "observed_flow_speed": 0.8149350720003472,
-        "implementation_readiness": 1.0,
-        "native_reuse_penalty": 0.0,
-        "complexity_penalty": 0.1
-      }
-    },
-    {
-      "module": "sklearn.svm._classes",
-      "estimator": "SVC",
-      "operation": "predict_proba",
-      "execution_class": "python-bound",
-      "flow_scikit_status": "present",
-      "priority_score": 44.62,
-      "disposition": "rewrite first",
-      "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 1.1239451997553072,
-      "factors": {
-        "substrate": 1.0,
-        "python_share": 0.0,
-        "crossing_cost_proxy": 0.0,
-        "allocation_proxy": 0.0,
-        "observed_flow_speed": 0.37464839991843574,
-        "implementation_readiness": 1.0,
-        "native_reuse_penalty": 0.0,
-        "complexity_penalty": 0.1
-      }
-    },
-    {
-      "module": "sklearn.svm._classes",
-      "estimator": "SVC",
-      "operation": "decision_function",
-      "execution_class": "python-bound",
-      "flow_scikit_status": "present",
-      "priority_score": 44.62,
-      "disposition": "rewrite first",
-      "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 1.1239451997553072,
-      "factors": {
-        "substrate": 1.0,
-        "python_share": 0.0,
-        "crossing_cost_proxy": 0.0,
-        "allocation_proxy": 0.0,
-        "observed_flow_speed": 0.37464839991843574,
-        "implementation_readiness": 1.0,
-        "native_reuse_penalty": 0.0,
-        "complexity_penalty": 0.1
-      }
-    },
-    {
-      "module": "sklearn.linear_model._coordinate_descent",
-      "estimator": "Lasso",
-      "operation": "predict",
-      "execution_class": "python-bound",
-      "flow_scikit_status": "present",
-      "priority_score": 44.237,
-      "disposition": "rewrite first",
-      "hypothesis": "remove Python control/validation and specialize the complete operation",
-      "observed_flow_speedup": 1.0473818058035227,
-      "factors": {
-        "substrate": 1.0,
-        "python_share": 0.0,
-        "crossing_cost_proxy": 0.0,
-        "allocation_proxy": 0.0,
-        "observed_flow_speed": 0.3491272686011742,
+        "observed_flow_speed": 0.713581307634002,
         "implementation_readiness": 1.0,
         "native_reuse_penalty": 0.0,
         "complexity_penalty": 0.1
@@ -5533,7 +5575,7 @@
       "priority_score": 40.5,
       "disposition": "compile whole estimator",
       "hypothesis": "retain useful numerical kernels while fusing validation, allocation and orchestration",
-      "observed_flow_speedup": 4.4345778248006855,
+      "observed_flow_speedup": 5.890542789141691,
       "factors": {
         "substrate": 0.55,
         "python_share": 0.0,
@@ -8066,66 +8108,24 @@
       }
     },
     {
-      "module": "sklearn.linear_model._coordinate_descent",
-      "estimator": "Lasso",
-      "operation": "fit",
-      "execution_class": "mixed",
-      "flow_scikit_status": "present",
-      "priority_score": 38.237,
-      "disposition": "compile whole estimator",
-      "hypothesis": "retain useful numerical kernels while fusing validation, allocation and orchestration",
-      "observed_flow_speedup": 1.0473818058035227,
-      "factors": {
-        "substrate": 0.8,
-        "python_share": 0.0,
-        "crossing_cost_proxy": 0.0,
-        "allocation_proxy": 0.0,
-        "observed_flow_speed": 0.3491272686011742,
-        "implementation_readiness": 1.0,
-        "native_reuse_penalty": 0.0,
-        "complexity_penalty": 0.1
-      }
-    },
-    {
       "module": "sklearn.kernel_ridge",
       "estimator": "KernelRidge",
       "operation": "predict",
       "execution_class": "numpy-bound",
       "flow_scikit_status": "present",
-      "priority_score": 37.724,
+      "priority_score": 36.204,
       "disposition": "compile whole estimator",
       "hypothesis": "retain useful numerical kernels while fusing validation, allocation and orchestration",
-      "observed_flow_speedup": 2.4448052160010416,
+      "observed_flow_speedup": 2.140743922902006,
       "factors": {
         "substrate": 0.55,
         "python_share": 0.0,
         "crossing_cost_proxy": 0.0,
         "allocation_proxy": 0.0,
-        "observed_flow_speed": 0.8149350720003472,
+        "observed_flow_speed": 0.713581307634002,
         "implementation_readiness": 1.0,
         "native_reuse_penalty": 0.0,
         "complexity_penalty": 0.1
-      }
-    },
-    {
-      "module": "sklearn.svm._classes",
-      "estimator": "SVC",
-      "operation": "fit",
-      "execution_class": "external-native-bound",
-      "flow_scikit_status": "present",
-      "priority_score": 35.54,
-      "disposition": "reuse optimized native kernel",
-      "hypothesis": "retain the mature backend and optimize boundary, layout and dispatch overhead around it",
-      "observed_flow_speedup": 1.1239451997553072,
-      "factors": {
-        "substrate": 0.15,
-        "python_share": 0.8911547626024956,
-        "crossing_cost_proxy": 0.2308,
-        "allocation_proxy": 0.0333215,
-        "observed_flow_speed": 0.37464839991843574,
-        "implementation_readiness": 1.0,
-        "native_reuse_penalty": 0.35,
-        "complexity_penalty": 0.25
       }
     },
     {
@@ -10145,6 +10145,27 @@
       }
     },
     {
+      "module": "sklearn.svm._classes",
+      "estimator": "LinearSVC",
+      "operation": "fit",
+      "execution_class": "external-native-bound",
+      "flow_scikit_status": "present",
+      "priority_score": 20.0,
+      "disposition": "reuse optimized native kernel",
+      "hypothesis": "retain the mature backend and optimize boundary, layout and dispatch overhead around it",
+      "observed_flow_speedup": 5.177985656283452,
+      "factors": {
+        "substrate": 0.15,
+        "python_share": 0.0,
+        "crossing_cost_proxy": 0.0,
+        "allocation_proxy": 0.0,
+        "observed_flow_speed": 1.0,
+        "implementation_readiness": 1.0,
+        "native_reuse_penalty": 0.35,
+        "complexity_penalty": 0.25
+      }
+    },
+    {
       "module": "sklearn.decomposition._sparse_pca",
       "estimator": "MiniBatchSparsePCA",
       "operation": "transform",
@@ -10286,27 +10307,6 @@
         "crossing_cost_proxy": 0.0,
         "allocation_proxy": 0.0,
         "observed_flow_speed": 0.5,
-        "implementation_readiness": 1.0,
-        "native_reuse_penalty": 0.35,
-        "complexity_penalty": 0.25
-      }
-    },
-    {
-      "module": "sklearn.svm._classes",
-      "estimator": "LinearSVC",
-      "operation": "fit",
-      "execution_class": "external-native-bound",
-      "flow_scikit_status": "present",
-      "priority_score": 12.23,
-      "disposition": "reuse optimized native kernel",
-      "hypothesis": "retain the mature backend and optimize boundary, layout and dispatch overhead around it",
-      "observed_flow_speedup": 1.4460998958338305,
-      "factors": {
-        "substrate": 0.15,
-        "python_share": 0.0,
-        "crossing_cost_proxy": 0.0,
-        "allocation_proxy": 0.0,
-        "observed_flow_speed": 0.4820332986112768,
         "implementation_readiness": 1.0,
         "native_reuse_penalty": 0.35,
         "complexity_penalty": 0.25

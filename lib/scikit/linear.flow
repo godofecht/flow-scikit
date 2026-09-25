@@ -407,10 +407,21 @@ export function linear_regression_fit(X: Matrix, y: ptr<f32>, penalty: Penalty) 
     # Build centered X in f64 and centered y in f64.
     # Use QR decomposition on the centered X to solve least squares.
     # This avoids forming XtX which squares the condition number.
+    # Which solver runs decides the layout, so the centered copy is written
+    # once rather than written row-major and then transposed.
+    let qr_work: i64 = (m as i64) * (n as i64) * (n as i64)
+
     let Xc: ptr<f64> = malloc((m as i64) * (n as i64) * 8) as ptr<f64>
     let yc: ptr<f64> = array_new_f64(m)
+    let w_out: ptr<f64> = array_new_f64(n)
     for i in 0 to m {
         yc[i] = (y[i] as f64) - y_mean
+    }
+    # Row-major, reading and writing contiguously. The LAPACK path transposes
+    # afterwards. Writing column-major directly here instead was measured
+    # slower: the read then strides by n_features through the f32 design and
+    # touches a fresh cache line per row.
+    for i in 0 to m {
         let base: i32 = i * n
         for j in 0 to n {
             Xc[base + j] = (xdata[base + j] as f64) - x_mean[j]
@@ -459,8 +470,34 @@ export function linear_regression_fit(X: Matrix, y: ptr<f32>, penalty: Penalty) 
         return LinearRegression { weights: weights, bias: bias, n_features: n, penalty: penalty, fitted: true }
     }
 
-    # No regularization: use QR decomposition for accuracy
-    _solve_lstsq_qr(Xc, yc, m, n)
+    # No regularization.
+    #
+    # The unblocked Householder sweep below is memory bound on a tall design:
+    # one dgemv and one dger per reflector, walking the trailing block twice
+    # for each of the n columns. At 10000 rows and 32 features it measured at
+    # 91% of the fit.
+    #
+    # For a tall, well-conditioned design the normal equations do the same job
+    # in one dgemm and an n x n Cholesky, which is level 3 throughout and a
+    # quarter of the arithmetic. Forming Xc^T Xc squares the condition number,
+    # so Cholesky doubles as the test for whether that was safe: it fails on a
+    # matrix that is not positive definite, and the diagonal ratio of the
+    # factor catches the rest. Either check failing falls through to the QR.
+    #
+    # The gate also keeps every small design on the QR, which is where the
+    # collinear cases in tests/test_linear_collinear_fit.flow stay.
+    let mut solved: bool = false
+    if qr_work >= 1000000 && m > n {
+        solved = blas_lstsq_normal_f64(Xc, yc, w_out, m, n)
+        if solved {
+            for j in 0 to n {
+                yc[j] = w_out[j]
+            }
+        }
+    }
+    if not solved {
+        _solve_lstsq_qr(Xc, yc, m, n)
+    }
 
     # Recover bias in f64: b = y_mean - sum(x_mean[j] * w[j])
     let mut bias_d: f64 = y_mean
@@ -475,6 +512,7 @@ export function linear_regression_fit(X: Matrix, y: ptr<f32>, penalty: Penalty) 
 
     free(Xc as ptr<void>)
     array_free_f64(yc)
+    array_free_f64(w_out)
     array_free_f64(x_mean)
 
     return LinearRegression { weights: weights, bias: bias_d as f32, n_features: n, penalty: penalty, fitted: true }
@@ -2770,9 +2808,22 @@ export struct Lasso {
 #
 # G is symmetric and stored row-major, so row j is contiguous. The diagonal is
 # taken from col_sq so the two paths agree on it exactly.
+# Coordinate descent stops on the same criterion scikit-learn's cd_fast uses:
+# the largest coefficient change in a sweep, relative to the largest
+# coefficient, falling below the tolerance. 1e-4 is the tol Lasso and ElasticNet
+# declare by default.
+#
+# The gate here used to be an absolute `max_change < 1e-16`, which is a test for
+# an exact fixed point rather than for convergence. It effectively never fired,
+# so every fit ran its full epoch budget: 1000 sweeps where scikit-learn takes
+# 3 to 10 on the same data. That is the whole of the Lasso gap in the scaled
+# benchmark, and it grew with the data because each wasted sweep costs more.
+const CD_TOL: f64 = 0.0001
+
 function lasso_cd_gram_f64(gram: ptr<f64>, col_sq: ptr<f64>, q: ptr<f64>, w_d: ptr<f64>, n: i32, threshold: f64, epochs: i32) -> void {
     for epoch in 0 to epochs {
         let mut max_change: f64 = 0.0
+        let mut w_max: f64 = 0.0
         for j in 0 to n {
             if col_sq[j] < 0.0000000000000001 { continue }
 
@@ -2798,9 +2849,12 @@ function lasso_cd_gram_f64(gram: ptr<f64>, col_sq: ptr<f64>, q: ptr<f64>, w_d: p
             if abs_change > max_change { max_change = abs_change }
 
             w_d[j] = new_w
+            let abs_w: f64 = fabs(new_w)
+            if abs_w > w_max { w_max = abs_w }
         }
 
-        if max_change < 0.0000000000000001 { break }
+        if w_max == 0.0 { break }
+        if max_change / w_max < CD_TOL { break }
     }
 }
 
@@ -2811,6 +2865,7 @@ function lasso_cd_gram_f64(gram: ptr<f64>, col_sq: ptr<f64>, q: ptr<f64>, w_d: p
 function lasso_cd_cols_f64(xc: ptr<f64>, col_sq: ptr<f64>, residual: ptr<f64>, w_d: ptr<f64>, n: i32, m: i32, threshold: f64, epochs: i32) -> void {
     for epoch in 0 to epochs {
         let mut max_change: f64 = 0.0
+        let mut w_max: f64 = 0.0
         for j in 0 to n {
             if col_sq[j] < 0.0000000000000001 { continue }
             let base: i32 = j * m
@@ -2840,9 +2895,12 @@ function lasso_cd_cols_f64(xc: ptr<f64>, col_sq: ptr<f64>, residual: ptr<f64>, w
             if abs_change > max_change { max_change = abs_change }
 
             w_d[j] = new_w
+            let abs_w: f64 = fabs(new_w)
+            if abs_w > w_max { w_max = abs_w }
         }
 
-        if max_change < 0.0000000000000001 { break }
+        if w_max == 0.0 { break }
+        if max_change / w_max < CD_TOL { break }
     }
 }
 
@@ -2851,6 +2909,7 @@ function lasso_cd_cols_f64(xc: ptr<f64>, col_sq: ptr<f64>, residual: ptr<f64>, w
 function lasso_cd_stream_f64(X: Matrix, x_mean: ptr<f64>, col_sq: ptr<f64>, residual: ptr<f64>, w_d: ptr<f64>, n: i32, m: i32, threshold: f64, epochs: i32) -> void {
     for epoch in 0 to epochs {
         let mut max_change: f64 = 0.0
+        let mut w_max: f64 = 0.0
         for j in 0 to n {
             if col_sq[j] < 0.0000000000000001 { continue }
 
@@ -2881,9 +2940,12 @@ function lasso_cd_stream_f64(X: Matrix, x_mean: ptr<f64>, col_sq: ptr<f64>, resi
             if abs_change > max_change { max_change = abs_change }
 
             w_d[j] = new_w
+            let abs_w: f64 = fabs(new_w)
+            if abs_w > w_max { w_max = abs_w }
         }
 
-        if max_change < 0.0000000000000001 { break }
+        if w_max == 0.0 { break }
+        if max_change / w_max < CD_TOL { break }
     }
 }
 
@@ -2946,30 +3008,58 @@ export function lasso_fit(X: Matrix, y: ptr<f32>, alpha: f32, epochs: i32, lr: f
         }
 
         if use_gram {
+            # xc is column-major, so read as a row-major n x m matrix its row j
+            # is feature j's centered column. The Gram matrix is then that
+            # matrix times its own transpose, which is one dgemm, and q is one
+            # dgemv against the centered target.
+            #
+            # These were scalar triple and double loops. The Gram build alone is
+            # n_samples * n_features^2 / 2 multiply-adds, 5.1 million at 10000
+            # rows and 32 features, and it is paid before the first sweep. Once
+            # coordinate descent started converging in a handful of sweeps that
+            # build was most of the fit.
+            #
+            # Below the work threshold the scalar path still runs, bit for bit
+            # as before, because the dgemm dispatch costs more than the build on
+            # a small problem. The gate is the multiply-add count.
             let gram: ptr<f64> = array_new_f64(n * n)
-            for j in 0 to n {
-                let bj: i32 = j * m
-                for k in j to n {
+            let q: ptr<f64> = array_new_f64(n)
+            let gram_work: i64 = (m as i64) * (n as i64) * (n as i64)
+            if gram_work >= 65536 {
+                blas_gemm_nt_f64(xc, xc, gram, n, n, m, m, m, n, 1.0, 0.0)
+                let rc: ptr<f64> = array_new_f64(m)
+                for i in 0 to m {
+                    rc[i] = (y[i] as f64) - y_mean
+                }
+                blas_matvec_ld_f64(xc, n, m, m, rc, q, 1.0, 0.0)
+                array_free_f64(rc)
+            } else {
+                for j in 0 to n {
+                    let bj: i32 = j * m
+                    for k in j to n {
+                        let bk: i32 = k * m
+                        let mut acc: f64 = 0.0
+                        for i in 0 to m {
+                            acc = acc + xc[bj + i] * xc[bk + i]
+                        }
+                        gram[j * n + k] = acc
+                        gram[k * n + j] = acc
+                    }
+                }
+                for k in 0 to n {
                     let bk: i32 = k * m
                     let mut acc: f64 = 0.0
                     for i in 0 to m {
-                        acc = acc + xc[bj + i] * xc[bk + i]
+                        acc = acc + xc[bk + i] * ((y[i] as f64) - y_mean)
                     }
-                    gram[j * n + k] = acc
-                    gram[k * n + j] = acc
+                    q[k] = acc
                 }
-                gram[j * n + j] = col_sq[j]
             }
-
-            # q = Xc^T r with r initialized to y - y_mean.
-            let q: ptr<f64> = array_new_f64(n)
-            for k in 0 to n {
-                let bk: i32 = k * m
-                let mut acc: f64 = 0.0
-                for i in 0 to m {
-                    acc = acc + xc[bk + i] * ((y[i] as f64) - y_mean)
-                }
-                q[k] = acc
+            # The diagonal is col_sq, which was accumulated in ascending row
+            # order per column. Reusing it keeps the diagonal identical to that
+            # pass whichever branch built the rest.
+            for j in 0 to n {
+                gram[j * n + j] = col_sq[j]
             }
 
             lasso_cd_gram_f64(gram, col_sq, q, w_d, n, threshold, epochs)

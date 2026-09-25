@@ -8,6 +8,10 @@ export const CBLAS_NO_TRANS: i32 = 111
 export const CBLAS_TRANS: i32 = 112
 
 extern {
+    function malloc(size: i64) -> ptr<void>
+    function calloc(count: i64, size: i64) -> ptr<void>
+    function free(p: ptr<void>) -> void
+    function fabs(x: f64) -> f64
     function cblas_sgemv(order: i32, trans: i32, m: i32, n: i32, alpha: f32, a: ptr<f32>, lda: i32, x: ptr<f32>, incx: i32, beta: f32, y: ptr<f32>, incy: i32) -> void
     function cblas_sdot(n: i32, x: ptr<f32>, incx: i32, y: ptr<f32>, incy: i32) -> f32
     function cblas_saxpy(n: i32, alpha: f32, x: ptr<f32>, incx: i32, y: ptr<f32>, incy: i32) -> void
@@ -110,4 +114,85 @@ export function blas_axpy_strided_f64(n: i32, alpha: f64, x: ptr<f64>, incx: i32
 # to get a Gram matrix, or a weighted copy to get X^T diag(w) X.
 export function blas_gemm_tn_f64(A: ptr<f64>, B: ptr<f64>, C: ptr<f64>, m: i32, n: i32, k: i32, lda: i32, ldb: i32, ldc: i32, alpha: f64, beta: f64) -> void {
     cblas_dgemm(CBLAS_ROW_MAJOR, CBLAS_TRANS, CBLAS_NO_TRANS, n, k, m, alpha, A, lda, B, ldb, beta, C, ldc)
+}
+
+# Double-precision C = alpha * A * B^T + beta * C.
+# A is row-major m x k with lda per row, B is row-major n x k with ldb per row,
+# C is row-major m x n with ldc per row. The shared k is contracted, so passing
+# the same matrix twice gives its Gram matrix over rows.
+export function blas_gemm_nt_f64(A: ptr<f64>, B: ptr<f64>, C: ptr<f64>, m: i32, n: i32, k: i32, lda: i32, ldb: i32, ldc: i32, alpha: f64, beta: f64) -> void {
+    cblas_dgemm(CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, CBLAS_TRANS, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc)
+}
+
+# Double-precision y = alpha * A * x + beta * y.
+# A is row-major m x n with lda elements per row, x is length n, y is length m.
+export function blas_matvec_ld_f64(A: ptr<f64>, m: i32, n: i32, lda: i32, x: ptr<f64>, y: ptr<f64>, alpha: f64, beta: f64) -> void {
+    cblas_dgemv(CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, m, n, alpha, A, lda, x, 1, beta, y, 1)
+}
+
+function blas_alloc_f64(n: i32) -> ptr<f64> {
+    return calloc((n as i64), 8) as ptr<f64>
+}
+
+function blas_free_f64(p: ptr<f64>) -> void {
+    free(p as ptr<void>)
+}
+
+# Least squares for a tall design by the normal equations, guarded by Cholesky.
+#
+# Xc is row-major m x n and is not modified. b is length m. On success the
+# solution is written to out and true is returned.
+#
+# Forming Xc^T Xc squares the condition number, so this is only safe when the
+# design is well conditioned. Cholesky is the test: dpotrf fails outright on a
+# matrix that is not positive definite, and the ratio of the smallest to the
+# largest diagonal of the factor bounds how far the rest has drifted. Either
+# check failing returns false and the caller falls back to its QR, which is
+# what the collinear designs in the tests take.
+#
+# The work is one dgemm of m * n^2 / 2 and a factorization of n^3 / 3, against
+# roughly 2 * m * n^2 for a Householder QR, and all of it is level 3.
+export function blas_lstsq_normal_f64(Xc: ptr<f64>, b: ptr<f64>, out: ptr<f64>, m: i32, n: i32) -> bool {
+    let xtx: ptr<f64> = blas_alloc_f64(n * n)
+    blas_gemm_tn_f64(Xc, Xc, xtx, m, n, n, n, n, n, 1.0, 0.0)
+    cblas_dgemv(CBLAS_ROW_MAJOR, CBLAS_TRANS, m, n, 1.0, Xc, n, b, 1, 0.0, out, 1)
+
+    let uplo: ptr<u8> = malloc(2) as ptr<u8>
+    let ni: ptr<i32> = malloc(4) as ptr<i32>
+    let info: ptr<i32> = malloc(4) as ptr<i32>
+    # 'L' in LAPACK's column-major view is the upper triangle of our row-major
+    # buffer, and the matrix is symmetric, so either reading is the same data.
+    uplo[0] = 76
+    uplo[1] = 0
+    ni[0] = n
+    info[0] = 0
+    dpotrf_(uplo, ni, xtx, ni, info)
+    let ok_factor: bool = info[0] == 0
+
+    let mut ok: bool = ok_factor
+    if ok {
+        let mut dmin: f64 = xtx[0]
+        let mut dmax: f64 = xtx[0]
+        for d in 0 to n {
+            let v: f64 = fabs(xtx[d * n + d])
+            if v < dmin { dmin = v }
+            if v > dmax { dmax = v }
+        }
+        if dmax <= 0.0 { ok = false }
+        if ok {
+            if dmin / dmax < 0.000001 { ok = false }
+        }
+    }
+
+    if ok {
+        # L L^T w = Xc^T b, solved as two triangular systems.
+        cblas_dtrsv(CBLAS_ROW_MAJOR, 121, CBLAS_NO_TRANS, 131, n, xtx, n, out, 1)
+        cblas_dtrsv(CBLAS_ROW_MAJOR, 121, CBLAS_TRANS, 131, n, xtx, n, out, 1)
+    }
+
+    blas_free_f64(xtx)
+    free(uplo as ptr<void>)
+    free(ni as ptr<void>)
+    free(info as ptr<void>)
+    return ok
 }

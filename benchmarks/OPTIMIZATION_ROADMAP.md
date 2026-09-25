@@ -4,103 +4,103 @@ Generated from committed inventory/profile/benchmark evidence.
 
 | Rank | Estimator | Operation | Substrate | Score | Disposition | Observed Flow speedup | Hypothesis |
 |---:|---|---|---|---:|---|---:|---|
-| 1 | `GaussianNB` | `fit` | python-bound | 75.3 | rewrite first | 33.37× | remove Python control/validation and specialize the complete operation |
-| 2 | `PCA` | `fit` | python-bound | 74.3 | rewrite first | 11.95× | remove Python control/validation and specialize the complete operation |
-| 3 | `LogisticRegression` | `predict` | python-bound | 73.8 | rewrite first | 10.56× | remove Python control/validation and specialize the complete operation |
-| 4 | `GaussianNB` | `predict` | python-bound | 73.7 | rewrite first | 33.37× | remove Python control/validation and specialize the complete operation |
-| 5 | `PCA` | `transform` | python-bound | 73.5 | rewrite first | 11.95× | remove Python control/validation and specialize the complete operation |
-| 6 | `LinearRegression` | `predict` | python-bound | 73.3 | rewrite first | 8.50× | remove Python control/validation and specialize the complete operation |
-| 7 | `KMeans` | `fit` | mixed | 72.2 | rewrite first | 4.86× | remove Python control/validation and specialize the complete operation |
-| 8 | `LogisticRegression` | `fit` | mixed | 71.8 | rewrite first | 10.56× | remove Python control/validation and specialize the complete operation |
-| 9 | `LinearRegression` | `fit` | mixed | 68.4 | rewrite first | 8.50× | remove Python control/validation and specialize the complete operation |
-| 10 | `KMeans` | `predict` | numpy-bound | 60.3 | rewrite first | 4.86× | remove Python control/validation and specialize the complete operation |
-| 11 | `SVC` | `predict` | numpy-bound | 54.5 | rewrite first | 1.12× | remove Python control/validation and specialize the complete operation |
-| 12 | `GaussianNB` | `predict_proba` | python-bound | 54.0 | rewrite first | 33.37× | remove Python control/validation and specialize the complete operation |
-| 13 | `KMeans` | `transform` | python-bound | 54.0 | rewrite first | 4.86× | remove Python control/validation and specialize the complete operation |
-| 14 | `LogisticRegression` | `predict_proba` | python-bound | 54.0 | rewrite first | 10.56× | remove Python control/validation and specialize the complete operation |
-| 15 | `LogisticRegression` | `decision_function` | python-bound | 54.0 | rewrite first | 10.56× | remove Python control/validation and specialize the complete operation |
-| 16 | `Ridge` | `fit` | python-bound | 54.0 | rewrite first | 7.10× | remove Python control/validation and specialize the complete operation |
-| 17 | `Ridge` | `predict` | python-bound | 54.0 | rewrite first | 7.10× | remove Python control/validation and specialize the complete operation |
-| 18 | `DecisionTreeClassifier` | `fit` | mixed | 48.0 | compile whole estimator | 4.43× | retain useful numerical kernels while fusing validation, allocation and orchestration |
-| 19 | `DecisionTreeClassifier` | `predict` | mixed | 48.0 | compile whole estimator | 4.43× | retain useful numerical kernels while fusing validation, allocation and orchestration |
-| 20 | `RandomForestClassifier` | `fit` | mixed | 48.0 | compile whole estimator | 4.48× | retain useful numerical kernels while fusing validation, allocation and orchestration |
-| 21 | `RandomForestClassifier` | `predict` | mixed | 48.0 | compile whole estimator | 4.48× | retain useful numerical kernels while fusing validation, allocation and orchestration |
-| 22 | `RandomForestClassifier` | `predict_proba` | mixed | 48.0 | compile whole estimator | 4.48× | retain useful numerical kernels while fusing validation, allocation and orchestration |
-| 23 | `AdaBoostRegressor` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 24 | `AdditiveChi2Sampler` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 25 | `AdditiveChi2Sampler` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 26 | `AgglomerativeClustering` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 27 | `BaggingClassifier` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 28 | `BaggingClassifier` | `predict_proba` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 29 | `BaggingClassifier` | `decision_function` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 30 | `BaggingRegressor` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 31 | `BaggingRegressor` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 32 | `BayesianGaussianMixture` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 33 | `BayesianGaussianMixture` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 34 | `BayesianGaussianMixture` | `predict_proba` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 35 | `BernoulliNB` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 36 | `BernoulliNB` | `predict_proba` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 37 | `Binarizer` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 38 | `Birch` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 39 | `Birch` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 40 | `Birch` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 41 | `BisectingKMeans` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 42 | `CCA` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 43 | `CategoricalNB` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 44 | `CategoricalNB` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 45 | `CategoricalNB` | `predict_proba` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 46 | `ClassifierChain` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 47 | `ClassifierChain` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 48 | `ClassifierChain` | `predict_proba` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 49 | `ClassifierChain` | `decision_function` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 50 | `ColumnTransformer` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 51 | `ComplementNB` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 52 | `ComplementNB` | `predict_proba` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 53 | `CountVectorizer` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 54 | `CountVectorizer` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 55 | `DictVectorizer` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 56 | `DictVectorizer` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 57 | `DictionaryLearning` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 58 | `DictionaryLearning` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 59 | `ElasticNet` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 60 | `ElasticNetCV` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 61 | `ElasticNetCV` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 62 | `EllipticEnvelope` | `decision_function` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 63 | `FastICA` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 64 | `FeatureAgglomeration` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 65 | `FeatureHasher` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 66 | `FeatureUnion` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 67 | `FeatureUnion` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 68 | `FunctionTransformer` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 69 | `FunctionTransformer` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 70 | `GaussianMixture` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 71 | `GaussianMixture` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 72 | `GaussianMixture` | `predict_proba` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 73 | `GaussianProcessClassifier` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 74 | `GaussianProcessClassifier` | `predict_proba` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 75 | `GenericUnivariateSelect` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 76 | `GridSearchCV` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 77 | `GridSearchCV` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 78 | `GridSearchCV` | `predict_proba` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 79 | `GridSearchCV` | `decision_function` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 80 | `GridSearchCV` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 81 | `HashingVectorizer` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 82 | `HashingVectorizer` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 83 | `HuberRegressor` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 84 | `Isomap` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 85 | `IsotonicRegression` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 86 | `IsotonicRegression` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 87 | `KNeighborsClassifier` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 88 | `KNeighborsRegressor` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 89 | `KNeighborsTransformer` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 90 | `KNeighborsTransformer` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 91 | `LabelBinarizer` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 92 | `LabelBinarizer` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 93 | `LabelEncoder` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 94 | `LabelEncoder` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 95 | `LabelPropagation` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 96 | `Lars` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 97 | `LarsCV` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 98 | `LassoCV` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 99 | `LassoCV` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
-| 100 | `LassoLars` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 1 | `GaussianNB` | `fit` | python-bound | 75.3 | rewrite first | 22.83× | remove Python control/validation and specialize the complete operation |
+| 2 | `PCA` | `fit` | python-bound | 74.3 | rewrite first | 16.60× | remove Python control/validation and specialize the complete operation |
+| 3 | `LogisticRegression` | `predict` | python-bound | 73.8 | rewrite first | 7.23× | remove Python control/validation and specialize the complete operation |
+| 4 | `GaussianNB` | `predict` | python-bound | 73.7 | rewrite first | 22.83× | remove Python control/validation and specialize the complete operation |
+| 5 | `PCA` | `transform` | python-bound | 73.5 | rewrite first | 16.60× | remove Python control/validation and specialize the complete operation |
+| 6 | `LinearRegression` | `predict` | python-bound | 73.3 | rewrite first | 10.21× | remove Python control/validation and specialize the complete operation |
+| 7 | `KMeans` | `fit` | mixed | 72.2 | rewrite first | 6.84× | remove Python control/validation and specialize the complete operation |
+| 8 | `LogisticRegression` | `fit` | mixed | 71.8 | rewrite first | 7.23× | remove Python control/validation and specialize the complete operation |
+| 9 | `LinearRegression` | `fit` | mixed | 68.4 | rewrite first | 10.21× | remove Python control/validation and specialize the complete operation |
+| 10 | `SVC` | `predict` | numpy-bound | 63.9 | rewrite first | 3.40× | remove Python control/validation and specialize the complete operation |
+| 11 | `KMeans` | `predict` | numpy-bound | 60.3 | rewrite first | 6.84× | remove Python control/validation and specialize the complete operation |
+| 12 | `GaussianNB` | `predict_proba` | python-bound | 54.0 | rewrite first | 22.83× | remove Python control/validation and specialize the complete operation |
+| 13 | `KMeans` | `transform` | python-bound | 54.0 | rewrite first | 6.84× | remove Python control/validation and specialize the complete operation |
+| 14 | `Lasso` | `predict` | python-bound | 54.0 | rewrite first | 7.36× | remove Python control/validation and specialize the complete operation |
+| 15 | `LinearSVC` | `predict` | python-bound | 54.0 | rewrite first | 5.18× | remove Python control/validation and specialize the complete operation |
+| 16 | `LinearSVC` | `decision_function` | python-bound | 54.0 | rewrite first | 5.18× | remove Python control/validation and specialize the complete operation |
+| 17 | `LogisticRegression` | `predict_proba` | python-bound | 54.0 | rewrite first | 7.23× | remove Python control/validation and specialize the complete operation |
+| 18 | `LogisticRegression` | `decision_function` | python-bound | 54.0 | rewrite first | 7.23× | remove Python control/validation and specialize the complete operation |
+| 19 | `Ridge` | `fit` | python-bound | 54.0 | rewrite first | 13.90× | remove Python control/validation and specialize the complete operation |
+| 20 | `Ridge` | `predict` | python-bound | 54.0 | rewrite first | 13.90× | remove Python control/validation and specialize the complete operation |
+| 21 | `SVC` | `predict_proba` | python-bound | 54.0 | rewrite first | 3.40× | remove Python control/validation and specialize the complete operation |
+| 22 | `SVC` | `decision_function` | python-bound | 54.0 | rewrite first | 3.40× | remove Python control/validation and specialize the complete operation |
+| 23 | `DecisionTreeClassifier` | `fit` | mixed | 48.0 | compile whole estimator | 5.89× | retain useful numerical kernels while fusing validation, allocation and orchestration |
+| 24 | `DecisionTreeClassifier` | `predict` | mixed | 48.0 | compile whole estimator | 5.89× | retain useful numerical kernels while fusing validation, allocation and orchestration |
+| 25 | `Lasso` | `fit` | mixed | 48.0 | compile whole estimator | 7.36× | retain useful numerical kernels while fusing validation, allocation and orchestration |
+| 26 | `RandomForestClassifier` | `fit` | mixed | 48.0 | compile whole estimator | 10.83× | retain useful numerical kernels while fusing validation, allocation and orchestration |
+| 27 | `RandomForestClassifier` | `predict` | mixed | 48.0 | compile whole estimator | 10.83× | retain useful numerical kernels while fusing validation, allocation and orchestration |
+| 28 | `RandomForestClassifier` | `predict_proba` | mixed | 48.0 | compile whole estimator | 10.83× | retain useful numerical kernels while fusing validation, allocation and orchestration |
+| 29 | `AdaBoostRegressor` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 30 | `AdditiveChi2Sampler` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 31 | `AdditiveChi2Sampler` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 32 | `AgglomerativeClustering` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 33 | `BaggingClassifier` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 34 | `BaggingClassifier` | `predict_proba` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 35 | `BaggingClassifier` | `decision_function` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 36 | `BaggingRegressor` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 37 | `BaggingRegressor` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 38 | `BayesianGaussianMixture` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 39 | `BayesianGaussianMixture` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 40 | `BayesianGaussianMixture` | `predict_proba` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 41 | `BernoulliNB` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 42 | `BernoulliNB` | `predict_proba` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 43 | `Binarizer` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 44 | `Birch` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 45 | `Birch` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 46 | `Birch` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 47 | `BisectingKMeans` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 48 | `CCA` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 49 | `CategoricalNB` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 50 | `CategoricalNB` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 51 | `CategoricalNB` | `predict_proba` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 52 | `ClassifierChain` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 53 | `ClassifierChain` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 54 | `ClassifierChain` | `predict_proba` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 55 | `ClassifierChain` | `decision_function` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 56 | `ColumnTransformer` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 57 | `ComplementNB` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 58 | `ComplementNB` | `predict_proba` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 59 | `CountVectorizer` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 60 | `CountVectorizer` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 61 | `DictVectorizer` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 62 | `DictVectorizer` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 63 | `DictionaryLearning` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 64 | `DictionaryLearning` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 65 | `ElasticNet` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 66 | `ElasticNetCV` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 67 | `ElasticNetCV` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 68 | `EllipticEnvelope` | `decision_function` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 69 | `FastICA` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 70 | `FeatureAgglomeration` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 71 | `FeatureHasher` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 72 | `FeatureUnion` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 73 | `FeatureUnion` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 74 | `FunctionTransformer` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 75 | `FunctionTransformer` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 76 | `GaussianMixture` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 77 | `GaussianMixture` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 78 | `GaussianMixture` | `predict_proba` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 79 | `GaussianProcessClassifier` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 80 | `GaussianProcessClassifier` | `predict_proba` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 81 | `GenericUnivariateSelect` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 82 | `GridSearchCV` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 83 | `GridSearchCV` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 84 | `GridSearchCV` | `predict_proba` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 85 | `GridSearchCV` | `decision_function` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 86 | `GridSearchCV` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 87 | `HashingVectorizer` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 88 | `HashingVectorizer` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 89 | `HuberRegressor` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 90 | `Isomap` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 91 | `IsotonicRegression` | `predict` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 92 | `IsotonicRegression` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 93 | `KNeighborsClassifier` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 94 | `KNeighborsRegressor` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 95 | `KNeighborsTransformer` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 96 | `KNeighborsTransformer` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 97 | `LabelBinarizer` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 98 | `LabelBinarizer` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 99 | `LabelEncoder` | `fit` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
+| 100 | `LabelEncoder` | `transform` | python-bound | 46.5 | rewrite first |  | remove Python control/validation and specialize the complete operation |
