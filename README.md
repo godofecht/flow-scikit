@@ -55,7 +55,7 @@ The win count is machine-dependent and the committed artifact says which machine
 
 Do not read that 23x as a property of the library. scikit-learn's own fit of that row takes about 25 ms on the Intel runner and about 181 ms on the AMD one, for the same code and the same data, so the AMD figure is measuring an OpenBLAS path that suits that machine badly rather than anything Flow does well. Flow's own time on the two runners is 8.9 ms and 7.5 ms. The Intel ratio is the honest one to quote, and a row whose margin sits near 1x can still land either way. The parity contract gates on correctness and measurement resolution rather than on the win count.
 
-The current grouped headline evidence is descriptive rather than causal: Flow wins every row in all three substrate groups, at a mean of 19.04x on Python-bound rows, 7.39x on mixed rows and 4.29x on external-native-bound rows in the committed architecture map.
+The current grouped headline evidence is descriptive rather than causal: Flow wins every row in all three substrate groups, at a mean of 45.75x on Python-bound rows, 11.31x on mixed rows and 3.60x on external-native-bound rows in the committed architecture map.
 
 Two earlier readings of this table were wrong, and both were artifacts of how Flow was built rather than of the substrate. While the Flow side was compiled unoptimized, external-native-bound rows all lost, which read as sklearn-owned compiled code being out of reach. The grouping is a guide to where the Python boundary costs most. It is not a ceiling.
 

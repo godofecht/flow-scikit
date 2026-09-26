@@ -13,7 +13,7 @@
         "python-control-loops:4"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 71.832,
+      "priority_score": 71.9,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -32,7 +32,7 @@
         "python-control-loops:2"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 71.726,
+      "priority_score": 71.743,
       "disposition": "retain-native",
       "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
     },
@@ -52,7 +52,7 @@
         "python-control-loops:5"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 68.576,
+      "priority_score": 68.496,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -82,6 +82,22 @@
       "evidence": [
         "numpy-bound:np.",
         "python-control-loops:3"
+      ],
+      "flow_scikit_status": "present",
+      "priority_score": 48.0,
+      "disposition": "already-equivalent",
+      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
+    },
+    {
+      "module": "sklearn.kernel_ridge",
+      "estimator": "KernelRidge",
+      "operation": "fit",
+      "execution_class": "mixed",
+      "ownership": "sklearn",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/kernel_ridge.py",
+      "evidence": [
+        "blas-lapack-bound:cholesky",
+        "numpy-bound:np."
       ],
       "flow_scikit_status": "present",
       "priority_score": 48.0,
@@ -168,25 +184,9 @@
         "numpy-bound:np."
       ],
       "flow_scikit_status": "present",
-      "priority_score": 44.889,
+      "priority_score": 43.767,
       "disposition": "retain-native",
       "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
-    },
-    {
-      "module": "sklearn.kernel_ridge",
-      "estimator": "KernelRidge",
-      "operation": "fit",
-      "execution_class": "mixed",
-      "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/sklearn/kernel_ridge.py",
-      "evidence": [
-        "blas-lapack-bound:cholesky",
-        "numpy-bound:np."
-      ],
-      "flow_scikit_status": "present",
-      "priority_score": 43.704,
-      "disposition": "already-equivalent",
-      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
     {
       "module": "sklearn.linear_model._bayes",

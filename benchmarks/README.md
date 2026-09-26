@@ -195,7 +195,7 @@ The main generated views are:
 
 A speedup is `sklearn_ms / flow_ms`. Values above `1x` mean Flow is faster; values below `1x` mean scikit-learn is faster.
 
-The current architecture map shows a useful but non-causal pattern: Flow wins every headline row in all three substrate classes, and the margin varies with the class, from a mean of 19.04x on Python-bound rows down to 4.29x on external-native-bound ones. That ordering is evidence for prioritization. It is not proof that execution substrate alone determines performance.
+The current architecture map shows a useful but non-causal pattern: Flow wins every headline row in all three substrate classes, and the margin varies with the class, from a mean of 45.75x on Python-bound rows down to 3.60x on external-native-bound ones. That ordering is evidence for prioritization. It is not proof that execution substrate alone determines performance.
 
 Mature BLAS/LAPACK, liblinear, libsvm and other native backends are treated as native competitors. The optimization roadmap deliberately prefers retaining those kernels unless benchmark and parity evidence justify replacement.
 
