@@ -225,6 +225,57 @@ python benchmarks/summarize_scaled_ci.py --baseline benchmarks/scaled_flow_basel
 
 Each run directory needs `scaled_flow.json` beside `scaled_comparison.json`. Build it from CI artifacts; a developer machine's numbers would make a fast laptop the standard CI has to meet.
 
+## Every estimator
+
+The canonical benchmark races 12 estimators. `lib/scikit` exports 203, and a
+claim about Flow against scikit-learn says little while the other 191 are
+unmeasured. Four pieces cover the rest, all driven from one registry so the two
+sides cannot drift apart.
+
+[`estimator_coverage.py`](estimator_coverage.py) parses every exported `*_fit`
+out of `lib/scikit`, resolves its arguments from a table keyed by parameter
+name, finds the scikit-learn class by name, and sorts each estimator into a
+bucket. Nothing is dropped silently; every entry that is not raced carries its
+reason.
+
+| bucket | meaning |
+| --- | --- |
+| `runnable` | arguments resolved and a scikit-learn counterpart exists |
+| `different_shape` | takes a pipeline, a vectorizer input or a list of fitted models first, so it is not an estimator over a feature matrix |
+| `flow_only` | Flow implements it and scikit-learn has no equivalent |
+| `blocked` | the signature is not resolved yet, with the missing parameter named |
+
+[`generate_estimator_bench.py`](generate_estimator_bench.py) emits the Flow
+timing blocks from that registry, split across several files because Flow issue
+#469 miscompiles some functions once a program grows past a certain size. Each
+block prints one line and flushes it. Without the flush, one estimator trapping
+takes the whole file's buffered output with it and the run looks empty rather
+than partial, which is how a RANSAC crash first presented.
+
+[`bench_estimators_sklearn.py`](bench_estimators_sklearn.py) times the
+scikit-learn side of the same registry, and
+[`compare_estimators.py`](compare_estimators.py) joins them.
+
+```
+python benchmarks/estimator_coverage.py
+python benchmarks/generate_estimator_bench.py
+for f in benchmarks/generated/bench_estimators_*.flow; do flow run "$f"; done | tee /tmp/flow.txt
+python benchmarks/bench_estimators_sklearn.py
+python benchmarks/compare_estimators.py /tmp/flow.txt
+```
+
+Read the result for what it is. These rows have no parity contract, no declared
+tolerances and no disparity report: each library runs its own defaults over the
+same data. That answers whether a Flow implementation is in the same
+performance league and says nothing about whether it computes the same thing.
+The per-estimator numerical contract remains the canonical benchmark's job, and
+`estimator_comparison.json` says so in its own `contract` field.
+
+The breadth is worth having for correctness as much as for speed. The first run
+of it found a heap-buffer-overflow in `_solve_lstsq_qr`, which assumed a design
+has at least as many rows as columns; RANSAC reaches it by fitting 5 sampled
+rows against the 10 features of diabetes.
+
 ## Pages publication
 
 [`publish_headline_v2.py`](publish_headline_v2.py) validates the committed canonical benchmark and architecture map, then copies the JSON artifacts into `docs/` for the static site. The public benchmark and architecture pages render those artifacts directly instead of embedding hand-maintained timing claims.
