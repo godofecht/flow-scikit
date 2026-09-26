@@ -14,10 +14,12 @@ RESULT = BENCH / "headline_result_v2.json"
 ARCH = BENCH / "architecture_performance_map.json"
 DISPARITY = BENCH / "disparity_report.json"
 HISTORY = BENCH / "disparity_history.json"
+SCALED = BENCH / "scaled_ci_history.json"
 DOC_RESULT = DOCS / "headline-result-v2.json"
 DOC_ARCH = DOCS / "architecture-performance-map.json"
 DOC_DISPARITY = DOCS / "disparity-report.json"
 DOC_HISTORY = DOCS / "disparity-history.json"
+DOC_SCALED = DOCS / "scaled-ci-history.json"
 
 
 def validate_headline(result: dict) -> None:
@@ -60,6 +62,20 @@ def validate_history(history: dict, total_rows: int) -> None:
             raise SystemExit("disparity history snapshot does not cover every canonical row")
 
 
+def validate_scaled(scaled: dict) -> None:
+    counts = scaled["counts"]
+    if counts["runs"] < 2:
+        raise SystemExit("the scaled matrix needs at least two runs before it says anything")
+    if counts["rows"] != len(scaled["rows"]):
+        raise SystemExit("scaled history row count does not match counts.rows")
+    won = sum(1 for r in scaled["rows"] if r["runs_won"] == r["runs_observed"])
+    if won != counts["rows_won_in_every_run"]:
+        raise SystemExit("scaled history win count disagrees with its own rows")
+    for row in scaled["rows"]:
+        if len(row["observations"]) != row["runs_observed"]:
+            raise SystemExit(f"scaled row {row['algorithm']} has a stale observation list")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
@@ -76,6 +92,11 @@ def main() -> int:
         validate_disparity(disparity, result["counts"]["total_rows"])
     elif not args.check:
         raise SystemExit("disparity_report.json must be generated before Pages publication")
+    scaled = json.loads(SCALED.read_text()) if SCALED.exists() else None
+    if scaled is not None:
+        validate_scaled(scaled)
+    elif not args.check:
+        raise SystemExit("scaled_ci_history.json must be present before Pages publication")
     if history is not None:
         validate_history(history, result["counts"]["total_rows"])
     elif not args.check:
@@ -86,8 +107,9 @@ def main() -> int:
         shutil.copyfile(ARCH, DOC_ARCH)
         shutil.copyfile(DISPARITY, DOC_DISPARITY)
         shutil.copyfile(HISTORY, DOC_HISTORY)
+        shutil.copyfile(SCALED, DOC_SCALED)
         counts = result["counts"]
-        print(f"published evidence: {counts['flow_wins']}/{counts['eligible_comparisons']} Flow wins; {disparity['counts']['rows_with_tracked_disparity']} rows with tracked disparities; {len(history['snapshots'])} history snapshots")
+        print(f"published evidence: {counts['flow_wins']}/{counts['eligible_comparisons']} Flow wins; {disparity['counts']['rows_with_tracked_disparity']} rows with tracked disparities; {len(history['snapshots'])} history snapshots; scaled matrix over {scaled['counts']['runs']} runs")
     else:
         print("canonical benchmark, architecture, disparity, and available history evidence are internally consistent")
     return 0

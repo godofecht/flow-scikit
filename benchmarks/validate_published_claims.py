@@ -26,6 +26,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 RESULT = ROOT / "benchmarks" / "headline_result_v2.json"
+ARCH = ROOT / "benchmarks" / "architecture_performance_map.json"
 
 # (path, regex with one group per count, builder for the replacement text)
 TARGETS = [
@@ -57,6 +58,40 @@ TARGETS = [
     ),
 ]
 
+# The same drift, from the other artifact: both READMEs quote the mean Flow
+# speedup per sklearn execution substrate, and those means move on every
+# freeze. They had gone stale by 2x on one group before this was added.
+SUBSTRATE_TARGETS = [
+    (
+        ROOT / "README.md",
+        re.compile(
+            r"at a mean of ([\d.]+)x on Python-bound rows, ([\d.]+)x on mixed rows "
+            r"and ([\d.]+)x on external-native-bound rows"
+        ),
+        lambda m: (
+            f"at a mean of {m['python-bound']:.2f}x on Python-bound rows, "
+            f"{m['mixed']:.2f}x on mixed rows and "
+            f"{m['external-native-bound']:.2f}x on external-native-bound rows"
+        ),
+    ),
+    (
+        ROOT / "benchmarks" / "README.md",
+        re.compile(
+            r"from a mean of ([\d.]+)x on Python-bound rows down to ([\d.]+)x on "
+            r"external-native-bound ones"
+        ),
+        lambda m: (
+            f"from a mean of {m['python-bound']:.2f}x on Python-bound rows down to "
+            f"{m['external-native-bound']:.2f}x on external-native-bound ones"
+        ),
+    ),
+]
+
+
+def substrate_means() -> dict[str, float]:
+    groups = json.loads(ARCH.read_text())["speedup_by_execution_substrate"]
+    return {g["execution_class"]: float(g["mean_flow_speedup"]) for g in groups}
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -64,9 +99,12 @@ def main() -> int:
     args = ap.parse_args()
 
     counts = json.loads(RESULT.read_text())["counts"]
+    means = substrate_means()
     drifted: list[str] = []
 
-    for path, pattern, build in TARGETS:
+    for path, pattern, build in TARGETS + [
+        (p, r, (lambda b: lambda _c: b(means))(build)) for p, r, build in SUBSTRATE_TARGETS
+    ]:
         text = path.read_text()
         match = pattern.search(text)
         rel = path.relative_to(ROOT)
@@ -83,7 +121,7 @@ def main() -> int:
             drifted.append(f"{rel}\n    committed: {match.group(0)}\n    artifact:  {expected}")
 
     if drifted:
-        print("Published prose disagrees with benchmarks/headline_result_v2.json:\n")
+        print("Published prose disagrees with the committed artifacts:\n")
         for d in drifted:
             print("  " + d + "\n")
         print("Run: python benchmarks/validate_published_claims.py --fix")

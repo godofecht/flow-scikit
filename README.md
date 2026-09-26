@@ -55,7 +55,7 @@ The win count is machine-dependent and the committed artifact says which machine
 
 Do not read that 23x as a property of the library. scikit-learn's own fit of that row takes about 25 ms on the Intel runner and about 181 ms on the AMD one, for the same code and the same data, so the AMD figure is measuring an OpenBLAS path that suits that machine badly rather than anything Flow does well. Flow's own time on the two runners is 8.9 ms and 7.5 ms. The Intel ratio is the honest one to quote, and a row whose margin sits near 1x can still land either way. The parity contract gates on correctness and measurement resolution rather than on the win count.
 
-The current grouped headline evidence is descriptive rather than causal: Flow wins every row in all three substrate groups, at a mean of 20.99x on Python-bound rows, 6.84x on mixed rows and 3.96x on external-native-bound rows in the committed architecture map.
+The current grouped headline evidence is descriptive rather than causal: Flow wins every row in all three substrate groups, at a mean of 19.04x on Python-bound rows, 7.39x on mixed rows and 4.29x on external-native-bound rows in the committed architecture map.
 
 Two earlier readings of this table were wrong, and both were artifacts of how Flow was built rather than of the substrate. While the Flow side was compiled unoptimized, external-native-bound rows all lost, which read as sklearn-owned compiled code being out of reach. The grouping is a guide to where the Python boundary costs most. It is not a ceiling.
 
@@ -63,11 +63,15 @@ One row is not a like-for-like comparison, and the disparity report records it. 
 
 ## Larger data
 
-The 19 canonical rows sit on iris, digits and diabetes, none of which exceeds 1797 samples. A separate matrix runs five estimators at 100, 1000 and 10000 rows against 8 and 32 features, which is where an implementation that only suits small inputs would show it.
+The 19 canonical rows sit on iris, digits and diabetes, none of which exceeds 1797 samples. A separate matrix runs five estimators at 100, 1000 and 10000 rows against 8 and 32 features, which is where an implementation that only suits small inputs would show it. CI measures it on every run and reports it without gating the build.
 
-CI measures this matrix on every run, on an Intel Xeon with OpenBLAS, and Flow wins 34 of 34 of those rows. The narrowest are `LinearRegression` at 10000 rows and 8 features (1.26x) and both `KernelSVC_RBF` rows at 1000 samples (1.29x); the widest is `GaussianNB` at 100 rows and 32 features (74.4x). Four rows were losses before the coordinate-descent, Cholesky, kernel-cache and support-vector changes in this repo's history, the worst at 0.24x.
+One run of that matrix does not settle a row. `benchmarks/scaled_ci_history.json` holds five consecutive runs. Flow wins 30 of the 34 rows in all five. The other four dipped below 1x in at least one run, and all four are at 1000 samples, where a fit finishes in well under a millisecond and the runner moves the measurement by more than the difference being measured: Lasso at 1000 rows and 32 features was recorded at 3.83x and at 0.92x on code that differs in nothing touching Lasso.
 
-The matrix is reported without gating the build, because a shared runner moves a tenth-of-a-millisecond row by more than the row itself. What does gate is `benchmarks/scaled_flow_baseline.json`, a Flow-against-itself comparison. Refresh it from a CI artifact rather than from a developer machine, or the gate will read a fast laptop as the standard and fail every CI run.
+Both `KernelSVC_RBF` rows at 1000 samples are in that group for a different reason. They lost consistently, at 0.68x and 0.88x, until a fitted one-vs-one model stopped keeping the whole training set and started keeping its support vectors. They have won every run since, at 1.16x to 1.36x. That is a step change that tracks the commit rather than the runner.
+
+The ten rows at 10000 samples, the only sizes in the matrix large enough to measure without fighting the noise, win in all five runs, from a median 1.15x on RandomForest at 32 features to 8.06x on GaussianNB at 8.
+
+`benchmarks/scaled_flow_baseline.json` is a separate Flow-against-itself gate that does fail the build. Refresh it from a CI artifact rather than from a developer machine, or the gate will read a fast laptop as the standard and fail every CI run.
 
 Detailed artifacts:
 
