@@ -25,10 +25,60 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 HISTORY = ROOT / "benchmarks" / "scaled_ci_history.json"
+BASELINE = ROOT / "benchmarks" / "scaled_flow_baseline.json"
 
 
 def row_key(row: dict) -> str:
     return f"{row['algorithm']}/{row['rows']}x{row['features']}"
+
+
+def load_flow(path: Path) -> dict[str, dict]:
+    """Flow's own fit/pred milliseconds from a run, for the self-regression gate."""
+    payload = json.loads(path.read_text())
+    return {
+        row_key(r): {"fit_ms": float(r["fit_ms"]), "pred_ms": float(r["pred_ms"])}
+        for r in payload["rows"]
+        if r.get("status") == "ok"
+    }
+
+
+def write_baseline(flow_runs: dict[str, dict[str, dict]], out: Path) -> int:
+    """The slowest observation per row, across every run fed in.
+
+    A regression gate should fire when the code is slower than it has ever
+    legitimately been, and stay quiet when a run is merely unlucky. Built from
+    a single run it does the opposite: RandomForest at 1000 rows and 8 features
+    was measured at 1.50, 1.58, 1.63, 2.31, 2.88 and 3.32 ms on identical code,
+    and a baseline taken from the 1.58 run failed the build on the 2.88 one.
+    Each row here is the slowest observation across the runs fed in.
+    """
+    keys = sorted({k for run in flow_runs.values() for k in run})
+    rows = []
+    for key in keys:
+        seen = [run[key] for run in flow_runs.values() if key in run]
+        algorithm, shape = key.split("/", 1)
+        samples, features = shape.split("x", 1)
+        rows.append(
+            {
+                "implementation": "flow",
+                "algorithm": algorithm,
+                "rows": int(samples),
+                "features": int(features),
+                "fit_ms": max(v["fit_ms"] for v in seen),
+                "pred_ms": max(v["pred_ms"] for v in seen),
+                "runs_observed": len(seen),
+                "timing_unit": "ms",
+                "status": "ok",
+            }
+        )
+    payload = {
+        "schema_version": 2,
+        "source": "slowest observation per row across GitHub Actions runs "
+                  + ", ".join(sorted(flow_runs)),
+        "rows": rows,
+    }
+    out.write_text(json.dumps(payload, indent=2) + "\n")
+    return len(rows)
 
 
 def load_run(path: Path) -> dict[str, float]:
@@ -90,6 +140,13 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("runs", nargs="+", metavar="RUN_ID=PATH")
     ap.add_argument("--out", type=Path, default=HISTORY)
+    ap.add_argument(
+        "--baseline",
+        type=Path,
+        default=None,
+        help="also rewrite the self-regression baseline from the slowest observation per row; "
+             "each RUN_ID=PATH directory must hold scaled_flow.json beside scaled_comparison.json",
+    )
     args = ap.parse_args()
 
     existing: dict[str, dict[str, float]] = {}
@@ -106,11 +163,22 @@ def main() -> int:
         run_id, path = spec.split("=", 1)
         existing[run_id] = load_run(Path(path))
 
+    if args.baseline is not None:
+        flow_runs: dict[str, dict[str, dict]] = {}
+        for spec in args.runs:
+            run_id, path = spec.split("=", 1)
+            flow_path = Path(path).parent / "scaled_flow.json"
+            if not flow_path.exists():
+                raise SystemExit(f"{flow_path} is missing; the baseline needs Flow's own timings")
+            flow_runs[run_id] = load_flow(flow_path)
+        n = write_baseline(flow_runs, args.baseline)
+        print(f"wrote {args.baseline}: {n} rows from {len(flow_runs)} runs")
+
     summary = summarize(existing)
     args.out.write_text(json.dumps(summary, indent=2) + "\n")
     counts = summary["counts"]
     print(
-        f"wrote {args.out.relative_to(ROOT)}: {counts['rows']} rows over {counts['runs']} runs; "
+        f"wrote {args.out}: {counts['rows']} rows over {counts['runs']} runs; "
         f"{counts['rows_won_in_every_run']} won in every run, "
         f"{counts['rows_lost_in_at_least_one_run']} dipped below 1x at least once"
     )

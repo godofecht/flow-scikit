@@ -214,7 +214,16 @@ python benchmarks/summarize_scaled_ci.py <id>=/tmp/<id>/scaled_comparison.json
 
 Runs merge by id, so adding a new one extends the history and re-adding an existing one replaces it.
 
-`scaled_flow_baseline.json` is a different artifact for a different job. It compares Flow against its own earlier CI timings and does fail the build, with a 20% relative tolerance and a 0.25 ms absolute floor. That floor exists because the rows below it are not measurable on a shared runner. Refresh the baseline from a CI artifact; a developer machine's numbers would make a fast laptop the standard CI has to meet.
+`scaled_flow_baseline.json` is a different artifact for a different job. It compares Flow against its own earlier CI timings and does fail the build, with a 20% relative tolerance and a 0.25 ms absolute floor.
+
+Each of its rows is the slowest observation across the runs it was built from, so the gate fires when the code is slower than it has ever legitimately been and stays quiet when a run is merely unlucky. Taken from one run it does the opposite: RandomForest at 1000 rows and 8 features has been measured at 1.50, 1.58, 1.63, 2.31, 2.88 and 3.32 ms on identical code, and a baseline taken from the 1.58 run failed the build on the 2.88 one. Rebuild it with the same script:
+
+```
+python benchmarks/summarize_scaled_ci.py --baseline benchmarks/scaled_flow_baseline.json \
+  <id>=/tmp/<id>/scaled_comparison.json ...
+```
+
+Each run directory needs `scaled_flow.json` beside `scaled_comparison.json`. Build it from CI artifacts; a developer machine's numbers would make a fast laptop the standard CI has to meet.
 
 ## Pages publication
 
