@@ -187,7 +187,17 @@ export function _solve_f64(A: ptr<f64>, b: ptr<f64>, n: i32) -> void {
 #
 # On a full-rank design the relative cutoff is never reached, so the arithmetic
 # is untouched: same reflectors, same order, same divisions.
+# X is m rows by n columns, row-major, and y must have room for max(m, n)
+# entries because the solution is read back from y[0..n-1].
+#
+# A design with fewer rows than columns has at most m pivots, and the
+# coordinates past that are not determined by the data. Every sweep below runs
+# to `rank` rather than to n for that reason: reading to n walked off the end
+# of both X and y, which RANSAC reached by fitting 5 sampled rows against the
+# 10 features of diabetes. AddressSanitizer caught it there.
 export function _solve_lstsq_qr(X: ptr<f64>, y: ptr<f64>, m: i32, n: i32) -> void {
+    let mut rank: i32 = n
+    if m < n { rank = m }
     let dots: ptr<f64> = array_new_f64(n)
 
     # Apply n Householder transformations to reduce X to upper triangular
@@ -234,7 +244,7 @@ export function _solve_lstsq_qr(X: ptr<f64>, y: ptr<f64>, m: i32, n: i32) -> voi
     # Rank cutoff, relative to the largest pivot and floored at the old
     # absolute value so it can never be looser than the code it replaces.
     let mut maxdiag: f64 = 0.0
-    for d in 0 to n {
+    for d in 0 to rank {
         let dd: f64 = fabs(X[d * n + d])
         if dd > maxdiag { maxdiag = dd }
     }
@@ -244,7 +254,14 @@ export function _solve_lstsq_qr(X: ptr<f64>, y: ptr<f64>, m: i32, n: i32) -> voi
     # Back-substitution: R * w = y(0..n-1). A coordinate whose pivot is below
     # tol is set to zero, which drops its column out of every sum above it and
     # leaves the reduced problem to the surviving pivots.
-    let mut i: i32 = n - 1
+    # Coordinates with no pivot are undetermined, so they are zero here and
+    # drop out of the sums for the pivots above them.
+    let mut z: i32 = rank
+    while z < n {
+        y[z] = 0.0
+        z = z + 1
+    }
+    let mut i: i32 = rank - 1
     while i >= 0 {
         let mut s: f64 = y[i]
         let mut j: i32 = i + 1
@@ -412,7 +429,11 @@ export function linear_regression_fit(X: Matrix, y: ptr<f32>, penalty: Penalty) 
     let qr_work: i64 = (m as i64) * (n as i64) * (n as i64)
 
     let Xc: ptr<f64> = malloc((m as i64) * (n as i64) * 8) as ptr<f64>
-    let yc: ptr<f64> = array_new_f64(m)
+    # The solution comes back in yc[0..n-1], so it needs room for n even when
+    # the design has fewer rows than that.
+    let mut yc_len: i32 = m
+    if n > yc_len { yc_len = n }
+    let yc: ptr<f64> = array_new_f64(yc_len)
     let w_out: ptr<f64> = array_new_f64(n)
     for i in 0 to m {
         yc[i] = (y[i] as f64) - y_mean
@@ -753,7 +774,10 @@ export function ols_inference_fit(model: LinearRegression, X: Matrix, y: ptr<f32
     }
 
     let Xc: ptr<f64> = malloc((m as i64) * (n as i64) * 8 + 128) as ptr<f64>
-    let yc: ptr<f64> = array_new_f64(m + 8)
+    # Same reason as the fit: the solution is read back from yc[0..n-1].
+    let mut yc_len2: i32 = m + 8
+    if n > yc_len2 { yc_len2 = n }
+    let yc: ptr<f64> = array_new_f64(yc_len2)
     for i in 0 to m {
         yc[i] = (y[i] as f64) - y_mean
         let base: i32 = i * n
@@ -767,8 +791,10 @@ export function ols_inference_fit(model: LinearRegression, X: Matrix, y: ptr<f32
     # the model's own coefficients are.
     _solve_lstsq_qr(Xc, yc, m, n)
 
+    let mut piv: i32 = n
+    if m < piv { piv = m }
     let mut maxdiag: f64 = 0.0
-    for j in 0 to n {
+    for j in 0 to piv {
         let dj: f64 = fabs(Xc[j * n + j])
         if dj > maxdiag { maxdiag = dj }
     }
