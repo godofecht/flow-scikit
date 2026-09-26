@@ -195,9 +195,35 @@ The main generated views are:
 
 A speedup is `sklearn_ms / flow_ms`. Values above `1x` mean Flow is faster; values below `1x` mean scikit-learn is faster.
 
-The current architecture map shows a useful but non-causal pattern: Flow wins every headline row in all three substrate classes, and the margin varies with the class, from a mean of 26.55x on Python-bound rows down to 3.79x on external-native-bound ones. That ordering is evidence for prioritization. It is not proof that execution substrate alone determines performance.
+The current architecture map shows a useful but non-causal pattern: Flow wins every headline row in all three substrate classes, and the margin varies with the class, from a mean of 19.04x on Python-bound rows down to 4.29x on external-native-bound ones. That ordering is evidence for prioritization. It is not proof that execution substrate alone determines performance.
 
 Mature BLAS/LAPACK, liblinear, libsvm and other native backends are treated as native competitors. The optimization roadmap deliberately prefers retaining those kernels unless benchmark and parity evidence justify replacement.
+
+## Scaled matrix
+
+The canonical rows run on iris, digits and diabetes and stop at 1797 samples. `bench_scaled.flow` and `bench_scaled_sklearn.py` run five estimators at 100, 1000 and 10000 rows against 8 and 32 features. CI runs both sides every push and reports the comparison without gating the build.
+
+One run does not settle a row. At 100 and 1000 samples a fit finishes in well under a millisecond, and the runner moves that by more than the Flow-versus-sklearn difference: Lasso at 1000 rows and 32 features was recorded at 3.83x on one run and 0.92x on another, on code that differs in nothing touching Lasso.
+
+So the published claim is the spread. [`summarize_scaled_ci.py`](summarize_scaled_ci.py) folds each run's `scaled_comparison.json` into `scaled_ci_history.json`, which records every observation per row along with its minimum, median and maximum:
+
+```
+gh run download <id> -n scaled-benchmark-<id> -D /tmp/<id>
+python benchmarks/summarize_scaled_ci.py <id>=/tmp/<id>/scaled_comparison.json
+```
+
+Runs merge by id, so adding a new one extends the history and re-adding an existing one replaces it.
+
+`scaled_flow_baseline.json` is a different artifact for a different job. It compares Flow against its own earlier CI timings and does fail the build, with a 20% relative tolerance and a 0.25 ms absolute floor.
+
+Each of its rows is the slowest observation across the runs it was built from, so the gate fires when the code is slower than it has ever legitimately been and stays quiet when a run is merely unlucky. Taken from one run it does the opposite: RandomForest at 1000 rows and 8 features has been measured at 1.50, 1.58, 1.63, 2.31, 2.88 and 3.32 ms on identical code, and a baseline taken from the 1.58 run failed the build on the 2.88 one. Rebuild it with the same script:
+
+```
+python benchmarks/summarize_scaled_ci.py --baseline benchmarks/scaled_flow_baseline.json \
+  <id>=/tmp/<id>/scaled_comparison.json ...
+```
+
+Each run directory needs `scaled_flow.json` beside `scaled_comparison.json`. Build it from CI artifacts; a developer machine's numbers would make a fast laptop the standard CI has to meet.
 
 ## Pages publication
 

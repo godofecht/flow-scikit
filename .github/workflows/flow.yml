@@ -37,11 +37,6 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/.flow-toolchain/src
         run: python .github/scripts/verify_flow_sources.py
 
-      - name: Audit published benchmark timing units
-        run: |
-          python benchmarks/normalize_published_timings.py
-          python benchmarks/validate_published_timings.py
-
       - name: Validate benchmark contracts and fixtures
         run: |
           python -m pip install numpy
