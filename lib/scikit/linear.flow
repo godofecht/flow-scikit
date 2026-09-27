@@ -5096,85 +5096,155 @@ export struct RidgeCV {
     fitted: bool
 }
 
+# One Gram matrix, many alphas.
+#
+# ridge_fit rebuilds XtX and Xty from the design on every call, which is the
+# whole cost of a ridge solve at these shapes. Neither depends on alpha, so a
+# cross-validation that sweeps a grid was doing that work once per alpha when
+# once per fold is enough. This builds the two of them, and _ridge_solve_gram
+# below turns a copy plus one alpha into coefficients.
+function _ridge_gram(X: Matrix, y: ptr<f32>, XtX: ptr<f64>, Xty: ptr<f64>, x_mean: ptr<f64>) -> f64 {
+    let n: i32 = X.cols
+    let m: i32 = X.rows
+    let xdata: ptr<f32> = X.data
+
+    let mut y_mean: f64 = 0.0
+    for j in 0 to n { x_mean[j] = 0.0 }
+    for i in 0 to m {
+        y_mean = y_mean + (y[i] as f64)
+        let base: i32 = i * n
+        for j in 0 to n {
+            x_mean[j] = x_mean[j] + (xdata[base + j] as f64)
+        }
+    }
+    y_mean = y_mean / (m as f64)
+    for j in 0 to n { x_mean[j] = x_mean[j] / (m as f64) }
+
+    for j in 0 to n * n { XtX[j] = 0.0 }
+    for j in 0 to n { Xty[j] = 0.0 }
+
+    let xrow: ptr<f64> = array_new_f64(n)
+    for i in 0 to m {
+        let base: i32 = i * n
+        for j in 0 to n {
+            xrow[j] = (xdata[base + j] as f64) - x_mean[j]
+        }
+        let yi: f64 = (y[i] as f64) - y_mean
+        for j in 0 to n {
+            Xty[j] = Xty[j] + xrow[j] * yi
+        }
+        blas_ger_ld_f64(XtX, n, n, n, xrow, 1, xrow, 1.0)
+    }
+    array_free_f64(xrow)
+    return y_mean
+}
+
+# Solves (XtX + alpha I) w = Xty without disturbing either input, so the same
+# Gram matrix serves every alpha on the grid.
+function _ridge_solve_gram(XtX: ptr<f64>, Xty: ptr<f64>, x_mean: ptr<f64>, y_mean: f64,
+                           n: i32, alpha: f32, weights: ptr<f32>) -> f32 {
+    let A: ptr<f64> = array_new_f64(n * n)
+    let rhs: ptr<f64> = array_new_f64(n)
+    for j in 0 to n * n { A[j] = XtX[j] }
+    for j in 0 to n { rhs[j] = Xty[j] }
+    let alpha_d: f64 = alpha as f64
+    for j in 0 to n {
+        A[j * n + j] = A[j * n + j] + alpha_d
+    }
+    _solve_f64(A, rhs, n)
+
+    let mut bias_d: f64 = y_mean
+    for j in 0 to n {
+        bias_d = bias_d - x_mean[j] * rhs[j]
+        weights[j] = rhs[j] as f32
+    }
+    array_free_f64(A)
+    array_free_f64(rhs)
+    return bias_d as f32
+}
+
+# The fold loop is outside the alpha loop, so each fold's training matrix is
+# built once rather than once per alpha. The old order rebuilt it n_alphas
+# times over, copying every element through matrix_at and matrix_set, which
+# each copy the Matrix struct by value. On ten alphas that is nine tenths of
+# the copying thrown away.
 export function ridge_cv_fit(X: Matrix, y: ptr<f32>, n_alphas: i32) -> RidgeCV {
     let n: i32 = X.rows
     let n_features: i32 = X.cols
+    let xdata: ptr<f32> = X.data
 
-    # Generate alpha grid (logspace from 0.001 to 10)
     let alphas: ptr<f32> = array_new_f32(n_alphas)
-    let mut i: i32 = 0
-    while i < n_alphas {
+    for i in 0 to n_alphas {
         let t: f32 = (i as f32) / ((n_alphas - 1) as f32)
         alphas[i] = 0.001 * pow(10.0 as f64, (t * 4.0) as f64) as f32
-        i = i + 1
     }
 
-    # Try each alpha, compute 5-fold CV MSE
-    let mut best_alpha: f32 = alphas[0]
-    let mut best_mse: f32 = 999999.0
+    # Squared error per alpha, summed over folds.
+    let sse: ptr<f32> = array_new_f32(n_alphas)
     let fold_size: i32 = n / 5
 
-    let mut a_idx: i32 = 0
-    while a_idx < n_alphas {
-        let alpha: f32 = alphas[a_idx]
-        let mut total_mse: f32 = 0.0
-        let mut fold: i32 = 0
-        while fold < 5 {
-            let test_start: i32 = fold * fold_size
-            let test_end: i32 = test_start + fold_size
-            if fold == 4 { test_end = n }
-            let n_train: i32 = n - (test_end - test_start)
+    for fold in 0 to 5 {
+        let test_start: i32 = fold * fold_size
+        let mut test_end: i32 = test_start + fold_size
+        if fold == 4 { test_end = n }
+        let n_test: i32 = test_end - test_start
+        let n_train: i32 = n - n_test
 
-            let X_train: Matrix = matrix_new(n_train, n_features)
-            let y_train: ptr<f32> = array_new_f32(n_train)
-            let mut idx: i32 = 0
-            let mut j: i32 = 0
-            while j < n {
-                if j < test_start || j >= test_end {
-                    let mut k: i32 = 0
-                    while k < n_features {
-                        matrix_set(X_train, idx, k, matrix_at(X, j, k))
-                        k = k + 1
-                    }
-                    y_train[idx] = y[j]
-                    idx = idx + 1
-                }
-                j = j + 1
+        let X_train: Matrix = matrix_new(n_train, n_features)
+        let y_train: ptr<f32> = array_new_f32(n_train)
+        let train_data: ptr<f32> = X_train.data
+        let mut idx: i32 = 0
+        for j in 0 to n {
+            if j < test_start || j >= test_end {
+                let src: ptr<f32> = xdata + j * n_features
+                let dst: ptr<f32> = train_data + idx * n_features
+                for k in 0 to n_features { dst[k] = src[k] }
+                y_train[idx] = y[j]
+                idx = idx + 1
             }
+        }
 
-            let model: Ridge = ridge_fit(X_train, y_train, alpha, 1000, 0.01)
+        # One Gram matrix for the whole alpha grid on this fold.
+        let XtX: ptr<f64> = array_new_f64(n_features * n_features)
+        let Xty: ptr<f64> = array_new_f64(n_features)
+        let x_mean: ptr<f64> = array_new_f64(n_features)
+        let y_mean: f64 = _ridge_gram(X_train, y_train, XtX, Xty, x_mean)
+        let w: ptr<f32> = array_new_f32(n_features)
 
+        for a_idx in 0 to n_alphas {
+            let bias: f32 = _ridge_solve_gram(XtX, Xty, x_mean, y_mean, n_features, alphas[a_idx], w)
             let mut fold_mse: f32 = 0.0
-            let n_test: i32 = test_end - test_start
-            let mut t2: i32 = test_start
-            while t2 < test_end {
-                let mut pred: f32 = model.bias
-                let mut k2: i32 = 0
-                while k2 < n_features {
-                    pred = pred + model.weights[k2] * matrix_at(X, t2, k2)
-                    k2 = k2 + 1
+            for t2 in test_start to test_end {
+                let trow: ptr<f32> = xdata + t2 * n_features
+                let mut pred: f32 = bias
+                for k2 in 0 to n_features {
+                    pred = pred + w[k2] * trow[k2]
                 }
                 let diff: f32 = y[t2] - pred
                 fold_mse = fold_mse + diff * diff
-                t2 = t2 + 1
             }
-            total_mse = total_mse + fold_mse / (n_test as f32)
-
-            ridge_free(model)
-            matrix_free(X_train)
-            array_free_f32(y_train)
-            fold = fold + 1
+            sse[a_idx] = sse[a_idx] + fold_mse / (n_test as f32)
         }
 
-        let avg_mse: f32 = total_mse / 5.0
-        if avg_mse < best_mse {
-            best_mse = avg_mse
-            best_alpha = alpha
-        }
-        a_idx = a_idx + 1
+        array_free_f32(w)
+        array_free_f64(XtX)
+        array_free_f64(Xty)
+        array_free_f64(x_mean)
+        matrix_free(X_train)
+        array_free_f32(y_train)
     }
 
-    # Refit with best alpha on all data
+    let mut best_alpha: f32 = alphas[0]
+    let mut best_mse: f32 = 999999.0
+    for a_idx in 0 to n_alphas {
+        let avg_mse: f32 = sse[a_idx] / 5.0
+        if avg_mse < best_mse {
+            best_mse = avg_mse
+            best_alpha = alphas[a_idx]
+        }
+    }
+    array_free_f32(sse)
+
     let best_model: Ridge = ridge_fit(X, y, best_alpha, 1000, 0.01)
     let coef_copy: ptr<f32> = array_copy_f32(best_model.weights, n_features)
     let intercept_copy: f32 = best_model.bias
@@ -5478,84 +5548,85 @@ export struct RidgeClassifierCV {
     fitted: bool
 }
 
+# Same restructuring as ridge_cv_fit: the fold loop is outside the alpha loop
+# so each training matrix is built once, and the Gram matrix each fold shares
+# across the whole grid is built once rather than once per alpha.
 export function ridge_classifier_cv_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_alphas: i32) -> RidgeClassifierCV {
     let n: i32 = X.rows
     let n_features: i32 = X.cols
+    let xdata: ptr<f32> = X.data
 
     let alphas: ptr<f32> = array_new_f32(n_alphas)
-    let mut i: i32 = 0
-    while i < n_alphas {
+    for i in 0 to n_alphas {
         let t: f32 = (i as f32) / ((n_alphas - 1) as f32)
         alphas[i] = 0.001 * pow(10.0 as f64, (t * 4.0) as f64) as f32
-        i = i + 1
+    }
+
+    let acc_sum: ptr<f32> = array_new_f32(n_alphas)
+    let fold_size: i32 = n / 5
+
+    for fold in 0 to 5 {
+        let test_start: i32 = fold * fold_size
+        let mut test_end: i32 = test_start + fold_size
+        if fold == 4 { test_end = n }
+        let n_test: i32 = test_end - test_start
+        let n_train: i32 = n - n_test
+
+        let X_train: Matrix = matrix_new(n_train, n_features)
+        let y_train: ptr<f32> = array_new_f32(n_train)
+        let train_data: ptr<f32> = X_train.data
+        let mut idx: i32 = 0
+        for j in 0 to n {
+            if j < test_start || j >= test_end {
+                let src: ptr<f32> = xdata + j * n_features
+                let dst: ptr<f32> = train_data + idx * n_features
+                for k in 0 to n_features { dst[k] = src[k] }
+                y_train[idx] = y[j]
+                idx = idx + 1
+            }
+        }
+
+        let XtX: ptr<f64> = array_new_f64(n_features * n_features)
+        let Xty: ptr<f64> = array_new_f64(n_features)
+        let x_mean: ptr<f64> = array_new_f64(n_features)
+        let y_mean: f64 = _ridge_gram(X_train, y_train, XtX, Xty, x_mean)
+        let w: ptr<f32> = array_new_f32(n_features)
+
+        for a_idx in 0 to n_alphas {
+            let bias: f32 = _ridge_solve_gram(XtX, Xty, x_mean, y_mean, n_features, alphas[a_idx], w)
+            let mut correct: i32 = 0
+            for t2 in test_start to test_end {
+                let trow: ptr<f32> = xdata + t2 * n_features
+                let mut pred_val: f32 = bias
+                for k2 in 0 to n_features {
+                    pred_val = pred_val + w[k2] * trow[k2]
+                }
+                let mut pred_cls: f32 = 0.0
+                if pred_val > 0.5 { pred_cls = 1.0 }
+                if pred_val > 1.5 { pred_cls = 2.0 }
+                if y[t2] == pred_cls { correct = correct + 1 }
+            }
+            acc_sum[a_idx] = acc_sum[a_idx] + (correct as f32) / (n_test as f32)
+        }
+
+        array_free_f32(w)
+        array_free_f64(XtX)
+        array_free_f64(Xty)
+        array_free_f64(x_mean)
+        matrix_free(X_train)
+        array_free_f32(y_train)
     }
 
     let mut best_alpha: f32 = alphas[0]
     let mut best_acc: f32 = -1.0
-    let fold_size: i32 = n / 5
-
-    let mut a_idx: i32 = 0
-    while a_idx < n_alphas {
-        let alpha: f32 = alphas[a_idx]
-        let mut total_acc: f32 = 0.0
-        let mut fold: i32 = 0
-        while fold < 5 {
-            let test_start: i32 = fold * fold_size
-            let test_end: i32 = test_start + fold_size
-            if fold == 4 { test_end = n }
-            let n_train: i32 = n - (test_end - test_start)
-
-            let X_train: Matrix = matrix_new(n_train, n_features)
-            let y_train: ptr<f32> = array_new_f32(n_train)
-            let mut idx: i32 = 0
-            let mut j: i32 = 0
-            while j < n {
-                if j < test_start || j >= test_end {
-                    let mut k: i32 = 0
-                    while k < n_features {
-                        matrix_set(X_train, idx, k, matrix_at(X, j, k))
-                        k = k + 1
-                    }
-                    y_train[idx] = y[j]
-                    idx = idx + 1
-                }
-                j = j + 1
-            }
-
-            let model: RidgeClassifier = ridge_classifier_fit(X_train, y_train, alpha, 1000, 0.01)
-
-            let mut correct: i32 = 0
-            let mut t2: i32 = test_start
-            while t2 < test_end {
-                let mut pred_val: f32 = model.bias
-                let mut k2: i32 = 0
-                while k2 < n_features {
-                    pred_val = pred_val + model.weights[k2] * matrix_at(X, t2, k2)
-                    k2 = k2 + 1
-                }
-                let pred_cls: f32 = 0.0
-                if pred_val > 0.5 { pred_cls = 1.0 }
-                if pred_val > 1.5 { pred_cls = 2.0 }
-                if y[t2] == pred_cls {
-                    correct = correct + 1
-                }
-                t2 = t2 + 1
-            }
-            total_acc = total_acc + (correct as f32) / ((test_end - test_start) as f32)
-
-            ridge_classifier_free(model)
-            matrix_free(X_train)
-            array_free_f32(y_train)
-            fold = fold + 1
-        }
-
-        let avg_acc: f32 = total_acc / 5.0
+    for a_idx in 0 to n_alphas {
+        let avg_acc: f32 = acc_sum[a_idx] / 5.0
         if avg_acc > best_acc {
             best_acc = avg_acc
-            best_alpha = alpha
+            best_alpha = alphas[a_idx]
         }
-        a_idx = a_idx + 1
     }
+    array_free_f32(acc_sum)
 
     # Refit with best alpha
     let best_model: RidgeClassifier = ridge_classifier_fit(X, y, best_alpha, 1000, 0.01)
