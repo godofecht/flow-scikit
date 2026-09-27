@@ -68,136 +68,300 @@ function main() -> i32 {
     let mut t0: i64 = 0
     let mut t1: i64 = 0
     let mut t2: i64 = 0
+    let mut t3: i64 = 0
+    let mut reps: i32 = 1
 
     # ---- spline_transformer (unsupervised) ----
     t0 = flow_now_ns()
-    let m_spline_transformer: SplineTransformer = spline_transformer_fit(X_c, 4, 2)
+    let probe_spline_transformer: SplineTransformer = spline_transformer_fit(X_c, 4, 2)
     t1 = flow_now_ns()
-    let o_spline_transformer: Matrix = spline_transformer_transform(m_spline_transformer, X_c)
+    spline_transformer_free(probe_spline_transformer)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_spline_transformer: SplineTransformer = spline_transformer_fit(X_c, 4, 2)
+        spline_transformer_free(m_spline_transformer)
+    }
+    t1 = flow_now_ns()
+    let fitted_spline_transformer: SplineTransformer = spline_transformer_fit(X_c, 4, 2)
     t2 = flow_now_ns()
-    matrix_free(o_spline_transformer)
-    printf("ESTIMATOR|spline_transformer|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_spline_transformer: Matrix = spline_transformer_transform(fitted_spline_transformer, X_c)
+        matrix_free(o_spline_transformer)
+    }
+    t3 = flow_now_ns()
+    spline_transformer_free(fitted_spline_transformer)
+    printf("ESTIMATOR|spline_transformer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    spline_transformer_free(m_spline_transformer)
 
     # ---- stacking_regressor (regression) ----
     t0 = flow_now_ns()
-    let m_stacking_regressor: StackingRegressor = stacking_regressor_fit(X_r, y_r, 3, 5, 42)
+    let probe_stacking_regressor: StackingRegressor = stacking_regressor_fit(X_r, y_r, 3, 5, 42)
     t1 = flow_now_ns()
-    let o_stacking_regressor: ptr<f32> = stacking_regressor_predict(m_stacking_regressor, X_r)
+    stacking_regressor_free(probe_stacking_regressor)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_stacking_regressor: StackingRegressor = stacking_regressor_fit(X_r, y_r, 3, 5, 42)
+        stacking_regressor_free(m_stacking_regressor)
+    }
+    t1 = flow_now_ns()
+    let fitted_stacking_regressor: StackingRegressor = stacking_regressor_fit(X_r, y_r, 3, 5, 42)
     t2 = flow_now_ns()
-    array_free_f32(o_stacking_regressor)
-    printf("ESTIMATOR|stacking_regressor|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_stacking_regressor: ptr<f32> = stacking_regressor_predict(fitted_stacking_regressor, X_r)
+        array_free_f32(o_stacking_regressor)
+    }
+    t3 = flow_now_ns()
+    stacking_regressor_free(fitted_stacking_regressor)
+    printf("ESTIMATOR|stacking_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    stacking_regressor_free(m_stacking_regressor)
 
     # ---- standard_scaler (unsupervised) ----
     t0 = flow_now_ns()
-    let m_standard_scaler: StandardScaler = standard_scaler_fit(X_c)
+    let probe_standard_scaler: StandardScaler = standard_scaler_fit(X_c)
     t1 = flow_now_ns()
-    let o_standard_scaler: Matrix = standard_scaler_transform(m_standard_scaler, X_c)
+    standard_scaler_free(probe_standard_scaler)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_standard_scaler: StandardScaler = standard_scaler_fit(X_c)
+        standard_scaler_free(m_standard_scaler)
+    }
+    t1 = flow_now_ns()
+    let fitted_standard_scaler: StandardScaler = standard_scaler_fit(X_c)
     t2 = flow_now_ns()
-    matrix_free(o_standard_scaler)
-    printf("ESTIMATOR|standard_scaler|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_standard_scaler: Matrix = standard_scaler_transform(fitted_standard_scaler, X_c)
+        matrix_free(o_standard_scaler)
+    }
+    t3 = flow_now_ns()
+    standard_scaler_free(fitted_standard_scaler)
+    printf("ESTIMATOR|standard_scaler|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    standard_scaler_free(m_standard_scaler)
 
     # ---- svc (classification) ----
     t0 = flow_now_ns()
-    let m_svc: SVC = svc_fit(X_c, y_c, 3, 1.0, 0, 0.1, 2, 0.0)
+    let probe_svc: SVC = svc_fit(X_c, y_c, 3, 1.0, 0, 0.1, 2, 0.0)
     t1 = flow_now_ns()
-    let o_svc: ptr<f32> = svc_predict(m_svc, X_c)
+    svc_free(probe_svc)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_svc: SVC = svc_fit(X_c, y_c, 3, 1.0, 0, 0.1, 2, 0.0)
+        svc_free(m_svc)
+    }
+    t1 = flow_now_ns()
+    let fitted_svc: SVC = svc_fit(X_c, y_c, 3, 1.0, 0, 0.1, 2, 0.0)
     t2 = flow_now_ns()
-    array_free_f32(o_svc)
-    printf("ESTIMATOR|svc|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_svc: ptr<f32> = svc_predict(fitted_svc, X_c)
+        array_free_f32(o_svc)
+    }
+    t3 = flow_now_ns()
+    svc_free(fitted_svc)
+    printf("ESTIMATOR|svc|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    svc_free(m_svc)
 
     # ---- svr (regression) ----
     t0 = flow_now_ns()
-    let m_svr: SVR = svr_fit(X_r, y_r, 1.0, 0.1, 0, 0.1, 2, 0.0)
+    let probe_svr: SVR = svr_fit(X_r, y_r, 1.0, 0.1, 0, 0.1, 2, 0.0)
     t1 = flow_now_ns()
-    let o_svr: ptr<f32> = svr_predict(m_svr, X_r)
+    svr_free(probe_svr)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_svr: SVR = svr_fit(X_r, y_r, 1.0, 0.1, 0, 0.1, 2, 0.0)
+        svr_free(m_svr)
+    }
+    t1 = flow_now_ns()
+    let fitted_svr: SVR = svr_fit(X_r, y_r, 1.0, 0.1, 0, 0.1, 2, 0.0)
     t2 = flow_now_ns()
-    array_free_f32(o_svr)
-    printf("ESTIMATOR|svr|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_svr: ptr<f32> = svr_predict(fitted_svr, X_r)
+        array_free_f32(o_svr)
+    }
+    t3 = flow_now_ns()
+    svr_free(fitted_svr)
+    printf("ESTIMATOR|svr|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    svr_free(m_svr)
 
     # ---- target_encoder (regression) ----
     t0 = flow_now_ns()
-    let m_target_encoder: TargetEncoder = target_encoder_fit(X_r, y_r, n_r, 1.0)
+    let probe_target_encoder: TargetEncoder = target_encoder_fit(X_r, y_r, n_r, 1.0)
     t1 = flow_now_ns()
-    let o_target_encoder: Matrix = target_encoder_transform(m_target_encoder, X_r)
+    target_encoder_free(probe_target_encoder)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_target_encoder: TargetEncoder = target_encoder_fit(X_r, y_r, n_r, 1.0)
+        target_encoder_free(m_target_encoder)
+    }
+    t1 = flow_now_ns()
+    let fitted_target_encoder: TargetEncoder = target_encoder_fit(X_r, y_r, n_r, 1.0)
     t2 = flow_now_ns()
-    matrix_free(o_target_encoder)
-    printf("ESTIMATOR|target_encoder|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_target_encoder: Matrix = target_encoder_transform(fitted_target_encoder, X_r)
+        matrix_free(o_target_encoder)
+    }
+    t3 = flow_now_ns()
+    target_encoder_free(fitted_target_encoder)
+    printf("ESTIMATOR|target_encoder|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    target_encoder_free(m_target_encoder)
 
     # ---- theil_sen_regressor (regression) ----
     t0 = flow_now_ns()
-    let m_theil_sen_regressor: TheilSenRegressor = theil_sen_regressor_fit(X_r, y_r, 10, 100, 42)
+    let probe_theil_sen_regressor: TheilSenRegressor = theil_sen_regressor_fit(X_r, y_r, 10, 100, 42)
     t1 = flow_now_ns()
-    let o_theil_sen_regressor: ptr<f32> = theil_sen_regressor_predict(m_theil_sen_regressor, X_r)
+    theil_sen_regressor_free(probe_theil_sen_regressor)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_theil_sen_regressor: TheilSenRegressor = theil_sen_regressor_fit(X_r, y_r, 10, 100, 42)
+        theil_sen_regressor_free(m_theil_sen_regressor)
+    }
+    t1 = flow_now_ns()
+    let fitted_theil_sen_regressor: TheilSenRegressor = theil_sen_regressor_fit(X_r, y_r, 10, 100, 42)
     t2 = flow_now_ns()
-    array_free_f32(o_theil_sen_regressor)
-    printf("ESTIMATOR|theil_sen_regressor|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_theil_sen_regressor: ptr<f32> = theil_sen_regressor_predict(fitted_theil_sen_regressor, X_r)
+        array_free_f32(o_theil_sen_regressor)
+    }
+    t3 = flow_now_ns()
+    theil_sen_regressor_free(fitted_theil_sen_regressor)
+    printf("ESTIMATOR|theil_sen_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    theil_sen_regressor_free(m_theil_sen_regressor)
 
     # ---- transformed_target_regressor (regression) ----
     t0 = flow_now_ns()
-    let m_transformed_target_regressor: TransformedTargetRegressor = transformed_target_regressor_fit(X_r, y_r, 0)
+    let probe_transformed_target_regressor: TransformedTargetRegressor = transformed_target_regressor_fit(X_r, y_r, 0)
     t1 = flow_now_ns()
-    let o_transformed_target_regressor: ptr<f32> = transformed_target_regressor_predict(m_transformed_target_regressor, X_r)
+    transformed_target_regressor_free(probe_transformed_target_regressor)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_transformed_target_regressor: TransformedTargetRegressor = transformed_target_regressor_fit(X_r, y_r, 0)
+        transformed_target_regressor_free(m_transformed_target_regressor)
+    }
+    t1 = flow_now_ns()
+    let fitted_transformed_target_regressor: TransformedTargetRegressor = transformed_target_regressor_fit(X_r, y_r, 0)
     t2 = flow_now_ns()
-    array_free_f32(o_transformed_target_regressor)
-    printf("ESTIMATOR|transformed_target_regressor|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_transformed_target_regressor: ptr<f32> = transformed_target_regressor_predict(fitted_transformed_target_regressor, X_r)
+        array_free_f32(o_transformed_target_regressor)
+    }
+    t3 = flow_now_ns()
+    transformed_target_regressor_free(fitted_transformed_target_regressor)
+    printf("ESTIMATOR|transformed_target_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    transformed_target_regressor_free(m_transformed_target_regressor)
 
     # ---- truncated_svd (unsupervised) ----
     t0 = flow_now_ns()
-    let m_truncated_svd: TruncatedSVD = truncated_svd_fit(X_c, 2)
+    let probe_truncated_svd: TruncatedSVD = truncated_svd_fit(X_c, 2)
     t1 = flow_now_ns()
-    let o_truncated_svd: Matrix = truncated_svd_transform(m_truncated_svd, X_c)
+    truncated_svd_free(probe_truncated_svd)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_truncated_svd: TruncatedSVD = truncated_svd_fit(X_c, 2)
+        truncated_svd_free(m_truncated_svd)
+    }
+    t1 = flow_now_ns()
+    let fitted_truncated_svd: TruncatedSVD = truncated_svd_fit(X_c, 2)
     t2 = flow_now_ns()
-    matrix_free(o_truncated_svd)
-    printf("ESTIMATOR|truncated_svd|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_truncated_svd: Matrix = truncated_svd_transform(fitted_truncated_svd, X_c)
+        matrix_free(o_truncated_svd)
+    }
+    t3 = flow_now_ns()
+    truncated_svd_free(fitted_truncated_svd)
+    printf("ESTIMATOR|truncated_svd|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    truncated_svd_free(m_truncated_svd)
 
     # ---- tsne (unsupervised) ----
     t0 = flow_now_ns()
-    let m_tsne: TSNE = tsne_fit(X_c, 2, 5.0, 0.1, 50, 42)
+    let probe_tsne: TSNE = tsne_fit(X_c, 2, 5.0, 0.1, 50, 42)
     t1 = flow_now_ns()
-    t2 = t1
-    printf("ESTIMATOR|tsne|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    tsne_free(probe_tsne)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_tsne: TSNE = tsne_fit(X_c, 2, 5.0, 0.1, 50, 42)
+        tsne_free(m_tsne)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|tsne|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
     fflush(null)
-    tsne_free(m_tsne)
 
     # ---- tweedie_regressor (regression) ----
     t0 = flow_now_ns()
-    let m_tweedie_regressor: TweedieRegressor = tweedie_regressor_fit(X_r, y_r, 1.0, 1.5, 100, 0.01)
+    let probe_tweedie_regressor: TweedieRegressor = tweedie_regressor_fit(X_r, y_r, 1.0, 1.5, 100, 0.01)
     t1 = flow_now_ns()
-    let o_tweedie_regressor: ptr<f32> = tweedie_regressor_predict(m_tweedie_regressor, X_r)
+    tweedie_regressor_free(probe_tweedie_regressor)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_tweedie_regressor: TweedieRegressor = tweedie_regressor_fit(X_r, y_r, 1.0, 1.5, 100, 0.01)
+        tweedie_regressor_free(m_tweedie_regressor)
+    }
+    t1 = flow_now_ns()
+    let fitted_tweedie_regressor: TweedieRegressor = tweedie_regressor_fit(X_r, y_r, 1.0, 1.5, 100, 0.01)
     t2 = flow_now_ns()
-    array_free_f32(o_tweedie_regressor)
-    printf("ESTIMATOR|tweedie_regressor|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_tweedie_regressor: ptr<f32> = tweedie_regressor_predict(fitted_tweedie_regressor, X_r)
+        array_free_f32(o_tweedie_regressor)
+    }
+    t3 = flow_now_ns()
+    tweedie_regressor_free(fitted_tweedie_regressor)
+    printf("ESTIMATOR|tweedie_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    tweedie_regressor_free(m_tweedie_regressor)
 
     # ---- variance_threshold (unsupervised) ----
     t0 = flow_now_ns()
-    let m_variance_threshold: VarianceThreshold = variance_threshold_fit(X_c, 0.5)
+    let probe_variance_threshold: VarianceThreshold = variance_threshold_fit(X_c, 0.5)
     t1 = flow_now_ns()
-    let o_variance_threshold: Matrix = variance_threshold_transform(m_variance_threshold, X_c)
+    variance_threshold_free(probe_variance_threshold)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_variance_threshold: VarianceThreshold = variance_threshold_fit(X_c, 0.5)
+        variance_threshold_free(m_variance_threshold)
+    }
+    t1 = flow_now_ns()
+    let fitted_variance_threshold: VarianceThreshold = variance_threshold_fit(X_c, 0.5)
     t2 = flow_now_ns()
-    matrix_free(o_variance_threshold)
-    printf("ESTIMATOR|variance_threshold|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_variance_threshold: Matrix = variance_threshold_transform(fitted_variance_threshold, X_c)
+        matrix_free(o_variance_threshold)
+    }
+    t3 = flow_now_ns()
+    variance_threshold_free(fitted_variance_threshold)
+    printf("ESTIMATOR|variance_threshold|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    variance_threshold_free(m_variance_threshold)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }
     free(Y_label_rows as ptr<void>)

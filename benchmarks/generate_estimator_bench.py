@@ -120,40 +120,77 @@ def fit_arguments(entry: dict, kind: str) -> tuple[list[str], list[str]]:
 
 
 def block(entry: dict) -> str:
+    """One estimator: probe, choose a repeat count, then time fit and predict.
+
+    A single shot does not measure an estimator that finishes in microseconds.
+    StandardScaler on 150 rows by 4 came back as 0.001 ms, which is the clock's
+    resolution rather than its cost, and spectral_biclustering produced a
+    23600x ratio out of the same rounding. The probe below picks a repeat count
+    so every estimator is timed over something the clock can see.
+    """
     name = entry["flow_estimator"]
     kind = dataset_kind(entry)
     suffix = SUFFIX[kind]
     pre, args = fit_arguments(entry, kind)
     ret = entry["fit"]["returns"]
-    model = f"m_{name}"
+    call = f"{entry['fit']['name']}({', '.join(args)})"
+    free = entry["companions"].get("free")
+    free_ok = free is not None and len(free["parameters"]) == 1
+
+    comp = entry["companions"].get("predict") or entry["companions"].get("transform")
+    comp_ok = (
+        comp is not None
+        and len(comp["parameters"]) == 2
+        and comp["parameters"][1]["type"] == "Matrix"
+        and comp["returns"] in ("Matrix", "ptr<f32>")
+    )
+
+    def release(var: str, kind_: str) -> str:
+        return "matrix_free(%s)" % var if kind_ == "Matrix" else "array_free_f32(%s)" % var
 
     lines = [f"    # ---- {name} ({kind}) ----"]
     lines += pre
+    # Probe once to size the repeat count, then release it.
     lines.append("    t0 = flow_now_ns()")
-    lines.append(f"    let {model}: {ret} = {entry['fit']['name']}({', '.join(args)})")
+    lines.append(f"    let probe_{name}: {ret} = {call}")
+    lines.append("    t1 = flow_now_ns()")
+    if free_ok:
+        lines.append(f"    {free['name']}(probe_{name})")
+    lines.append("    reps = 1")
+    lines.append("    if (t1 - t0) < 200000 { reps = 200 }")
+    lines.append("    elif (t1 - t0) < 2000000 { reps = 20 }")
+
+    # Timed fit loop.
+    lines.append("    t0 = flow_now_ns()")
+    lines.append("    for rep in 0 to reps {")
+    lines.append(f"        let m_{name}: {ret} = {call}")
+    if free_ok:
+        lines.append(f"        {free['name']}(m_{name})")
+    lines.append("    }")
     lines.append("    t1 = flow_now_ns()")
 
-    comp = entry["companions"].get("predict") or entry["companions"].get("transform")
-    if comp is not None and len(comp["parameters"]) == 2 and comp["parameters"][1]["type"] == "Matrix":
-        out = f"o_{name}"
-        lines.append(f"    let {out}: {comp['returns']} = {comp['name']}({model}, X_{suffix})")
+    # Timed predict loop against one fitted model.
+    if comp_ok:
+        lines.append(f"    let fitted_{name}: {ret} = {call}")
         lines.append("    t2 = flow_now_ns()")
-        if comp["returns"] == "Matrix":
-            lines.append(f"    matrix_free({out})")
-        elif comp["returns"] == "ptr<f32>":
-            lines.append(f"    array_free_f32({out})")
+        lines.append("    for rep2 in 0 to reps {")
+        lines.append(f"        let o_{name}: {comp['returns']} = {comp['name']}(fitted_{name}, X_{suffix})")
+        lines.append("        " + release(f"o_{name}", comp["returns"]))
+        lines.append("    }")
+        lines.append("    t3 = flow_now_ns()")
+        if free_ok:
+            lines.append(f"    {free['name']}(fitted_{name})")
+        pred_expr = "ms_between(t2, t3) / (reps as f32)"
     else:
-        lines.append("    t2 = t1")
+        pred_expr = "0.0"
 
     lines.append(
-        f'    printf("ESTIMATOR|{name}|%.9f|%.9f|ok\\n", ms_between(t0, t1), ms_between(t1, t2))'
+        f'    printf("ESTIMATOR|{name}|%.9f|%.9f|%d|ok\\n", '
+        f"ms_between(t0, t1) / (reps as f32), {pred_expr}, reps)"
     )
     # Without this, one estimator trapping takes the whole file's buffered
     # output with it and the run looks empty rather than partial.
     lines.append("    fflush(null)")
-    free = entry["companions"].get("free")
-    if free is not None and len(free["parameters"]) == 1:
-        lines.append(f"    {free['name']}({model})")
     return "\n".join(lines) + "\n"
 
 
@@ -209,6 +246,8 @@ function main() -> i32 {{
     let mut t0: i64 = 0
     let mut t1: i64 = 0
     let mut t2: i64 = 0
+    let mut t3: i64 = 0
+    let mut reps: i32 = 1
 
 {body}
     for i in 0 to n_c {{ array_free_f32(Y_label_rows[i]) }}

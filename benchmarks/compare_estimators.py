@@ -17,7 +17,11 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-LINE = re.compile(r"^ESTIMATOR\|([a-z_0-9]+)\|([0-9.eE+-]+)\|([0-9.eE+-]+)\|ok$")
+LINE = re.compile(r"^ESTIMATOR\|([a-z_0-9]+)\|([0-9.eE+-]+)\|([0-9.eE+-]+)\|(\d+)\|ok$")
+
+# flow_now_ns resolves to about a microsecond through this harness, so a total
+# at or below this is a rounding artifact rather than a measurement.
+RESOLUTION_MS = 0.00002
 
 
 def parse_flow(path: Path) -> dict[str, dict]:
@@ -26,12 +30,12 @@ def parse_flow(path: Path) -> dict[str, dict]:
         m = LINE.match(line.strip())
         if not m:
             continue
-        name, fit, pred = m.group(1), float(m.group(2)), float(m.group(3))
+        name, fit, pred, reps = m.group(1), float(m.group(2)), float(m.group(3)), int(m.group(4))
         prior = rows.get(name)
         # Repeated runs of the same file: keep the fastest, as every other
         # harness here does.
         if prior is None or fit + pred < prior["fit_ms"] + prior["pred_ms"]:
-            rows[name] = {"fit_ms": fit, "pred_ms": pred}
+            rows[name] = {"fit_ms": fit, "pred_ms": pred, "repeats": reps}
     return rows
 
 
@@ -65,6 +69,22 @@ def main() -> int:
             continue
         flow_ms = f["fit_ms"] + f["pred_ms"]
         sk_ms = s["fit_ms"] + s["pred_ms"]
+        # The harness repeats a fast estimator until the clock can see it, so
+        # this should not trigger any more. It stays as the backstop it always
+        # was: a Flow side at the floor has been rounded rather than measured.
+        if flow_ms <= RESOLUTION_MS:
+            rows.append({
+                "flow_estimator": name,
+                "sklearn_estimator": entry["sklearn_estimator"],
+                "dataset": s["dataset"],
+                "flow_ms": flow_ms,
+                "sklearn_ms": sk_ms,
+                "speedup": None,
+                "timing_unit": "ms",
+                "status": "below_resolution",
+                "reason": f"Flow side at or under {RESOLUTION_MS} ms, which is the clock's floor here",
+            })
+            continue
         rows.append({
             "flow_estimator": name,
             "sklearn_estimator": entry["sklearn_estimator"],
@@ -72,11 +92,13 @@ def main() -> int:
             "flow_ms": flow_ms,
             "sklearn_ms": sk_ms,
             "speedup": (sk_ms / flow_ms) if flow_ms > 0 else None,
+            "flow_repeats": f["repeats"],
             "timing_unit": "ms",
             "status": "ok",
         })
 
     compared = [r for r in rows if r["status"] == "ok" and r["speedup"] is not None]
+    unmeasured = [r for r in rows if r["status"] == "below_resolution"]
     wins = sum(1 for r in compared if r["speedup"] >= 1.0)
     payload = {
         "schema_version": 1,
@@ -90,11 +112,16 @@ def main() -> int:
             "compared": len(compared),
             "flow_wins": wins,
             "sklearn_wins": len(compared) - wins,
+            "below_resolution": len(unmeasured),
         },
         "rows": rows,
     }
     args.output.write_text(json.dumps(payload, indent=2) + "\n")
     print(f"compared {len(compared)} estimators: {wins} Flow wins, {len(compared) - wins} scikit-learn wins")
+    if unmeasured:
+        print(f"{len(unmeasured)} rows left unranked, Flow side under the clock's resolution:")
+        for r in sorted(unmeasured, key=lambda r: r["flow_estimator"]):
+            print(f"  {r['flow_estimator']:32s} flow={r['flow_ms']:.4f} sklearn={r['sklearn_ms']:9.3f}")
     losers = sorted((r for r in compared if r["speedup"] < 1.0), key=lambda r: r["speedup"])
     for r in losers:
         print(f"  {r['speedup']:6.2f}x  {r['flow_estimator']:32s} flow={r['flow_ms']:9.3f} sklearn={r['sklearn_ms']:9.3f}")

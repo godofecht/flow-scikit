@@ -68,222 +68,478 @@ function main() -> i32 {
     let mut t0: i64 = 0
     let mut t1: i64 = 0
     let mut t2: i64 = 0
+    let mut t3: i64 = 0
+    let mut reps: i32 = 1
 
     # ---- mds (unsupervised) ----
     t0 = flow_now_ns()
-    let m_mds: MDS = mds_fit(X_c, 2, 100, 0.0001, 42)
+    let probe_mds: MDS = mds_fit(X_c, 2, 100, 0.0001, 42)
     t1 = flow_now_ns()
-    t2 = t1
-    printf("ESTIMATOR|mds|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    mds_free(probe_mds)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_mds: MDS = mds_fit(X_c, 2, 100, 0.0001, 42)
+        mds_free(m_mds)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|mds|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
     fflush(null)
-    mds_free(m_mds)
 
     # ---- mean_shift (unsupervised) ----
     t0 = flow_now_ns()
-    let m_mean_shift: MeanShift = mean_shift_fit(X_c, 1.0, 100)
+    let probe_mean_shift: MeanShift = mean_shift_fit(X_c, 1.0, 100)
     t1 = flow_now_ns()
-    let o_mean_shift: ptr<i32> = mean_shift_predict(m_mean_shift, X_c)
-    t2 = flow_now_ns()
-    printf("ESTIMATOR|mean_shift|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    mean_shift_free(probe_mean_shift)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_mean_shift: MeanShift = mean_shift_fit(X_c, 1.0, 100)
+        mean_shift_free(m_mean_shift)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|mean_shift|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
     fflush(null)
-    mean_shift_free(m_mean_shift)
 
     # ---- min_cov_det (unsupervised) ----
     t0 = flow_now_ns()
-    let m_min_cov_det: MinCovDet = min_cov_det_fit(X_c, 0.75, 100, 42)
+    let probe_min_cov_det: MinCovDet = min_cov_det_fit(X_c, 0.75, 100, 42)
     t1 = flow_now_ns()
-    t2 = t1
-    printf("ESTIMATOR|min_cov_det|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    min_cov_det_free(probe_min_cov_det)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_min_cov_det: MinCovDet = min_cov_det_fit(X_c, 0.75, 100, 42)
+        min_cov_det_free(m_min_cov_det)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|min_cov_det|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
     fflush(null)
-    min_cov_det_free(m_min_cov_det)
 
     # ---- minibatch_dictionary_learning (unsupervised) ----
     t0 = flow_now_ns()
-    let m_minibatch_dictionary_learning: MiniBatchDictionaryLearning = minibatch_dictionary_learning_fit(X_c, 2, 50, 32, 42)
+    let probe_minibatch_dictionary_learning: MiniBatchDictionaryLearning = minibatch_dictionary_learning_fit(X_c, 2, 50, 32, 42)
     t1 = flow_now_ns()
-    let o_minibatch_dictionary_learning: Matrix = minibatch_dictionary_learning_transform(m_minibatch_dictionary_learning, X_c)
+    minibatch_dictionary_learning_free(probe_minibatch_dictionary_learning)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_minibatch_dictionary_learning: MiniBatchDictionaryLearning = minibatch_dictionary_learning_fit(X_c, 2, 50, 32, 42)
+        minibatch_dictionary_learning_free(m_minibatch_dictionary_learning)
+    }
+    t1 = flow_now_ns()
+    let fitted_minibatch_dictionary_learning: MiniBatchDictionaryLearning = minibatch_dictionary_learning_fit(X_c, 2, 50, 32, 42)
     t2 = flow_now_ns()
-    matrix_free(o_minibatch_dictionary_learning)
-    printf("ESTIMATOR|minibatch_dictionary_learning|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_minibatch_dictionary_learning: Matrix = minibatch_dictionary_learning_transform(fitted_minibatch_dictionary_learning, X_c)
+        matrix_free(o_minibatch_dictionary_learning)
+    }
+    t3 = flow_now_ns()
+    minibatch_dictionary_learning_free(fitted_minibatch_dictionary_learning)
+    printf("ESTIMATOR|minibatch_dictionary_learning|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    minibatch_dictionary_learning_free(m_minibatch_dictionary_learning)
 
     # ---- minibatch_kmeans (unsupervised) ----
     t0 = flow_now_ns()
-    let m_minibatch_kmeans: MiniBatchKMeans = minibatch_kmeans_fit(X_c, 3, 32, 100, 0.0001, 42)
+    let probe_minibatch_kmeans: MiniBatchKMeans = minibatch_kmeans_fit(X_c, 3, 32, 100, 0.0001, 42)
     t1 = flow_now_ns()
-    let o_minibatch_kmeans: ptr<i32> = minibatch_kmeans_predict(m_minibatch_kmeans, X_c)
-    t2 = flow_now_ns()
-    printf("ESTIMATOR|minibatch_kmeans|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    minibatch_kmeans_free(probe_minibatch_kmeans)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_minibatch_kmeans: MiniBatchKMeans = minibatch_kmeans_fit(X_c, 3, 32, 100, 0.0001, 42)
+        minibatch_kmeans_free(m_minibatch_kmeans)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|minibatch_kmeans|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
     fflush(null)
-    minibatch_kmeans_free(m_minibatch_kmeans)
 
     # ---- minibatch_nmf (unsupervised) ----
     t0 = flow_now_ns()
-    let m_minibatch_nmf: MiniBatchNMF = minibatch_nmf_fit(X_c, 2, 100, 32, 0.0001, 42)
+    let probe_minibatch_nmf: MiniBatchNMF = minibatch_nmf_fit(X_c, 2, 100, 32, 0.0001, 42)
     t1 = flow_now_ns()
-    let o_minibatch_nmf: Matrix = minibatch_nmf_transform(m_minibatch_nmf, X_c)
+    minibatch_nmf_free(probe_minibatch_nmf)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_minibatch_nmf: MiniBatchNMF = minibatch_nmf_fit(X_c, 2, 100, 32, 0.0001, 42)
+        minibatch_nmf_free(m_minibatch_nmf)
+    }
+    t1 = flow_now_ns()
+    let fitted_minibatch_nmf: MiniBatchNMF = minibatch_nmf_fit(X_c, 2, 100, 32, 0.0001, 42)
     t2 = flow_now_ns()
-    matrix_free(o_minibatch_nmf)
-    printf("ESTIMATOR|minibatch_nmf|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_minibatch_nmf: Matrix = minibatch_nmf_transform(fitted_minibatch_nmf, X_c)
+        matrix_free(o_minibatch_nmf)
+    }
+    t3 = flow_now_ns()
+    minibatch_nmf_free(fitted_minibatch_nmf)
+    printf("ESTIMATOR|minibatch_nmf|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    minibatch_nmf_free(m_minibatch_nmf)
 
     # ---- minibatch_sparse_pca (unsupervised) ----
     t0 = flow_now_ns()
-    let m_minibatch_sparse_pca: MiniBatchSparsePCA = minibatch_sparse_pca_fit(X_c, 2, 1.0, 100, 32, 0.0001, 42)
+    let probe_minibatch_sparse_pca: MiniBatchSparsePCA = minibatch_sparse_pca_fit(X_c, 2, 1.0, 100, 32, 0.0001, 42)
     t1 = flow_now_ns()
-    let o_minibatch_sparse_pca: Matrix = minibatch_sparse_pca_transform(m_minibatch_sparse_pca, X_c)
+    minibatch_sparse_pca_free(probe_minibatch_sparse_pca)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_minibatch_sparse_pca: MiniBatchSparsePCA = minibatch_sparse_pca_fit(X_c, 2, 1.0, 100, 32, 0.0001, 42)
+        minibatch_sparse_pca_free(m_minibatch_sparse_pca)
+    }
+    t1 = flow_now_ns()
+    let fitted_minibatch_sparse_pca: MiniBatchSparsePCA = minibatch_sparse_pca_fit(X_c, 2, 1.0, 100, 32, 0.0001, 42)
     t2 = flow_now_ns()
-    matrix_free(o_minibatch_sparse_pca)
-    printf("ESTIMATOR|minibatch_sparse_pca|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_minibatch_sparse_pca: Matrix = minibatch_sparse_pca_transform(fitted_minibatch_sparse_pca, X_c)
+        matrix_free(o_minibatch_sparse_pca)
+    }
+    t3 = flow_now_ns()
+    minibatch_sparse_pca_free(fitted_minibatch_sparse_pca)
+    printf("ESTIMATOR|minibatch_sparse_pca|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    minibatch_sparse_pca_free(m_minibatch_sparse_pca)
 
     # ---- minmax_scaler (unsupervised) ----
     t0 = flow_now_ns()
-    let m_minmax_scaler: MinMaxScaler = minmax_scaler_fit(X_c)
+    let probe_minmax_scaler: MinMaxScaler = minmax_scaler_fit(X_c)
     t1 = flow_now_ns()
-    let o_minmax_scaler: Matrix = minmax_scaler_transform(m_minmax_scaler, X_c)
+    minmax_scaler_free(probe_minmax_scaler)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_minmax_scaler: MinMaxScaler = minmax_scaler_fit(X_c)
+        minmax_scaler_free(m_minmax_scaler)
+    }
+    t1 = flow_now_ns()
+    let fitted_minmax_scaler: MinMaxScaler = minmax_scaler_fit(X_c)
     t2 = flow_now_ns()
-    matrix_free(o_minmax_scaler)
-    printf("ESTIMATOR|minmax_scaler|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_minmax_scaler: Matrix = minmax_scaler_transform(fitted_minmax_scaler, X_c)
+        matrix_free(o_minmax_scaler)
+    }
+    t3 = flow_now_ns()
+    minmax_scaler_free(fitted_minmax_scaler)
+    printf("ESTIMATOR|minmax_scaler|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    minmax_scaler_free(m_minmax_scaler)
 
     # ---- missing_indicator (unsupervised) ----
     t0 = flow_now_ns()
-    let m_missing_indicator: MissingIndicator = missing_indicator_fit(X_c, 0.0, 0)
+    let probe_missing_indicator: MissingIndicator = missing_indicator_fit(X_c, 0.0, 0)
     t1 = flow_now_ns()
-    let o_missing_indicator: Matrix = missing_indicator_transform(m_missing_indicator, X_c)
+    missing_indicator_free(probe_missing_indicator)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_missing_indicator: MissingIndicator = missing_indicator_fit(X_c, 0.0, 0)
+        missing_indicator_free(m_missing_indicator)
+    }
+    t1 = flow_now_ns()
+    let fitted_missing_indicator: MissingIndicator = missing_indicator_fit(X_c, 0.0, 0)
     t2 = flow_now_ns()
-    matrix_free(o_missing_indicator)
-    printf("ESTIMATOR|missing_indicator|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_missing_indicator: Matrix = missing_indicator_transform(fitted_missing_indicator, X_c)
+        matrix_free(o_missing_indicator)
+    }
+    t3 = flow_now_ns()
+    missing_indicator_free(fitted_missing_indicator)
+    printf("ESTIMATOR|missing_indicator|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    missing_indicator_free(m_missing_indicator)
 
     # ---- mlp_classifier (classification) ----
     let hidden_sizes_mlp_classifier: array<i32, 1> = [8]
     t0 = flow_now_ns()
-    let m_mlp_classifier: MLPClassifier = mlp_classifier_fit(X_c, y_c, 3, hidden_sizes_mlp_classifier, 1, 0, 50, 0.01, 0.9, 42)
+    let probe_mlp_classifier: MLPClassifier = mlp_classifier_fit(X_c, y_c, 3, hidden_sizes_mlp_classifier, 1, 0, 50, 0.01, 0.9, 42)
     t1 = flow_now_ns()
-    let o_mlp_classifier: Matrix = mlp_classifier_predict(m_mlp_classifier, X_c)
+    mlp_classifier_free(probe_mlp_classifier)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_mlp_classifier: MLPClassifier = mlp_classifier_fit(X_c, y_c, 3, hidden_sizes_mlp_classifier, 1, 0, 50, 0.01, 0.9, 42)
+        mlp_classifier_free(m_mlp_classifier)
+    }
+    t1 = flow_now_ns()
+    let fitted_mlp_classifier: MLPClassifier = mlp_classifier_fit(X_c, y_c, 3, hidden_sizes_mlp_classifier, 1, 0, 50, 0.01, 0.9, 42)
     t2 = flow_now_ns()
-    matrix_free(o_mlp_classifier)
-    printf("ESTIMATOR|mlp_classifier|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_mlp_classifier: Matrix = mlp_classifier_predict(fitted_mlp_classifier, X_c)
+        matrix_free(o_mlp_classifier)
+    }
+    t3 = flow_now_ns()
+    mlp_classifier_free(fitted_mlp_classifier)
+    printf("ESTIMATOR|mlp_classifier|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    mlp_classifier_free(m_mlp_classifier)
 
     # ---- mlp_regressor (regression) ----
     let hidden_sizes_mlp_regressor: array<i32, 1> = [8]
     t0 = flow_now_ns()
-    let m_mlp_regressor: MLPRegressor = mlp_regressor_fit(X_r, y_r, hidden_sizes_mlp_regressor, 1, 0, 50, 0.01, 0.9, 42)
+    let probe_mlp_regressor: MLPRegressor = mlp_regressor_fit(X_r, y_r, hidden_sizes_mlp_regressor, 1, 0, 50, 0.01, 0.9, 42)
     t1 = flow_now_ns()
-    let o_mlp_regressor: ptr<f32> = mlp_regressor_predict(m_mlp_regressor, X_r)
+    mlp_regressor_free(probe_mlp_regressor)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_mlp_regressor: MLPRegressor = mlp_regressor_fit(X_r, y_r, hidden_sizes_mlp_regressor, 1, 0, 50, 0.01, 0.9, 42)
+        mlp_regressor_free(m_mlp_regressor)
+    }
+    t1 = flow_now_ns()
+    let fitted_mlp_regressor: MLPRegressor = mlp_regressor_fit(X_r, y_r, hidden_sizes_mlp_regressor, 1, 0, 50, 0.01, 0.9, 42)
     t2 = flow_now_ns()
-    array_free_f32(o_mlp_regressor)
-    printf("ESTIMATOR|mlp_regressor|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_mlp_regressor: ptr<f32> = mlp_regressor_predict(fitted_mlp_regressor, X_r)
+        array_free_f32(o_mlp_regressor)
+    }
+    t3 = flow_now_ns()
+    mlp_regressor_free(fitted_mlp_regressor)
+    printf("ESTIMATOR|mlp_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    mlp_regressor_free(m_mlp_regressor)
 
     # ---- multi_output_classifier (multioutput_class) ----
     t0 = flow_now_ns()
-    let m_multi_output_classifier: MultiOutputClassifier = multi_output_classifier_fit(X_c, Y_labels, 2, 1, 50, 0.01)
+    let probe_multi_output_classifier: MultiOutputClassifier = multi_output_classifier_fit(X_c, Y_labels, 2, 1, 50, 0.01)
     t1 = flow_now_ns()
-    let o_multi_output_classifier: Matrix = multi_output_classifier_predict(m_multi_output_classifier, X_c)
+    multi_output_classifier_free(probe_multi_output_classifier)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_multi_output_classifier: MultiOutputClassifier = multi_output_classifier_fit(X_c, Y_labels, 2, 1, 50, 0.01)
+        multi_output_classifier_free(m_multi_output_classifier)
+    }
+    t1 = flow_now_ns()
+    let fitted_multi_output_classifier: MultiOutputClassifier = multi_output_classifier_fit(X_c, Y_labels, 2, 1, 50, 0.01)
     t2 = flow_now_ns()
-    matrix_free(o_multi_output_classifier)
-    printf("ESTIMATOR|multi_output_classifier|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_multi_output_classifier: Matrix = multi_output_classifier_predict(fitted_multi_output_classifier, X_c)
+        matrix_free(o_multi_output_classifier)
+    }
+    t3 = flow_now_ns()
+    multi_output_classifier_free(fitted_multi_output_classifier)
+    printf("ESTIMATOR|multi_output_classifier|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    multi_output_classifier_free(m_multi_output_classifier)
 
     # ---- multi_output_regressor (multioutput) ----
     t0 = flow_now_ns()
-    let m_multi_output_regressor: MultiOutputRegressor = multi_output_regressor_fit(X_r, Y_multi, 2)
+    let probe_multi_output_regressor: MultiOutputRegressor = multi_output_regressor_fit(X_r, Y_multi, 2)
     t1 = flow_now_ns()
-    let o_multi_output_regressor: Matrix = multi_output_regressor_predict(m_multi_output_regressor, X_r)
+    multi_output_regressor_free(probe_multi_output_regressor)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_multi_output_regressor: MultiOutputRegressor = multi_output_regressor_fit(X_r, Y_multi, 2)
+        multi_output_regressor_free(m_multi_output_regressor)
+    }
+    t1 = flow_now_ns()
+    let fitted_multi_output_regressor: MultiOutputRegressor = multi_output_regressor_fit(X_r, Y_multi, 2)
     t2 = flow_now_ns()
-    matrix_free(o_multi_output_regressor)
-    printf("ESTIMATOR|multi_output_regressor|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_multi_output_regressor: Matrix = multi_output_regressor_predict(fitted_multi_output_regressor, X_r)
+        matrix_free(o_multi_output_regressor)
+    }
+    t3 = flow_now_ns()
+    multi_output_regressor_free(fitted_multi_output_regressor)
+    printf("ESTIMATOR|multi_output_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    multi_output_regressor_free(m_multi_output_regressor)
 
     # ---- multiclass_logistic (classification) ----
     t0 = flow_now_ns()
-    let m_multiclass_logistic: MultiClassLogisticRegression = multiclass_logistic_fit(X_c, y_c, 3, 50, 0.01, penalty_none())
+    let probe_multiclass_logistic: MultiClassLogisticRegression = multiclass_logistic_fit(X_c, y_c, 3, 50, 0.01, penalty_none())
     t1 = flow_now_ns()
-    let o_multiclass_logistic: Matrix = multiclass_logistic_predict(m_multiclass_logistic, X_c)
+    multiclass_logistic_free(probe_multiclass_logistic)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_multiclass_logistic: MultiClassLogisticRegression = multiclass_logistic_fit(X_c, y_c, 3, 50, 0.01, penalty_none())
+        multiclass_logistic_free(m_multiclass_logistic)
+    }
+    t1 = flow_now_ns()
+    let fitted_multiclass_logistic: MultiClassLogisticRegression = multiclass_logistic_fit(X_c, y_c, 3, 50, 0.01, penalty_none())
     t2 = flow_now_ns()
-    matrix_free(o_multiclass_logistic)
-    printf("ESTIMATOR|multiclass_logistic|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_multiclass_logistic: Matrix = multiclass_logistic_predict(fitted_multiclass_logistic, X_c)
+        matrix_free(o_multiclass_logistic)
+    }
+    t3 = flow_now_ns()
+    multiclass_logistic_free(fitted_multiclass_logistic)
+    printf("ESTIMATOR|multiclass_logistic|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    multiclass_logistic_free(m_multiclass_logistic)
 
     # ---- multinomial_nb (classification) ----
     t0 = flow_now_ns()
-    let m_multinomial_nb: MultinomialNB = multinomial_nb_fit(X_c, y_c, 3, 1.0)
+    let probe_multinomial_nb: MultinomialNB = multinomial_nb_fit(X_c, y_c, 3, 1.0)
     t1 = flow_now_ns()
-    let o_multinomial_nb: ptr<f32> = multinomial_nb_predict(m_multinomial_nb, X_c)
+    multinomial_nb_free(probe_multinomial_nb)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_multinomial_nb: MultinomialNB = multinomial_nb_fit(X_c, y_c, 3, 1.0)
+        multinomial_nb_free(m_multinomial_nb)
+    }
+    t1 = flow_now_ns()
+    let fitted_multinomial_nb: MultinomialNB = multinomial_nb_fit(X_c, y_c, 3, 1.0)
     t2 = flow_now_ns()
-    array_free_f32(o_multinomial_nb)
-    printf("ESTIMATOR|multinomial_nb|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_multinomial_nb: ptr<f32> = multinomial_nb_predict(fitted_multinomial_nb, X_c)
+        array_free_f32(o_multinomial_nb)
+    }
+    t3 = flow_now_ns()
+    multinomial_nb_free(fitted_multinomial_nb)
+    printf("ESTIMATOR|multinomial_nb|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    multinomial_nb_free(m_multinomial_nb)
 
     # ---- multitask_elastic_net_cv (multioutput) ----
     t0 = flow_now_ns()
-    let m_multitask_elastic_net_cv: MultiTaskElasticNetCV = multitask_elastic_net_cv_fit(X_r, Y_multi, 10)
+    let probe_multitask_elastic_net_cv: MultiTaskElasticNetCV = multitask_elastic_net_cv_fit(X_r, Y_multi, 10)
     t1 = flow_now_ns()
-    let o_multitask_elastic_net_cv: Matrix = multitask_elastic_net_cv_predict(m_multitask_elastic_net_cv, X_r)
+    multitask_elastic_net_cv_free(probe_multitask_elastic_net_cv)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_multitask_elastic_net_cv: MultiTaskElasticNetCV = multitask_elastic_net_cv_fit(X_r, Y_multi, 10)
+        multitask_elastic_net_cv_free(m_multitask_elastic_net_cv)
+    }
+    t1 = flow_now_ns()
+    let fitted_multitask_elastic_net_cv: MultiTaskElasticNetCV = multitask_elastic_net_cv_fit(X_r, Y_multi, 10)
     t2 = flow_now_ns()
-    matrix_free(o_multitask_elastic_net_cv)
-    printf("ESTIMATOR|multitask_elastic_net_cv|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_multitask_elastic_net_cv: Matrix = multitask_elastic_net_cv_predict(fitted_multitask_elastic_net_cv, X_r)
+        matrix_free(o_multitask_elastic_net_cv)
+    }
+    t3 = flow_now_ns()
+    multitask_elastic_net_cv_free(fitted_multitask_elastic_net_cv)
+    printf("ESTIMATOR|multitask_elastic_net_cv|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    multitask_elastic_net_cv_free(m_multitask_elastic_net_cv)
 
     # ---- multitask_elastic_net (multioutput) ----
     t0 = flow_now_ns()
-    let m_multitask_elastic_net: MultiTaskElasticNet = multitask_elastic_net_fit(X_r, Y_multi, 1.0, 0.5, 50, 0.01)
+    let probe_multitask_elastic_net: MultiTaskElasticNet = multitask_elastic_net_fit(X_r, Y_multi, 1.0, 0.5, 50, 0.01)
     t1 = flow_now_ns()
-    let o_multitask_elastic_net: Matrix = multitask_elastic_net_predict(m_multitask_elastic_net, X_r)
+    multitask_elastic_net_free(probe_multitask_elastic_net)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_multitask_elastic_net: MultiTaskElasticNet = multitask_elastic_net_fit(X_r, Y_multi, 1.0, 0.5, 50, 0.01)
+        multitask_elastic_net_free(m_multitask_elastic_net)
+    }
+    t1 = flow_now_ns()
+    let fitted_multitask_elastic_net: MultiTaskElasticNet = multitask_elastic_net_fit(X_r, Y_multi, 1.0, 0.5, 50, 0.01)
     t2 = flow_now_ns()
-    matrix_free(o_multitask_elastic_net)
-    printf("ESTIMATOR|multitask_elastic_net|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_multitask_elastic_net: Matrix = multitask_elastic_net_predict(fitted_multitask_elastic_net, X_r)
+        matrix_free(o_multitask_elastic_net)
+    }
+    t3 = flow_now_ns()
+    multitask_elastic_net_free(fitted_multitask_elastic_net)
+    printf("ESTIMATOR|multitask_elastic_net|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    multitask_elastic_net_free(m_multitask_elastic_net)
 
     # ---- multitask_lasso_cv (multioutput) ----
     t0 = flow_now_ns()
-    let m_multitask_lasso_cv: MultiTaskLassoCV = multitask_lasso_cv_fit(X_r, Y_multi, 10)
+    let probe_multitask_lasso_cv: MultiTaskLassoCV = multitask_lasso_cv_fit(X_r, Y_multi, 10)
     t1 = flow_now_ns()
-    let o_multitask_lasso_cv: Matrix = multitask_lasso_cv_predict(m_multitask_lasso_cv, X_r)
+    multitask_lasso_cv_free(probe_multitask_lasso_cv)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_multitask_lasso_cv: MultiTaskLassoCV = multitask_lasso_cv_fit(X_r, Y_multi, 10)
+        multitask_lasso_cv_free(m_multitask_lasso_cv)
+    }
+    t1 = flow_now_ns()
+    let fitted_multitask_lasso_cv: MultiTaskLassoCV = multitask_lasso_cv_fit(X_r, Y_multi, 10)
     t2 = flow_now_ns()
-    matrix_free(o_multitask_lasso_cv)
-    printf("ESTIMATOR|multitask_lasso_cv|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_multitask_lasso_cv: Matrix = multitask_lasso_cv_predict(fitted_multitask_lasso_cv, X_r)
+        matrix_free(o_multitask_lasso_cv)
+    }
+    t3 = flow_now_ns()
+    multitask_lasso_cv_free(fitted_multitask_lasso_cv)
+    printf("ESTIMATOR|multitask_lasso_cv|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    multitask_lasso_cv_free(m_multitask_lasso_cv)
 
     # ---- multitask_lasso (multioutput) ----
     t0 = flow_now_ns()
-    let m_multitask_lasso: MultiTaskLasso = multitask_lasso_fit(X_r, Y_multi, 1.0, 50, 0.01)
+    let probe_multitask_lasso: MultiTaskLasso = multitask_lasso_fit(X_r, Y_multi, 1.0, 50, 0.01)
     t1 = flow_now_ns()
-    let o_multitask_lasso: Matrix = multitask_lasso_predict(m_multitask_lasso, X_r)
+    multitask_lasso_free(probe_multitask_lasso)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_multitask_lasso: MultiTaskLasso = multitask_lasso_fit(X_r, Y_multi, 1.0, 50, 0.01)
+        multitask_lasso_free(m_multitask_lasso)
+    }
+    t1 = flow_now_ns()
+    let fitted_multitask_lasso: MultiTaskLasso = multitask_lasso_fit(X_r, Y_multi, 1.0, 50, 0.01)
     t2 = flow_now_ns()
-    matrix_free(o_multitask_lasso)
-    printf("ESTIMATOR|multitask_lasso|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_multitask_lasso: Matrix = multitask_lasso_predict(fitted_multitask_lasso, X_r)
+        matrix_free(o_multitask_lasso)
+    }
+    t3 = flow_now_ns()
+    multitask_lasso_free(fitted_multitask_lasso)
+    printf("ESTIMATOR|multitask_lasso|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    multitask_lasso_free(m_multitask_lasso)
 
     # ---- nca (regression) ----
     t0 = flow_now_ns()
-    let m_nca: NeighborhoodComponentsAnalysis = nca_fit(X_r, y_r, 2, 50, 0.01)
+    let probe_nca: NeighborhoodComponentsAnalysis = nca_fit(X_r, y_r, 2, 50, 0.01)
     t1 = flow_now_ns()
-    let o_nca: Matrix = nca_transform(m_nca, X_r)
+    nca_free(probe_nca)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_nca: NeighborhoodComponentsAnalysis = nca_fit(X_r, y_r, 2, 50, 0.01)
+        nca_free(m_nca)
+    }
+    t1 = flow_now_ns()
+    let fitted_nca: NeighborhoodComponentsAnalysis = nca_fit(X_r, y_r, 2, 50, 0.01)
     t2 = flow_now_ns()
-    matrix_free(o_nca)
-    printf("ESTIMATOR|nca|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_nca: Matrix = nca_transform(fitted_nca, X_r)
+        matrix_free(o_nca)
+    }
+    t3 = flow_now_ns()
+    nca_free(fitted_nca)
+    printf("ESTIMATOR|nca|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    nca_free(m_nca)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }
     free(Y_label_rows as ptr<void>)

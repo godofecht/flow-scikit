@@ -68,218 +68,474 @@ function main() -> i32 {
     let mut t0: i64 = 0
     let mut t1: i64 = 0
     let mut t2: i64 = 0
+    let mut t3: i64 = 0
+    let mut reps: i32 = 1
 
     # ---- nearest_centroid (classification) ----
     t0 = flow_now_ns()
-    let m_nearest_centroid: NearestCentroid = nearest_centroid_fit(X_c, y_c, 3)
+    let probe_nearest_centroid: NearestCentroid = nearest_centroid_fit(X_c, y_c, 3)
     t1 = flow_now_ns()
-    let o_nearest_centroid: ptr<f32> = nearest_centroid_predict(m_nearest_centroid, X_c)
+    nearest_centroid_free(probe_nearest_centroid)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_nearest_centroid: NearestCentroid = nearest_centroid_fit(X_c, y_c, 3)
+        nearest_centroid_free(m_nearest_centroid)
+    }
+    t1 = flow_now_ns()
+    let fitted_nearest_centroid: NearestCentroid = nearest_centroid_fit(X_c, y_c, 3)
     t2 = flow_now_ns()
-    array_free_f32(o_nearest_centroid)
-    printf("ESTIMATOR|nearest_centroid|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_nearest_centroid: ptr<f32> = nearest_centroid_predict(fitted_nearest_centroid, X_c)
+        array_free_f32(o_nearest_centroid)
+    }
+    t3 = flow_now_ns()
+    nearest_centroid_free(fitted_nearest_centroid)
+    printf("ESTIMATOR|nearest_centroid|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    nearest_centroid_free(m_nearest_centroid)
 
     # ---- nearest_neighbors (unsupervised) ----
     t0 = flow_now_ns()
-    let m_nearest_neighbors: NearestNeighbors = nearest_neighbors_fit(X_c, 5)
+    let probe_nearest_neighbors: NearestNeighbors = nearest_neighbors_fit(X_c, 5)
     t1 = flow_now_ns()
-    t2 = t1
-    printf("ESTIMATOR|nearest_neighbors|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    nearest_neighbors_free(probe_nearest_neighbors)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_nearest_neighbors: NearestNeighbors = nearest_neighbors_fit(X_c, 5)
+        nearest_neighbors_free(m_nearest_neighbors)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|nearest_neighbors|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
     fflush(null)
-    nearest_neighbors_free(m_nearest_neighbors)
 
     # ---- nmf (unsupervised) ----
     t0 = flow_now_ns()
-    let m_nmf: NMF = nmf_fit(X_c, 2, 100, 0.0001, 42)
+    let probe_nmf: NMF = nmf_fit(X_c, 2, 100, 0.0001, 42)
     t1 = flow_now_ns()
-    let o_nmf: Matrix = nmf_transform(m_nmf, X_c)
+    nmf_free(probe_nmf)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_nmf: NMF = nmf_fit(X_c, 2, 100, 0.0001, 42)
+        nmf_free(m_nmf)
+    }
+    t1 = flow_now_ns()
+    let fitted_nmf: NMF = nmf_fit(X_c, 2, 100, 0.0001, 42)
     t2 = flow_now_ns()
-    matrix_free(o_nmf)
-    printf("ESTIMATOR|nmf|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_nmf: Matrix = nmf_transform(fitted_nmf, X_c)
+        matrix_free(o_nmf)
+    }
+    t3 = flow_now_ns()
+    nmf_free(fitted_nmf)
+    printf("ESTIMATOR|nmf|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    nmf_free(m_nmf)
 
     # ---- nu_svc (regression) ----
     t0 = flow_now_ns()
-    let m_nu_svc: NuSVC = nu_svc_fit(X_r, y_r, 0.5, 0.1, 100, 1.0)
+    let probe_nu_svc: NuSVC = nu_svc_fit(X_r, y_r, 0.5, 0.1, 100, 1.0)
     t1 = flow_now_ns()
-    let o_nu_svc: ptr<f32> = nu_svc_predict(m_nu_svc, X_r)
+    nu_svc_free(probe_nu_svc)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_nu_svc: NuSVC = nu_svc_fit(X_r, y_r, 0.5, 0.1, 100, 1.0)
+        nu_svc_free(m_nu_svc)
+    }
+    t1 = flow_now_ns()
+    let fitted_nu_svc: NuSVC = nu_svc_fit(X_r, y_r, 0.5, 0.1, 100, 1.0)
     t2 = flow_now_ns()
-    array_free_f32(o_nu_svc)
-    printf("ESTIMATOR|nu_svc|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_nu_svc: ptr<f32> = nu_svc_predict(fitted_nu_svc, X_r)
+        array_free_f32(o_nu_svc)
+    }
+    t3 = flow_now_ns()
+    nu_svc_free(fitted_nu_svc)
+    printf("ESTIMATOR|nu_svc|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    nu_svc_free(m_nu_svc)
 
     # ---- nu_svr (regression) ----
     t0 = flow_now_ns()
-    let m_nu_svr: NuSVR = nu_svr_fit(X_r, y_r, 0.5, 1.0, 0.1, 100)
+    let probe_nu_svr: NuSVR = nu_svr_fit(X_r, y_r, 0.5, 1.0, 0.1, 100)
     t1 = flow_now_ns()
-    let o_nu_svr: ptr<f32> = nu_svr_predict(m_nu_svr, X_r)
+    nu_svr_free(probe_nu_svr)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_nu_svr: NuSVR = nu_svr_fit(X_r, y_r, 0.5, 1.0, 0.1, 100)
+        nu_svr_free(m_nu_svr)
+    }
+    t1 = flow_now_ns()
+    let fitted_nu_svr: NuSVR = nu_svr_fit(X_r, y_r, 0.5, 1.0, 0.1, 100)
     t2 = flow_now_ns()
-    array_free_f32(o_nu_svr)
-    printf("ESTIMATOR|nu_svr|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_nu_svr: ptr<f32> = nu_svr_predict(fitted_nu_svr, X_r)
+        array_free_f32(o_nu_svr)
+    }
+    t3 = flow_now_ns()
+    nu_svr_free(fitted_nu_svr)
+    printf("ESTIMATOR|nu_svr|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    nu_svr_free(m_nu_svr)
 
     # ---- nystroem (unsupervised) ----
     t0 = flow_now_ns()
-    let m_nystroem: Nystroem = nystroem_fit(X_c, 2, 0.1, 0, 42)
+    let probe_nystroem: Nystroem = nystroem_fit(X_c, 2, 0.1, 0, 42)
     t1 = flow_now_ns()
-    let o_nystroem: Matrix = nystroem_transform(m_nystroem, X_c)
+    nystroem_free(probe_nystroem)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_nystroem: Nystroem = nystroem_fit(X_c, 2, 0.1, 0, 42)
+        nystroem_free(m_nystroem)
+    }
+    t1 = flow_now_ns()
+    let fitted_nystroem: Nystroem = nystroem_fit(X_c, 2, 0.1, 0, 42)
     t2 = flow_now_ns()
-    matrix_free(o_nystroem)
-    printf("ESTIMATOR|nystroem|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_nystroem: Matrix = nystroem_transform(fitted_nystroem, X_c)
+        matrix_free(o_nystroem)
+    }
+    t3 = flow_now_ns()
+    nystroem_free(fitted_nystroem)
+    printf("ESTIMATOR|nystroem|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    nystroem_free(m_nystroem)
 
     # ---- oas_estimator (unsupervised) ----
     t0 = flow_now_ns()
-    let m_oas_estimator: ShrunkCovariance = oas_estimator_fit(X_c)
+    let probe_oas_estimator: ShrunkCovariance = oas_estimator_fit(X_c)
     t1 = flow_now_ns()
-    t2 = t1
-    printf("ESTIMATOR|oas_estimator|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_oas_estimator: ShrunkCovariance = oas_estimator_fit(X_c)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|oas_estimator|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
     fflush(null)
 
     # ---- omp_cv (regression) ----
     t0 = flow_now_ns()
-    let m_omp_cv: OrthogonalMatchingPursuitCV = omp_cv_fit(X_r, y_r, 3)
+    let probe_omp_cv: OrthogonalMatchingPursuitCV = omp_cv_fit(X_r, y_r, 3)
     t1 = flow_now_ns()
-    let o_omp_cv: ptr<f32> = omp_cv_predict(m_omp_cv, X_r)
+    omp_cv_free(probe_omp_cv)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_omp_cv: OrthogonalMatchingPursuitCV = omp_cv_fit(X_r, y_r, 3)
+        omp_cv_free(m_omp_cv)
+    }
+    t1 = flow_now_ns()
+    let fitted_omp_cv: OrthogonalMatchingPursuitCV = omp_cv_fit(X_r, y_r, 3)
     t2 = flow_now_ns()
-    array_free_f32(o_omp_cv)
-    printf("ESTIMATOR|omp_cv|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_omp_cv: ptr<f32> = omp_cv_predict(fitted_omp_cv, X_r)
+        array_free_f32(o_omp_cv)
+    }
+    t3 = flow_now_ns()
+    omp_cv_free(fitted_omp_cv)
+    printf("ESTIMATOR|omp_cv|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    omp_cv_free(m_omp_cv)
 
     # ---- one_class_svm (unsupervised) ----
     t0 = flow_now_ns()
-    let m_one_class_svm: OneClassSVM = one_class_svm_fit(X_c, 0.5, 0.1, 100)
+    let probe_one_class_svm: OneClassSVM = one_class_svm_fit(X_c, 0.5, 0.1, 100)
     t1 = flow_now_ns()
-    let o_one_class_svm: ptr<i32> = one_class_svm_predict(m_one_class_svm, X_c)
-    t2 = flow_now_ns()
-    printf("ESTIMATOR|one_class_svm|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    one_class_svm_free(probe_one_class_svm)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_one_class_svm: OneClassSVM = one_class_svm_fit(X_c, 0.5, 0.1, 100)
+        one_class_svm_free(m_one_class_svm)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|one_class_svm|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
     fflush(null)
-    one_class_svm_free(m_one_class_svm)
 
     # ---- one_vs_one (classification) ----
     t0 = flow_now_ns()
-    let m_one_vs_one: OneVsOneClassifier = one_vs_one_fit(X_c, y_c, 3, 50, 0.01, penalty_none())
+    let probe_one_vs_one: OneVsOneClassifier = one_vs_one_fit(X_c, y_c, 3, 50, 0.01, penalty_none())
     t1 = flow_now_ns()
-    let o_one_vs_one: ptr<f32> = one_vs_one_predict(m_one_vs_one, X_c)
+    one_vs_one_free(probe_one_vs_one)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_one_vs_one: OneVsOneClassifier = one_vs_one_fit(X_c, y_c, 3, 50, 0.01, penalty_none())
+        one_vs_one_free(m_one_vs_one)
+    }
+    t1 = flow_now_ns()
+    let fitted_one_vs_one: OneVsOneClassifier = one_vs_one_fit(X_c, y_c, 3, 50, 0.01, penalty_none())
     t2 = flow_now_ns()
-    array_free_f32(o_one_vs_one)
-    printf("ESTIMATOR|one_vs_one|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_one_vs_one: ptr<f32> = one_vs_one_predict(fitted_one_vs_one, X_c)
+        array_free_f32(o_one_vs_one)
+    }
+    t3 = flow_now_ns()
+    one_vs_one_free(fitted_one_vs_one)
+    printf("ESTIMATOR|one_vs_one|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    one_vs_one_free(m_one_vs_one)
 
     # ---- one_vs_rest (classification) ----
     t0 = flow_now_ns()
-    let m_one_vs_rest: OneVsRestClassifier = one_vs_rest_fit(X_c, y_c, 3, 50, 0.01, penalty_none())
+    let probe_one_vs_rest: OneVsRestClassifier = one_vs_rest_fit(X_c, y_c, 3, 50, 0.01, penalty_none())
     t1 = flow_now_ns()
-    let o_one_vs_rest: ptr<f32> = one_vs_rest_predict(m_one_vs_rest, X_c)
+    one_vs_rest_free(probe_one_vs_rest)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_one_vs_rest: OneVsRestClassifier = one_vs_rest_fit(X_c, y_c, 3, 50, 0.01, penalty_none())
+        one_vs_rest_free(m_one_vs_rest)
+    }
+    t1 = flow_now_ns()
+    let fitted_one_vs_rest: OneVsRestClassifier = one_vs_rest_fit(X_c, y_c, 3, 50, 0.01, penalty_none())
     t2 = flow_now_ns()
-    array_free_f32(o_one_vs_rest)
-    printf("ESTIMATOR|one_vs_rest|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_one_vs_rest: ptr<f32> = one_vs_rest_predict(fitted_one_vs_rest, X_c)
+        array_free_f32(o_one_vs_rest)
+    }
+    t3 = flow_now_ns()
+    one_vs_rest_free(fitted_one_vs_rest)
+    printf("ESTIMATOR|one_vs_rest|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    one_vs_rest_free(m_one_vs_rest)
 
     # ---- onehot_encoder (unsupervised) ----
     t0 = flow_now_ns()
-    let m_onehot_encoder: OneHotEncoder = onehot_encoder_fit(X_c, 0)
+    let probe_onehot_encoder: OneHotEncoder = onehot_encoder_fit(X_c, 0)
     t1 = flow_now_ns()
-    let o_onehot_encoder: Matrix = onehot_encoder_transform(m_onehot_encoder, X_c)
+    onehot_encoder_free(probe_onehot_encoder)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_onehot_encoder: OneHotEncoder = onehot_encoder_fit(X_c, 0)
+        onehot_encoder_free(m_onehot_encoder)
+    }
+    t1 = flow_now_ns()
+    let fitted_onehot_encoder: OneHotEncoder = onehot_encoder_fit(X_c, 0)
     t2 = flow_now_ns()
-    matrix_free(o_onehot_encoder)
-    printf("ESTIMATOR|onehot_encoder|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_onehot_encoder: Matrix = onehot_encoder_transform(fitted_onehot_encoder, X_c)
+        matrix_free(o_onehot_encoder)
+    }
+    t3 = flow_now_ns()
+    onehot_encoder_free(fitted_onehot_encoder)
+    printf("ESTIMATOR|onehot_encoder|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    onehot_encoder_free(m_onehot_encoder)
 
     # ---- optics (unsupervised) ----
     t0 = flow_now_ns()
-    let m_optics: OPTICS = optics_fit(X_c, 0.5, 5)
+    let probe_optics: OPTICS = optics_fit(X_c, 0.5, 5)
     t1 = flow_now_ns()
-    t2 = t1
-    printf("ESTIMATOR|optics|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    optics_free(probe_optics)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_optics: OPTICS = optics_fit(X_c, 0.5, 5)
+        optics_free(m_optics)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|optics|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
     fflush(null)
-    optics_free(m_optics)
 
     # ---- ordinal_encoder (unsupervised) ----
     t0 = flow_now_ns()
-    let m_ordinal_encoder: OrdinalEncoder = ordinal_encoder_fit(X_c, 0)
+    let probe_ordinal_encoder: OrdinalEncoder = ordinal_encoder_fit(X_c, 0)
     t1 = flow_now_ns()
-    let o_ordinal_encoder: Matrix = ordinal_encoder_transform(m_ordinal_encoder, X_c)
+    ordinal_encoder_free(probe_ordinal_encoder)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_ordinal_encoder: OrdinalEncoder = ordinal_encoder_fit(X_c, 0)
+        ordinal_encoder_free(m_ordinal_encoder)
+    }
+    t1 = flow_now_ns()
+    let fitted_ordinal_encoder: OrdinalEncoder = ordinal_encoder_fit(X_c, 0)
     t2 = flow_now_ns()
-    matrix_free(o_ordinal_encoder)
-    printf("ESTIMATOR|ordinal_encoder|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_ordinal_encoder: Matrix = ordinal_encoder_transform(fitted_ordinal_encoder, X_c)
+        matrix_free(o_ordinal_encoder)
+    }
+    t3 = flow_now_ns()
+    ordinal_encoder_free(fitted_ordinal_encoder)
+    printf("ESTIMATOR|ordinal_encoder|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    ordinal_encoder_free(m_ordinal_encoder)
 
     # ---- orthogonal_matching_pursuit (regression) ----
     t0 = flow_now_ns()
-    let m_orthogonal_matching_pursuit: OrthogonalMatchingPursuit = orthogonal_matching_pursuit_fit(X_r, y_r, 3)
+    let probe_orthogonal_matching_pursuit: OrthogonalMatchingPursuit = orthogonal_matching_pursuit_fit(X_r, y_r, 3)
     t1 = flow_now_ns()
-    let o_orthogonal_matching_pursuit: ptr<f32> = orthogonal_matching_pursuit_predict(m_orthogonal_matching_pursuit, X_r)
+    orthogonal_matching_pursuit_free(probe_orthogonal_matching_pursuit)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_orthogonal_matching_pursuit: OrthogonalMatchingPursuit = orthogonal_matching_pursuit_fit(X_r, y_r, 3)
+        orthogonal_matching_pursuit_free(m_orthogonal_matching_pursuit)
+    }
+    t1 = flow_now_ns()
+    let fitted_orthogonal_matching_pursuit: OrthogonalMatchingPursuit = orthogonal_matching_pursuit_fit(X_r, y_r, 3)
     t2 = flow_now_ns()
-    array_free_f32(o_orthogonal_matching_pursuit)
-    printf("ESTIMATOR|orthogonal_matching_pursuit|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_orthogonal_matching_pursuit: ptr<f32> = orthogonal_matching_pursuit_predict(fitted_orthogonal_matching_pursuit, X_r)
+        array_free_f32(o_orthogonal_matching_pursuit)
+    }
+    t3 = flow_now_ns()
+    orthogonal_matching_pursuit_free(fitted_orthogonal_matching_pursuit)
+    printf("ESTIMATOR|orthogonal_matching_pursuit|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    orthogonal_matching_pursuit_free(m_orthogonal_matching_pursuit)
 
     # ---- output_code (classification) ----
     t0 = flow_now_ns()
-    let m_output_code: OutputCodeClassifier = output_code_fit(X_c, y_c, 3, 4, 50, 0.01, penalty_none())
+    let probe_output_code: OutputCodeClassifier = output_code_fit(X_c, y_c, 3, 4, 50, 0.01, penalty_none())
     t1 = flow_now_ns()
-    let o_output_code: ptr<f32> = output_code_predict(m_output_code, X_c)
+    output_code_free(probe_output_code)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_output_code: OutputCodeClassifier = output_code_fit(X_c, y_c, 3, 4, 50, 0.01, penalty_none())
+        output_code_free(m_output_code)
+    }
+    t1 = flow_now_ns()
+    let fitted_output_code: OutputCodeClassifier = output_code_fit(X_c, y_c, 3, 4, 50, 0.01, penalty_none())
     t2 = flow_now_ns()
-    array_free_f32(o_output_code)
-    printf("ESTIMATOR|output_code|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_output_code: ptr<f32> = output_code_predict(fitted_output_code, X_c)
+        array_free_f32(o_output_code)
+    }
+    t3 = flow_now_ns()
+    output_code_free(fitted_output_code)
+    printf("ESTIMATOR|output_code|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    output_code_free(m_output_code)
 
     # ---- passive_aggressive_classifier (regression) ----
     t0 = flow_now_ns()
-    let m_passive_aggressive_classifier: PassiveAggressiveClassifier = passive_aggressive_classifier_fit(X_r, y_r, 50, 1.0)
+    let probe_passive_aggressive_classifier: PassiveAggressiveClassifier = passive_aggressive_classifier_fit(X_r, y_r, 50, 1.0)
     t1 = flow_now_ns()
-    let o_passive_aggressive_classifier: ptr<f32> = passive_aggressive_classifier_predict(m_passive_aggressive_classifier, X_r)
+    passive_aggressive_classifier_free(probe_passive_aggressive_classifier)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_passive_aggressive_classifier: PassiveAggressiveClassifier = passive_aggressive_classifier_fit(X_r, y_r, 50, 1.0)
+        passive_aggressive_classifier_free(m_passive_aggressive_classifier)
+    }
+    t1 = flow_now_ns()
+    let fitted_passive_aggressive_classifier: PassiveAggressiveClassifier = passive_aggressive_classifier_fit(X_r, y_r, 50, 1.0)
     t2 = flow_now_ns()
-    array_free_f32(o_passive_aggressive_classifier)
-    printf("ESTIMATOR|passive_aggressive_classifier|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_passive_aggressive_classifier: ptr<f32> = passive_aggressive_classifier_predict(fitted_passive_aggressive_classifier, X_r)
+        array_free_f32(o_passive_aggressive_classifier)
+    }
+    t3 = flow_now_ns()
+    passive_aggressive_classifier_free(fitted_passive_aggressive_classifier)
+    printf("ESTIMATOR|passive_aggressive_classifier|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    passive_aggressive_classifier_free(m_passive_aggressive_classifier)
 
     # ---- passive_aggressive_regressor (regression) ----
     t0 = flow_now_ns()
-    let m_passive_aggressive_regressor: PassiveAggressiveRegressor = passive_aggressive_regressor_fit(X_r, y_r, 1.0, 100)
+    let probe_passive_aggressive_regressor: PassiveAggressiveRegressor = passive_aggressive_regressor_fit(X_r, y_r, 1.0, 100)
     t1 = flow_now_ns()
-    let o_passive_aggressive_regressor: ptr<f32> = passive_aggressive_regressor_predict(m_passive_aggressive_regressor, X_r)
+    passive_aggressive_regressor_free(probe_passive_aggressive_regressor)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_passive_aggressive_regressor: PassiveAggressiveRegressor = passive_aggressive_regressor_fit(X_r, y_r, 1.0, 100)
+        passive_aggressive_regressor_free(m_passive_aggressive_regressor)
+    }
+    t1 = flow_now_ns()
+    let fitted_passive_aggressive_regressor: PassiveAggressiveRegressor = passive_aggressive_regressor_fit(X_r, y_r, 1.0, 100)
     t2 = flow_now_ns()
-    array_free_f32(o_passive_aggressive_regressor)
-    printf("ESTIMATOR|passive_aggressive_regressor|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_passive_aggressive_regressor: ptr<f32> = passive_aggressive_regressor_predict(fitted_passive_aggressive_regressor, X_r)
+        array_free_f32(o_passive_aggressive_regressor)
+    }
+    t3 = flow_now_ns()
+    passive_aggressive_regressor_free(fitted_passive_aggressive_regressor)
+    printf("ESTIMATOR|passive_aggressive_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    passive_aggressive_regressor_free(m_passive_aggressive_regressor)
 
     # ---- pca (unsupervised) ----
     t0 = flow_now_ns()
-    let m_pca: PCA = pca_fit(X_c, 2)
+    let probe_pca: PCA = pca_fit(X_c, 2)
     t1 = flow_now_ns()
-    let o_pca: Matrix = pca_transform(m_pca, X_c)
+    pca_free(probe_pca)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_pca: PCA = pca_fit(X_c, 2)
+        pca_free(m_pca)
+    }
+    t1 = flow_now_ns()
+    let fitted_pca: PCA = pca_fit(X_c, 2)
     t2 = flow_now_ns()
-    matrix_free(o_pca)
-    printf("ESTIMATOR|pca|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_pca: Matrix = pca_transform(fitted_pca, X_c)
+        matrix_free(o_pca)
+    }
+    t3 = flow_now_ns()
+    pca_free(fitted_pca)
+    printf("ESTIMATOR|pca|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    pca_free(m_pca)
 
     # ---- perceptron (regression) ----
     t0 = flow_now_ns()
-    let m_perceptron: Perceptron = perceptron_fit(X_r, y_r, 50, 0.01, 42)
+    let probe_perceptron: Perceptron = perceptron_fit(X_r, y_r, 50, 0.01, 42)
     t1 = flow_now_ns()
-    let o_perceptron: ptr<f32> = perceptron_predict(m_perceptron, X_r)
+    perceptron_free(probe_perceptron)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_perceptron: Perceptron = perceptron_fit(X_r, y_r, 50, 0.01, 42)
+        perceptron_free(m_perceptron)
+    }
+    t1 = flow_now_ns()
+    let fitted_perceptron: Perceptron = perceptron_fit(X_r, y_r, 50, 0.01, 42)
     t2 = flow_now_ns()
-    array_free_f32(o_perceptron)
-    printf("ESTIMATOR|perceptron|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_perceptron: ptr<f32> = perceptron_predict(fitted_perceptron, X_r)
+        array_free_f32(o_perceptron)
+    }
+    t3 = flow_now_ns()
+    perceptron_free(fitted_perceptron)
+    printf("ESTIMATOR|perceptron|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    perceptron_free(m_perceptron)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }
     free(Y_label_rows as ptr<void>)

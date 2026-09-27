@@ -68,216 +68,460 @@ function main() -> i32 {
     let mut t0: i64 = 0
     let mut t1: i64 = 0
     let mut t2: i64 = 0
+    let mut t3: i64 = 0
+    let mut reps: i32 = 1
 
     # ---- gradient_boosting_regressor (regression) ----
     t0 = flow_now_ns()
-    let m_gradient_boosting_regressor: GradientBoostingRegressor = gradient_boosting_regressor_fit(X_r, y_r, 10, 0.1, 5)
+    let probe_gradient_boosting_regressor: GradientBoostingRegressor = gradient_boosting_regressor_fit(X_r, y_r, 10, 0.1, 5)
     t1 = flow_now_ns()
-    let o_gradient_boosting_regressor: ptr<f32> = gradient_boosting_regressor_predict(m_gradient_boosting_regressor, X_r)
+    gradient_boosting_regressor_free(probe_gradient_boosting_regressor)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_gradient_boosting_regressor: GradientBoostingRegressor = gradient_boosting_regressor_fit(X_r, y_r, 10, 0.1, 5)
+        gradient_boosting_regressor_free(m_gradient_boosting_regressor)
+    }
+    t1 = flow_now_ns()
+    let fitted_gradient_boosting_regressor: GradientBoostingRegressor = gradient_boosting_regressor_fit(X_r, y_r, 10, 0.1, 5)
     t2 = flow_now_ns()
-    array_free_f32(o_gradient_boosting_regressor)
-    printf("ESTIMATOR|gradient_boosting_regressor|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_gradient_boosting_regressor: ptr<f32> = gradient_boosting_regressor_predict(fitted_gradient_boosting_regressor, X_r)
+        array_free_f32(o_gradient_boosting_regressor)
+    }
+    t3 = flow_now_ns()
+    gradient_boosting_regressor_free(fitted_gradient_boosting_regressor)
+    printf("ESTIMATOR|gradient_boosting_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    gradient_boosting_regressor_free(m_gradient_boosting_regressor)
 
     # ---- graphical_lasso (unsupervised) ----
     t0 = flow_now_ns()
-    let m_graphical_lasso: GraphicalLasso = graphical_lasso_fit(X_c, 1.0, 100, 0.0001)
+    let probe_graphical_lasso: GraphicalLasso = graphical_lasso_fit(X_c, 1.0, 100, 0.0001)
     t1 = flow_now_ns()
-    t2 = t1
-    printf("ESTIMATOR|graphical_lasso|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    graphical_lasso_free(probe_graphical_lasso)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_graphical_lasso: GraphicalLasso = graphical_lasso_fit(X_c, 1.0, 100, 0.0001)
+        graphical_lasso_free(m_graphical_lasso)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|graphical_lasso|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
     fflush(null)
-    graphical_lasso_free(m_graphical_lasso)
 
     # ---- hdbscan (unsupervised) ----
     t0 = flow_now_ns()
-    let m_hdbscan: HDBSCAN = hdbscan_fit(X_c, 5, 5)
+    let probe_hdbscan: HDBSCAN = hdbscan_fit(X_c, 5, 5)
     t1 = flow_now_ns()
-    t2 = t1
-    printf("ESTIMATOR|hdbscan|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    hdbscan_free(probe_hdbscan)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_hdbscan: HDBSCAN = hdbscan_fit(X_c, 5, 5)
+        hdbscan_free(m_hdbscan)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|hdbscan|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
     fflush(null)
-    hdbscan_free(m_hdbscan)
 
     # ---- hist_gradient_boosting_classifier (classification) ----
     t0 = flow_now_ns()
-    let m_hist_gradient_boosting_classifier: HistGradientBoostingClassifier = hist_gradient_boosting_classifier_fit(X_c, y_c, n_c, 3, 10, 0.1, 5)
+    let probe_hist_gradient_boosting_classifier: HistGradientBoostingClassifier = hist_gradient_boosting_classifier_fit(X_c, y_c, n_c, 3, 10, 0.1, 5)
     t1 = flow_now_ns()
-    let o_hist_gradient_boosting_classifier: ptr<f32> = hist_gradient_boosting_classifier_predict(m_hist_gradient_boosting_classifier, X_c)
+    hist_gradient_boosting_classifier_free(probe_hist_gradient_boosting_classifier)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_hist_gradient_boosting_classifier: HistGradientBoostingClassifier = hist_gradient_boosting_classifier_fit(X_c, y_c, n_c, 3, 10, 0.1, 5)
+        hist_gradient_boosting_classifier_free(m_hist_gradient_boosting_classifier)
+    }
+    t1 = flow_now_ns()
+    let fitted_hist_gradient_boosting_classifier: HistGradientBoostingClassifier = hist_gradient_boosting_classifier_fit(X_c, y_c, n_c, 3, 10, 0.1, 5)
     t2 = flow_now_ns()
-    array_free_f32(o_hist_gradient_boosting_classifier)
-    printf("ESTIMATOR|hist_gradient_boosting_classifier|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_hist_gradient_boosting_classifier: ptr<f32> = hist_gradient_boosting_classifier_predict(fitted_hist_gradient_boosting_classifier, X_c)
+        array_free_f32(o_hist_gradient_boosting_classifier)
+    }
+    t3 = flow_now_ns()
+    hist_gradient_boosting_classifier_free(fitted_hist_gradient_boosting_classifier)
+    printf("ESTIMATOR|hist_gradient_boosting_classifier|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    hist_gradient_boosting_classifier_free(m_hist_gradient_boosting_classifier)
 
     # ---- hist_gradient_boosting_regressor (regression) ----
     t0 = flow_now_ns()
-    let m_hist_gradient_boosting_regressor: HistGradientBoostingRegressor = hist_gradient_boosting_regressor_fit(X_r, y_r, n_r, 10, 0.1, 5)
+    let probe_hist_gradient_boosting_regressor: HistGradientBoostingRegressor = hist_gradient_boosting_regressor_fit(X_r, y_r, n_r, 10, 0.1, 5)
     t1 = flow_now_ns()
-    let o_hist_gradient_boosting_regressor: ptr<f32> = hist_gradient_boosting_regressor_predict(m_hist_gradient_boosting_regressor, X_r)
+    hist_gradient_boosting_regressor_free(probe_hist_gradient_boosting_regressor)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_hist_gradient_boosting_regressor: HistGradientBoostingRegressor = hist_gradient_boosting_regressor_fit(X_r, y_r, n_r, 10, 0.1, 5)
+        hist_gradient_boosting_regressor_free(m_hist_gradient_boosting_regressor)
+    }
+    t1 = flow_now_ns()
+    let fitted_hist_gradient_boosting_regressor: HistGradientBoostingRegressor = hist_gradient_boosting_regressor_fit(X_r, y_r, n_r, 10, 0.1, 5)
     t2 = flow_now_ns()
-    array_free_f32(o_hist_gradient_boosting_regressor)
-    printf("ESTIMATOR|hist_gradient_boosting_regressor|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_hist_gradient_boosting_regressor: ptr<f32> = hist_gradient_boosting_regressor_predict(fitted_hist_gradient_boosting_regressor, X_r)
+        array_free_f32(o_hist_gradient_boosting_regressor)
+    }
+    t3 = flow_now_ns()
+    hist_gradient_boosting_regressor_free(fitted_hist_gradient_boosting_regressor)
+    printf("ESTIMATOR|hist_gradient_boosting_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    hist_gradient_boosting_regressor_free(m_hist_gradient_boosting_regressor)
 
     # ---- huber_regressor (regression) ----
     t0 = flow_now_ns()
-    let m_huber_regressor: HuberRegressor = huber_regressor_fit(X_r, y_r, 0.1, 100, 0.01)
+    let probe_huber_regressor: HuberRegressor = huber_regressor_fit(X_r, y_r, 0.1, 100, 0.01)
     t1 = flow_now_ns()
-    let o_huber_regressor: ptr<f32> = huber_regressor_predict(m_huber_regressor, X_r)
+    huber_regressor_free(probe_huber_regressor)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_huber_regressor: HuberRegressor = huber_regressor_fit(X_r, y_r, 0.1, 100, 0.01)
+        huber_regressor_free(m_huber_regressor)
+    }
+    t1 = flow_now_ns()
+    let fitted_huber_regressor: HuberRegressor = huber_regressor_fit(X_r, y_r, 0.1, 100, 0.01)
     t2 = flow_now_ns()
-    array_free_f32(o_huber_regressor)
-    printf("ESTIMATOR|huber_regressor|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_huber_regressor: ptr<f32> = huber_regressor_predict(fitted_huber_regressor, X_r)
+        array_free_f32(o_huber_regressor)
+    }
+    t3 = flow_now_ns()
+    huber_regressor_free(fitted_huber_regressor)
+    printf("ESTIMATOR|huber_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    huber_regressor_free(m_huber_regressor)
 
     # ---- isolation_forest (unsupervised) ----
     t0 = flow_now_ns()
-    let m_isolation_forest: IsolationForest = isolation_forest_fit(X_c, 10, 5, 42)
+    let probe_isolation_forest: IsolationForest = isolation_forest_fit(X_c, 10, 5, 42)
     t1 = flow_now_ns()
-    let o_isolation_forest: ptr<i32> = isolation_forest_predict(m_isolation_forest, X_c)
-    t2 = flow_now_ns()
-    printf("ESTIMATOR|isolation_forest|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    isolation_forest_free(probe_isolation_forest)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_isolation_forest: IsolationForest = isolation_forest_fit(X_c, 10, 5, 42)
+        isolation_forest_free(m_isolation_forest)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|isolation_forest|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
     fflush(null)
-    isolation_forest_free(m_isolation_forest)
 
     # ---- isomap (unsupervised) ----
     t0 = flow_now_ns()
-    let m_isomap: Isomap = isomap_fit(X_c, 2, 5)
+    let probe_isomap: Isomap = isomap_fit(X_c, 2, 5)
     t1 = flow_now_ns()
-    t2 = t1
-    printf("ESTIMATOR|isomap|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    isomap_free(probe_isomap)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_isomap: Isomap = isomap_fit(X_c, 2, 5)
+        isomap_free(m_isomap)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|isomap|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
     fflush(null)
-    isomap_free(m_isomap)
 
     # ---- iterative_imputer (unsupervised) ----
     t0 = flow_now_ns()
-    let m_iterative_imputer: IterativeImputer = iterative_imputer_fit(X_c, 100, 0.0001, 42)
+    let probe_iterative_imputer: IterativeImputer = iterative_imputer_fit(X_c, 100, 0.0001, 42)
     t1 = flow_now_ns()
-    let o_iterative_imputer: Matrix = iterative_imputer_transform(m_iterative_imputer, X_c)
+    iterative_imputer_free(probe_iterative_imputer)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_iterative_imputer: IterativeImputer = iterative_imputer_fit(X_c, 100, 0.0001, 42)
+        iterative_imputer_free(m_iterative_imputer)
+    }
+    t1 = flow_now_ns()
+    let fitted_iterative_imputer: IterativeImputer = iterative_imputer_fit(X_c, 100, 0.0001, 42)
     t2 = flow_now_ns()
-    matrix_free(o_iterative_imputer)
-    printf("ESTIMATOR|iterative_imputer|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_iterative_imputer: Matrix = iterative_imputer_transform(fitted_iterative_imputer, X_c)
+        matrix_free(o_iterative_imputer)
+    }
+    t3 = flow_now_ns()
+    iterative_imputer_free(fitted_iterative_imputer)
+    printf("ESTIMATOR|iterative_imputer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    iterative_imputer_free(m_iterative_imputer)
 
     # ---- kbins_discretizer (unsupervised) ----
     t0 = flow_now_ns()
-    let m_kbins_discretizer: KBinsDiscretizer = kbins_discretizer_fit(X_c, 4, 0)
+    let probe_kbins_discretizer: KBinsDiscretizer = kbins_discretizer_fit(X_c, 4, 0)
     t1 = flow_now_ns()
-    let o_kbins_discretizer: Matrix = kbins_discretizer_transform(m_kbins_discretizer, X_c)
+    kbins_discretizer_free(probe_kbins_discretizer)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_kbins_discretizer: KBinsDiscretizer = kbins_discretizer_fit(X_c, 4, 0)
+        kbins_discretizer_free(m_kbins_discretizer)
+    }
+    t1 = flow_now_ns()
+    let fitted_kbins_discretizer: KBinsDiscretizer = kbins_discretizer_fit(X_c, 4, 0)
     t2 = flow_now_ns()
-    matrix_free(o_kbins_discretizer)
-    printf("ESTIMATOR|kbins_discretizer|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_kbins_discretizer: Matrix = kbins_discretizer_transform(fitted_kbins_discretizer, X_c)
+        matrix_free(o_kbins_discretizer)
+    }
+    t3 = flow_now_ns()
+    kbins_discretizer_free(fitted_kbins_discretizer)
+    printf("ESTIMATOR|kbins_discretizer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    kbins_discretizer_free(m_kbins_discretizer)
 
     # ---- kernel_density (unsupervised) ----
     t0 = flow_now_ns()
-    let m_kernel_density: KernelDensity = kernel_density_fit(X_c, 1.0, 0)
+    let probe_kernel_density: KernelDensity = kernel_density_fit(X_c, 1.0, 0)
     t1 = flow_now_ns()
-    t2 = t1
-    printf("ESTIMATOR|kernel_density|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    kernel_density_free(probe_kernel_density)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_kernel_density: KernelDensity = kernel_density_fit(X_c, 1.0, 0)
+        kernel_density_free(m_kernel_density)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|kernel_density|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
     fflush(null)
-    kernel_density_free(m_kernel_density)
 
     # ---- kernel_pca (unsupervised) ----
     t0 = flow_now_ns()
-    let m_kernel_pca: KernelPCA = kernel_pca_fit(X_c, 2, 0, 0.1, 2, 0.0)
+    let probe_kernel_pca: KernelPCA = kernel_pca_fit(X_c, 2, 0, 0.1, 2, 0.0)
     t1 = flow_now_ns()
-    let o_kernel_pca: Matrix = kernel_pca_transform(m_kernel_pca, X_c)
+    kernel_pca_free(probe_kernel_pca)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_kernel_pca: KernelPCA = kernel_pca_fit(X_c, 2, 0, 0.1, 2, 0.0)
+        kernel_pca_free(m_kernel_pca)
+    }
+    t1 = flow_now_ns()
+    let fitted_kernel_pca: KernelPCA = kernel_pca_fit(X_c, 2, 0, 0.1, 2, 0.0)
     t2 = flow_now_ns()
-    matrix_free(o_kernel_pca)
-    printf("ESTIMATOR|kernel_pca|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_kernel_pca: Matrix = kernel_pca_transform(fitted_kernel_pca, X_c)
+        matrix_free(o_kernel_pca)
+    }
+    t3 = flow_now_ns()
+    kernel_pca_free(fitted_kernel_pca)
+    printf("ESTIMATOR|kernel_pca|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    kernel_pca_free(m_kernel_pca)
 
     # ---- kernel_ridge (regression) ----
     t0 = flow_now_ns()
-    let m_kernel_ridge: KernelRidge = kernel_ridge_fit(X_r, y_r, 1.0, 0, 0.1, 2, 0.0)
+    let probe_kernel_ridge: KernelRidge = kernel_ridge_fit(X_r, y_r, 1.0, 0, 0.1, 2, 0.0)
     t1 = flow_now_ns()
-    let o_kernel_ridge: ptr<f32> = kernel_ridge_predict(m_kernel_ridge, X_r)
+    kernel_ridge_free(probe_kernel_ridge)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_kernel_ridge: KernelRidge = kernel_ridge_fit(X_r, y_r, 1.0, 0, 0.1, 2, 0.0)
+        kernel_ridge_free(m_kernel_ridge)
+    }
+    t1 = flow_now_ns()
+    let fitted_kernel_ridge: KernelRidge = kernel_ridge_fit(X_r, y_r, 1.0, 0, 0.1, 2, 0.0)
     t2 = flow_now_ns()
-    array_free_f32(o_kernel_ridge)
-    printf("ESTIMATOR|kernel_ridge|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_kernel_ridge: ptr<f32> = kernel_ridge_predict(fitted_kernel_ridge, X_r)
+        array_free_f32(o_kernel_ridge)
+    }
+    t3 = flow_now_ns()
+    kernel_ridge_free(fitted_kernel_ridge)
+    printf("ESTIMATOR|kernel_ridge|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    kernel_ridge_free(m_kernel_ridge)
 
     # ---- kernel_svc (classification) ----
     t0 = flow_now_ns()
-    let m_kernel_svc: KernelSVC = kernel_svc_fit(X_c, y_c, 3, 1.0, 0.1, 100)
+    let probe_kernel_svc: KernelSVC = kernel_svc_fit(X_c, y_c, 3, 1.0, 0.1, 100)
     t1 = flow_now_ns()
-    let o_kernel_svc: ptr<f32> = kernel_svc_predict(m_kernel_svc, X_c)
+    kernel_svc_free(probe_kernel_svc)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_kernel_svc: KernelSVC = kernel_svc_fit(X_c, y_c, 3, 1.0, 0.1, 100)
+        kernel_svc_free(m_kernel_svc)
+    }
+    t1 = flow_now_ns()
+    let fitted_kernel_svc: KernelSVC = kernel_svc_fit(X_c, y_c, 3, 1.0, 0.1, 100)
     t2 = flow_now_ns()
-    array_free_f32(o_kernel_svc)
-    printf("ESTIMATOR|kernel_svc|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_kernel_svc: ptr<f32> = kernel_svc_predict(fitted_kernel_svc, X_c)
+        array_free_f32(o_kernel_svc)
+    }
+    t3 = flow_now_ns()
+    kernel_svc_free(fitted_kernel_svc)
+    printf("ESTIMATOR|kernel_svc|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    kernel_svc_free(m_kernel_svc)
 
     # ---- kernel_svc_multi (classification) ----
     t0 = flow_now_ns()
-    let m_kernel_svc_multi: KernelSVCMulti = kernel_svc_multi_fit(X_c, y_c, 3, 0.1, 1.0, 100)
+    let probe_kernel_svc_multi: KernelSVCMulti = kernel_svc_multi_fit(X_c, y_c, 3, 0.1, 1.0, 100)
     t1 = flow_now_ns()
-    let o_kernel_svc_multi: ptr<f32> = kernel_svc_multi_predict(m_kernel_svc_multi, X_c)
+    kernel_svc_multi_free(probe_kernel_svc_multi)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_kernel_svc_multi: KernelSVCMulti = kernel_svc_multi_fit(X_c, y_c, 3, 0.1, 1.0, 100)
+        kernel_svc_multi_free(m_kernel_svc_multi)
+    }
+    t1 = flow_now_ns()
+    let fitted_kernel_svc_multi: KernelSVCMulti = kernel_svc_multi_fit(X_c, y_c, 3, 0.1, 1.0, 100)
     t2 = flow_now_ns()
-    array_free_f32(o_kernel_svc_multi)
-    printf("ESTIMATOR|kernel_svc_multi|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_kernel_svc_multi: ptr<f32> = kernel_svc_multi_predict(fitted_kernel_svc_multi, X_c)
+        array_free_f32(o_kernel_svc_multi)
+    }
+    t3 = flow_now_ns()
+    kernel_svc_multi_free(fitted_kernel_svc_multi)
+    printf("ESTIMATOR|kernel_svc_multi|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    kernel_svc_multi_free(m_kernel_svc_multi)
 
     # ---- kmeans (unsupervised) ----
     t0 = flow_now_ns()
-    let m_kmeans: KMeans = kmeans_fit(X_c, 3, 100, 0.0001, 42)
+    let probe_kmeans: KMeans = kmeans_fit(X_c, 3, 100, 0.0001, 42)
     t1 = flow_now_ns()
-    let o_kmeans: ptr<i32> = kmeans_predict(m_kmeans, X_c)
-    t2 = flow_now_ns()
-    printf("ESTIMATOR|kmeans|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    kmeans_free(probe_kmeans)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_kmeans: KMeans = kmeans_fit(X_c, 3, 100, 0.0001, 42)
+        kmeans_free(m_kmeans)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|kmeans|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
     fflush(null)
-    kmeans_free(m_kmeans)
 
     # ---- kneighbors_transformer (unsupervised) ----
     t0 = flow_now_ns()
-    let m_kneighbors_transformer: KNeighborsTransformer = kneighbors_transformer_fit(X_c, 5, 0)
+    let probe_kneighbors_transformer: KNeighborsTransformer = kneighbors_transformer_fit(X_c, 5, 0)
     t1 = flow_now_ns()
-    let o_kneighbors_transformer: Matrix = kneighbors_transformer_transform(m_kneighbors_transformer, X_c)
+    kneighbors_transformer_free(probe_kneighbors_transformer)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_kneighbors_transformer: KNeighborsTransformer = kneighbors_transformer_fit(X_c, 5, 0)
+        kneighbors_transformer_free(m_kneighbors_transformer)
+    }
+    t1 = flow_now_ns()
+    let fitted_kneighbors_transformer: KNeighborsTransformer = kneighbors_transformer_fit(X_c, 5, 0)
     t2 = flow_now_ns()
-    matrix_free(o_kneighbors_transformer)
-    printf("ESTIMATOR|kneighbors_transformer|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_kneighbors_transformer: Matrix = kneighbors_transformer_transform(fitted_kneighbors_transformer, X_c)
+        matrix_free(o_kneighbors_transformer)
+    }
+    t3 = flow_now_ns()
+    kneighbors_transformer_free(fitted_kneighbors_transformer)
+    printf("ESTIMATOR|kneighbors_transformer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    kneighbors_transformer_free(m_kneighbors_transformer)
 
     # ---- knn_classifier (classification) ----
     t0 = flow_now_ns()
-    let m_knn_classifier: KNNClassifier = knn_classifier_fit(X_c, y_c, 3, 3)
+    let probe_knn_classifier: KNNClassifier = knn_classifier_fit(X_c, y_c, 3, 3)
     t1 = flow_now_ns()
-    let o_knn_classifier: Matrix = knn_classifier_predict(m_knn_classifier, X_c)
+    knn_classifier_free(probe_knn_classifier)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_knn_classifier: KNNClassifier = knn_classifier_fit(X_c, y_c, 3, 3)
+        knn_classifier_free(m_knn_classifier)
+    }
+    t1 = flow_now_ns()
+    let fitted_knn_classifier: KNNClassifier = knn_classifier_fit(X_c, y_c, 3, 3)
     t2 = flow_now_ns()
-    matrix_free(o_knn_classifier)
-    printf("ESTIMATOR|knn_classifier|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_knn_classifier: Matrix = knn_classifier_predict(fitted_knn_classifier, X_c)
+        matrix_free(o_knn_classifier)
+    }
+    t3 = flow_now_ns()
+    knn_classifier_free(fitted_knn_classifier)
+    printf("ESTIMATOR|knn_classifier|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    knn_classifier_free(m_knn_classifier)
 
     # ---- knn_imputer (unsupervised) ----
     t0 = flow_now_ns()
-    let m_knn_imputer: KNNImputer = knn_imputer_fit(X_c, 5, 0)
+    let probe_knn_imputer: KNNImputer = knn_imputer_fit(X_c, 5, 0)
     t1 = flow_now_ns()
-    let o_knn_imputer: Matrix = knn_imputer_transform(m_knn_imputer, X_c)
+    knn_imputer_free(probe_knn_imputer)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_knn_imputer: KNNImputer = knn_imputer_fit(X_c, 5, 0)
+        knn_imputer_free(m_knn_imputer)
+    }
+    t1 = flow_now_ns()
+    let fitted_knn_imputer: KNNImputer = knn_imputer_fit(X_c, 5, 0)
     t2 = flow_now_ns()
-    matrix_free(o_knn_imputer)
-    printf("ESTIMATOR|knn_imputer|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_knn_imputer: Matrix = knn_imputer_transform(fitted_knn_imputer, X_c)
+        matrix_free(o_knn_imputer)
+    }
+    t3 = flow_now_ns()
+    knn_imputer_free(fitted_knn_imputer)
+    printf("ESTIMATOR|knn_imputer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    knn_imputer_free(m_knn_imputer)
 
     # ---- knn_regressor (regression) ----
     t0 = flow_now_ns()
-    let m_knn_regressor: KNNRegressor = knn_regressor_fit(X_r, y_r, 3)
+    let probe_knn_regressor: KNNRegressor = knn_regressor_fit(X_r, y_r, 3)
     t1 = flow_now_ns()
-    let o_knn_regressor: ptr<f32> = knn_regressor_predict(m_knn_regressor, X_r)
+    knn_regressor_free(probe_knn_regressor)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_knn_regressor: KNNRegressor = knn_regressor_fit(X_r, y_r, 3)
+        knn_regressor_free(m_knn_regressor)
+    }
+    t1 = flow_now_ns()
+    let fitted_knn_regressor: KNNRegressor = knn_regressor_fit(X_r, y_r, 3)
     t2 = flow_now_ns()
-    array_free_f32(o_knn_regressor)
-    printf("ESTIMATOR|knn_regressor|%.9f|%.9f|ok\n", ms_between(t0, t1), ms_between(t1, t2))
+    for rep2 in 0 to reps {
+        let o_knn_regressor: ptr<f32> = knn_regressor_predict(fitted_knn_regressor, X_r)
+        array_free_f32(o_knn_regressor)
+    }
+    t3 = flow_now_ns()
+    knn_regressor_free(fitted_knn_regressor)
+    printf("ESTIMATOR|knn_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
-    knn_regressor_free(m_knn_regressor)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }
     free(Y_label_rows as ptr<void>)
