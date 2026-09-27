@@ -65,11 +65,48 @@ function main() -> i32 {
         Y_rows[i] = row
     }
 
+    # A one-dimensional x for the isotonic row, which regresses against a
+    # single ordered variable rather than a design.
+    let x1d_r: ptr<f32> = array_new_f32(n_r)
+    for i in 0 to n_r { x1d_r[i] = matrix_at(X_r, i, 0) }
+
+    # Per-feature importances for the selector row, which takes the weights a
+    # fitted model would hand it rather than a design.
+    let w_f: ptr<f32> = array_new_f32(f_c)
+    for i in 0 to f_c { w_f[i] = 1.0 / ((i + 1) as f32) }
+
     let mut t0: i64 = 0
     let mut t1: i64 = 0
     let mut t2: i64 = 0
     let mut t3: i64 = 0
     let mut reps: i32 = 1
+    let mut sink: f32 = 0.0
+
+    # ---- decision_tree_classifier (classification) ----
+    t0 = flow_now_ns()
+    let probe_decision_tree_classifier: DecisionTreeClassifier = decision_tree_classifier_fit(X_c, y_c, 3, 5, 0)
+    t1 = flow_now_ns()
+    decision_tree_classifier_free(probe_decision_tree_classifier)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_decision_tree_classifier: DecisionTreeClassifier = decision_tree_classifier_fit(X_c, y_c, 3, 5, 0)
+        decision_tree_classifier_free(m_decision_tree_classifier)
+    }
+    t1 = flow_now_ns()
+    let fitted_decision_tree_classifier: DecisionTreeClassifier = decision_tree_classifier_fit(X_c, y_c, 3, 5, 0)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_decision_tree_classifier: ptr<f32> = decision_tree_classifier_predict(fitted_decision_tree_classifier, X_c)
+        sink = sink + o_decision_tree_classifier[0]
+        array_free_f32(o_decision_tree_classifier)
+    }
+    t3 = flow_now_ns()
+    decision_tree_classifier_free(fitted_decision_tree_classifier)
+    printf("ESTIMATOR|decision_tree_classifier|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
 
     # ---- decision_tree_regressor (regression) ----
     t0 = flow_now_ns()
@@ -89,6 +126,7 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_decision_tree_regressor: ptr<f32> = decision_tree_regressor_predict(fitted_decision_tree_regressor, X_r)
+        sink = sink + o_decision_tree_regressor[0]
         array_free_f32(o_decision_tree_regressor)
     }
     t3 = flow_now_ns()
@@ -114,6 +152,9 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_dictionary_learning: Matrix = dictionary_learning_transform(fitted_dictionary_learning, X_c)
+        if o_dictionary_learning.rows > 0 {
+            if o_dictionary_learning.cols > 0 { sink = sink + o_dictionary_learning.data[0] }
+        }
         matrix_free(o_dictionary_learning)
     }
     t3 = flow_now_ns()
@@ -139,11 +180,64 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_discriminant_lda: ptr<f32> = discriminant_lda_predict(fitted_discriminant_lda, X_c)
+        sink = sink + o_discriminant_lda[0]
         array_free_f32(o_discriminant_lda)
     }
     t3 = flow_now_ns()
     discriminant_lda_free(fitted_discriminant_lda)
     printf("ESTIMATOR|discriminant_lda|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- dummy_classifier (classification, written out) ----
+    t0 = flow_now_ns()
+    let probe_dummy_classifier: DummyClassifier = dummy_classifier_fit(y_c, n_c, 3, 0, 0.0, 42)
+    t1 = flow_now_ns()
+    dummy_classifier_free(probe_dummy_classifier)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_dummy_classifier: DummyClassifier = dummy_classifier_fit(y_c, n_c, 3, 0, 0.0, 42)
+        dummy_classifier_free(m_dummy_classifier)
+    }
+    t1 = flow_now_ns()
+    let fitted_dummy_classifier: DummyClassifier = dummy_classifier_fit(y_c, n_c, 3, 0, 0.0, 42)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_dummy_classifier: ptr<f32> = dummy_classifier_predict(fitted_dummy_classifier, n_c)
+        sink = sink + o_dummy_classifier[0]
+        array_free_f32(o_dummy_classifier)
+    }
+    t3 = flow_now_ns()
+    dummy_classifier_free(fitted_dummy_classifier)
+    printf("ESTIMATOR|dummy_classifier|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- dummy_regressor (regression, written out) ----
+    t0 = flow_now_ns()
+    let probe_dummy_regressor: DummyRegressor = dummy_regressor_fit(y_r, n_r, 0, 0.0)
+    t1 = flow_now_ns()
+    dummy_regressor_free(probe_dummy_regressor)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_dummy_regressor: DummyRegressor = dummy_regressor_fit(y_r, n_r, 0, 0.0)
+        dummy_regressor_free(m_dummy_regressor)
+    }
+    t1 = flow_now_ns()
+    let fitted_dummy_regressor: DummyRegressor = dummy_regressor_fit(y_r, n_r, 0, 0.0)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_dummy_regressor: ptr<f32> = dummy_regressor_predict(fitted_dummy_regressor, n_r)
+        sink = sink + o_dummy_regressor[0]
+        array_free_f32(o_dummy_regressor)
+    }
+    t3 = flow_now_ns()
+    dummy_regressor_free(fitted_dummy_regressor)
+    printf("ESTIMATOR|dummy_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     # ---- elastic_net_cv (regression) ----
@@ -164,6 +258,7 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_elastic_net_cv: ptr<f32> = elastic_net_cv_predict(fitted_elastic_net_cv, X_r)
+        sink = sink + o_elastic_net_cv[0]
         array_free_f32(o_elastic_net_cv)
     }
     t3 = flow_now_ns()
@@ -189,6 +284,7 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_elastic_net: ptr<f32> = elastic_net_predict(fitted_elastic_net, X_r)
+        sink = sink + o_elastic_net[0]
         array_free_f32(o_elastic_net)
     }
     t3 = flow_now_ns()
@@ -214,6 +310,7 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_elliptic_envelope: ptr<f32> = elliptic_envelope_predict(fitted_elliptic_envelope, X_c)
+        sink = sink + o_elliptic_envelope[0]
         array_free_f32(o_elliptic_envelope)
     }
     t3 = flow_now_ns()
@@ -256,6 +353,7 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_extra_tree_classifier: ptr<f32> = extra_tree_classifier_predict(fitted_extra_tree_classifier, X_c)
+        sink = sink + o_extra_tree_classifier[0]
         array_free_f32(o_extra_tree_classifier)
     }
     t3 = flow_now_ns()
@@ -281,6 +379,7 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_extra_tree_regressor: ptr<f32> = extra_tree_regressor_predict(fitted_extra_tree_regressor, X_r)
+        sink = sink + o_extra_tree_regressor[0]
         array_free_f32(o_extra_tree_regressor)
     }
     t3 = flow_now_ns()
@@ -306,6 +405,7 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_extra_trees_classifier: ptr<f32> = extra_trees_classifier_predict(fitted_extra_trees_classifier, X_c)
+        sink = sink + o_extra_trees_classifier[0]
         array_free_f32(o_extra_trees_classifier)
     }
     t3 = flow_now_ns()
@@ -331,6 +431,7 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_extra_trees_regressor: ptr<f32> = extra_trees_regressor_predict(fitted_extra_trees_regressor, X_r)
+        sink = sink + o_extra_trees_regressor[0]
         array_free_f32(o_extra_trees_regressor)
     }
     t3 = flow_now_ns()
@@ -356,6 +457,9 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_factor_analysis: Matrix = factor_analysis_transform(fitted_factor_analysis, X_c)
+        if o_factor_analysis.rows > 0 {
+            if o_factor_analysis.cols > 0 { sink = sink + o_factor_analysis.data[0] }
+        }
         matrix_free(o_factor_analysis)
     }
     t3 = flow_now_ns()
@@ -381,6 +485,9 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_fast_ica: Matrix = fast_ica_transform(fitted_fast_ica, X_c)
+        if o_fast_ica.rows > 0 {
+            if o_fast_ica.cols > 0 { sink = sink + o_fast_ica.data[0] }
+        }
         matrix_free(o_fast_ica)
     }
     t3 = flow_now_ns()
@@ -406,6 +513,9 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_feature_agglomeration: Matrix = feature_agglomeration_transform(fitted_feature_agglomeration, X_c)
+        if o_feature_agglomeration.rows > 0 {
+            if o_feature_agglomeration.cols > 0 { sink = sink + o_feature_agglomeration.data[0] }
+        }
         matrix_free(o_feature_agglomeration)
     }
     t3 = flow_now_ns()
@@ -431,6 +541,7 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_gamma_regressor: ptr<f32> = gamma_regressor_predict(fitted_gamma_regressor, X_r)
+        sink = sink + o_gamma_regressor[0]
         array_free_f32(o_gamma_regressor)
     }
     t3 = flow_now_ns()
@@ -473,86 +584,12 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_gaussian_nb: ptr<f32> = gaussian_nb_predict(fitted_gaussian_nb, X_c)
+        sink = sink + o_gaussian_nb[0]
         array_free_f32(o_gaussian_nb)
     }
     t3 = flow_now_ns()
     gaussian_nb_free(fitted_gaussian_nb)
     printf("ESTIMATOR|gaussian_nb|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- gaussian_process_classifier (regression) ----
-    t0 = flow_now_ns()
-    let probe_gaussian_process_classifier: GaussianProcessClassifier = gaussian_process_classifier_fit(X_r, y_r, 0.1, 100)
-    t1 = flow_now_ns()
-    gaussian_process_classifier_free(probe_gaussian_process_classifier)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_gaussian_process_classifier: GaussianProcessClassifier = gaussian_process_classifier_fit(X_r, y_r, 0.1, 100)
-        gaussian_process_classifier_free(m_gaussian_process_classifier)
-    }
-    t1 = flow_now_ns()
-    let fitted_gaussian_process_classifier: GaussianProcessClassifier = gaussian_process_classifier_fit(X_r, y_r, 0.1, 100)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_gaussian_process_classifier: ptr<f32> = gaussian_process_classifier_predict(fitted_gaussian_process_classifier, X_r)
-        array_free_f32(o_gaussian_process_classifier)
-    }
-    t3 = flow_now_ns()
-    gaussian_process_classifier_free(fitted_gaussian_process_classifier)
-    printf("ESTIMATOR|gaussian_process_classifier|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- gaussian_process_regressor (regression) ----
-    t0 = flow_now_ns()
-    let probe_gaussian_process_regressor: GaussianProcessRegressor = gaussian_process_regressor_fit(X_r, y_r, 1.0, 1.0, 0)
-    t1 = flow_now_ns()
-    gaussian_process_regressor_free(probe_gaussian_process_regressor)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_gaussian_process_regressor: GaussianProcessRegressor = gaussian_process_regressor_fit(X_r, y_r, 1.0, 1.0, 0)
-        gaussian_process_regressor_free(m_gaussian_process_regressor)
-    }
-    t1 = flow_now_ns()
-    let fitted_gaussian_process_regressor: GaussianProcessRegressor = gaussian_process_regressor_fit(X_r, y_r, 1.0, 1.0, 0)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_gaussian_process_regressor: ptr<f32> = gaussian_process_regressor_predict(fitted_gaussian_process_regressor, X_r)
-        array_free_f32(o_gaussian_process_regressor)
-    }
-    t3 = flow_now_ns()
-    gaussian_process_regressor_free(fitted_gaussian_process_regressor)
-    printf("ESTIMATOR|gaussian_process_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- gradient_boosting_classifier (classification) ----
-    t0 = flow_now_ns()
-    let probe_gradient_boosting_classifier: GradientBoostingClassifier = gradient_boosting_classifier_fit(X_c, y_c, 3, 10, 0.1, 5, 42)
-    t1 = flow_now_ns()
-    gradient_boosting_classifier_free(probe_gradient_boosting_classifier)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_gradient_boosting_classifier: GradientBoostingClassifier = gradient_boosting_classifier_fit(X_c, y_c, 3, 10, 0.1, 5, 42)
-        gradient_boosting_classifier_free(m_gradient_boosting_classifier)
-    }
-    t1 = flow_now_ns()
-    let fitted_gradient_boosting_classifier: GradientBoostingClassifier = gradient_boosting_classifier_fit(X_c, y_c, 3, 10, 0.1, 5, 42)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_gradient_boosting_classifier: ptr<f32> = gradient_boosting_classifier_predict(fitted_gradient_boosting_classifier, X_c)
-        array_free_f32(o_gradient_boosting_classifier)
-    }
-    t3 = flow_now_ns()
-    gradient_boosting_classifier_free(fitted_gradient_boosting_classifier)
-    printf("ESTIMATOR|gradient_boosting_classifier|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }
@@ -563,5 +600,10 @@ function main() -> i32 {
     matrix_free(Y_multi)
     free(yi_c as ptr<void>)
     free(yi_r as ptr<void>)
+    array_free_f32(x1d_r)
+    array_free_f32(w_f)
+    # The sink is printed so the work above cannot be optimized away. The
+    # parser matches ESTIMATOR lines only, so this one is ignored.
+    printf("SINK|%.9f\n", sink)
     return 0
 }

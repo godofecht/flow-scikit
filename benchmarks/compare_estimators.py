@@ -55,7 +55,7 @@ def main() -> int:
     rows = []
     for entry in registry["entries"]:
         name = entry["flow_estimator"]
-        if entry["bucket"] != "runnable":
+        if entry["bucket"] not in ("runnable", "shaped"):
             row = {"flow_estimator": name, "status": entry["bucket"], "reason": entry.get("reason", "")}
             if entry.get("sklearn_estimator"):
                 row["sklearn_estimator"] = entry["sklearn_estimator"]

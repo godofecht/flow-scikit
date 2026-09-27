@@ -3,7 +3,8 @@
   "counts": {
     "estimators": 203,
     "runnable": 168,
-    "different_shape": 25,
+    "shaped": 13,
+    "different_shape": 12,
     "simplified": 4,
     "flow_only": 6
   },
@@ -196,9 +197,20 @@
         "n_features",
         "sample_steps"
       ],
-      "bucket": "different_shape",
-      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness",
-      "sklearn_estimator": "AdditiveChi2Sampler"
+      "bucket": "shaped",
+      "sklearn_estimator": "AdditiveChi2Sampler",
+      "shape": {
+        "dataset": "classification",
+        "flow_fit": [
+          "n_c",
+          "f_c",
+          "2"
+        ],
+        "flow_work": [
+          "X_c"
+        ],
+        "sklearn_input": "X"
+      }
     },
     {
       "flow_estimator": "affinity_propagation",
@@ -1719,9 +1731,23 @@
         "constant_label",
         "seed"
       ],
-      "bucket": "different_shape",
-      "reason": "takes ptr<f32> first, so it is not an estimator over a feature matrix and needs its own harness",
-      "sklearn_estimator": "DummyClassifier"
+      "bucket": "shaped",
+      "sklearn_estimator": "DummyClassifier",
+      "shape": {
+        "dataset": "classification",
+        "flow_fit": [
+          "y_c",
+          "n_c",
+          "3",
+          "0",
+          "0.0",
+          "42"
+        ],
+        "flow_work": [
+          "n_c"
+        ],
+        "sklearn_input": "X"
+      }
     },
     {
       "flow_estimator": "dummy_regressor",
@@ -1780,9 +1806,21 @@
         "strategy",
         "constant_value"
       ],
-      "bucket": "different_shape",
-      "reason": "takes ptr<f32> first, so it is not an estimator over a feature matrix and needs its own harness",
-      "sklearn_estimator": "DummyRegressor"
+      "bucket": "shaped",
+      "sklearn_estimator": "DummyRegressor",
+      "shape": {
+        "dataset": "regression",
+        "flow_fit": [
+          "y_r",
+          "n_r",
+          "0",
+          "0.0"
+        ],
+        "flow_work": [
+          "n_r"
+        ],
+        "sklearn_input": "X"
+      }
     },
     {
       "flow_estimator": "elastic_net_cv",
@@ -2897,9 +2935,21 @@
         "n_components",
         "seed"
       ],
-      "bucket": "different_shape",
-      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness",
-      "sklearn_estimator": "GaussianRandomProjection"
+      "bucket": "shaped",
+      "sklearn_estimator": "GaussianRandomProjection",
+      "shape": {
+        "dataset": "classification",
+        "flow_fit": [
+          "f_c",
+          "2",
+          "42"
+        ],
+        "flow_work": [
+          "X_c"
+        ],
+        "sklearn_input": "X",
+        "sklearn_ctor": "n_components=2, random_state=42"
+      }
     },
     {
       "flow_estimator": "gradient_boosting_classifier",
@@ -3604,9 +3654,22 @@
         "n",
         "increasing"
       ],
-      "bucket": "different_shape",
-      "reason": "takes ptr<f32> first, so it is not an estimator over a feature matrix and needs its own harness",
-      "sklearn_estimator": "IsotonicRegression"
+      "bucket": "shaped",
+      "sklearn_estimator": "IsotonicRegression",
+      "shape": {
+        "dataset": "regression",
+        "flow_fit": [
+          "x1d_r",
+          "y_r",
+          "n_r",
+          "true"
+        ],
+        "flow_work": [
+          "x1d_r",
+          "n_r"
+        ],
+        "sklearn_input": "x1d"
+      }
     },
     {
       "flow_estimator": "iterative_imputer",
@@ -4456,9 +4519,22 @@
         "neg_label",
         "pos_label"
       ],
-      "bucket": "different_shape",
-      "reason": "takes ptr<f32> first, so it is not an estimator over a feature matrix and needs its own harness",
-      "sklearn_estimator": "LabelBinarizer"
+      "bucket": "shaped",
+      "sklearn_estimator": "LabelBinarizer",
+      "shape": {
+        "dataset": "classification",
+        "flow_fit": [
+          "y_c",
+          "n_c",
+          "0.0",
+          "1.0"
+        ],
+        "flow_work": [
+          "y_c",
+          "n_c"
+        ],
+        "sklearn_input": "y"
+      }
     },
     {
       "flow_estimator": "label_encoder",
@@ -4511,9 +4587,20 @@
         "y",
         "n"
       ],
-      "bucket": "different_shape",
-      "reason": "takes ptr<f32> first, so it is not an estimator over a feature matrix and needs its own harness",
-      "sklearn_estimator": "LabelEncoder"
+      "bucket": "shaped",
+      "sklearn_estimator": "LabelEncoder",
+      "shape": {
+        "dataset": "classification",
+        "flow_fit": [
+          "y_c",
+          "n_c"
+        ],
+        "flow_work": [
+          "y_c",
+          "n_c"
+        ],
+        "sklearn_input": "y"
+      }
     },
     {
       "flow_estimator": "label_propagation",
@@ -8771,9 +8858,21 @@
         "n_components",
         "degree"
       ],
-      "bucket": "different_shape",
-      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness",
-      "sklearn_estimator": "PolynomialCountSketch"
+      "bucket": "shaped",
+      "sklearn_estimator": "PolynomialCountSketch",
+      "shape": {
+        "dataset": "classification",
+        "flow_fit": [
+          "f_c",
+          "2",
+          "2"
+        ],
+        "flow_work": [
+          "X_c"
+        ],
+        "sklearn_input": "X",
+        "sklearn_ctor": "n_components=2, degree=2, random_state=42"
+      }
     },
     {
       "flow_estimator": "polynomial_features",
@@ -8832,9 +8931,21 @@
         "interaction_only",
         "include_bias"
       ],
-      "bucket": "different_shape",
-      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness",
-      "sklearn_estimator": "PolynomialFeatures"
+      "bucket": "shaped",
+      "sklearn_estimator": "PolynomialFeatures",
+      "shape": {
+        "dataset": "classification",
+        "flow_fit": [
+          "f_c",
+          "2",
+          "false",
+          "true"
+        ],
+        "flow_work": [
+          "X_c"
+        ],
+        "sklearn_input": "X"
+      }
     },
     {
       "flow_estimator": "power_transformer",
@@ -9577,9 +9688,22 @@
         "n_components",
         "seed"
       ],
-      "bucket": "different_shape",
-      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness",
-      "sklearn_estimator": "RBFSampler"
+      "bucket": "shaped",
+      "sklearn_estimator": "RBFSampler",
+      "shape": {
+        "dataset": "classification",
+        "flow_fit": [
+          "f_c",
+          "0.1",
+          "2",
+          "42"
+        ],
+        "flow_work": [
+          "X_c"
+        ],
+        "sklearn_input": "X",
+        "sklearn_ctor": "gamma=0.1, n_components=2, random_state=42"
+      }
     },
     {
       "flow_estimator": "regressor_chain",
@@ -10238,9 +10362,20 @@
         "n_features",
         "threshold"
       ],
-      "bucket": "different_shape",
-      "reason": "takes ptr<f32> first, so it is not an estimator over a feature matrix and needs its own harness",
-      "sklearn_estimator": "SelectFromModel"
+      "bucket": "shaped",
+      "sklearn_estimator": "SelectFromModel",
+      "shape": {
+        "dataset": "classification",
+        "flow_fit": [
+          "w_f",
+          "f_c",
+          "0.5"
+        ],
+        "flow_work": [
+          "X_c"
+        ],
+        "sklearn_input": "X"
+      }
     },
     {
       "flow_estimator": "select_fwe",
@@ -10921,9 +11056,22 @@
         "n_components",
         "seed"
       ],
-      "bucket": "different_shape",
-      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness",
-      "sklearn_estimator": "SkewedChi2Sampler"
+      "bucket": "shaped",
+      "sklearn_estimator": "SkewedChi2Sampler",
+      "shape": {
+        "dataset": "classification",
+        "flow_fit": [
+          "f_c",
+          "1.0",
+          "2",
+          "42"
+        ],
+        "flow_work": [
+          "X_c"
+        ],
+        "sklearn_input": "X",
+        "sklearn_ctor": "skewedness=1.0, n_components=2, random_state=42"
+      }
     },
     {
       "flow_estimator": "sparse_coder",
@@ -11102,9 +11250,22 @@
         "density",
         "seed"
       ],
-      "bucket": "different_shape",
-      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness",
-      "sklearn_estimator": "SparseRandomProjection"
+      "bucket": "shaped",
+      "sklearn_estimator": "SparseRandomProjection",
+      "shape": {
+        "dataset": "classification",
+        "flow_fit": [
+          "f_c",
+          "2",
+          "0.3",
+          "42"
+        ],
+        "flow_work": [
+          "X_c"
+        ],
+        "sklearn_input": "X",
+        "sklearn_ctor": "n_components=2, density=0.3, random_state=42"
+      }
     },
     {
       "flow_estimator": "spectral_biclustering",

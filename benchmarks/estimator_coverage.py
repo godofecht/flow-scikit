@@ -7,9 +7,11 @@ the rest are unmeasured. This builds the registry the wider benchmark runs
 from: every exported `*_fit`, its companion predict/transform, the arguments
 to call it with, and the scikit-learn class to race it against.
 
-An estimator lands in one of three buckets, and every one carries a reason:
+An estimator lands in one of these buckets, and every one carries a reason:
 
   runnable   arguments resolved and a scikit-learn counterpart exists
+  shaped     raced through a written out call, because its fit does not begin
+             with a feature matrix
   flow_only  Flow implements it and scikit-learn has no equivalent
   blocked    something about the signature is not resolved yet
 
@@ -175,6 +177,103 @@ PREAMBLE_ARGS: dict[str, tuple[str, str]] = {
     "n_categories": ("array<i32, 4>", "[4, 4, 4, 4]"),
 }
 
+# Estimators whose fit does not begin with a feature matrix, and which race
+# scikit-learn perfectly well once the call is written out. Thirteen rows sat
+# in different_shape only because the generic path builds one call shape.
+#
+# `flow_fit` and `flow_work` are argument expressions in terms of the variables
+# the generated harness declares (X_c, y_c, n_c, f_c and the regression pair).
+# `sklearn_input` says what the scikit-learn side fits and transforms: the
+# feature matrix, the target vector, or the first column of the matrix as a
+# one-dimensional x. `sklearn_ctor` overrides the constructor where the default
+# would measure a different size of problem, as it would for a random
+# projection whose n_components is chosen by Johnson-Lindenstrauss.
+SHAPED: dict[str, dict] = {
+    "additive_chi2_sampler": {
+        "dataset": "classification",
+        "flow_fit": ["n_c", "f_c", "2"],
+        "flow_work": ["X_c"],
+        "sklearn_input": "X",
+    },
+    "gaussian_random_projection": {
+        "dataset": "classification",
+        "flow_fit": ["f_c", "2", "42"],
+        "flow_work": ["X_c"],
+        "sklearn_input": "X",
+        "sklearn_ctor": "n_components=2, random_state=42",
+    },
+    "polynomial_count_sketch": {
+        "dataset": "classification",
+        "flow_fit": ["f_c", "2", "2"],
+        "flow_work": ["X_c"],
+        "sklearn_input": "X",
+        "sklearn_ctor": "n_components=2, degree=2, random_state=42",
+    },
+    "polynomial_features": {
+        "dataset": "classification",
+        "flow_fit": ["f_c", "2", "false", "true"],
+        "flow_work": ["X_c"],
+        "sklearn_input": "X",
+    },
+    "rbf_sampler": {
+        "dataset": "classification",
+        "flow_fit": ["f_c", "0.1", "2", "42"],
+        "flow_work": ["X_c"],
+        "sklearn_input": "X",
+        "sklearn_ctor": "gamma=0.1, n_components=2, random_state=42",
+    },
+    "skewed_chi2_sampler": {
+        "dataset": "classification",
+        "flow_fit": ["f_c", "1.0", "2", "42"],
+        "flow_work": ["X_c"],
+        "sklearn_input": "X",
+        "sklearn_ctor": "skewedness=1.0, n_components=2, random_state=42",
+    },
+    "sparse_random_projection": {
+        "dataset": "classification",
+        "flow_fit": ["f_c", "2", "0.3", "42"],
+        "flow_work": ["X_c"],
+        "sklearn_input": "X",
+        "sklearn_ctor": "n_components=2, density=0.3, random_state=42",
+    },
+    "select_from_model": {
+        "dataset": "classification",
+        "flow_fit": ["w_f", "f_c", "0.5"],
+        "flow_work": ["X_c"],
+        "sklearn_input": "X",
+    },
+    "dummy_classifier": {
+        "dataset": "classification",
+        "flow_fit": ["y_c", "n_c", "3", "0", "0.0", "42"],
+        "flow_work": ["n_c"],
+        "sklearn_input": "X",
+    },
+    "dummy_regressor": {
+        "dataset": "regression",
+        "flow_fit": ["y_r", "n_r", "0", "0.0"],
+        "flow_work": ["n_r"],
+        "sklearn_input": "X",
+    },
+    "label_encoder": {
+        "dataset": "classification",
+        "flow_fit": ["y_c", "n_c"],
+        "flow_work": ["y_c", "n_c"],
+        "sklearn_input": "y",
+    },
+    "label_binarizer": {
+        "dataset": "classification",
+        "flow_fit": ["y_c", "n_c", "0.0", "1.0"],
+        "flow_work": ["y_c", "n_c"],
+        "sklearn_input": "y",
+    },
+    "isotonic": {
+        "dataset": "regression",
+        "flow_fit": ["x1d_r", "y_r", "n_r", "true"],
+        "flow_work": ["x1d_r", "n_r"],
+        "sklearn_input": "x1d",
+    },
+}
+
 # Parameters whose value depends on the dataset rather than on a constant.
 DATASET_ARGS = {"n_classes", "n_samples", "n_features"}
 
@@ -302,6 +401,9 @@ def classify(base: str, spec: dict, known: set[str], exports: dict[str, dict]) -
         unresolved.append(f"{p['name']}: {p['type']}")
     head = spec["params"][0]["type"] if spec["params"] else "absent"
     sk = sklearn_name(base, known)
+    if base in SHAPED and sk is not None:
+        entry.update(bucket="shaped", sklearn_estimator=sk, shape=SHAPED[base])
+        return entry
     if head != "Matrix":
         entry.update(
             bucket="different_shape",
@@ -326,7 +428,8 @@ def argument_tables() -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, default=OUT)
-    ap.add_argument("--show", choices=["blocked", "flow_only", "runnable", "simplified", "different_shape"], help="list one bucket and exit")
+    ap.add_argument("--show", choices=["blocked", "flow_only", "runnable", "shaped", "simplified",
+                                       "different_shape"], help="list one bucket and exit")
     args = ap.parse_args()
 
     exports = parse_exports()
@@ -359,7 +462,7 @@ def main() -> int:
         return 0
 
     print(f"{len(entries)} exported Flow estimators against a {len(known)}-estimator scikit-learn surface")
-    for bucket in ("runnable", "simplified", "different_shape", "flow_only", "blocked"):
+    for bucket in ("runnable", "shaped", "simplified", "different_shape", "flow_only", "blocked"):
         print(f"  {bucket:10s} {counts.get(bucket, 0)}")
     return 0
 

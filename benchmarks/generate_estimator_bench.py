@@ -119,6 +119,20 @@ def fit_arguments(entry: dict, kind: str) -> tuple[list[str], list[str]]:
     return pre, args
 
 
+# One value out of every result is added to a running sink, which main prints
+# on a line the parser ignores. Without it, clang at -O3 is free to delete a
+# transform whose result is freed without being read, and two rows came back at
+# exactly 0.000000 ms because it did.
+def sink_line(var: str, returns: str, indent: str = "        ") -> list[str]:
+    if returns == "Matrix":
+        return [
+            f"{indent}if {var}.rows > 0 {{",
+            f"{indent}    if {var}.cols > 0 {{ sink = sink + {var}.data[0] }}",
+            f"{indent}}}",
+        ]
+    return [f"{indent}sink = sink + {var}[0]"]
+
+
 def block(entry: dict) -> str:
     """One estimator: probe, choose a repeat count, then time fit and predict.
 
@@ -175,6 +189,7 @@ def block(entry: dict) -> str:
         lines.append("    t2 = flow_now_ns()")
         lines.append("    for rep2 in 0 to reps {")
         lines.append(f"        let o_{name}: {comp['returns']} = {comp['name']}(fitted_{name}, X_{suffix})")
+        lines += sink_line(f"o_{name}", comp["returns"])
         lines.append("        " + release(f"o_{name}", comp["returns"]))
         lines.append("    }")
         lines.append("    t3 = flow_now_ns()")
@@ -194,8 +209,69 @@ def block(entry: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def shaped_block(entry: dict) -> str:
+    """One estimator whose fit does not begin with a feature matrix.
+
+    The registry carries the call for these, because the generic path above
+    builds one shape of call and these take a target vector, a feature count or
+    a pair of scalars instead. Everything else about the timing is the same, so
+    a shaped row is ranked like any other.
+    """
+    name = entry["flow_estimator"]
+    shape = entry["shape"]
+    kind = shape["dataset"]
+    ret = entry["fit"]["returns"]
+    call = f"{entry['fit']['name']}({', '.join(shape['flow_fit'])})"
+    free = entry["companions"].get("free")
+    free_ok = free is not None and len(free["parameters"]) == 1
+    comp = entry["companions"].get("transform") or entry["companions"].get("predict")
+    work = shape.get("flow_work")
+    comp_ok = comp is not None and work is not None and comp["returns"] in ("Matrix", "ptr<f32>")
+
+    lines = [f"    # ---- {name} ({kind}, written out) ----"]
+    lines.append("    t0 = flow_now_ns()")
+    lines.append(f"    let probe_{name}: {ret} = {call}")
+    lines.append("    t1 = flow_now_ns()")
+    if free_ok:
+        lines.append(f"    {free['name']}(probe_{name})")
+    lines.append("    reps = 1")
+    lines.append("    if (t1 - t0) < 200000 { reps = 200 }")
+    lines.append("    elif (t1 - t0) < 2000000 { reps = 20 }")
+    lines.append("    t0 = flow_now_ns()")
+    lines.append("    for rep in 0 to reps {")
+    lines.append(f"        let m_{name}: {ret} = {call}")
+    if free_ok:
+        lines.append(f"        {free['name']}(m_{name})")
+    lines.append("    }")
+    lines.append("    t1 = flow_now_ns()")
+
+    if comp_ok:
+        release = "matrix_free" if comp["returns"] == "Matrix" else "array_free_f32"
+        lines.append(f"    let fitted_{name}: {ret} = {call}")
+        lines.append("    t2 = flow_now_ns()")
+        lines.append("    for rep2 in 0 to reps {")
+        lines.append(f"        let o_{name}: {comp['returns']} = "
+                     f"{comp['name']}(fitted_{name}, {', '.join(work)})")
+        lines += sink_line(f"o_{name}", comp["returns"])
+        lines.append(f"        {release}(o_{name})")
+        lines.append("    }")
+        lines.append("    t3 = flow_now_ns()")
+        if free_ok:
+            lines.append(f"    {free['name']}(fitted_{name})")
+        pred_expr = "ms_between(t2, t3) / (reps as f32)"
+    else:
+        pred_expr = "0.0"
+
+    lines.append(
+        f'    printf("ESTIMATOR|{name}|%.9f|%.9f|%d|ok\\n", '
+        f"ms_between(t0, t1) / (reps as f32), {pred_expr}, reps)"
+    )
+    lines.append("    fflush(null)")
+    return "\n".join(lines) + "\n"
+
+
 def chunk_file(index: int, entries: list[dict]) -> str:
-    body = "\n".join(block(e) for e in entries)
+    body = "\n".join(shaped_block(e) if e["bucket"] == "shaped" else block(e) for e in entries)
     return f'''{HEADER}
 function main() -> i32 {{
     let iris: Dataset = load_iris()
@@ -243,11 +319,22 @@ function main() -> i32 {{
         Y_rows[i] = row
     }}
 
+    # A one-dimensional x for the isotonic row, which regresses against a
+    # single ordered variable rather than a design.
+    let x1d_r: ptr<f32> = array_new_f32(n_r)
+    for i in 0 to n_r {{ x1d_r[i] = matrix_at(X_r, i, 0) }}
+
+    # Per-feature importances for the selector row, which takes the weights a
+    # fitted model would hand it rather than a design.
+    let w_f: ptr<f32> = array_new_f32(f_c)
+    for i in 0 to f_c {{ w_f[i] = 1.0 / ((i + 1) as f32) }}
+
     let mut t0: i64 = 0
     let mut t1: i64 = 0
     let mut t2: i64 = 0
     let mut t3: i64 = 0
     let mut reps: i32 = 1
+    let mut sink: f32 = 0.0
 
 {body}
     for i in 0 to n_c {{ array_free_f32(Y_label_rows[i]) }}
@@ -258,6 +345,11 @@ function main() -> i32 {{
     matrix_free(Y_multi)
     free(yi_c as ptr<void>)
     free(yi_r as ptr<void>)
+    array_free_f32(x1d_r)
+    array_free_f32(w_f)
+    # The sink is printed so the work above cannot be optimized away. The
+    # parser matches ESTIMATOR lines only, so this one is ignored.
+    printf("SINK|%.9f\\n", sink)
     return 0
 }}
 '''
@@ -278,7 +370,7 @@ def main() -> int:
     # Simplified implementations are timed too, because compare_estimators.py
     # shows their times while withholding a ratio. Leaving them out of the
     # race would make the page quietly drop four rows.
-    timed = ("runnable", "simplified")
+    timed = ("runnable", "shaped", "simplified")
     runnable = [e for e in registry["entries"] if e["bucket"] in timed]
     if args.only:
         wanted = [n.strip() for n in args.only.split(",") if n.strip()]
