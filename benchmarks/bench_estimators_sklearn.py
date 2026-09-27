@@ -33,7 +33,8 @@ REGISTRY = ROOT / "benchmarks" / "estimator_coverage.json"
 # this data. A shallow tree keeps the wrapper's own overhead visible rather than
 # burying it under the base estimator's work.
 def _constructors() -> dict:
-    from sklearn.linear_model import Ridge
+    from sklearn.linear_model import LogisticRegression, Ridge
+    from sklearn.preprocessing import FunctionTransformer, StandardScaler
     from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
     import numpy as np
 
@@ -59,6 +60,14 @@ def _constructors() -> dict:
         "NuSVC": lambda c: c(nu=0.1),
         # A selector needs something to read importances from.
         "SelectFromModel": lambda c: c(tree_c(), threshold=-np.inf, max_features=2),
+        # The composed rows, built to match what the Flow harness composes:
+        # a scaler and a logistic regression, a scaler over the columns, and a
+        # scaler beside a passthrough.
+        "Pipeline": lambda c: c([("scaler", StandardScaler()),
+                                 ("classifier", LogisticRegression(max_iter=50))]),
+        "ColumnTransformer": lambda c: c([("scaler", StandardScaler(), [0, 1, 2, 3])]),
+        "FeatureUnion": lambda c: c([("scaler", StandardScaler()),
+                                     ("passthrough", FunctionTransformer())]),
     }
 
 
@@ -136,6 +145,16 @@ def main() -> int:
             first, second = y, None
         elif fit_input == "x1d":
             first, second = X[:, 0], y
+        elif fit_input == "docs":
+            # The corpus travels in the registry, so the Flow file and this one
+            # read one copy of it.
+            first, second = list(shape["corpus"]), None
+        elif fit_input == "dicts":
+            first = [{f"f{j}": float(v) for j, v in enumerate(row)} for row in X]
+            second = None
+        elif fit_input == "labelsets":
+            first = [tuple(int(v) for v in row) for row in y]
+            second = None
         else:
             first, second = X, y
         try:

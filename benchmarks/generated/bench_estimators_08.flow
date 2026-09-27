@@ -82,6 +82,174 @@ function main() -> i32 {
     let mut reps: i32 = 1
     let mut sink: f32 = 0.0
 
+    # ---- select_fpr (regression) ----
+    t0 = flow_now_ns()
+    let probe_select_fpr: SelectFpr = select_fpr_fit(X_r, y_r, 1.0)
+    t1 = flow_now_ns()
+    select_fpr_free(probe_select_fpr)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_select_fpr: SelectFpr = select_fpr_fit(X_r, y_r, 1.0)
+        select_fpr_free(m_select_fpr)
+    }
+    t1 = flow_now_ns()
+    let fitted_select_fpr: SelectFpr = select_fpr_fit(X_r, y_r, 1.0)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_select_fpr: Matrix = select_fpr_transform(fitted_select_fpr, X_r)
+        if o_select_fpr.rows > 0 {
+            if o_select_fpr.cols > 0 { sink = sink + o_select_fpr.data[0] }
+        }
+        matrix_free(o_select_fpr)
+    }
+    t3 = flow_now_ns()
+    select_fpr_free(fitted_select_fpr)
+    printf("ESTIMATOR|select_fpr|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- select_from_model (classification, written out) ----
+    t0 = flow_now_ns()
+    let probe_select_from_model: SelectFromModel = select_from_model_fit(w_f, f_c, 0.5)
+    t1 = flow_now_ns()
+    select_from_model_free(probe_select_from_model)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_select_from_model: SelectFromModel = select_from_model_fit(w_f, f_c, 0.5)
+        select_from_model_free(m_select_from_model)
+    }
+    t1 = flow_now_ns()
+    let fitted_select_from_model: SelectFromModel = select_from_model_fit(w_f, f_c, 0.5)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_select_from_model: Matrix = select_from_model_transform(fitted_select_from_model, X_c)
+        if o_select_from_model.rows > 0 {
+            if o_select_from_model.cols > 0 { sink = sink + o_select_from_model.data[0] }
+        }
+        matrix_free(o_select_from_model)
+    }
+    t3 = flow_now_ns()
+    select_from_model_free(fitted_select_from_model)
+    printf("ESTIMATOR|select_from_model|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- select_fwe (regression) ----
+    t0 = flow_now_ns()
+    let probe_select_fwe: SelectFwe = select_fwe_fit(X_r, y_r, 1.0)
+    t1 = flow_now_ns()
+    select_fwe_free(probe_select_fwe)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_select_fwe: SelectFwe = select_fwe_fit(X_r, y_r, 1.0)
+        select_fwe_free(m_select_fwe)
+    }
+    t1 = flow_now_ns()
+    let fitted_select_fwe: SelectFwe = select_fwe_fit(X_r, y_r, 1.0)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_select_fwe: Matrix = select_fwe_transform(fitted_select_fwe, X_r)
+        if o_select_fwe.rows > 0 {
+            if o_select_fwe.cols > 0 { sink = sink + o_select_fwe.data[0] }
+        }
+        matrix_free(o_select_fwe)
+    }
+    t3 = flow_now_ns()
+    select_fwe_free(fitted_select_fwe)
+    printf("ESTIMATOR|select_fwe|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- select_k_best (regression) ----
+    t0 = flow_now_ns()
+    let probe_select_k_best: SelectKBest = select_k_best_fit(X_r, y_r, 3, 0)
+    t1 = flow_now_ns()
+    select_k_best_free(probe_select_k_best)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_select_k_best: SelectKBest = select_k_best_fit(X_r, y_r, 3, 0)
+        select_k_best_free(m_select_k_best)
+    }
+    t1 = flow_now_ns()
+    let fitted_select_k_best: SelectKBest = select_k_best_fit(X_r, y_r, 3, 0)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_select_k_best: Matrix = select_k_best_transform(fitted_select_k_best, X_r)
+        if o_select_k_best.rows > 0 {
+            if o_select_k_best.cols > 0 { sink = sink + o_select_k_best.data[0] }
+        }
+        matrix_free(o_select_k_best)
+    }
+    t3 = flow_now_ns()
+    select_k_best_free(fitted_select_k_best)
+    printf("ESTIMATOR|select_k_best|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- select_percentile (regression) ----
+    t0 = flow_now_ns()
+    let probe_select_percentile: SelectPercentile = select_percentile_fit(X_r, y_r, 50)
+    t1 = flow_now_ns()
+    select_percentile_free(probe_select_percentile)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_select_percentile: SelectPercentile = select_percentile_fit(X_r, y_r, 50)
+        select_percentile_free(m_select_percentile)
+    }
+    t1 = flow_now_ns()
+    let fitted_select_percentile: SelectPercentile = select_percentile_fit(X_r, y_r, 50)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_select_percentile: Matrix = select_percentile_transform(fitted_select_percentile, X_r)
+        if o_select_percentile.rows > 0 {
+            if o_select_percentile.cols > 0 { sink = sink + o_select_percentile.data[0] }
+        }
+        matrix_free(o_select_percentile)
+    }
+    t3 = flow_now_ns()
+    select_percentile_free(fitted_select_percentile)
+    printf("ESTIMATOR|select_percentile|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- sequential_feature_selector (regression) ----
+    t0 = flow_now_ns()
+    let probe_sequential_feature_selector: SequentialFeatureSelector = sequential_feature_selector_fit(X_r, y_r, 2, 0, n_r, f_r)
+    t1 = flow_now_ns()
+    sequential_feature_selector_free(probe_sequential_feature_selector)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_sequential_feature_selector: SequentialFeatureSelector = sequential_feature_selector_fit(X_r, y_r, 2, 0, n_r, f_r)
+        sequential_feature_selector_free(m_sequential_feature_selector)
+    }
+    t1 = flow_now_ns()
+    let fitted_sequential_feature_selector: SequentialFeatureSelector = sequential_feature_selector_fit(X_r, y_r, 2, 0, n_r, f_r)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_sequential_feature_selector: Matrix = sequential_feature_selector_transform(fitted_sequential_feature_selector, X_r)
+        if o_sequential_feature_selector.rows > 0 {
+            if o_sequential_feature_selector.cols > 0 { sink = sink + o_sequential_feature_selector.data[0] }
+        }
+        matrix_free(o_sequential_feature_selector)
+    }
+    t3 = flow_now_ns()
+    sequential_feature_selector_free(fitted_sequential_feature_selector)
+    printf("ESTIMATOR|sequential_feature_selector|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
     # ---- sgd_classifier (classification) ----
     t0 = flow_now_ns()
     let probe_sgd_classifier: SGDClassifier = sgd_classifier_fit(X_c, y_c, 3, 0, 1.0, 50, 0.01)
@@ -411,166 +579,6 @@ function main() -> i32 {
     t3 = flow_now_ns()
     spline_transformer_free(fitted_spline_transformer)
     printf("ESTIMATOR|spline_transformer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- stacking_regressor (regression) ----
-    t0 = flow_now_ns()
-    let probe_stacking_regressor: StackingRegressor = stacking_regressor_fit(X_r, y_r, 3, 5, 42)
-    t1 = flow_now_ns()
-    stacking_regressor_free(probe_stacking_regressor)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_stacking_regressor: StackingRegressor = stacking_regressor_fit(X_r, y_r, 3, 5, 42)
-        stacking_regressor_free(m_stacking_regressor)
-    }
-    t1 = flow_now_ns()
-    let fitted_stacking_regressor: StackingRegressor = stacking_regressor_fit(X_r, y_r, 3, 5, 42)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_stacking_regressor: ptr<f32> = stacking_regressor_predict(fitted_stacking_regressor, X_r)
-        sink = sink + o_stacking_regressor[0]
-        array_free_f32(o_stacking_regressor)
-    }
-    t3 = flow_now_ns()
-    stacking_regressor_free(fitted_stacking_regressor)
-    printf("ESTIMATOR|stacking_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- standard_scaler (unsupervised) ----
-    t0 = flow_now_ns()
-    let probe_standard_scaler: StandardScaler = standard_scaler_fit(X_c)
-    t1 = flow_now_ns()
-    standard_scaler_free(probe_standard_scaler)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_standard_scaler: StandardScaler = standard_scaler_fit(X_c)
-        standard_scaler_free(m_standard_scaler)
-    }
-    t1 = flow_now_ns()
-    let fitted_standard_scaler: StandardScaler = standard_scaler_fit(X_c)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_standard_scaler: Matrix = standard_scaler_transform(fitted_standard_scaler, X_c)
-        if o_standard_scaler.rows > 0 {
-            if o_standard_scaler.cols > 0 { sink = sink + o_standard_scaler.data[0] }
-        }
-        matrix_free(o_standard_scaler)
-    }
-    t3 = flow_now_ns()
-    standard_scaler_free(fitted_standard_scaler)
-    printf("ESTIMATOR|standard_scaler|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- svc (classification) ----
-    t0 = flow_now_ns()
-    let probe_svc: SVC = svc_fit(X_c, y_c, 3, 1.0, 0, 0.1, 2, 0.0)
-    t1 = flow_now_ns()
-    svc_free(probe_svc)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_svc: SVC = svc_fit(X_c, y_c, 3, 1.0, 0, 0.1, 2, 0.0)
-        svc_free(m_svc)
-    }
-    t1 = flow_now_ns()
-    let fitted_svc: SVC = svc_fit(X_c, y_c, 3, 1.0, 0, 0.1, 2, 0.0)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_svc: ptr<f32> = svc_predict(fitted_svc, X_c)
-        sink = sink + o_svc[0]
-        array_free_f32(o_svc)
-    }
-    t3 = flow_now_ns()
-    svc_free(fitted_svc)
-    printf("ESTIMATOR|svc|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- svr (regression) ----
-    t0 = flow_now_ns()
-    let probe_svr: SVR = svr_fit(X_r, y_r, 1.0, 0.1, 0, 0.1, 2, 0.0)
-    t1 = flow_now_ns()
-    svr_free(probe_svr)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_svr: SVR = svr_fit(X_r, y_r, 1.0, 0.1, 0, 0.1, 2, 0.0)
-        svr_free(m_svr)
-    }
-    t1 = flow_now_ns()
-    let fitted_svr: SVR = svr_fit(X_r, y_r, 1.0, 0.1, 0, 0.1, 2, 0.0)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_svr: ptr<f32> = svr_predict(fitted_svr, X_r)
-        sink = sink + o_svr[0]
-        array_free_f32(o_svr)
-    }
-    t3 = flow_now_ns()
-    svr_free(fitted_svr)
-    printf("ESTIMATOR|svr|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- target_encoder (regression) ----
-    t0 = flow_now_ns()
-    let probe_target_encoder: TargetEncoder = target_encoder_fit(X_r, y_r, n_r, 1.0)
-    t1 = flow_now_ns()
-    target_encoder_free(probe_target_encoder)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_target_encoder: TargetEncoder = target_encoder_fit(X_r, y_r, n_r, 1.0)
-        target_encoder_free(m_target_encoder)
-    }
-    t1 = flow_now_ns()
-    let fitted_target_encoder: TargetEncoder = target_encoder_fit(X_r, y_r, n_r, 1.0)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_target_encoder: Matrix = target_encoder_transform(fitted_target_encoder, X_r)
-        if o_target_encoder.rows > 0 {
-            if o_target_encoder.cols > 0 { sink = sink + o_target_encoder.data[0] }
-        }
-        matrix_free(o_target_encoder)
-    }
-    t3 = flow_now_ns()
-    target_encoder_free(fitted_target_encoder)
-    printf("ESTIMATOR|target_encoder|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- theil_sen_regressor (regression) ----
-    t0 = flow_now_ns()
-    let probe_theil_sen_regressor: TheilSenRegressor = theil_sen_regressor_fit(X_r, y_r, 10, 100, 42)
-    t1 = flow_now_ns()
-    theil_sen_regressor_free(probe_theil_sen_regressor)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_theil_sen_regressor: TheilSenRegressor = theil_sen_regressor_fit(X_r, y_r, 10, 100, 42)
-        theil_sen_regressor_free(m_theil_sen_regressor)
-    }
-    t1 = flow_now_ns()
-    let fitted_theil_sen_regressor: TheilSenRegressor = theil_sen_regressor_fit(X_r, y_r, 10, 100, 42)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_theil_sen_regressor: ptr<f32> = theil_sen_regressor_predict(fitted_theil_sen_regressor, X_r)
-        sink = sink + o_theil_sen_regressor[0]
-        array_free_f32(o_theil_sen_regressor)
-    }
-    t3 = flow_now_ns()
-    theil_sen_regressor_free(fitted_theil_sen_regressor)
-    printf("ESTIMATOR|theil_sen_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }

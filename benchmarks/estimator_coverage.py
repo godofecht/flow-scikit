@@ -177,6 +177,45 @@ PREAMBLE_ARGS: dict[str, tuple[str, str]] = {
     "n_categories": ("array<i32, 4>", "[4, 4, 4, 4]"),
 }
 
+# Flow functions whose scikit-learn namesake does more than they do. Timing
+# them against that class would compare a part against the whole, which is the
+# same objection the simplified rows carry. The wording says which part.
+DIFFERENT_JOB: dict[str, str] = {
+    "stacking_classifier": "takes the base estimators' predictions as input, so it is the "
+                           "meta-learner alone while StackingClassifier also fits the base "
+                           "estimators and cross-validates them",
+    "self_training_classifier": "takes class probabilities as input, so it is the labelling "
+                                "loop alone while SelfTrainingClassifier also fits the base "
+                                "estimator on every round",
+    "voting_classifier": "takes trees that are already fitted, so its fit is the vote alone "
+                         "while VotingClassifier fits every estimator it is given",
+    "voting_regressor": "takes regressors that are already fitted, so its fit is the average "
+                        "alone while VotingRegressor fits every estimator it is given",
+    "incremental_pca_partial": "one partial_fit step over one batch, where IncrementalPCA.fit "
+                               "walks the whole design in batches",
+}
+
+# One corpus for the two text vectorizers, read by the Flow generator and by
+# the scikit-learn harness, so the two sides cannot drift apart.
+CORPUS: list[str] = [
+    "the quick brown fox jumps over the lazy dog",
+    "a lazy dog sleeps in the warm sun",
+    "quick brown foxes are rare in the city",
+    "the dog and the fox share a field",
+    "warm sun and a cold river run together",
+    "a field of brown grass in the sun",
+    "the city river runs past the old field",
+    "old dogs sleep through a quick storm",
+    "a storm over the city wakes the dog",
+    "foxes hunt in the cold river valley",
+    "the valley holds a warm field of grass",
+    "grass grows where the river meets the sun",
+    "a rare fox crosses the old stone bridge",
+    "the stone bridge over the cold river",
+    "dogs and foxes keep their distance here",
+    "here the field the river and the city meet",
+]
+
 # Estimators whose fit does not begin with a feature matrix, and which race
 # scikit-learn perfectly well once the call is written out. Thirteen rows sat
 # in different_shape only because the generic path builds one call shape.
@@ -271,6 +310,97 @@ SHAPED: dict[str, dict] = {
         "flow_fit": ["x1d_r", "y_r", "n_r", "true"],
         "flow_work": ["x1d_r", "n_r"],
         "sklearn_input": "x1d",
+    },
+    "multilabel_binarizer": {
+        # The label rows, so the scikit-learn side gets sets of labels rather
+        # than one label per sample.
+        "dataset": "multioutput_class",
+        "flow_preamble": [
+            "let mlb_counts: ptr<i32> = malloc((n_c as i64) * 4) as ptr<i32>",
+            "for i in 0 to n_c { mlb_counts[i] = 2 }",
+        ],
+        "flow_fit": ["Y_label_rows", "n_c", "mlb_counts", "3"],
+        "flow_work": ["Y_label_rows", "n_c", "mlb_counts"],
+        "sklearn_input": "labelsets",
+    },
+    "dict_vectorizer": {
+        "dataset": "classification",
+        "flow_preamble": [
+            "let dv_counts: ptr<i32> = malloc((n_c as i64) * 4) as ptr<i32>",
+            "let dv_keys: ptr<ptr<i32> > = malloc((n_c as i64) * 8) as ptr<ptr<i32> >",
+            "let dv_vals: ptr<ptr<f32> > = malloc((n_c as i64) * 8) as ptr<ptr<f32> >",
+            "for i in 0 to n_c {",
+            "    dv_counts[i] = f_c",
+            "    let dv_kk: ptr<i32> = malloc((f_c as i64) * 4) as ptr<i32>",
+            "    let dv_vv: ptr<f32> = array_new_f32(f_c)",
+            "    for j in 0 to f_c {",
+            "        dv_kk[j] = j",
+            "        dv_vv[j] = matrix_at(X_c, i, j)",
+            "    }",
+            "    dv_keys[i] = dv_kk",
+            "    dv_vals[i] = dv_vv",
+            "}",
+        ],
+        "flow_fit": ["dv_keys", "dv_vals", "n_c", "dv_counts"],
+        "flow_work": ["dv_keys", "dv_vals", "n_c", "dv_counts"],
+        "sklearn_input": "dicts",
+    },
+    "count_vectorizer": {
+        "dataset": "classification",
+        "corpus": CORPUS,
+        "flow_fit": ["count_vectorizer_docs", "16", "50"],
+        "flow_work": ["count_vectorizer_docs", "16"],
+        "sklearn_input": "docs",
+    },
+    "tfidf_vectorizer": {
+        "dataset": "classification",
+        "corpus": CORPUS,
+        "flow_fit": ["tfidf_vectorizer_docs", "16", "50"],
+        "flow_work": ["tfidf_vectorizer_docs", "16"],
+        "sklearn_input": "docs",
+    },
+    "pipeline": {
+        "dataset": "classification",
+        "flow_preamble": [
+            "let pipe_steps: array<PipelineStep, 2> = [",
+            '    step_standard_scaler("scaler"),',
+            '    step_logistic_regression("classifier", 3, 50, 0.5, penalty_none())',
+            "]",
+            "let pipe_obj: Pipeline = pipeline_new(pipe_steps, 2)",
+        ],
+        "flow_fit": ["pipe_obj", "X_c", "y_c"],
+        "flow_work": ["X_c"],
+        "flow_free": "after",
+        "sklearn_input": "X",
+    },
+    "column_transformer": {
+        "dataset": "classification",
+        "flow_preamble": [
+            "let ct_cols: ptr<i32> = malloc((f_c as i64) * 4) as ptr<i32>",
+            "for i in 0 to f_c { ct_cols[i] = i }",
+            "let ct_obj: ColumnTransformer = column_transformer_init(1)",
+            "# 0 is TRANSFORMER_STANDARD_SCALER. The constant is written out",
+            "# because an export const is not visible through the umbrella import.",
+            "column_transformer_set_spec(ct_obj, 0, 0, ct_cols, f_c)",
+        ],
+        "flow_fit": ["ct_obj", "X_c"],
+        "flow_work": ["X_c"],
+        "flow_free": "after",
+        "sklearn_input": "X",
+    },
+    "feature_union": {
+        "dataset": "classification",
+        "flow_preamble": [
+            "let fu_obj: FeatureUnion = feature_union_init(2)",
+            "# 0 is FU_TRANSFORMER_STANDARD_SCALER and 2 is FU_TRANSFORMER_PASSTHROUGH,",
+            "# written out for the reason the column transformer above gives.",
+            "feature_union_set_transformer(fu_obj, 0, 0, 0)",
+            "feature_union_set_transformer(fu_obj, 1, 2, 0)",
+        ],
+        "flow_fit": ["fu_obj", "X_c"],
+        "flow_work": ["X_c"],
+        "flow_free": "after",
+        "sklearn_input": "X",
     },
 }
 
@@ -403,6 +533,9 @@ def classify(base: str, spec: dict, known: set[str], exports: dict[str, dict]) -
     sk = sklearn_name(base, known)
     if base in SHAPED and sk is not None:
         entry.update(bucket="shaped", sklearn_estimator=sk, shape=SHAPED[base])
+        return entry
+    if base in DIFFERENT_JOB:
+        entry.update(bucket="different_shape", reason=DIFFERENT_JOB[base], sklearn_estimator=sk)
         return entry
     if head != "Matrix":
         entry.update(

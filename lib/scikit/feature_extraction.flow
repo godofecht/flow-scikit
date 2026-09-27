@@ -41,15 +41,20 @@ export struct CountVectorizer {
     fitted: bool
 }
 
+# djb2, carried in 64 bits and reduced every step.
+#
+# The i32 version overflowed into a negative h on the sixth character of a
+# token and then shifted it, which the runtime traps as a left shift of a
+# negative. A four document fixture never reached that; a sixteen document one
+# did, and the process aborted inside the fit.
 function _hash_string(s: string) -> i32 {
-    let h: i32 = 5381
+    let mut h: i64 = 5381
     let len: i32 = _string_length(s)
     for i in 0 to len {
         let c: i32 = _string_char_at(s, i)
-        h = ((h << 5) + h) + c
+        h = (h * 33 + (c as i64)) % 2147483647
     }
-    if h < 0 { h = 0 - h }
-    return h
+    return h as i32
 }
 
 function _tokenize(doc: string, out_tokens: ptr<string>, max_tokens: i32) -> i32 {

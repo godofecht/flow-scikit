@@ -82,6 +82,120 @@ function main() -> i32 {
     let mut reps: i32 = 1
     let mut sink: f32 = 0.0
 
+    # ---- one_class_svm (unsupervised) ----
+    t0 = flow_now_ns()
+    let probe_one_class_svm: OneClassSVM = one_class_svm_fit(X_c, 0.5, 0.1, 100)
+    t1 = flow_now_ns()
+    one_class_svm_free(probe_one_class_svm)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_one_class_svm: OneClassSVM = one_class_svm_fit(X_c, 0.5, 0.1, 100)
+        one_class_svm_free(m_one_class_svm)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|one_class_svm|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
+    fflush(null)
+
+    # ---- one_vs_one (classification) ----
+    t0 = flow_now_ns()
+    let probe_one_vs_one: OneVsOneClassifier = one_vs_one_fit(X_c, y_c, 3, 50, 0.01, penalty_none())
+    t1 = flow_now_ns()
+    one_vs_one_free(probe_one_vs_one)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_one_vs_one: OneVsOneClassifier = one_vs_one_fit(X_c, y_c, 3, 50, 0.01, penalty_none())
+        one_vs_one_free(m_one_vs_one)
+    }
+    t1 = flow_now_ns()
+    let fitted_one_vs_one: OneVsOneClassifier = one_vs_one_fit(X_c, y_c, 3, 50, 0.01, penalty_none())
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_one_vs_one: ptr<f32> = one_vs_one_predict(fitted_one_vs_one, X_c)
+        sink = sink + o_one_vs_one[0]
+        array_free_f32(o_one_vs_one)
+    }
+    t3 = flow_now_ns()
+    one_vs_one_free(fitted_one_vs_one)
+    printf("ESTIMATOR|one_vs_one|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- one_vs_rest (classification) ----
+    t0 = flow_now_ns()
+    let probe_one_vs_rest: OneVsRestClassifier = one_vs_rest_fit(X_c, y_c, 3, 50, 0.01, penalty_none())
+    t1 = flow_now_ns()
+    one_vs_rest_free(probe_one_vs_rest)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_one_vs_rest: OneVsRestClassifier = one_vs_rest_fit(X_c, y_c, 3, 50, 0.01, penalty_none())
+        one_vs_rest_free(m_one_vs_rest)
+    }
+    t1 = flow_now_ns()
+    let fitted_one_vs_rest: OneVsRestClassifier = one_vs_rest_fit(X_c, y_c, 3, 50, 0.01, penalty_none())
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_one_vs_rest: ptr<f32> = one_vs_rest_predict(fitted_one_vs_rest, X_c)
+        sink = sink + o_one_vs_rest[0]
+        array_free_f32(o_one_vs_rest)
+    }
+    t3 = flow_now_ns()
+    one_vs_rest_free(fitted_one_vs_rest)
+    printf("ESTIMATOR|one_vs_rest|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- onehot_encoder (unsupervised) ----
+    t0 = flow_now_ns()
+    let probe_onehot_encoder: OneHotEncoder = onehot_encoder_fit(X_c, 0)
+    t1 = flow_now_ns()
+    onehot_encoder_free(probe_onehot_encoder)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_onehot_encoder: OneHotEncoder = onehot_encoder_fit(X_c, 0)
+        onehot_encoder_free(m_onehot_encoder)
+    }
+    t1 = flow_now_ns()
+    let fitted_onehot_encoder: OneHotEncoder = onehot_encoder_fit(X_c, 0)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_onehot_encoder: Matrix = onehot_encoder_transform(fitted_onehot_encoder, X_c)
+        if o_onehot_encoder.rows > 0 {
+            if o_onehot_encoder.cols > 0 { sink = sink + o_onehot_encoder.data[0] }
+        }
+        matrix_free(o_onehot_encoder)
+    }
+    t3 = flow_now_ns()
+    onehot_encoder_free(fitted_onehot_encoder)
+    printf("ESTIMATOR|onehot_encoder|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- optics (unsupervised) ----
+    t0 = flow_now_ns()
+    let probe_optics: OPTICS = optics_fit(X_c, 0.5, 5)
+    t1 = flow_now_ns()
+    optics_free(probe_optics)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_optics: OPTICS = optics_fit(X_c, 0.5, 5)
+        optics_free(m_optics)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|optics|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
+    fflush(null)
+
     # ---- ordinal_encoder (unsupervised) ----
     t0 = flow_now_ns()
     let probe_ordinal_encoder: OrdinalEncoder = ordinal_encoder_fit(X_c, 0)
@@ -266,6 +380,35 @@ function main() -> i32 {
     t3 = flow_now_ns()
     perceptron_free(fitted_perceptron)
     printf("ESTIMATOR|perceptron|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- pipeline (classification, written out) ----
+    let pipe_steps: array<PipelineStep, 2> = [
+        step_standard_scaler("scaler"),
+        step_logistic_regression("classifier", 3, 50, 0.5, penalty_none())
+    ]
+    let pipe_obj: Pipeline = pipeline_new(pipe_steps, 2)
+    t0 = flow_now_ns()
+    let probe_pipeline: Pipeline = pipeline_fit(pipe_obj, X_c, y_c)
+    t1 = flow_now_ns()
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_pipeline: Pipeline = pipeline_fit(pipe_obj, X_c, y_c)
+    }
+    t1 = flow_now_ns()
+    let fitted_pipeline: Pipeline = pipeline_fit(pipe_obj, X_c, y_c)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_pipeline: ptr<f32> = pipeline_predict(fitted_pipeline, X_c)
+        sink = sink + o_pipeline[0]
+        array_free_f32(o_pipeline)
+    }
+    t3 = flow_now_ns()
+    pipeline_free(fitted_pipeline)
+    printf("ESTIMATOR|pipeline|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     # ---- pls_canonical (multioutput) ----
@@ -460,166 +603,6 @@ function main() -> i32 {
     t3 = flow_now_ns()
     power_transformer_free(fitted_power_transformer)
     printf("ESTIMATOR|power_transformer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- qda (classification) ----
-    t0 = flow_now_ns()
-    let probe_qda: QuadraticDiscriminantAnalysis = qda_fit(X_c, y_c, 3)
-    t1 = flow_now_ns()
-    qda_free(probe_qda)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_qda: QuadraticDiscriminantAnalysis = qda_fit(X_c, y_c, 3)
-        qda_free(m_qda)
-    }
-    t1 = flow_now_ns()
-    let fitted_qda: QuadraticDiscriminantAnalysis = qda_fit(X_c, y_c, 3)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_qda: ptr<f32> = qda_predict(fitted_qda, X_c)
-        sink = sink + o_qda[0]
-        array_free_f32(o_qda)
-    }
-    t3 = flow_now_ns()
-    qda_free(fitted_qda)
-    printf("ESTIMATOR|qda|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- quantile_regressor (regression) ----
-    t0 = flow_now_ns()
-    let probe_quantile_regressor: QuantileRegressor = quantile_regressor_fit(X_r, y_r, 0.5, 1.0, 50, 0.01)
-    t1 = flow_now_ns()
-    quantile_regressor_free(probe_quantile_regressor)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_quantile_regressor: QuantileRegressor = quantile_regressor_fit(X_r, y_r, 0.5, 1.0, 50, 0.01)
-        quantile_regressor_free(m_quantile_regressor)
-    }
-    t1 = flow_now_ns()
-    let fitted_quantile_regressor: QuantileRegressor = quantile_regressor_fit(X_r, y_r, 0.5, 1.0, 50, 0.01)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_quantile_regressor: ptr<f32> = quantile_regressor_predict(fitted_quantile_regressor, X_r)
-        sink = sink + o_quantile_regressor[0]
-        array_free_f32(o_quantile_regressor)
-    }
-    t3 = flow_now_ns()
-    quantile_regressor_free(fitted_quantile_regressor)
-    printf("ESTIMATOR|quantile_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- quantile_transformer (unsupervised) ----
-    t0 = flow_now_ns()
-    let probe_quantile_transformer: QuantileTransformer = quantile_transformer_fit(X_c, 10, 0)
-    t1 = flow_now_ns()
-    quantile_transformer_free(probe_quantile_transformer)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_quantile_transformer: QuantileTransformer = quantile_transformer_fit(X_c, 10, 0)
-        quantile_transformer_free(m_quantile_transformer)
-    }
-    t1 = flow_now_ns()
-    let fitted_quantile_transformer: QuantileTransformer = quantile_transformer_fit(X_c, 10, 0)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_quantile_transformer: Matrix = quantile_transformer_transform(fitted_quantile_transformer, X_c)
-        if o_quantile_transformer.rows > 0 {
-            if o_quantile_transformer.cols > 0 { sink = sink + o_quantile_transformer.data[0] }
-        }
-        matrix_free(o_quantile_transformer)
-    }
-    t3 = flow_now_ns()
-    quantile_transformer_free(fitted_quantile_transformer)
-    printf("ESTIMATOR|quantile_transformer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- radius_neighbors_classifier (classification) ----
-    t0 = flow_now_ns()
-    let probe_radius_neighbors_classifier: RadiusNeighborsClassifier = radius_neighbors_classifier_fit(X_c, y_c, 1.0, 3, 0.0)
-    t1 = flow_now_ns()
-    radius_neighbors_classifier_free(probe_radius_neighbors_classifier)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_radius_neighbors_classifier: RadiusNeighborsClassifier = radius_neighbors_classifier_fit(X_c, y_c, 1.0, 3, 0.0)
-        radius_neighbors_classifier_free(m_radius_neighbors_classifier)
-    }
-    t1 = flow_now_ns()
-    let fitted_radius_neighbors_classifier: RadiusNeighborsClassifier = radius_neighbors_classifier_fit(X_c, y_c, 1.0, 3, 0.0)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_radius_neighbors_classifier: ptr<f32> = radius_neighbors_classifier_predict(fitted_radius_neighbors_classifier, X_c)
-        sink = sink + o_radius_neighbors_classifier[0]
-        array_free_f32(o_radius_neighbors_classifier)
-    }
-    t3 = flow_now_ns()
-    radius_neighbors_classifier_free(fitted_radius_neighbors_classifier)
-    printf("ESTIMATOR|radius_neighbors_classifier|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- radius_neighbors_regressor (regression) ----
-    t0 = flow_now_ns()
-    let probe_radius_neighbors_regressor: RadiusNeighborsRegressor = radius_neighbors_regressor_fit(X_r, y_r, 1.0)
-    t1 = flow_now_ns()
-    radius_neighbors_regressor_free(probe_radius_neighbors_regressor)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_radius_neighbors_regressor: RadiusNeighborsRegressor = radius_neighbors_regressor_fit(X_r, y_r, 1.0)
-        radius_neighbors_regressor_free(m_radius_neighbors_regressor)
-    }
-    t1 = flow_now_ns()
-    let fitted_radius_neighbors_regressor: RadiusNeighborsRegressor = radius_neighbors_regressor_fit(X_r, y_r, 1.0)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_radius_neighbors_regressor: ptr<f32> = radius_neighbors_regressor_predict(fitted_radius_neighbors_regressor, X_r)
-        sink = sink + o_radius_neighbors_regressor[0]
-        array_free_f32(o_radius_neighbors_regressor)
-    }
-    t3 = flow_now_ns()
-    radius_neighbors_regressor_free(fitted_radius_neighbors_regressor)
-    printf("ESTIMATOR|radius_neighbors_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- radius_neighbors_transformer (unsupervised) ----
-    t0 = flow_now_ns()
-    let probe_radius_neighbors_transformer: RadiusNeighborsTransformer = radius_neighbors_transformer_fit(X_c, 1.0, 0)
-    t1 = flow_now_ns()
-    radius_neighbors_transformer_free(probe_radius_neighbors_transformer)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_radius_neighbors_transformer: RadiusNeighborsTransformer = radius_neighbors_transformer_fit(X_c, 1.0, 0)
-        radius_neighbors_transformer_free(m_radius_neighbors_transformer)
-    }
-    t1 = flow_now_ns()
-    let fitted_radius_neighbors_transformer: RadiusNeighborsTransformer = radius_neighbors_transformer_fit(X_c, 1.0, 0)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_radius_neighbors_transformer: Matrix = radius_neighbors_transformer_transform(fitted_radius_neighbors_transformer, X_c)
-        if o_radius_neighbors_transformer.rows > 0 {
-            if o_radius_neighbors_transformer.cols > 0 { sink = sink + o_radius_neighbors_transformer.data[0] }
-        }
-        matrix_free(o_radius_neighbors_transformer)
-    }
-    t3 = flow_now_ns()
-    radius_neighbors_transformer_free(fitted_radius_neighbors_transformer)
-    printf("ESTIMATOR|radius_neighbors_transformer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }

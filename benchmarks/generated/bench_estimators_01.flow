@@ -82,6 +82,69 @@ function main() -> i32 {
     let mut reps: i32 = 1
     let mut sink: f32 = 0.0
 
+    # ---- count_vectorizer (classification, written out) ----
+    let count_vectorizer_docs: array<string, 16> = [
+        "the quick brown fox jumps over the lazy dog",
+        "a lazy dog sleeps in the warm sun",
+        "quick brown foxes are rare in the city",
+        "the dog and the fox share a field",
+        "warm sun and a cold river run together",
+        "a field of brown grass in the sun",
+        "the city river runs past the old field",
+        "old dogs sleep through a quick storm",
+        "a storm over the city wakes the dog",
+        "foxes hunt in the cold river valley",
+        "the valley holds a warm field of grass",
+        "grass grows where the river meets the sun",
+        "a rare fox crosses the old stone bridge",
+        "the stone bridge over the cold river",
+        "dogs and foxes keep their distance here",
+        "here the field the river and the city meet"
+    ]
+    t0 = flow_now_ns()
+    let probe_count_vectorizer: CountVectorizer = count_vectorizer_fit(count_vectorizer_docs, 16, 50)
+    t1 = flow_now_ns()
+    count_vectorizer_free(probe_count_vectorizer)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_count_vectorizer: CountVectorizer = count_vectorizer_fit(count_vectorizer_docs, 16, 50)
+        count_vectorizer_free(m_count_vectorizer)
+    }
+    t1 = flow_now_ns()
+    let fitted_count_vectorizer: CountVectorizer = count_vectorizer_fit(count_vectorizer_docs, 16, 50)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_count_vectorizer: Matrix = count_vectorizer_transform(fitted_count_vectorizer, count_vectorizer_docs, 16)
+        if o_count_vectorizer.rows > 0 {
+            if o_count_vectorizer.cols > 0 { sink = sink + o_count_vectorizer.data[0] }
+        }
+        matrix_free(o_count_vectorizer)
+    }
+    t3 = flow_now_ns()
+    count_vectorizer_free(fitted_count_vectorizer)
+    printf("ESTIMATOR|count_vectorizer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- dbscan (unsupervised) ----
+    t0 = flow_now_ns()
+    let probe_dbscan: DBSCAN = dbscan_fit(X_c, 0.5, 5)
+    t1 = flow_now_ns()
+    dbscan_free(probe_dbscan)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_dbscan: DBSCAN = dbscan_fit(X_c, 0.5, 5)
+        dbscan_free(m_dbscan)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|dbscan|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
+    fflush(null)
+
     # ---- decision_tree_classifier (classification) ----
     t0 = flow_now_ns()
     let probe_decision_tree_classifier: DecisionTreeClassifier = decision_tree_classifier_fit(X_c, y_c, 3, 5, 0)
@@ -132,6 +195,48 @@ function main() -> i32 {
     t3 = flow_now_ns()
     decision_tree_regressor_free(fitted_decision_tree_regressor)
     printf("ESTIMATOR|decision_tree_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- dict_vectorizer (classification, written out) ----
+    let dv_counts: ptr<i32> = malloc((n_c as i64) * 4) as ptr<i32>
+    let dv_keys: ptr<ptr<i32> > = malloc((n_c as i64) * 8) as ptr<ptr<i32> >
+    let dv_vals: ptr<ptr<f32> > = malloc((n_c as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n_c {
+        dv_counts[i] = f_c
+        let dv_kk: ptr<i32> = malloc((f_c as i64) * 4) as ptr<i32>
+        let dv_vv: ptr<f32> = array_new_f32(f_c)
+        for j in 0 to f_c {
+            dv_kk[j] = j
+            dv_vv[j] = matrix_at(X_c, i, j)
+        }
+        dv_keys[i] = dv_kk
+        dv_vals[i] = dv_vv
+    }
+    t0 = flow_now_ns()
+    let probe_dict_vectorizer: DictVectorizer = dict_vectorizer_fit(dv_keys, dv_vals, n_c, dv_counts)
+    t1 = flow_now_ns()
+    dict_vectorizer_free(probe_dict_vectorizer)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_dict_vectorizer: DictVectorizer = dict_vectorizer_fit(dv_keys, dv_vals, n_c, dv_counts)
+        dict_vectorizer_free(m_dict_vectorizer)
+    }
+    t1 = flow_now_ns()
+    let fitted_dict_vectorizer: DictVectorizer = dict_vectorizer_fit(dv_keys, dv_vals, n_c, dv_counts)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_dict_vectorizer: Matrix = dict_vectorizer_transform(fitted_dict_vectorizer, dv_keys, dv_vals, n_c, dv_counts)
+        if o_dict_vectorizer.rows > 0 {
+            if o_dict_vectorizer.cols > 0 { sink = sink + o_dict_vectorizer.data[0] }
+        }
+        matrix_free(o_dict_vectorizer)
+    }
+    t3 = flow_now_ns()
+    dict_vectorizer_free(fitted_dict_vectorizer)
+    printf("ESTIMATOR|dict_vectorizer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     # ---- dictionary_learning (unsupervised) ----
@@ -521,75 +626,6 @@ function main() -> i32 {
     t3 = flow_now_ns()
     feature_agglomeration_free(fitted_feature_agglomeration)
     printf("ESTIMATOR|feature_agglomeration|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- gamma_regressor (regression) ----
-    t0 = flow_now_ns()
-    let probe_gamma_regressor: GammaRegressor = gamma_regressor_fit(X_r, y_r, 1.0, 100, 0.01)
-    t1 = flow_now_ns()
-    gamma_regressor_free(probe_gamma_regressor)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_gamma_regressor: GammaRegressor = gamma_regressor_fit(X_r, y_r, 1.0, 100, 0.01)
-        gamma_regressor_free(m_gamma_regressor)
-    }
-    t1 = flow_now_ns()
-    let fitted_gamma_regressor: GammaRegressor = gamma_regressor_fit(X_r, y_r, 1.0, 100, 0.01)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_gamma_regressor: ptr<f32> = gamma_regressor_predict(fitted_gamma_regressor, X_r)
-        sink = sink + o_gamma_regressor[0]
-        array_free_f32(o_gamma_regressor)
-    }
-    t3 = flow_now_ns()
-    gamma_regressor_free(fitted_gamma_regressor)
-    printf("ESTIMATOR|gamma_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- gaussian_mixture (unsupervised) ----
-    t0 = flow_now_ns()
-    let probe_gaussian_mixture: GaussianMixture = gaussian_mixture_fit(X_c, 2, 100, 0.0001, 42)
-    t1 = flow_now_ns()
-    gaussian_mixture_free(probe_gaussian_mixture)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_gaussian_mixture: GaussianMixture = gaussian_mixture_fit(X_c, 2, 100, 0.0001, 42)
-        gaussian_mixture_free(m_gaussian_mixture)
-    }
-    t1 = flow_now_ns()
-    printf("ESTIMATOR|gaussian_mixture|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
-    fflush(null)
-
-    # ---- gaussian_nb (classification) ----
-    t0 = flow_now_ns()
-    let probe_gaussian_nb: GaussianNB = gaussian_nb_fit(X_c, y_c, 3, 0.000000001)
-    t1 = flow_now_ns()
-    gaussian_nb_free(probe_gaussian_nb)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_gaussian_nb: GaussianNB = gaussian_nb_fit(X_c, y_c, 3, 0.000000001)
-        gaussian_nb_free(m_gaussian_nb)
-    }
-    t1 = flow_now_ns()
-    let fitted_gaussian_nb: GaussianNB = gaussian_nb_fit(X_c, y_c, 3, 0.000000001)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_gaussian_nb: ptr<f32> = gaussian_nb_predict(fitted_gaussian_nb, X_c)
-        sink = sink + o_gaussian_nb[0]
-        array_free_f32(o_gaussian_nb)
-    }
-    t3 = flow_now_ns()
-    gaussian_nb_free(fitted_gaussian_nb)
-    printf("ESTIMATOR|gaussian_nb|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }

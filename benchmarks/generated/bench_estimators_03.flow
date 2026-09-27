@@ -82,6 +82,112 @@ function main() -> i32 {
     let mut reps: i32 = 1
     let mut sink: f32 = 0.0
 
+    # ---- kernel_pca (unsupervised) ----
+    t0 = flow_now_ns()
+    let probe_kernel_pca: KernelPCA = kernel_pca_fit(X_c, 2, 0, 0.1, 2, 0.0)
+    t1 = flow_now_ns()
+    kernel_pca_free(probe_kernel_pca)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_kernel_pca: KernelPCA = kernel_pca_fit(X_c, 2, 0, 0.1, 2, 0.0)
+        kernel_pca_free(m_kernel_pca)
+    }
+    t1 = flow_now_ns()
+    let fitted_kernel_pca: KernelPCA = kernel_pca_fit(X_c, 2, 0, 0.1, 2, 0.0)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_kernel_pca: Matrix = kernel_pca_transform(fitted_kernel_pca, X_c)
+        if o_kernel_pca.rows > 0 {
+            if o_kernel_pca.cols > 0 { sink = sink + o_kernel_pca.data[0] }
+        }
+        matrix_free(o_kernel_pca)
+    }
+    t3 = flow_now_ns()
+    kernel_pca_free(fitted_kernel_pca)
+    printf("ESTIMATOR|kernel_pca|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- kernel_ridge (regression) ----
+    t0 = flow_now_ns()
+    let probe_kernel_ridge: KernelRidge = kernel_ridge_fit(X_r, y_r, 1.0, 0, 0.1, 2, 0.0)
+    t1 = flow_now_ns()
+    kernel_ridge_free(probe_kernel_ridge)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_kernel_ridge: KernelRidge = kernel_ridge_fit(X_r, y_r, 1.0, 0, 0.1, 2, 0.0)
+        kernel_ridge_free(m_kernel_ridge)
+    }
+    t1 = flow_now_ns()
+    let fitted_kernel_ridge: KernelRidge = kernel_ridge_fit(X_r, y_r, 1.0, 0, 0.1, 2, 0.0)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_kernel_ridge: ptr<f32> = kernel_ridge_predict(fitted_kernel_ridge, X_r)
+        sink = sink + o_kernel_ridge[0]
+        array_free_f32(o_kernel_ridge)
+    }
+    t3 = flow_now_ns()
+    kernel_ridge_free(fitted_kernel_ridge)
+    printf("ESTIMATOR|kernel_ridge|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- kernel_svc (classification) ----
+    t0 = flow_now_ns()
+    let probe_kernel_svc: KernelSVC = kernel_svc_fit(X_c, y_c, 3, 1.0, 0.1, 100)
+    t1 = flow_now_ns()
+    kernel_svc_free(probe_kernel_svc)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_kernel_svc: KernelSVC = kernel_svc_fit(X_c, y_c, 3, 1.0, 0.1, 100)
+        kernel_svc_free(m_kernel_svc)
+    }
+    t1 = flow_now_ns()
+    let fitted_kernel_svc: KernelSVC = kernel_svc_fit(X_c, y_c, 3, 1.0, 0.1, 100)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_kernel_svc: ptr<f32> = kernel_svc_predict(fitted_kernel_svc, X_c)
+        sink = sink + o_kernel_svc[0]
+        array_free_f32(o_kernel_svc)
+    }
+    t3 = flow_now_ns()
+    kernel_svc_free(fitted_kernel_svc)
+    printf("ESTIMATOR|kernel_svc|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- kernel_svc_multi (classification) ----
+    t0 = flow_now_ns()
+    let probe_kernel_svc_multi: KernelSVCMulti = kernel_svc_multi_fit(X_c, y_c, 3, 0.1, 1.0, 100)
+    t1 = flow_now_ns()
+    kernel_svc_multi_free(probe_kernel_svc_multi)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_kernel_svc_multi: KernelSVCMulti = kernel_svc_multi_fit(X_c, y_c, 3, 0.1, 1.0, 100)
+        kernel_svc_multi_free(m_kernel_svc_multi)
+    }
+    t1 = flow_now_ns()
+    let fitted_kernel_svc_multi: KernelSVCMulti = kernel_svc_multi_fit(X_c, y_c, 3, 0.1, 1.0, 100)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_kernel_svc_multi: ptr<f32> = kernel_svc_multi_predict(fitted_kernel_svc_multi, X_c)
+        sink = sink + o_kernel_svc_multi[0]
+        array_free_f32(o_kernel_svc_multi)
+    }
+    t3 = flow_now_ns()
+    kernel_svc_multi_free(fitted_kernel_svc_multi)
+    printf("ESTIMATOR|kernel_svc_multi|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
     # ---- kmeans (unsupervised) ----
     t0 = flow_now_ns()
     let probe_kmeans: KMeans = kmeans_fit(X_c, 3, 100, 0.0001, 42)
@@ -477,101 +583,6 @@ function main() -> i32 {
     t3 = flow_now_ns()
     lasso_lars_ic_free(fitted_lasso_lars_ic)
     printf("ESTIMATOR|lasso_lars_ic|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- lda (unsupervised) ----
-    t0 = flow_now_ns()
-    let probe_lda: LatentDirichletAllocation = lda_fit(X_c, 3, 50, 1.0, 0.1, 42)
-    t1 = flow_now_ns()
-    lda_free(probe_lda)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_lda: LatentDirichletAllocation = lda_fit(X_c, 3, 50, 1.0, 0.1, 42)
-        lda_free(m_lda)
-    }
-    t1 = flow_now_ns()
-    let fitted_lda: LatentDirichletAllocation = lda_fit(X_c, 3, 50, 1.0, 0.1, 42)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_lda: Matrix = lda_transform(fitted_lda, X_c)
-        if o_lda.rows > 0 {
-            if o_lda.cols > 0 { sink = sink + o_lda.data[0] }
-        }
-        matrix_free(o_lda)
-    }
-    t3 = flow_now_ns()
-    lda_free(fitted_lda)
-    printf("ESTIMATOR|lda|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- ledoit_wolf_estimator (unsupervised) ----
-    t0 = flow_now_ns()
-    let probe_ledoit_wolf_estimator: ShrunkCovariance = ledoit_wolf_estimator_fit(X_c)
-    t1 = flow_now_ns()
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_ledoit_wolf_estimator: ShrunkCovariance = ledoit_wolf_estimator_fit(X_c)
-    }
-    t1 = flow_now_ns()
-    printf("ESTIMATOR|ledoit_wolf_estimator|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
-    fflush(null)
-
-    # ---- linear_regression (regression) ----
-    t0 = flow_now_ns()
-    let probe_linear_regression: LinearRegression = linear_regression_fit(X_r, y_r, penalty_none())
-    t1 = flow_now_ns()
-    linear_regression_free(probe_linear_regression)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_linear_regression: LinearRegression = linear_regression_fit(X_r, y_r, penalty_none())
-        linear_regression_free(m_linear_regression)
-    }
-    t1 = flow_now_ns()
-    let fitted_linear_regression: LinearRegression = linear_regression_fit(X_r, y_r, penalty_none())
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_linear_regression: ptr<f32> = linear_regression_predict(fitted_linear_regression, X_r)
-        sink = sink + o_linear_regression[0]
-        array_free_f32(o_linear_regression)
-    }
-    t3 = flow_now_ns()
-    linear_regression_free(fitted_linear_regression)
-    printf("ESTIMATOR|linear_regression|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- linear_svc (classification) ----
-    t0 = flow_now_ns()
-    let probe_linear_svc: LinearSVC = linear_svc_fit(X_c, y_c, 3, 1.0, 50, 0.01)
-    t1 = flow_now_ns()
-    linear_svc_free(probe_linear_svc)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_linear_svc: LinearSVC = linear_svc_fit(X_c, y_c, 3, 1.0, 50, 0.01)
-        linear_svc_free(m_linear_svc)
-    }
-    t1 = flow_now_ns()
-    let fitted_linear_svc: LinearSVC = linear_svc_fit(X_c, y_c, 3, 1.0, 50, 0.01)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_linear_svc: ptr<f32> = linear_svc_predict(fitted_linear_svc, X_c)
-        sink = sink + o_linear_svc[0]
-        array_free_f32(o_linear_svc)
-    }
-    t3 = flow_now_ns()
-    linear_svc_free(fitted_linear_svc)
-    printf("ESTIMATOR|linear_svc|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }

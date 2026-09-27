@@ -82,6 +82,106 @@ function main() -> i32 {
     let mut reps: i32 = 1
     let mut sink: f32 = 0.0
 
+    # ---- feature_union (classification, written out) ----
+    let fu_obj: FeatureUnion = feature_union_init(2)
+    # 0 is FU_TRANSFORMER_STANDARD_SCALER and 2 is FU_TRANSFORMER_PASSTHROUGH,
+    # written out for the reason the column transformer above gives.
+    feature_union_set_transformer(fu_obj, 0, 0, 0)
+    feature_union_set_transformer(fu_obj, 1, 2, 0)
+    t0 = flow_now_ns()
+    let probe_feature_union: FeatureUnion = feature_union_fit(fu_obj, X_c)
+    t1 = flow_now_ns()
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_feature_union: FeatureUnion = feature_union_fit(fu_obj, X_c)
+    }
+    t1 = flow_now_ns()
+    let fitted_feature_union: FeatureUnion = feature_union_fit(fu_obj, X_c)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_feature_union: Matrix = feature_union_transform(fitted_feature_union, X_c)
+        if o_feature_union.rows > 0 {
+            if o_feature_union.cols > 0 { sink = sink + o_feature_union.data[0] }
+        }
+        matrix_free(o_feature_union)
+    }
+    t3 = flow_now_ns()
+    feature_union_free(fitted_feature_union)
+    printf("ESTIMATOR|feature_union|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- gamma_regressor (regression) ----
+    t0 = flow_now_ns()
+    let probe_gamma_regressor: GammaRegressor = gamma_regressor_fit(X_r, y_r, 1.0, 100, 0.01)
+    t1 = flow_now_ns()
+    gamma_regressor_free(probe_gamma_regressor)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_gamma_regressor: GammaRegressor = gamma_regressor_fit(X_r, y_r, 1.0, 100, 0.01)
+        gamma_regressor_free(m_gamma_regressor)
+    }
+    t1 = flow_now_ns()
+    let fitted_gamma_regressor: GammaRegressor = gamma_regressor_fit(X_r, y_r, 1.0, 100, 0.01)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_gamma_regressor: ptr<f32> = gamma_regressor_predict(fitted_gamma_regressor, X_r)
+        sink = sink + o_gamma_regressor[0]
+        array_free_f32(o_gamma_regressor)
+    }
+    t3 = flow_now_ns()
+    gamma_regressor_free(fitted_gamma_regressor)
+    printf("ESTIMATOR|gamma_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- gaussian_mixture (unsupervised) ----
+    t0 = flow_now_ns()
+    let probe_gaussian_mixture: GaussianMixture = gaussian_mixture_fit(X_c, 2, 100, 0.0001, 42)
+    t1 = flow_now_ns()
+    gaussian_mixture_free(probe_gaussian_mixture)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_gaussian_mixture: GaussianMixture = gaussian_mixture_fit(X_c, 2, 100, 0.0001, 42)
+        gaussian_mixture_free(m_gaussian_mixture)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|gaussian_mixture|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
+    fflush(null)
+
+    # ---- gaussian_nb (classification) ----
+    t0 = flow_now_ns()
+    let probe_gaussian_nb: GaussianNB = gaussian_nb_fit(X_c, y_c, 3, 0.000000001)
+    t1 = flow_now_ns()
+    gaussian_nb_free(probe_gaussian_nb)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_gaussian_nb: GaussianNB = gaussian_nb_fit(X_c, y_c, 3, 0.000000001)
+        gaussian_nb_free(m_gaussian_nb)
+    }
+    t1 = flow_now_ns()
+    let fitted_gaussian_nb: GaussianNB = gaussian_nb_fit(X_c, y_c, 3, 0.000000001)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_gaussian_nb: ptr<f32> = gaussian_nb_predict(fitted_gaussian_nb, X_c)
+        sink = sink + o_gaussian_nb[0]
+        array_free_f32(o_gaussian_nb)
+    }
+    t3 = flow_now_ns()
+    gaussian_nb_free(fitted_gaussian_nb)
+    printf("ESTIMATOR|gaussian_nb|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
     # ---- gaussian_process_classifier (regression) ----
     t0 = flow_now_ns()
     let probe_gaussian_process_classifier: GaussianProcessClassifier = gaussian_process_classifier_fit(X_r, y_r, 0.1, 100)
@@ -457,112 +557,6 @@ function main() -> i32 {
     }
     t1 = flow_now_ns()
     printf("ESTIMATOR|kernel_density|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
-    fflush(null)
-
-    # ---- kernel_pca (unsupervised) ----
-    t0 = flow_now_ns()
-    let probe_kernel_pca: KernelPCA = kernel_pca_fit(X_c, 2, 0, 0.1, 2, 0.0)
-    t1 = flow_now_ns()
-    kernel_pca_free(probe_kernel_pca)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_kernel_pca: KernelPCA = kernel_pca_fit(X_c, 2, 0, 0.1, 2, 0.0)
-        kernel_pca_free(m_kernel_pca)
-    }
-    t1 = flow_now_ns()
-    let fitted_kernel_pca: KernelPCA = kernel_pca_fit(X_c, 2, 0, 0.1, 2, 0.0)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_kernel_pca: Matrix = kernel_pca_transform(fitted_kernel_pca, X_c)
-        if o_kernel_pca.rows > 0 {
-            if o_kernel_pca.cols > 0 { sink = sink + o_kernel_pca.data[0] }
-        }
-        matrix_free(o_kernel_pca)
-    }
-    t3 = flow_now_ns()
-    kernel_pca_free(fitted_kernel_pca)
-    printf("ESTIMATOR|kernel_pca|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- kernel_ridge (regression) ----
-    t0 = flow_now_ns()
-    let probe_kernel_ridge: KernelRidge = kernel_ridge_fit(X_r, y_r, 1.0, 0, 0.1, 2, 0.0)
-    t1 = flow_now_ns()
-    kernel_ridge_free(probe_kernel_ridge)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_kernel_ridge: KernelRidge = kernel_ridge_fit(X_r, y_r, 1.0, 0, 0.1, 2, 0.0)
-        kernel_ridge_free(m_kernel_ridge)
-    }
-    t1 = flow_now_ns()
-    let fitted_kernel_ridge: KernelRidge = kernel_ridge_fit(X_r, y_r, 1.0, 0, 0.1, 2, 0.0)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_kernel_ridge: ptr<f32> = kernel_ridge_predict(fitted_kernel_ridge, X_r)
-        sink = sink + o_kernel_ridge[0]
-        array_free_f32(o_kernel_ridge)
-    }
-    t3 = flow_now_ns()
-    kernel_ridge_free(fitted_kernel_ridge)
-    printf("ESTIMATOR|kernel_ridge|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- kernel_svc (classification) ----
-    t0 = flow_now_ns()
-    let probe_kernel_svc: KernelSVC = kernel_svc_fit(X_c, y_c, 3, 1.0, 0.1, 100)
-    t1 = flow_now_ns()
-    kernel_svc_free(probe_kernel_svc)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_kernel_svc: KernelSVC = kernel_svc_fit(X_c, y_c, 3, 1.0, 0.1, 100)
-        kernel_svc_free(m_kernel_svc)
-    }
-    t1 = flow_now_ns()
-    let fitted_kernel_svc: KernelSVC = kernel_svc_fit(X_c, y_c, 3, 1.0, 0.1, 100)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_kernel_svc: ptr<f32> = kernel_svc_predict(fitted_kernel_svc, X_c)
-        sink = sink + o_kernel_svc[0]
-        array_free_f32(o_kernel_svc)
-    }
-    t3 = flow_now_ns()
-    kernel_svc_free(fitted_kernel_svc)
-    printf("ESTIMATOR|kernel_svc|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- kernel_svc_multi (classification) ----
-    t0 = flow_now_ns()
-    let probe_kernel_svc_multi: KernelSVCMulti = kernel_svc_multi_fit(X_c, y_c, 3, 0.1, 1.0, 100)
-    t1 = flow_now_ns()
-    kernel_svc_multi_free(probe_kernel_svc_multi)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_kernel_svc_multi: KernelSVCMulti = kernel_svc_multi_fit(X_c, y_c, 3, 0.1, 1.0, 100)
-        kernel_svc_multi_free(m_kernel_svc_multi)
-    }
-    t1 = flow_now_ns()
-    let fitted_kernel_svc_multi: KernelSVCMulti = kernel_svc_multi_fit(X_c, y_c, 3, 0.1, 1.0, 100)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_kernel_svc_multi: ptr<f32> = kernel_svc_multi_predict(fitted_kernel_svc_multi, X_c)
-        sink = sink + o_kernel_svc_multi[0]
-        array_free_f32(o_kernel_svc_multi)
-    }
-    t3 = flow_now_ns()
-    kernel_svc_multi_free(fitted_kernel_svc_multi)
-    printf("ESTIMATOR|kernel_svc_multi|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }

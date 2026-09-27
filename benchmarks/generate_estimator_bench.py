@@ -223,16 +223,31 @@ def shaped_block(entry: dict) -> str:
     ret = entry["fit"]["returns"]
     call = f"{entry['fit']['name']}({', '.join(shape['flow_fit'])})"
     free = entry["companions"].get("free")
+    # A fit that takes a composed object built outside the timing mutates that
+    # object and hands it back, so freeing the result on every repeat would free
+    # what the next repeat is about to read. Those rows free once, after the
+    # timing, and leak the state a repeat leaves behind, which is a few hundred
+    # bytes per pass over a four-column design.
+    free_in_loop = shape.get("flow_free", "loop") == "loop"
     free_ok = free is not None and len(free["parameters"]) == 1
     comp = entry["companions"].get("transform") or entry["companions"].get("predict")
     work = shape.get("flow_work")
     comp_ok = comp is not None and work is not None and comp["returns"] in ("Matrix", "ptr<f32>")
 
     lines = [f"    # ---- {name} ({kind}, written out) ----"]
+    if shape.get("corpus"):
+        docs = shape["corpus"]
+        lines.append(f"    let {name}_docs: array<string, {len(docs)}> = [")
+        for i, doc in enumerate(docs):
+            tail = "," if i + 1 < len(docs) else ""
+            lines.append(f'        "{doc}"{tail}')
+        lines.append("    ]")
+    for pre_line in shape.get("flow_preamble", []):
+        lines.append("    " + pre_line)
     lines.append("    t0 = flow_now_ns()")
     lines.append(f"    let probe_{name}: {ret} = {call}")
     lines.append("    t1 = flow_now_ns()")
-    if free_ok:
+    if free_ok and free_in_loop:
         lines.append(f"    {free['name']}(probe_{name})")
     lines.append("    reps = 1")
     lines.append("    if (t1 - t0) < 200000 { reps = 200 }")
@@ -240,7 +255,7 @@ def shaped_block(entry: dict) -> str:
     lines.append("    t0 = flow_now_ns()")
     lines.append("    for rep in 0 to reps {")
     lines.append(f"        let m_{name}: {ret} = {call}")
-    if free_ok:
+    if free_ok and free_in_loop:
         lines.append(f"        {free['name']}(m_{name})")
     lines.append("    }")
     lines.append("    t1 = flow_now_ns()")
@@ -261,6 +276,8 @@ def shaped_block(entry: dict) -> str:
         pred_expr = "ms_between(t2, t3) / (reps as f32)"
     else:
         pred_expr = "0.0"
+        if free_ok and not free_in_loop:
+            lines.append(f"    {free['name']}(probe_{name})")
 
     lines.append(
         f'    printf("ESTIMATOR|{name}|%.9f|%.9f|%d|ok\\n", '

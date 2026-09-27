@@ -512,6 +512,38 @@ function main() -> i32 {
     printf("ESTIMATOR|classifier_chain|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
     fflush(null)
 
+    # ---- column_transformer (classification, written out) ----
+    let ct_cols: ptr<i32> = malloc((f_c as i64) * 4) as ptr<i32>
+    for i in 0 to f_c { ct_cols[i] = i }
+    let ct_obj: ColumnTransformer = column_transformer_init(1)
+    # 0 is TRANSFORMER_STANDARD_SCALER. The constant is written out
+    # because an export const is not visible through the umbrella import.
+    column_transformer_set_spec(ct_obj, 0, 0, ct_cols, f_c)
+    t0 = flow_now_ns()
+    let probe_column_transformer: ColumnTransformer = column_transformer_fit(ct_obj, X_c)
+    t1 = flow_now_ns()
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_column_transformer: ColumnTransformer = column_transformer_fit(ct_obj, X_c)
+    }
+    t1 = flow_now_ns()
+    let fitted_column_transformer: ColumnTransformer = column_transformer_fit(ct_obj, X_c)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_column_transformer: Matrix = column_transformer_transform(fitted_column_transformer, X_c)
+        if o_column_transformer.rows > 0 {
+            if o_column_transformer.cols > 0 { sink = sink + o_column_transformer.data[0] }
+        }
+        matrix_free(o_column_transformer)
+    }
+    t3 = flow_now_ns()
+    column_transformer_free(fitted_column_transformer)
+    printf("ESTIMATOR|column_transformer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
     # ---- complement_nb (classification) ----
     t0 = flow_now_ns()
     let probe_complement_nb: ComplementNB = complement_nb_fit(X_c, y_c, 3, 1.0)
@@ -536,23 +568,6 @@ function main() -> i32 {
     t3 = flow_now_ns()
     complement_nb_free(fitted_complement_nb)
     printf("ESTIMATOR|complement_nb|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- dbscan (unsupervised) ----
-    t0 = flow_now_ns()
-    let probe_dbscan: DBSCAN = dbscan_fit(X_c, 0.5, 5)
-    t1 = flow_now_ns()
-    dbscan_free(probe_dbscan)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_dbscan: DBSCAN = dbscan_fit(X_c, 0.5, 5)
-        dbscan_free(m_dbscan)
-    }
-    t1 = flow_now_ns()
-    printf("ESTIMATOR|dbscan|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
     fflush(null)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }

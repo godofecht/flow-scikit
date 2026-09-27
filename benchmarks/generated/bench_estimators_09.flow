@@ -82,6 +82,212 @@ function main() -> i32 {
     let mut reps: i32 = 1
     let mut sink: f32 = 0.0
 
+    # ---- stacking_regressor (regression) ----
+    t0 = flow_now_ns()
+    let probe_stacking_regressor: StackingRegressor = stacking_regressor_fit(X_r, y_r, 3, 5, 42)
+    t1 = flow_now_ns()
+    stacking_regressor_free(probe_stacking_regressor)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_stacking_regressor: StackingRegressor = stacking_regressor_fit(X_r, y_r, 3, 5, 42)
+        stacking_regressor_free(m_stacking_regressor)
+    }
+    t1 = flow_now_ns()
+    let fitted_stacking_regressor: StackingRegressor = stacking_regressor_fit(X_r, y_r, 3, 5, 42)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_stacking_regressor: ptr<f32> = stacking_regressor_predict(fitted_stacking_regressor, X_r)
+        sink = sink + o_stacking_regressor[0]
+        array_free_f32(o_stacking_regressor)
+    }
+    t3 = flow_now_ns()
+    stacking_regressor_free(fitted_stacking_regressor)
+    printf("ESTIMATOR|stacking_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- standard_scaler (unsupervised) ----
+    t0 = flow_now_ns()
+    let probe_standard_scaler: StandardScaler = standard_scaler_fit(X_c)
+    t1 = flow_now_ns()
+    standard_scaler_free(probe_standard_scaler)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_standard_scaler: StandardScaler = standard_scaler_fit(X_c)
+        standard_scaler_free(m_standard_scaler)
+    }
+    t1 = flow_now_ns()
+    let fitted_standard_scaler: StandardScaler = standard_scaler_fit(X_c)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_standard_scaler: Matrix = standard_scaler_transform(fitted_standard_scaler, X_c)
+        if o_standard_scaler.rows > 0 {
+            if o_standard_scaler.cols > 0 { sink = sink + o_standard_scaler.data[0] }
+        }
+        matrix_free(o_standard_scaler)
+    }
+    t3 = flow_now_ns()
+    standard_scaler_free(fitted_standard_scaler)
+    printf("ESTIMATOR|standard_scaler|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- svc (classification) ----
+    t0 = flow_now_ns()
+    let probe_svc: SVC = svc_fit(X_c, y_c, 3, 1.0, 0, 0.1, 2, 0.0)
+    t1 = flow_now_ns()
+    svc_free(probe_svc)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_svc: SVC = svc_fit(X_c, y_c, 3, 1.0, 0, 0.1, 2, 0.0)
+        svc_free(m_svc)
+    }
+    t1 = flow_now_ns()
+    let fitted_svc: SVC = svc_fit(X_c, y_c, 3, 1.0, 0, 0.1, 2, 0.0)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_svc: ptr<f32> = svc_predict(fitted_svc, X_c)
+        sink = sink + o_svc[0]
+        array_free_f32(o_svc)
+    }
+    t3 = flow_now_ns()
+    svc_free(fitted_svc)
+    printf("ESTIMATOR|svc|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- svr (regression) ----
+    t0 = flow_now_ns()
+    let probe_svr: SVR = svr_fit(X_r, y_r, 1.0, 0.1, 0, 0.1, 2, 0.0)
+    t1 = flow_now_ns()
+    svr_free(probe_svr)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_svr: SVR = svr_fit(X_r, y_r, 1.0, 0.1, 0, 0.1, 2, 0.0)
+        svr_free(m_svr)
+    }
+    t1 = flow_now_ns()
+    let fitted_svr: SVR = svr_fit(X_r, y_r, 1.0, 0.1, 0, 0.1, 2, 0.0)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_svr: ptr<f32> = svr_predict(fitted_svr, X_r)
+        sink = sink + o_svr[0]
+        array_free_f32(o_svr)
+    }
+    t3 = flow_now_ns()
+    svr_free(fitted_svr)
+    printf("ESTIMATOR|svr|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- target_encoder (regression) ----
+    t0 = flow_now_ns()
+    let probe_target_encoder: TargetEncoder = target_encoder_fit(X_r, y_r, n_r, 1.0)
+    t1 = flow_now_ns()
+    target_encoder_free(probe_target_encoder)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_target_encoder: TargetEncoder = target_encoder_fit(X_r, y_r, n_r, 1.0)
+        target_encoder_free(m_target_encoder)
+    }
+    t1 = flow_now_ns()
+    let fitted_target_encoder: TargetEncoder = target_encoder_fit(X_r, y_r, n_r, 1.0)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_target_encoder: Matrix = target_encoder_transform(fitted_target_encoder, X_r)
+        if o_target_encoder.rows > 0 {
+            if o_target_encoder.cols > 0 { sink = sink + o_target_encoder.data[0] }
+        }
+        matrix_free(o_target_encoder)
+    }
+    t3 = flow_now_ns()
+    target_encoder_free(fitted_target_encoder)
+    printf("ESTIMATOR|target_encoder|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- tfidf_vectorizer (classification, written out) ----
+    let tfidf_vectorizer_docs: array<string, 16> = [
+        "the quick brown fox jumps over the lazy dog",
+        "a lazy dog sleeps in the warm sun",
+        "quick brown foxes are rare in the city",
+        "the dog and the fox share a field",
+        "warm sun and a cold river run together",
+        "a field of brown grass in the sun",
+        "the city river runs past the old field",
+        "old dogs sleep through a quick storm",
+        "a storm over the city wakes the dog",
+        "foxes hunt in the cold river valley",
+        "the valley holds a warm field of grass",
+        "grass grows where the river meets the sun",
+        "a rare fox crosses the old stone bridge",
+        "the stone bridge over the cold river",
+        "dogs and foxes keep their distance here",
+        "here the field the river and the city meet"
+    ]
+    t0 = flow_now_ns()
+    let probe_tfidf_vectorizer: TfidfVectorizer = tfidf_vectorizer_fit(tfidf_vectorizer_docs, 16, 50)
+    t1 = flow_now_ns()
+    tfidf_vectorizer_free(probe_tfidf_vectorizer)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_tfidf_vectorizer: TfidfVectorizer = tfidf_vectorizer_fit(tfidf_vectorizer_docs, 16, 50)
+        tfidf_vectorizer_free(m_tfidf_vectorizer)
+    }
+    t1 = flow_now_ns()
+    let fitted_tfidf_vectorizer: TfidfVectorizer = tfidf_vectorizer_fit(tfidf_vectorizer_docs, 16, 50)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_tfidf_vectorizer: Matrix = tfidf_vectorizer_transform(fitted_tfidf_vectorizer, tfidf_vectorizer_docs, 16)
+        if o_tfidf_vectorizer.rows > 0 {
+            if o_tfidf_vectorizer.cols > 0 { sink = sink + o_tfidf_vectorizer.data[0] }
+        }
+        matrix_free(o_tfidf_vectorizer)
+    }
+    t3 = flow_now_ns()
+    tfidf_vectorizer_free(fitted_tfidf_vectorizer)
+    printf("ESTIMATOR|tfidf_vectorizer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- theil_sen_regressor (regression) ----
+    t0 = flow_now_ns()
+    let probe_theil_sen_regressor: TheilSenRegressor = theil_sen_regressor_fit(X_r, y_r, 10, 100, 42)
+    t1 = flow_now_ns()
+    theil_sen_regressor_free(probe_theil_sen_regressor)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_theil_sen_regressor: TheilSenRegressor = theil_sen_regressor_fit(X_r, y_r, 10, 100, 42)
+        theil_sen_regressor_free(m_theil_sen_regressor)
+    }
+    t1 = flow_now_ns()
+    let fitted_theil_sen_regressor: TheilSenRegressor = theil_sen_regressor_fit(X_r, y_r, 10, 100, 42)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_theil_sen_regressor: ptr<f32> = theil_sen_regressor_predict(fitted_theil_sen_regressor, X_r)
+        sink = sink + o_theil_sen_regressor[0]
+        array_free_f32(o_theil_sen_regressor)
+    }
+    t3 = flow_now_ns()
+    theil_sen_regressor_free(fitted_theil_sen_regressor)
+    printf("ESTIMATOR|theil_sen_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
     # ---- transformed_target_regressor (regression) ----
     t0 = flow_now_ns()
     let probe_transformed_target_regressor: TransformedTargetRegressor = transformed_target_regressor_fit(X_r, y_r, 0)
