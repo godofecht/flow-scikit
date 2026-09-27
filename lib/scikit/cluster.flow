@@ -1969,6 +1969,7 @@ export function affinity_propagation_fit(X: Matrix, damping: f32, max_iter: i32,
     let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
     let col_pos: ptr<f32> = array_new_f32(n)
     let rkk: ptr<f32> = array_new_f32(n)
+    let base: ptr<f32> = array_new_f32(n)
     let keep: f32 = damping
     let take: f32 = 1.0 - damping
 
@@ -1980,6 +1981,13 @@ export function affinity_propagation_fit(X: Matrix, damping: f32, max_iter: i32,
         # up. Finding both once per row makes this pass quadratic. Rescanning
         # the row for every k made it cubic, which is the whole cost of a fit
         # at these sizes.
+        # The column sums the availability pass needs are accumulated as the
+        # responsibilities are written, and the diagonal is picked up on the
+        # way past. That used to be two more sweeps over the whole matrix
+        # after this one, and the first of them walked down a column of an
+        # array of row allocations, a cache line per element.
+        for k in 0 to n { col_pos[k] = 0.0 }
+
         for i in 0 to n {
             let ai: ptr<f32> = A + i * n
             let si3: ptr<f32> = S + i * n
@@ -2002,46 +2010,39 @@ export function affinity_propagation_fit(X: Matrix, damping: f32, max_iter: i32,
             for k in 0 to n {
                 let mut max_other: f32 = best
                 if k == best_k { max_other = second }
-                ri2[k] = take * (si3[k] - max_other) + keep * ri2[k]
-            }
-        }
-
-        # Both passes below used to walk down a column of a row-pointer array,
-        # touching a different cache line for every element. They accumulate
-        # and write row by row instead, which is the order the rows are
-        # actually laid out in.
-        for k in 0 to n {
-            col_pos[k] = 0.0
-            rkk[k] = R[k * n + k]
-        }
-        for i in 0 to n {
-            let ri3: ptr<f32> = R + i * n
-            for k in 0 to n {
-                if i != k {
-                    let v: f32 = ri3[k]
-                    if v > 0.0 { col_pos[k] = col_pos[k] + v }
+                let v: f32 = take * (si3[k] - max_other) + keep * ri2[k]
+                ri2[k] = v
+                if k == i {
+                    rkk[i] = v
+                } elif v > 0.0 {
+                    col_pos[k] = col_pos[k] + v
                 }
             }
         }
 
-        # The availability update, and the exemplar of row i falls out of its
-        # own diagonal on the way past.
+        # The availability update. The term that depends only on the column is
+        # computed once per column rather than once per pair, and the diagonal
+        # is lifted out of the inner loop, which used to test i against k for
+        # every element of the matrix.
+        for k in 0 to n { base[k] = col_pos[k] + rkk[k] }
+
         for i in 0 to n {
             let ai2: ptr<f32> = A + i * n
             let ri4: ptr<f32> = R + i * n
-            for k in 0 to n {
-                let base_val: f32 = col_pos[k] + rkk[k]
+            for k in 0 to i {
+                let mut val: f32 = base[k]
                 let r_ik: f32 = ri4[k]
-                let mut updated: f32 = 0.0
-                if i == k {
-                    updated = take * base_val + keep * ai2[k]
-                } else {
-                    let mut val: f32 = base_val
-                    if r_ik > 0.0 { val = val - r_ik }
-                    if val > 0.0 { val = 0.0 }
-                    updated = take * val + keep * ai2[k]
-                }
-                ai2[k] = updated
+                if r_ik > 0.0 { val = val - r_ik }
+                if val > 0.0 { val = 0.0 }
+                ai2[k] = take * val + keep * ai2[k]
+            }
+            ai2[i] = take * base[i] + keep * ai2[i]
+            for k in i + 1 to n {
+                let mut val2: f32 = base[k]
+                let r_ik2: f32 = ri4[k]
+                if r_ik2 > 0.0 { val2 = val2 - r_ik2 }
+                if val2 > 0.0 { val2 = 0.0 }
+                ai2[k] = take * val2 + keep * ai2[k]
             }
         }
 
@@ -2101,6 +2102,7 @@ export function affinity_propagation_fit(X: Matrix, damping: f32, max_iter: i32,
     array_free_f32(A)
     array_free_f32(col_pos)
     array_free_f32(rkk)
+    array_free_f32(base)
 
     let result: AffinityPropagation = AffinityPropagation {
         cluster_centers_indices: exemplars,
