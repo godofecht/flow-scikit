@@ -91,7 +91,9 @@ def main() -> int:
     args = ap.parse_args()
 
     registry = json.loads(REGISTRY.read_text())
-    runnable = [e for e in registry["entries"] if e["bucket"] == "runnable"]
+    # Matches generate_estimator_bench.py: simplified rows are timed on both
+    # sides and shown without a ratio.
+    runnable = [e for e in registry["entries"] if e["bucket"] in ("runnable", "simplified")]
     classes = dict(all_estimators())
     constructors = _constructors()
 

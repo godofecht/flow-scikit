@@ -267,24 +267,35 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--per-file", type=int, default=20)
     ap.add_argument("--outdir", type=Path, default=OUTDIR)
-    ap.add_argument("--only", help="generate a single estimator, for bisecting a compile failure")
+    ap.add_argument("--only", help="comma separated estimator names, for bisecting a compile "
+                                   "failure or re-timing one group")
+    ap.add_argument("--prefix", default="bench_estimators",
+                    help="output file prefix, so a subset written elsewhere cannot collide with "
+                         "the committed files or with another process in the shared build directory")
     args = ap.parse_args()
 
     registry = json.loads(REGISTRY.read_text())
-    runnable = [e for e in registry["entries"] if e["bucket"] == "runnable"]
+    # Simplified implementations are timed too, because compare_estimators.py
+    # shows their times while withholding a ratio. Leaving them out of the
+    # race would make the page quietly drop four rows.
+    timed = ("runnable", "simplified")
+    runnable = [e for e in registry["entries"] if e["bucket"] in timed]
     if args.only:
-        runnable = [e for e in runnable if e["flow_estimator"] == args.only]
-        if not runnable:
-            raise SystemExit(f"{args.only} is not a runnable registry entry")
+        wanted = [n.strip() for n in args.only.split(",") if n.strip()]
+        runnable = [e for e in runnable if e["flow_estimator"] in wanted]
+        found = {e["flow_estimator"] for e in runnable}
+        missing = [n for n in wanted if n not in found]
+        if missing:
+            raise SystemExit(f"not timed registry entries: {', '.join(missing)}")
 
     args.outdir.mkdir(parents=True, exist_ok=True)
-    for stale in args.outdir.glob("bench_estimators_*.flow"):
+    for stale in args.outdir.glob(f"{args.prefix}_*.flow"):
         stale.unlink()
 
     written = []
     for i in range(0, len(runnable), args.per_file):
         part = runnable[i : i + args.per_file]
-        path = args.outdir / f"bench_estimators_{i // args.per_file:02d}.flow"
+        path = args.outdir / f"{args.prefix}_{i // args.per_file:02d}.flow"
         path.write_text(chunk_file(i // args.per_file, part))
         written.append((path.name, len(part)))
 
