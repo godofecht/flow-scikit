@@ -542,9 +542,9 @@ function main() -> i32 {
     printf("ESTIMATOR|kbins_discretizer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
-    # ---- kernel_density (unsupervised) ----
+    # ---- kernel_density (classification, written out) ----
     t0 = flow_now_ns()
-    let probe_kernel_density: KernelDensity = kernel_density_fit(X_c, 1.0, 0)
+    let probe_kernel_density: KernelDensity = kernel_density_fit(X_c, 0.5, 0)
     t1 = flow_now_ns()
     kernel_density_free(probe_kernel_density)
     reps = 1
@@ -552,11 +552,20 @@ function main() -> i32 {
     elif (t1 - t0) < 2000000 { reps = 20 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
-        let m_kernel_density: KernelDensity = kernel_density_fit(X_c, 1.0, 0)
+        let m_kernel_density: KernelDensity = kernel_density_fit(X_c, 0.5, 0)
         kernel_density_free(m_kernel_density)
     }
     t1 = flow_now_ns()
-    printf("ESTIMATOR|kernel_density|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
+    let fitted_kernel_density: KernelDensity = kernel_density_fit(X_c, 0.5, 0)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_kernel_density: ptr<f32> = kernel_density_score_samples(fitted_kernel_density, X_c)
+        sink = sink + o_kernel_density[0]
+        array_free_f32(o_kernel_density)
+    }
+    t3 = flow_now_ns()
+    kernel_density_free(fitted_kernel_density)
+    printf("ESTIMATOR|kernel_density|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }

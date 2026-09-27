@@ -232,7 +232,13 @@ def shaped_block(entry: dict) -> str:
     free_ok = free is not None and len(free["parameters"]) == 1
     comp = entry["companions"].get("transform") or entry["companions"].get("predict")
     work = shape.get("flow_work")
-    comp_ok = comp is not None and work is not None and comp["returns"] in ("Matrix", "ptr<f32>")
+    # A recipe can name the work function itself, for an estimator whose
+    # companion is called something other than predict or transform.
+    if shape.get("flow_work_fn"):
+        comp = {"name": shape["flow_work_fn"], "returns": shape["flow_work_returns"]}
+    comp_ok = comp is not None and work is not None and (
+        comp["returns"] in ("Matrix", "ptr<f32>") or shape.get("flow_work_release")
+    )
 
     lines = [f"    # ---- {name} ({kind}, written out) ----"]
     if shape.get("corpus"):
@@ -267,8 +273,12 @@ def shaped_block(entry: dict) -> str:
         lines.append("    for rep2 in 0 to reps {")
         lines.append(f"        let o_{name}: {comp['returns']} = "
                      f"{comp['name']}(fitted_{name}, {', '.join(work)})")
-        lines += sink_line(f"o_{name}", comp["returns"])
-        lines.append(f"        {release}(o_{name})")
+        if comp["returns"] in ("Matrix", "ptr<f32>"):
+            lines += sink_line(f"o_{name}", comp["returns"])
+        if shape.get("flow_work_release"):
+            lines.append("        " + shape["flow_work_release"].format(var=f"o_{name}"))
+        else:
+            lines.append(f"        {release}(o_{name})")
         lines.append("    }")
         lines.append("    t3 = flow_now_ns()")
         if free_ok:

@@ -1917,44 +1917,50 @@ export function affinity_propagation_fit(X: Matrix, damping: f32, max_iter: i32,
     let n: i32 = X.rows
     let p: i32 = X.cols
 
-    let S: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    # The three n by n matrices are one allocation each rather than n row
+    # allocations. Every pass below walks them in row order, and an array of
+    # row pointers puts a pointer load and a separate cache line in front of
+    # each row for no benefit.
+    #
+    # The similarity is symmetric, so one triangle is computed and mirrored,
+    # off row pointers rather than through matrix_at.
+    let xdata: ptr<f32> = X.data
+    let S: ptr<f32> = array_new_f32(n * n)
     for i in 0 to n {
-        S[i] = array_new_f32(n)
-        for j in 0 to n {
+        let ri: ptr<f32> = xdata + i * p
+        let si: ptr<f32> = S + i * n
+        for j in i + 1 to n {
+            let rj: ptr<f32> = xdata + j * p
             let mut s: f32 = 0.0
             for k in 0 to p {
-                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+                let d: f32 = ri[k] - rj[k]
                 s = s + d * d
             }
-            S[i][j] = -s
+            si[j] = 0.0 - s
+            S[j * n + i] = 0.0 - s
         }
     }
 
     let mut pref: f32 = 0.0
     let mut count: i32 = 0
     for i in 0 to n {
+        let si2: ptr<f32> = S + i * n
         for j in 0 to n {
             if i != j {
-                pref = pref + S[i][j]
+                pref = pref + si2[j]
                 count = count + 1
             }
         }
     }
     pref = pref / (count as f32)
-    for i in 0 to n {
-        S[i][i] = pref
-    }
+    for i in 0 to n { S[i * n + i] = pref }
 
-    let R: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
-    let A: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
-    for i in 0 to n {
-        R[i] = array_new_f32(n)
-        A[i] = array_new_f32(n)
-    }
+    let R: ptr<f32> = array_new_f32(n * n)
+    let A: ptr<f32> = array_new_f32(n * n)
 
     let mut n_iter: i32 = 0
     let mut conv_count: i32 = 0
-    let mut old_labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
+    let old_labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
     for i in 0 to n { old_labels[i] = -1 }
 
     # One label buffer for the whole sweep. It used to be allocated and freed
@@ -1962,6 +1968,8 @@ export function affinity_propagation_fit(X: Matrix, damping: f32, max_iter: i32,
     let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
     let col_pos: ptr<f32> = array_new_f32(n)
     let rkk: ptr<f32> = array_new_f32(n)
+    let keep: f32 = damping
+    let take: f32 = 1.0 - damping
 
     for iter in 0 to max_iter {
         n_iter = iter + 1
@@ -1972,15 +1980,15 @@ export function affinity_propagation_fit(X: Matrix, damping: f32, max_iter: i32,
         # the row for every k made it cubic, which is the whole cost of a fit
         # at these sizes.
         for i in 0 to n {
-            let ai: ptr<f32> = A[i]
-            let si: ptr<f32> = S[i]
-            let ri: ptr<f32> = R[i]
+            let ai: ptr<f32> = A + i * n
+            let si3: ptr<f32> = S + i * n
+            let ri2: ptr<f32> = R + i * n
 
             let mut best: f32 = -9999999999.0
             let mut second: f32 = -9999999999.0
             let mut best_k: i32 = 0
             for kk in 0 to n {
-                let val: f32 = ai[kk] + si[kk]
+                let val: f32 = ai[kk] + si3[kk]
                 if val > best {
                     second = best
                     best = val
@@ -1993,7 +2001,7 @@ export function affinity_propagation_fit(X: Matrix, damping: f32, max_iter: i32,
             for k in 0 to n {
                 let mut max_other: f32 = best
                 if k == best_k { max_other = second }
-                ri[k] = (1.0 - damping) * (si[k] - max_other) + damping * ri[k]
+                ri2[k] = take * (si3[k] - max_other) + keep * ri2[k]
             }
         }
 
@@ -2003,41 +2011,42 @@ export function affinity_propagation_fit(X: Matrix, damping: f32, max_iter: i32,
         # actually laid out in.
         for k in 0 to n {
             col_pos[k] = 0.0
-            rkk[k] = R[k][k]
+            rkk[k] = R[k * n + k]
         }
         for i in 0 to n {
-            let ri2: ptr<f32> = R[i]
+            let ri3: ptr<f32> = R + i * n
             for k in 0 to n {
                 if i != k {
-                    let v: f32 = ri2[k]
+                    let v: f32 = ri3[k]
                     if v > 0.0 { col_pos[k] = col_pos[k] + v }
                 }
             }
         }
-        for i in 0 to n {
-            let ai2: ptr<f32> = A[i]
-            let ri3: ptr<f32> = R[i]
-            for k in 0 to n {
-                let base_val: f32 = col_pos[k] + rkk[k]
-                if i == k {
-                    ai2[k] = (1.0 - damping) * base_val + damping * ai2[k]
-                } else {
-                    let r_ik: f32 = ri3[k]
-                    let mut val: f32 = base_val
-                    if r_ik > 0.0 { val = val - r_ik }
-                    if val > 0.0 { val = 0.0 }
-                    ai2[k] = (1.0 - damping) * val + damping * ai2[k]
-                }
-            }
-        }
 
+        # The label for row i is the largest A + R in that row, and this pass
+        # has both in hand as it writes them. It used to be a fourth sweep
+        # over the whole matrix.
         for i in 0 to n {
+            let ai2: ptr<f32> = A + i * n
+            let ri4: ptr<f32> = R + i * n
             let mut best_k: i32 = 0
             let mut best_val: f32 = -9999999999.0
             for k in 0 to n {
-                let val: f32 = A[i][k] + R[i][k]
-                if val > best_val {
-                    best_val = val
+                let base_val: f32 = col_pos[k] + rkk[k]
+                let r_ik: f32 = ri4[k]
+                let mut updated: f32 = 0.0
+                if i == k {
+                    updated = take * base_val + keep * ai2[k]
+                } else {
+                    let mut val: f32 = base_val
+                    if r_ik > 0.0 { val = val - r_ik }
+                    if val > 0.0 { val = 0.0 }
+                    updated = take * val + keep * ai2[k]
+                }
+                ai2[k] = updated
+                let total: f32 = updated + r_ik
+                if total > best_val {
+                    best_val = total
                     best_k = k
                 }
             }
@@ -2061,19 +2070,20 @@ export function affinity_propagation_fit(X: Matrix, damping: f32, max_iter: i32,
     let mut n_exemplars: i32 = 0
 
     for k in 0 to n {
-        if A[k][k] + R[k][k] > 0.0 {
+        if A[k * n + k] + R[k * n + k] > 0.0 {
             exemplars[n_exemplars] = k
             n_exemplars = n_exemplars + 1
         }
     }
 
     for i in 0 to n {
+        let si4: ptr<f32> = S + i * n
         let mut best_e: i32 = 0
         let mut best_sim: f32 = -9999999999.0
         for e in 0 to n_exemplars {
             let k: i32 = exemplars[e]
-            if S[i][k] > best_sim {
-                best_sim = S[i][k]
+            if si4[k] > best_sim {
+                best_sim = si4[k]
                 best_e = e
             }
         }
@@ -2081,14 +2091,11 @@ export function affinity_propagation_fit(X: Matrix, damping: f32, max_iter: i32,
     }
 
     free(old_labels as ptr<void>)
-    for i in 0 to n {
-        array_free_f32(S[i])
-        array_free_f32(R[i])
-        array_free_f32(A[i])
-    }
-    free(S as ptr<void>)
-    free(R as ptr<void>)
-    free(A as ptr<void>)
+    array_free_f32(S)
+    array_free_f32(R)
+    array_free_f32(A)
+    array_free_f32(col_pos)
+    array_free_f32(rkk)
 
     let result: AffinityPropagation = AffinityPropagation {
         cluster_centers_indices: exemplars,

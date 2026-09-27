@@ -607,9 +607,26 @@ export function linear_svr_fit(X: Matrix, y: ptr<f32>, C: f32, epsilon: f32, epo
         let mut violations: i32 = 0
         for i in 0 to rows {
             let row: ptr<f32> = xdata + i * n
-            let mut dot: f32 = 0.0
-            for j in 0 to n {
-                dot = dot + w_hat[j] * row[j]
+            # Four accumulators. A single one makes the dot a chain of
+            # dependent additions, and at these feature counts the chain is
+            # the whole cost of the epoch.
+            let mut d0: f32 = 0.0
+            let mut d1: f32 = 0.0
+            let mut d2: f32 = 0.0
+            let mut d3: f32 = 0.0
+            let limit: i32 = n - 3
+            let mut jd: i32 = 0
+            while jd < limit {
+                d0 = d0 + w_hat[jd] * row[jd]
+                d1 = d1 + w_hat[jd + 1] * row[jd + 1]
+                d2 = d2 + w_hat[jd + 2] * row[jd + 2]
+                d3 = d3 + w_hat[jd + 3] * row[jd + 3]
+                jd = jd + 4
+            }
+            let mut dot: f32 = (d0 + d1) + (d2 + d3)
+            while jd < n {
+                dot = dot + w_hat[jd] * row[jd]
+                jd = jd + 1
             }
             let pred: f32 = scale * dot + bias
             let err: f32 = pred - y[i]

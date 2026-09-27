@@ -444,7 +444,7 @@ function main() -> i32 {
     printf("ESTIMATOR|nearest_centroid|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
-    # ---- nearest_neighbors (unsupervised) ----
+    # ---- nearest_neighbors (classification, written out) ----
     t0 = flow_now_ns()
     let probe_nearest_neighbors: NearestNeighbors = nearest_neighbors_fit(X_c, 5)
     t1 = flow_now_ns()
@@ -458,7 +458,15 @@ function main() -> i32 {
         nearest_neighbors_free(m_nearest_neighbors)
     }
     t1 = flow_now_ns()
-    printf("ESTIMATOR|nearest_neighbors|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
+    let fitted_nearest_neighbors: NearestNeighbors = nearest_neighbors_fit(X_c, 5)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_nearest_neighbors: ptr<NeighborResult> = nearest_neighbors_kneighbors(fitted_nearest_neighbors, X_c)
+        nearest_neighbors_free_results(o_nearest_neighbors, n_c)
+    }
+    t3 = flow_now_ns()
+    nearest_neighbors_free(fitted_nearest_neighbors)
+    printf("ESTIMATOR|nearest_neighbors|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     # ---- nmf (unsupervised) ----

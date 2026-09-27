@@ -2,8 +2,8 @@
   "schema_version": 1,
   "counts": {
     "estimators": 203,
-    "runnable": 168,
-    "shaped": 20,
+    "runnable": 166,
+    "shaped": 22,
     "simplified": 4,
     "flow_only": 6,
     "different_shape": 5
@@ -3922,8 +3922,23 @@
         "bandwidth",
         "kernel"
       ],
-      "bucket": "runnable",
-      "sklearn_estimator": "KernelDensity"
+      "bucket": "shaped",
+      "sklearn_estimator": "KernelDensity",
+      "shape": {
+        "dataset": "classification",
+        "flow_fit": [
+          "X_c",
+          "0.5",
+          "0"
+        ],
+        "flow_work": [
+          "X_c"
+        ],
+        "flow_work_fn": "kernel_density_score_samples",
+        "flow_work_returns": "ptr<f32>",
+        "sklearn_input": "X",
+        "sklearn_work": "score_samples"
+      }
     },
     {
       "flow_estimator": "kernel_pca",
@@ -7472,8 +7487,23 @@
         "X",
         "n_neighbors"
       ],
-      "bucket": "runnable",
-      "sklearn_estimator": "NearestNeighbors"
+      "bucket": "shaped",
+      "sklearn_estimator": "NearestNeighbors",
+      "shape": {
+        "dataset": "classification",
+        "flow_fit": [
+          "X_c",
+          "5"
+        ],
+        "flow_work": [
+          "X_c"
+        ],
+        "flow_work_fn": "nearest_neighbors_kneighbors",
+        "flow_work_returns": "ptr<NeighborResult>",
+        "flow_work_release": "nearest_neighbors_free_results({var}, n_c)",
+        "sklearn_input": "X",
+        "sklearn_work": "kneighbors"
+      }
     },
     {
       "flow_estimator": "nmf",

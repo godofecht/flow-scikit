@@ -311,6 +311,28 @@ SHAPED: dict[str, dict] = {
         "flow_work": ["x1d_r", "n_r"],
         "sklearn_input": "x1d",
     },
+    # Two rows whose work function is named for what it returns rather than
+    # predict or transform, so the generic path found nothing to time and the
+    # fit alone fell under the clock's floor.
+    "kernel_density": {
+        "dataset": "classification",
+        "flow_fit": ["X_c", "0.5", "0"],
+        "flow_work": ["X_c"],
+        "flow_work_fn": "kernel_density_score_samples",
+        "flow_work_returns": "ptr<f32>",
+        "sklearn_input": "X",
+        "sklearn_work": "score_samples",
+    },
+    "nearest_neighbors": {
+        "dataset": "classification",
+        "flow_fit": ["X_c", "5"],
+        "flow_work": ["X_c"],
+        "flow_work_fn": "nearest_neighbors_kneighbors",
+        "flow_work_returns": "ptr<NeighborResult>",
+        "flow_work_release": "nearest_neighbors_free_results({var}, n_c)",
+        "sklearn_input": "X",
+        "sklearn_work": "kneighbors",
+    },
     "multilabel_binarizer": {
         # The label rows, so the scikit-learn side gets sets of labels rather
         # than one label per sample.

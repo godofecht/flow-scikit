@@ -168,7 +168,11 @@ def main() -> int:
                     args.repeats,
                 )
                 pred_ms = 0.0
-                for method in ("predict", "transform"):
+                # A recipe can name the method to time, for a class whose work
+                # is called something other than predict or transform.
+                methods = [shape["sklearn_work"]] if shape and shape.get("sklearn_work") \
+                    else ["predict", "transform"]
+                for method in methods:
                     if hasattr(model, method):
                         try:
                             pred_ms = timed(lambda m=method: getattr(model, m)(first), args.repeats)
