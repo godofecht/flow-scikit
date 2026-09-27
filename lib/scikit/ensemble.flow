@@ -699,10 +699,16 @@ export struct VotingClassifier {
 
 export function voting_classifier_fit(estimators: ptr<DecisionTreeClassifier>, n_estimators: i32, n_classes: i32, classes: ptr<f32>, voting: i32) -> VotingClassifier {
     return VotingClassifier {
+        # The model takes over the fitted sub-estimators and its free
+        # function releases them, so the caller must not free this array
+        # or the trees in it.
         estimators: estimators,
         n_estimators: n_estimators,
         n_classes: n_classes,
-        classes: classes,
+        # Freed by this model's free function, so it must be this model's
+        # own memory. Aliasing the caller's made fit and free destroy the
+        # input.
+        classes: array_copy_f32(classes, n_classes),
         voting: voting,
         fitted: true
     }
@@ -2696,10 +2702,16 @@ export struct VotingRegressor {
 
 export function voting_regressor_fit(estimators: ptr<DecisionTreeRegressor>, n_estimators: i32, weights: ptr<f32>) -> VotingRegressor {
     let result: VotingRegressor = VotingRegressor {
+        # The model takes over the fitted sub-estimators and its free
+        # function releases them, so the caller must not free this array
+        # or the trees in it.
         estimators: estimators,
         n_estimators: n_estimators,
         n_features: 0,
-        weights: weights,
+        # Freed by this model's free function, so it must be this model's
+        # own memory. Aliasing the caller's made fit and free destroy the
+        # input.
+        weights: array_copy_f32(weights, n_estimators),
         fitted: true
     }
     return result

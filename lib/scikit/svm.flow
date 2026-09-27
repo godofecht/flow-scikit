@@ -1903,8 +1903,15 @@ export function nu_svr_fit(X: Matrix, y: ptr<f32>, nu: f32, C: f32, gamma: f32, 
     }
 
     return NuSVR {
-        X_train: X,
-        y_train: y,
+        # The free function releases this, so it has to be this model's
+        # copy. Aliasing the caller's matrix made a fit and free pair
+        # destroy the input, which AddressSanitizer caught as a
+        # use-after-free on the second fit of the same data.
+        X_train: matrix_copy(X),
+        # Freed by this model's free function, so it must be this model's
+        # own memory. Aliasing the caller's made fit and free destroy the
+        # input.
+        y_train: array_copy_f32(y, n),
         alphas: alphas,
         b: b,
         gamma: gamma,
@@ -2011,7 +2018,10 @@ export function one_class_svm_fit(X: Matrix, nu: f32, gamma: f32, max_iter: i32)
     }
 
     return OneClassSVM {
-        X_train: X,
+        # Freed by this model's free function, so it must be this model's
+        # own memory. Aliasing the caller's made fit and free destroy the
+        # input.
+        X_train: matrix_copy(X),
         alphas: alphas,
         b: b,
         gamma: gamma,
@@ -2166,123 +2176,224 @@ function _svm_kernel_matrix(X: Matrix, kernel: i32, gamma: f32, degree: i32, coe
     return K
 }
 
+# Second order working set selection over a materialized kernel, as in
+# libsvm's Solver (WSS3 of Fan, Chen and Lin 2005).
+#
+# The previous implementation recomputed every error term from scratch: an
+# O(n) sum per candidate, inside a scan over candidates to pick the partner,
+# inside a pass over all n, for up to max_iter passes. On iris that is billions
+# of operations and SVC took 4.8 seconds against scikit-learn's 0.6 ms. The
+# gradient is maintained incrementally here instead, which is what
+# _kernel_svc_smo_precomputed already does for KernelSVC.
+#
+# Q[i,j] is y_i * y_j * K[i,j] and G[i] is sum_j Q[i,j] * alpha_j - 1. Since
+# y squared is one, the curvature terms reduce to plain kernel entries:
+# QD_i + QD_j - 2 * y_i * y_j * Q_ij is K_ii + K_jj - 2 * K_ij.
 function _smo_train(K: Matrix, y_dual: ptr<f32>, n: i32, C: f32, max_iter: i32) -> SMOResult {
-    let alphas: ptr<f32> = array_new_f32(n)
-    let mut b: f32 = 0.0
-    let tol: f32 = 0.001
+    let kdata: ptr<f32> = K.data
+    let C_d: f64 = C as f64
 
-    let mut iter: i32 = 0
-    let mut passes_without_change: i32 = 0
-    while iter < max_iter && passes_without_change < 5 {
-        let mut num_changed: i32 = 0
+    let alphas_d: ptr<f64> = array_new_f64(n)
+    let y_d: ptr<f64> = array_new_f64(n)
+    let G: ptr<f64> = array_new_f64(n)
+    let QD: ptr<f64> = array_new_f64(n)
+    for i in 0 to n {
+        y_d[i] = y_dual[i] as f64
+        G[i] = -1.0
+        QD[i] = kdata[i * n + i] as f64
+    }
 
-        for i in 0 to n {
-            let mut ei: f32 = 0.0
-            for j in 0 to n {
-                ei = ei + alphas[j] * y_dual[j] * matrix_at(K, i, j)
+    let tol: f64 = 0.001
+    let tau: f64 = 0.000000000001
+    let big: f64 = 1000000000000.0
+    # The old rule counted outer passes over n examples; keep the same total
+    # step budget so a caller passing a small cap behaves the same way.
+    let budget: i32 = max_iter * n
+    let mut steps: i32 = 0
+
+    while steps < budget {
+        let mut gmax: f64 = 0.0 - big
+        let mut i_sel: i32 = -1
+        for t in 0 to n {
+            let at: f64 = alphas_d[t]
+            if y_d[t] > 0.0 {
+                if at < C_d {
+                    let v: f64 = 0.0 - G[t]
+                    if v >= gmax {
+                        gmax = v
+                        i_sel = t
+                    }
+                }
+            } else {
+                if at > 0.0 {
+                    let v2: f64 = G[t]
+                    if v2 >= gmax {
+                        gmax = v2
+                        i_sel = t
+                    }
+                }
             }
-            ei = ei + b - y_dual[i]
+        }
+        if i_sel < 0 { break }
 
-            let yi_ei: f32 = y_dual[i] * ei
-            if (yi_ei < -tol && alphas[i] < C) || (yi_ei > tol && alphas[i] > 0.0) {
-                # Platt-style second-choice heuristic: choose the partner
-                # with the largest |E_i - E_j| so each step has useful gain.
-                let mut j: i32 = -1
-                let mut best_gap: f32 = -1.0
-                for candidate in 0 to n {
-                    if candidate != i {
-                        let mut candidate_e: f32 = 0.0
-                        for k in 0 to n {
-                            candidate_e = candidate_e + alphas[k] * y_dual[k] * matrix_at(K, candidate, k)
-                        }
-                        candidate_e = candidate_e + b - y_dual[candidate]
-                        let mut gap: f32 = ei - candidate_e
-                        if gap < 0.0 { gap = -gap }
-                        if gap > best_gap {
-                            best_gap = gap
-                            j = candidate
-                        }
+        let y_i: f64 = y_d[i_sel]
+        let row_i: ptr<f32> = kdata + i_sel * n
+        let qd_i: f64 = QD[i_sel]
+
+        let mut gmax2: f64 = 0.0 - big
+        let mut j_sel: i32 = -1
+        let mut obj_min: f64 = big
+        for t2 in 0 to n {
+            let a2: f64 = alphas_d[t2]
+            let y_t: f64 = y_d[t2]
+            let mut usable: bool = false
+            if y_t > 0.0 {
+                if a2 > 0.0 { usable = true }
+            } else {
+                if a2 < C_d { usable = true }
+            }
+            if usable {
+                let ygt: f64 = y_t * G[t2]
+                if ygt >= gmax2 { gmax2 = ygt }
+                let gdiff: f64 = gmax + ygt
+                if gdiff > 0.0 {
+                    let mut quad: f64 = qd_i + QD[t2] - 2.0 * (row_i[t2] as f64)
+                    if quad <= 0.0 { quad = tau }
+                    let odiff: f64 = 0.0 - (gdiff * gdiff) / quad
+                    if odiff <= obj_min {
+                        obj_min = odiff
+                        j_sel = t2
                     }
                 }
-                if j < 0 { continue }
-
-                let mut ej: f32 = 0.0
-                for k in 0 to n {
-                    ej = ej + alphas[k] * y_dual[k] * matrix_at(K, j, k)
-                }
-                ej = ej + b - y_dual[j]
-
-                let alpha_i_old: f32 = alphas[i]
-                let alpha_j_old: f32 = alphas[j]
-
-                let mut L: f32 = 0.0
-                let mut H: f32 = C
-                if y_dual[i] == y_dual[j] {
-                    L = alpha_i_old + alpha_j_old - C
-                    H = alpha_i_old + alpha_j_old
-                    if L < 0.0 {
-                        L = 0.0
-                    }
-                    if H > C {
-                        H = C
-                    }
-                } else {
-                    # Standard SMO bounds when y_i != y_j:
-                    # L=max(0, a_j-a_i), H=min(C, C+a_j-a_i).
-                    L = alpha_j_old - alpha_i_old
-                    H = alpha_j_old - alpha_i_old + C
-                    if L < 0.0 {
-                        L = 0.0
-                    }
-                    if H > C {
-                        H = C
-                    }
-                }
-
-                if L == H {
-                    continue
-                }
-
-                let eta: f32 = 2.0 * matrix_at(K, i, j) - matrix_at(K, i, i) - matrix_at(K, j, j)
-                if eta >= 0.0 {
-                    continue
-                }
-
-                let mut alpha_j_new: f32 = alpha_j_old - y_dual[j] * (ei - ej) / eta
-                if alpha_j_new < L {
-                    alpha_j_new = L
-                }
-                if alpha_j_new > H {
-                    alpha_j_new = H
-                }
-
-                let alpha_i_new: f32 = alpha_i_old + y_dual[i] * y_dual[j] * (alpha_j_old - alpha_j_new)
-
-                alphas[i] = alpha_i_new
-                alphas[j] = alpha_j_new
-
-                let b1: f32 = b - ei - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(K, i, i) - y_dual[j] * (alpha_j_new - alpha_j_old) * matrix_at(K, i, j)
-                let b2: f32 = b - ej - y_dual[i] * (alpha_i_new - alpha_i_old) * matrix_at(K, i, j) - y_dual[j] * (alpha_j_new - alpha_j_old) * matrix_at(K, j, j)
-
-                if alpha_i_new > 0.0 && alpha_i_new < C {
-                    b = b1
-                } elif alpha_j_new > 0.0 && alpha_j_new < C {
-                    b = b2
-                } else {
-                    b = (b1 + b2) / 2.0
-                }
-
-                num_changed = num_changed + 1
             }
         }
 
-        iter = iter + 1
-        if num_changed == 0 {
-            passes_without_change = passes_without_change + 1
+        # Maximal KKT violation, which is libsvm's stopping rule.
+        if gmax + gmax2 < tol { break }
+        if j_sel < 0 { break }
+
+        let y_j: f64 = y_d[j_sel]
+        let ai_old: f64 = alphas_d[i_sel]
+        let aj_old: f64 = alphas_d[j_sel]
+        let mut quad_c: f64 = qd_i + QD[j_sel] - 2.0 * (row_i[j_sel] as f64)
+        if quad_c <= 0.0 { quad_c = tau }
+
+        let mut ai_new: f64 = 0.0
+        let mut aj_new: f64 = 0.0
+        if y_i != y_j {
+            let delta: f64 = (0.0 - G[i_sel] - G[j_sel]) / quad_c
+            let diff: f64 = ai_old - aj_old
+            ai_new = ai_old + delta
+            aj_new = aj_old + delta
+            if diff > 0.0 {
+                if aj_new < 0.0 {
+                    aj_new = 0.0
+                    ai_new = diff
+                }
+            } else {
+                if ai_new < 0.0 {
+                    ai_new = 0.0
+                    aj_new = 0.0 - diff
+                }
+            }
+            if diff > 0.0 {
+                if ai_new > C_d {
+                    ai_new = C_d
+                    aj_new = C_d - diff
+                }
+            } else {
+                if aj_new > C_d {
+                    aj_new = C_d
+                    ai_new = C_d + diff
+                }
+            }
         } else {
-            passes_without_change = 0
+            let delta2: f64 = (G[i_sel] - G[j_sel]) / quad_c
+            let sum_a: f64 = ai_old + aj_old
+            ai_new = ai_old - delta2
+            aj_new = aj_old + delta2
+            if sum_a > C_d {
+                if ai_new > C_d {
+                    ai_new = C_d
+                    aj_new = sum_a - C_d
+                }
+            } else {
+                if aj_new < 0.0 {
+                    aj_new = 0.0
+                    ai_new = sum_a
+                }
+            }
+            if sum_a > C_d {
+                if aj_new > C_d {
+                    aj_new = C_d
+                    ai_new = sum_a - C_d
+                }
+            } else {
+                if ai_new < 0.0 {
+                    ai_new = 0.0
+                    aj_new = sum_a
+                }
+            }
+        }
+
+        alphas_d[i_sel] = ai_new
+        alphas_d[j_sel] = aj_new
+        let d_i: f64 = ai_new - ai_old
+        let d_j: f64 = aj_new - aj_old
+
+        # G[k] += Q[i,k] * d_i + Q[j,k] * d_j, and the kernel is symmetric so
+        # both come off a row rather than striding down a column.
+        let row_j: ptr<f32> = kdata + j_sel * n
+        for k in 0 to n {
+            let contrib: f64 = y_i * (row_i[k] as f64) * d_i + y_j * (row_j[k] as f64) * d_j
+            G[k] = G[k] + y_d[k] * contrib
+        }
+        steps = steps + 1
+    }
+
+    # Bias from the free support vectors, which is where the decision function
+    # is exactly y_i. With none of them, every support vector is at a bound and
+    # their average is the best available estimate.
+    let mut b_sum: f64 = 0.0
+    let mut n_free: i32 = 0
+    let mut b_any: f64 = 0.0
+    let mut n_any: i32 = 0
+    for i in 0 to n {
+        let ai: f64 = alphas_d[i]
+        if ai > 0.0 {
+            let row: ptr<f32> = kdata + i * n
+            let mut fi: f64 = 0.0
+            for j in 0 to n {
+                let aj: f64 = alphas_d[j]
+                if aj > 0.0 {
+                    fi = fi + aj * y_d[j] * (row[j] as f64)
+                }
+            }
+            let resid: f64 = y_d[i] - fi
+            b_any = b_any + resid
+            n_any = n_any + 1
+            if ai < C_d {
+                b_sum = b_sum + resid
+                n_free = n_free + 1
+            }
         }
     }
+    let mut b: f32 = 0.0
+    if n_free > 0 {
+        b = (b_sum / (n_free as f64)) as f32
+    } elif n_any > 0 {
+        b = (b_any / (n_any as f64)) as f32
+    }
+
+    let alphas: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        alphas[i] = alphas_d[i] as f32
+    }
+
+    array_free_f64(alphas_d)
+    array_free_f64(y_d)
+    array_free_f64(G)
+    array_free_f64(QD)
 
     let result: SMOResult = SMOResult { alphas: alphas, b: b }
     return result
