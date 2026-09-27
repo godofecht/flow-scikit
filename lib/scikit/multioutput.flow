@@ -131,10 +131,17 @@ export function classifier_chain_fit(X: Matrix, Y: ptr<ptr<f32> >, n_samples: i3
     let order: ptr<i32> = malloc((n_outputs as i64) * 4) as ptr<i32>
     for o in 0 to n_outputs { order[o] = o }
 
+    # Row-pointer copies. matrix_at and matrix_set each copy the Matrix struct
+    # by value for every element, and the chain rebuilds a wider design for
+    # every output.
     let mut current_X: Matrix = matrix_new(n_samples, n_features)
+    let xsrc: ptr<f32> = X.data
+    let xdst: ptr<f32> = current_X.data
     for i in 0 to n_samples {
+        let srow: ptr<f32> = xsrc + i * n_features
+        let drow: ptr<f32> = xdst + i * n_features
         for j in 0 to n_features {
-            matrix_set(current_X, i, j, matrix_at(X, i, j))
+            drow[j] = srow[j]
         }
     }
 
@@ -146,10 +153,15 @@ export function classifier_chain_fit(X: Matrix, Y: ptr<ptr<f32> >, n_samples: i3
         }
         models[o] = logistic_regression_fit(current_X, y, 2, n_iter, lr, penalty_none())
 
-        let augmented: Matrix = matrix_new(n_samples, current_X.cols + 1)
+        let cur_cols: i32 = current_X.cols
+        let augmented: Matrix = matrix_new(n_samples, cur_cols + 1)
+        let csrc: ptr<f32> = current_X.data
+        let adst: ptr<f32> = augmented.data
         for i in 0 to n_samples {
-            for j in 0 to current_X.cols {
-                matrix_set(augmented, i, j, matrix_at(current_X, i, j))
+            let crow: ptr<f32> = csrc + i * cur_cols
+            let arow: ptr<f32> = adst + i * (cur_cols + 1)
+            for j in 0 to cur_cols {
+                arow[j] = crow[j]
             }
             matrix_set(augmented, i, current_X.cols, y[i])
         }
@@ -173,10 +185,16 @@ export function classifier_chain_predict(model: ClassifierChain, X: Matrix) -> p
     let result: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
     for i in 0 to n { result[i] = array_new_f32(model.n_outputs) }
 
-    let mut current_X: Matrix = matrix_new(n, model.n_features)
+    # Row-pointer copies, for the reason the fit above gives.
+    let nf: i32 = model.n_features
+    let mut current_X: Matrix = matrix_new(n, nf)
+    let xsrc: ptr<f32> = X.data
+    let xdst: ptr<f32> = current_X.data
     for i in 0 to n {
-        for j in 0 to model.n_features {
-            matrix_set(current_X, i, j, matrix_at(X, i, j))
+        let srow: ptr<f32> = xsrc + i * nf
+        let drow: ptr<f32> = xdst + i * nf
+        for j in 0 to nf {
+            drow[j] = srow[j]
         }
     }
 
@@ -186,12 +204,17 @@ export function classifier_chain_predict(model: ClassifierChain, X: Matrix) -> p
             result[i][o] = preds[i]
         }
 
-        let augmented: Matrix = matrix_new(n, current_X.cols + 1)
+        let cur_cols: i32 = current_X.cols
+        let augmented: Matrix = matrix_new(n, cur_cols + 1)
+        let csrc: ptr<f32> = current_X.data
+        let adst: ptr<f32> = augmented.data
         for i in 0 to n {
-            for j in 0 to current_X.cols {
-                matrix_set(augmented, i, j, matrix_at(current_X, i, j))
+            let crow: ptr<f32> = csrc + i * cur_cols
+            let arow: ptr<f32> = adst + i * (cur_cols + 1)
+            for j in 0 to cur_cols {
+                arow[j] = crow[j]
             }
-            matrix_set(augmented, i, current_X.cols, preds[i])
+            arow[cur_cols] = preds[i]
         }
         matrix_free(current_X)
         current_X = augmented

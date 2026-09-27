@@ -70,6 +70,15 @@ function tanh_f32(x: f32) -> f32 {
     return ((e1 - e2) / (e1 + e2)) as f32
 }
 
+# A linear, polynomial or sigmoid kernel entry is a function of the dot
+# product alone, so the dot products can come from one sgemm and this turns
+# each one into its kernel entry.
+function _kr_from_dot(dot: f32, kernel_type: i32, gamma: f32, degree: i32, coef0: f32) -> f32 {
+    if kernel_type == KR_KERNEL_POLY { return pow_f32(gamma * dot + coef0, degree) }
+    if kernel_type == KR_KERNEL_SIGMOID { return tanh_f32(gamma * dot + coef0) }
+    return dot
+}
+
 function compute_kernel_matrix(X: Matrix, kernel_type: i32, gamma: f32, degree: i32, coef0: f32) -> Matrix {
     let n: i32 = X.rows
     let p: i32 = X.cols
@@ -124,14 +133,24 @@ export function kernel_ridge_fit(X: Matrix, y: ptr<f32>, alpha: f32, kernel_type
         free(cross as ptr<void>)
         array_free_f32(x_sq)
     } else {
-        let K: Matrix = compute_kernel_matrix(X, kernel_type, gamma, degree, coef0)
+        # The dot products behind these kernels are one sgemm.
+        # compute_kernel_matrix walked them with a scalar dot per pair and
+        # wrote every entry through matrix_set, which copies the Matrix struct
+        # per element, and the loop below then read all of it back through
+        # matrix_at. The matrix is symmetric, so one triangle is enough.
+        let x_data2: ptr<f32> = X.data
+        let cross2: ptr<f32> = malloc((n as i64) * (n as i64) * 4) as ptr<f32>
+        cblas_sgemm(101, 111, 112, n, n, n_features, 1.0, x_data2, n_features, x_data2, n_features, 0.0, cross2, n)
         for i in 0 to n {
-            for j in 0 to n {
-                K_reg[i * n + j] = (matrix_at(K, i, j)) as f64
+            let crow: ptr<f32> = cross2 + i * n
+            for j in i to n {
+                let kv: f64 = (_kr_from_dot(crow[j], kernel_type, gamma, degree, coef0)) as f64
+                K_reg[i * n + j] = kv
+                K_reg[j * n + i] = kv
             }
             K_reg[i * n + i] = K_reg[i * n + i] + (alpha as f64)
         }
-        matrix_free(K)
+        free(cross2 as ptr<void>)
     }
 
     # Cholesky decomposition in f64 via LAPACK dpotrf_: L * L^T = K + alpha*I
@@ -258,15 +277,27 @@ export function kernel_ridge_predict(model: KernelRidge, X: Matrix) -> ptr<f32> 
         array_free_f32(x_sq)
         array_free_f32(xt_sq)
     } else {
-        for i in 0 to n {
-            let xi: ptr<f32> = X.data + i * model.n_features
-            let mut sum: f32 = 0.0
-            for j in 0 to model.n_samples {
-                let xj: ptr<f32> = model.X_train.data + j * model.n_features
-                let k: f32 = kernel_compute(xi, xj, model.n_features, model.kernel_type, model.gamma, model.degree, model.coef0)
-                sum = sum + model.dual_coef[j] * k
+        let xt_data2: ptr<f32> = model.X_train.data
+        if model.kernel_type == KR_KERNEL_LINEAR {
+            # A linear kernel has a primal form. Folding the dual
+            # coefficients into one weight vector replaces an n by n_train
+            # kernel with a single matrix vector product.
+            let w: ptr<f32> = array_new_f32(nf)
+            blas_matvec_trans(xt_data2, nt, nf, model.dual_coef, w, 1.0, 0.0)
+            blas_matvec(X.data, n, nf, w, result, 1.0, 0.0)
+            array_free_f32(w)
+        } else {
+            let cross3: ptr<f32> = malloc((n as i64) * (nt as i64) * 4) as ptr<f32>
+            cblas_sgemm(101, 111, 112, n, nt, nf, 1.0, X.data, nf, xt_data2, nf, 0.0, cross3, nt)
+            for i in 0 to n {
+                let crow2: ptr<f32> = cross3 + i * nt
+                let mut sum: f32 = 0.0
+                for j in 0 to nt {
+                    sum = sum + model.dual_coef[j] * _kr_from_dot(crow2[j], model.kernel_type, model.gamma, model.degree, model.coef0)
+                }
+                result[i] = sum
             }
-            result[i] = sum
+            free(cross3 as ptr<void>)
         }
     }
 

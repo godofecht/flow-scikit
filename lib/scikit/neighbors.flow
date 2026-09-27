@@ -947,58 +947,53 @@ export function kneighbors_transformer_fit(X: Matrix, n_neighbors: i32, mode: i3
 export function kneighbors_transformer_transform(model: KNeighborsTransformer, X: Matrix) -> Matrix {
     let n: i32 = X.rows
     let n_train: i32 = model.X_train.rows
-    let k: i32 = model.n_neighbors
+    let f_cols: i32 = model.X_train.cols
+    let mut k: i32 = model.n_neighbors
     if k > n_train { k = n_train }
+
+    # matrix_new returns zeroed storage, so the explicit zero fill it used to
+    # run was n by n_train calls to matrix_set, each copying the Matrix struct
+    # by value. The distances come off row pointers for the same reason.
     let result: Matrix = matrix_new(n, n_train)
-    let mut i: i32 = 0
-    while i < n {
-        let mut j: i32 = 0
-        while j < n_train {
-            matrix_set(result, i, j, 0.0)
-            j = j + 1
-        }
-        i = i + 1
-    }
-    i = 0
-    while i < n {
-        let dists: ptr<f32> = array_new_f32(n_train)
-        let mut j: i32 = 0
-        while j < n_train {
+    let rdata: ptr<f32> = result.data
+    let xdata: ptr<f32> = X.data
+    let tdata: ptr<f32> = model.X_train.data
+    let dists: ptr<f32> = array_new_f32(n_train)
+
+    for i in 0 to n {
+        let xrow: ptr<f32> = xdata + i * f_cols
+        for j in 0 to n_train {
+            let trow: ptr<f32> = tdata + j * f_cols
             let mut d: f32 = 0.0
-            let mut f: i32 = 0
-            while f < model.X_train.cols {
-                let diff: f32 = matrix_at(X, i, f) - matrix_at(model.X_train, j, f)
+            for f in 0 to f_cols {
+                let diff: f32 = xrow[f] - trow[f]
                 d = d + diff * diff
-                f = f + 1
             }
             dists[j] = sqrt((d) as f64) as f32
-            j = j + 1
         }
-        let mut kk: i32 = 0
-        while kk < k {
+
+        let out_row: ptr<f32> = rdata + i * n_train
+        for kk in 0 to k {
             let mut best_j: i32 = -1
             let mut best_d: f32 = 9999999999.0
-            let mut j2: i32 = 0
-            while j2 < n_train {
-                if dists[j2] < best_d && dists[j2] >= 0.0 {
-                    best_d = dists[j2]
-                    best_j = j2
+            for j2 in 0 to n_train {
+                let dj: f32 = dists[j2]
+                if dj >= 0.0 {
+                    if dj < best_d {
+                        best_d = dj
+                        best_j = j2
+                    }
                 }
-                j2 = j2 + 1
             }
             if best_j >= 0 {
-                if model.mode == 1 {
-                    matrix_set(result, i, best_j, best_d)
-                } else {
-                    matrix_set(result, i, best_j, 1.0)
-                }
-                dists[best_j] = -1.0
+                if model.mode == 1 { out_row[best_j] = best_d }
+                else { out_row[best_j] = 1.0 }
+                dists[best_j] = 0.0 - 1.0
             }
-            kk = kk + 1
         }
-        array_free_f32(dists)
-        i = i + 1
     }
+
+    array_free_f32(dists)
     return result
 }
 

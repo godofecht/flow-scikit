@@ -659,14 +659,13 @@ export function linear_svr_fit(X: Matrix, y: ptr<f32>, C: f32, epsilon: f32, epo
 }
 
 export function linear_svr_predict(model: LinearSVR, X: Matrix) -> ptr<f32> {
-    let preds: ptr<f32> = array_new_f32(X.rows)
-    for i in 0 to X.rows {
-        let mut pred: f32 = model.bias
-        for j in 0 to model.n_features {
-            pred = pred + model.weights[j] * matrix_at(X, i, j)
-        }
-        preds[i] = pred
-    }
+    # One sgemv for the whole design. The loop it replaces read every element
+    # through matrix_at, which copies the Matrix struct per element.
+    let rows: i32 = X.rows
+    let preds: ptr<f32> = array_new_f32(rows)
+    blas_matvec(X.data, rows, model.n_features, model.weights, preds, 1.0, 0.0)
+    let b: f32 = model.bias
+    for i in 0 to rows { preds[i] = preds[i] + b }
     return preds
 }
 
