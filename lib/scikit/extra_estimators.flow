@@ -35,7 +35,11 @@ export struct SparseCoder {
 
 export function sparse_coder_fit(dictionary: Matrix, n_nonzero_coefs: i32) -> SparseCoder {
     return SparseCoder {
-        dictionary: dictionary,
+        # The free function releases this, so it has to be this model's
+        # copy. Aliasing the caller's matrix made a fit and free pair
+        # destroy the input, which AddressSanitizer caught as a
+        # use-after-free on the second fit of the same data.
+        dictionary: matrix_copy(dictionary),
         n_components: dictionary.rows,
         n_features: dictionary.cols,
         transform_n_nonzero_coefs: n_nonzero_coefs,

@@ -329,7 +329,11 @@ export function gaussian_process_classifier_fit(X: Matrix, y: ptr<f32>, gamma: f
     free(K as ptr<void>)
 
     return GaussianProcessClassifier {
-        X_train: X,
+        # The free function releases this, so it has to be this model's
+        # copy. Aliasing the caller's matrix made a fit and free pair
+        # destroy the input, which AddressSanitizer caught as a
+        # use-after-free on the second fit of the same data.
+        X_train: matrix_copy(X),
         y_train: y_dual,
         f: f,
         gamma: gamma,
