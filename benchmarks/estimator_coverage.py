@@ -29,6 +29,16 @@ OUT = ROOT / "benchmarks" / "estimator_coverage.json"
 
 FIT_RE = re.compile(r"^export function ([a-z_0-9]+)\(([^)]*)\)\s*->\s*([^{]+)\{", re.M)
 
+# An implementation that says in its own comments that it is a simplified
+# stand-in is not racing scikit-learn's algorithm, and timing it against one
+# produces a number that means nothing. spectral_biclustering thresholds row
+# and column means where scikit-learn does an SVD and k-means, and came out at
+# 25106x. Detected from the source rather than listed here, so the registry
+# stays true as the implementations are filled in.
+SIMPLIFIED_RE = re.compile(
+    r"#[^\n]*\b(simplified|simple approximation|placeholder|stub|not a real)\b", re.I
+)
+
 # Values for a hyperparameter, by parameter name. Chosen to be small and valid.
 # This measures call cost on a fixed workload, so what matters is that every
 # estimator gets arguments it will accept. Tuning them would not make the
@@ -206,6 +216,11 @@ FLOW_ONLY: dict[str, str] = {
 }
 
 
+def fit_body(text: str, name: str) -> str:
+    m = re.search(rf"^export function {re.escape(name)}\(.*?\n\}}", text, re.S | re.M)
+    return m.group(0) if m else ""
+
+
 def parse_exports() -> dict[str, dict]:
     out: dict[str, dict] = {}
     for path in sorted(LIB.glob("*.flow")):
@@ -219,7 +234,12 @@ def parse_exports() -> dict[str, dict]:
                     continue
                 pname, _, ptype = p.partition(":")
                 params.append({"name": pname.strip(), "type": ptype.strip()})
-            out[name] = {"module": path.name, "params": params, "returns": ret}
+            entry = {"module": path.name, "params": params, "returns": ret}
+            if name.endswith("_fit"):
+                found = SIMPLIFIED_RE.search(fit_body(text, name))
+                if found:
+                    entry["simplified"] = found.group(1).lower()
+            out[name] = entry
     return out
 
 
@@ -262,6 +282,14 @@ def classify(base: str, spec: dict, known: set[str], exports: dict[str, dict]) -
     if base in FLOW_ONLY:
         entry.update(bucket="flow_only", reason=FLOW_ONLY[base])
         return entry
+    if "simplified" in spec:
+        entry.update(
+            bucket="simplified",
+            reason=f"the implementation's own comments call it {spec['simplified']}, "
+                   "so timing it against scikit-learn's algorithm compares two different things",
+            sklearn_estimator=sklearn_name(base, known),
+        )
+        return entry
 
     unresolved = []
     for p in spec["params"][1:]:
@@ -298,7 +326,7 @@ def argument_tables() -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, default=OUT)
-    ap.add_argument("--show", choices=["blocked", "flow_only", "runnable"], help="list one bucket and exit")
+    ap.add_argument("--show", choices=["blocked", "flow_only", "runnable", "simplified", "different_shape"], help="list one bucket and exit")
     args = ap.parse_args()
 
     exports = parse_exports()
@@ -331,7 +359,7 @@ def main() -> int:
         return 0
 
     print(f"{len(entries)} exported Flow estimators against a {len(known)}-estimator scikit-learn surface")
-    for bucket in ("runnable", "different_shape", "flow_only", "blocked"):
+    for bucket in ("runnable", "simplified", "different_shape", "flow_only", "blocked"):
         print(f"  {bucket:10s} {counts.get(bucket, 0)}")
     return 0
 

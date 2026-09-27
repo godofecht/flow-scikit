@@ -5,10 +5,11 @@
   "note": "Apple M4 Max; Flow at -O3 with adaptive repeats, fastest of 3 rounds; scikit-learn 1.9.0 wheel, fastest of 3; developer machine under load. CI is the authority for anything published.",
   "counts": {
     "registry_estimators": 203,
-    "compared": 170,
-    "flow_wins": 148,
-    "sklearn_wins": 22,
-    "below_resolution": 2
+    "compared": 166,
+    "flow_wins": 145,
+    "sklearn_wins": 21,
+    "below_resolution": 2,
+    "simplified": 4
   },
   "rows": [
     {
@@ -36,7 +37,8 @@
     {
       "flow_estimator": "additive_chi2_sampler",
       "status": "different_shape",
-      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "AdditiveChi2Sampler"
     },
     {
       "flow_estimator": "affinity_propagation",
@@ -206,7 +208,8 @@
     {
       "flow_estimator": "column_transformer",
       "status": "different_shape",
-      "reason": "takes ColumnTransformer first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes ColumnTransformer first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "ColumnTransformer"
     },
     {
       "flow_estimator": "complement_nb",
@@ -222,7 +225,8 @@
     {
       "flow_estimator": "count_vectorizer",
       "status": "different_shape",
-      "reason": "takes ptr<string> first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes ptr<string> first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "CountVectorizer"
     },
     {
       "flow_estimator": "dbscan",
@@ -260,7 +264,8 @@
     {
       "flow_estimator": "dict_vectorizer",
       "status": "different_shape",
-      "reason": "takes ptr<ptr<i32> > first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes ptr<ptr<i32> > first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "DictVectorizer"
     },
     {
       "flow_estimator": "dictionary_learning",
@@ -287,12 +292,14 @@
     {
       "flow_estimator": "dummy_classifier",
       "status": "different_shape",
-      "reason": "takes ptr<f32> first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes ptr<f32> first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "DummyClassifier"
     },
     {
       "flow_estimator": "dummy_regressor",
       "status": "different_shape",
-      "reason": "takes ptr<f32> first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes ptr<f32> first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "DummyRegressor"
     },
     {
       "flow_estimator": "elastic_net_cv",
@@ -318,14 +325,12 @@
     },
     {
       "flow_estimator": "elliptic_envelope",
+      "status": "simplified",
+      "reason": "the implementation's own comments call it simplified, so timing it against scikit-learn's algorithm compares two different things",
       "sklearn_estimator": "EllipticEnvelope",
-      "dataset": "unsupervised",
       "flow_ms": 0.020725001,
       "sklearn_ms": 8.94445800804533,
-      "speedup": 431.5781701552309,
-      "flow_repeats": 200,
-      "timing_unit": "ms",
-      "status": "ok"
+      "timing_unit": "ms"
     },
     {
       "flow_estimator": "empirical_covariance",
@@ -418,7 +423,8 @@
     {
       "flow_estimator": "feature_union",
       "status": "different_shape",
-      "reason": "takes FeatureUnion first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes FeatureUnion first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "FeatureUnion"
     },
     {
       "flow_estimator": "gamma_regressor",
@@ -478,7 +484,8 @@
     {
       "flow_estimator": "gaussian_random_projection",
       "status": "different_shape",
-      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "GaussianRandomProjection"
     },
     {
       "flow_estimator": "gradient_boosting_classifier",
@@ -565,7 +572,8 @@
     {
       "flow_estimator": "incremental_pca_partial",
       "status": "different_shape",
-      "reason": "takes IncrementalPCA first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes IncrementalPCA first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "IncrementalPCA"
     },
     {
       "flow_estimator": "isolation_forest",
@@ -592,7 +600,8 @@
     {
       "flow_estimator": "isotonic",
       "status": "different_shape",
-      "reason": "takes ptr<f32> first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes ptr<f32> first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "IsotonicRegression"
     },
     {
       "flow_estimator": "iterative_imputer",
@@ -729,12 +738,14 @@
     {
       "flow_estimator": "label_binarizer",
       "status": "different_shape",
-      "reason": "takes ptr<f32> first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes ptr<f32> first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "LabelBinarizer"
     },
     {
       "flow_estimator": "label_encoder",
       "status": "different_shape",
-      "reason": "takes ptr<f32> first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes ptr<f32> first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "LabelEncoder"
     },
     {
       "flow_estimator": "label_propagation",
@@ -1128,7 +1139,8 @@
     {
       "flow_estimator": "multilabel_binarizer",
       "status": "different_shape",
-      "reason": "takes ptr<ptr<f32> > first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes ptr<ptr<f32> > first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "MultiLabelBinarizer"
     },
     {
       "flow_estimator": "multinomial_nb",
@@ -1187,14 +1199,12 @@
     },
     {
       "flow_estimator": "nca",
+      "status": "simplified",
+      "reason": "the implementation's own comments call it simplified, so timing it against scikit-learn's algorithm compares two different things",
       "sklearn_estimator": "NeighborhoodComponentsAnalysis",
-      "dataset": "regression",
       "flow_ms": 169.713004028,
       "sklearn_ms": 36.182417010422796,
-      "speedup": 0.2131976698995515,
-      "flow_repeats": 1,
-      "timing_unit": "ms",
-      "status": "ok"
+      "timing_unit": "ms"
     },
     {
       "flow_estimator": "nearest_centroid",
@@ -1429,7 +1439,8 @@
     {
       "flow_estimator": "pipeline",
       "status": "different_shape",
-      "reason": "takes Pipeline first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes Pipeline first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "Pipeline"
     },
     {
       "flow_estimator": "pls_canonical",
@@ -1478,12 +1489,14 @@
     {
       "flow_estimator": "polynomial_count_sketch",
       "status": "different_shape",
-      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "PolynomialCountSketch"
     },
     {
       "flow_estimator": "polynomial_features",
       "status": "different_shape",
-      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "PolynomialFeatures"
     },
     {
       "flow_estimator": "power_transformer",
@@ -1609,7 +1622,8 @@
     {
       "flow_estimator": "rbf_sampler",
       "status": "different_shape",
-      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "RBFSampler"
     },
     {
       "flow_estimator": "regressor_chain",
@@ -1724,7 +1738,8 @@
     {
       "flow_estimator": "select_from_model",
       "status": "different_shape",
-      "reason": "takes ptr<f32> first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes ptr<f32> first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "SelectFromModel"
     },
     {
       "flow_estimator": "select_fwe",
@@ -1762,7 +1777,8 @@
     {
       "flow_estimator": "self_training_classifier",
       "status": "different_shape",
-      "reason": "takes ptr<i32> first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes ptr<i32> first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "SelfTrainingClassifier"
     },
     {
       "flow_estimator": "sequential_feature_selector",
@@ -1833,7 +1849,8 @@
     {
       "flow_estimator": "skewed_chi2_sampler",
       "status": "different_shape",
-      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "SkewedChi2Sampler"
     },
     {
       "flow_estimator": "sparse_coder",
@@ -1860,18 +1877,17 @@
     {
       "flow_estimator": "sparse_random_projection",
       "status": "different_shape",
-      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes i32 first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "SparseRandomProjection"
     },
     {
       "flow_estimator": "spectral_biclustering",
+      "status": "simplified",
+      "reason": "the implementation's own comments call it simplified, so timing it against scikit-learn's algorithm compares two different things",
       "sklearn_estimator": "SpectralBiclustering",
-      "dataset": "unsupervised",
       "flow_ms": 0.00094,
       "sklearn_ms": 23.599958993145265,
-      "speedup": 25106.339354409858,
-      "flow_repeats": 200,
-      "timing_unit": "ms",
-      "status": "ok"
+      "timing_unit": "ms"
     },
     {
       "flow_estimator": "spectral_clustering",
@@ -1886,14 +1902,12 @@
     },
     {
       "flow_estimator": "spectral_coclustering",
+      "status": "simplified",
+      "reason": "the implementation's own comments call it simplified, so timing it against scikit-learn's algorithm compares two different things",
       "sklearn_estimator": "SpectralCoclustering",
-      "dataset": "unsupervised",
       "flow_ms": 0.000915,
       "sklearn_ms": 3.2601659913780168,
-      "speedup": 3563.0229413967395,
-      "flow_repeats": 200,
-      "timing_unit": "ms",
-      "status": "ok"
+      "timing_unit": "ms"
     },
     {
       "flow_estimator": "spectral_embedding",
@@ -1920,7 +1934,8 @@
     {
       "flow_estimator": "stacking_classifier",
       "status": "different_shape",
-      "reason": "takes ptr<ptr<f32> > first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes ptr<ptr<f32> > first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "StackingClassifier"
     },
     {
       "flow_estimator": "stacking_regressor",
@@ -1980,7 +1995,8 @@
     {
       "flow_estimator": "tfidf_vectorizer",
       "status": "different_shape",
-      "reason": "takes ptr<string> first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes ptr<string> first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "TfidfVectorizer"
     },
     {
       "flow_estimator": "theil_sen_regressor",
@@ -2051,12 +2067,14 @@
     {
       "flow_estimator": "voting_classifier",
       "status": "different_shape",
-      "reason": "takes ptr<DecisionTreeClassifier> first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes ptr<DecisionTreeClassifier> first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "VotingClassifier"
     },
     {
       "flow_estimator": "voting_regressor",
       "status": "different_shape",
-      "reason": "takes ptr<DecisionTreeRegressor> first, so it is not an estimator over a feature matrix and needs its own harness"
+      "reason": "takes ptr<DecisionTreeRegressor> first, so it is not an estimator over a feature matrix and needs its own harness",
+      "sklearn_estimator": "VotingRegressor"
     }
   ]
 }

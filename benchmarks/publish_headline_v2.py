@@ -15,11 +15,13 @@ ARCH = BENCH / "architecture_performance_map.json"
 DISPARITY = BENCH / "disparity_report.json"
 HISTORY = BENCH / "disparity_history.json"
 SCALED = BENCH / "scaled_ci_history.json"
+ESTIMATORS = BENCH / "estimator_comparison.json"
 DOC_RESULT = DOCS / "headline-result-v2.json"
 DOC_ARCH = DOCS / "architecture-performance-map.json"
 DOC_DISPARITY = DOCS / "disparity-report.json"
 DOC_HISTORY = DOCS / "disparity-history.json"
 DOC_SCALED = DOCS / "scaled-ci-history.json"
+DOC_ESTIMATORS = DOCS / "estimator-comparison.json"
 
 
 def validate_headline(result: dict) -> None:
@@ -76,6 +78,21 @@ def validate_scaled(scaled: dict) -> None:
             raise SystemExit(f"scaled row {row['algorithm']} has a stale observation list")
 
 
+def validate_estimators(payload: dict) -> None:
+    counts = payload["counts"]
+    rows = payload["rows"]
+    if counts["registry_estimators"] != len(rows):
+        raise SystemExit("estimator comparison does not cover every registry entry")
+    ranked = [r for r in rows if r["status"] == "ok" and r.get("speedup") is not None]
+    if counts["compared"] != len(ranked):
+        raise SystemExit("estimator comparison compared count disagrees with its own rows")
+    wins = sum(1 for r in ranked if r["speedup"] >= 1.0)
+    if counts["flow_wins"] != wins:
+        raise SystemExit("estimator comparison win count disagrees with its own rows")
+    if not payload.get("contract"):
+        raise SystemExit("the estimator comparison must carry the contract it was measured under")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
@@ -92,6 +109,11 @@ def main() -> int:
         validate_disparity(disparity, result["counts"]["total_rows"])
     elif not args.check:
         raise SystemExit("disparity_report.json must be generated before Pages publication")
+    estimators = json.loads(ESTIMATORS.read_text()) if ESTIMATORS.exists() else None
+    if estimators is not None:
+        validate_estimators(estimators)
+    elif not args.check:
+        raise SystemExit("estimator_comparison.json must be present before Pages publication")
     scaled = json.loads(SCALED.read_text()) if SCALED.exists() else None
     if scaled is not None:
         validate_scaled(scaled)
@@ -108,8 +130,9 @@ def main() -> int:
         shutil.copyfile(DISPARITY, DOC_DISPARITY)
         shutil.copyfile(HISTORY, DOC_HISTORY)
         shutil.copyfile(SCALED, DOC_SCALED)
+        shutil.copyfile(ESTIMATORS, DOC_ESTIMATORS)
         counts = result["counts"]
-        print(f"published evidence: {counts['flow_wins']}/{counts['eligible_comparisons']} Flow wins; {disparity['counts']['rows_with_tracked_disparity']} rows with tracked disparities; {len(history['snapshots'])} history snapshots; scaled matrix over {scaled['counts']['runs']} runs")
+        print(f"published evidence: {counts['flow_wins']}/{counts['eligible_comparisons']} Flow wins; {disparity['counts']['rows_with_tracked_disparity']} rows with tracked disparities; {len(history['snapshots'])} history snapshots; scaled matrix over {scaled['counts']['runs']} runs; {estimators['counts']['compared']} estimators ranked")
     else:
         print("canonical benchmark, architecture, disparity, and available history evidence are internally consistent")
     return 0

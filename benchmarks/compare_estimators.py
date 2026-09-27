@@ -56,7 +56,18 @@ def main() -> int:
     for entry in registry["entries"]:
         name = entry["flow_estimator"]
         if entry["bucket"] != "runnable":
-            rows.append({"flow_estimator": name, "status": entry["bucket"], "reason": entry.get("reason", "")})
+            row = {"flow_estimator": name, "status": entry["bucket"], "reason": entry.get("reason", "")}
+            if entry.get("sklearn_estimator"):
+                row["sklearn_estimator"] = entry["sklearn_estimator"]
+            # A simplified implementation still gets its times shown, because
+            # hiding them reads as concealment. They carry no ratio, because a
+            # ratio against a different algorithm is not a speedup.
+            f, k = flow.get(name), sk.get(name)
+            if entry["bucket"] == "simplified" and f and k and k.get("status") == "ok":
+                row["flow_ms"] = f["fit_ms"] + f["pred_ms"]
+                row["sklearn_ms"] = k["fit_ms"] + k["pred_ms"]
+                row["timing_unit"] = "ms"
+            rows.append(row)
             continue
         f, s = flow.get(name), sk.get(name)
         if f is None:
@@ -113,11 +124,19 @@ def main() -> int:
             "flow_wins": wins,
             "sklearn_wins": len(compared) - wins,
             "below_resolution": len(unmeasured),
+            "simplified": sum(1 for r in rows if r["status"] == "simplified"),
         },
         "rows": rows,
     }
     args.output.write_text(json.dumps(payload, indent=2) + "\n")
     print(f"compared {len(compared)} estimators: {wins} Flow wins, {len(compared) - wins} scikit-learn wins")
+    simplified = [r for r in rows if r["status"] == "simplified"]
+    if simplified:
+        print(f"{len(simplified)} rows excluded, implementation declared simplified in its own comments:")
+        for r in sorted(simplified, key=lambda r: r["flow_estimator"]):
+            times = (f"  flow={r['flow_ms']:.3f} sklearn={r['sklearn_ms']:.3f}"
+                     if "flow_ms" in r else "")
+            print(f"  {r['flow_estimator']:32s}{times}")
     if unmeasured:
         print(f"{len(unmeasured)} rows left unranked, Flow side under the clock's resolution:")
         for r in sorted(unmeasured, key=lambda r: r["flow_estimator"]):

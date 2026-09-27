@@ -243,7 +243,14 @@ reason.
 | `runnable` | arguments resolved and a scikit-learn counterpart exists |
 | `different_shape` | takes a pipeline, a vectorizer input or a list of fitted models first, so it is not an estimator over a feature matrix |
 | `flow_only` | Flow implements it and scikit-learn has no equivalent |
+| `simplified` | the implementation's own comments call it a simplified stand-in |
 | `blocked` | the signature is not resolved yet, with the missing parameter named |
+
+The `simplified` bucket is detected from the source rather than listed, so it
+stays true as the implementations are filled in. It matters: `spectral_biclustering`
+thresholds row and column means where scikit-learn does an SVD and k-means, and
+came out at 25106x. Three of the four it catches would otherwise have been the
+widest wins in the whole matrix.
 
 [`generate_estimator_bench.py`](generate_estimator_bench.py) emits the Flow
 timing blocks from that registry, split across several files because Flow issue
