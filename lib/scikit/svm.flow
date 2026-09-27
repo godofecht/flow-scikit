@@ -2203,17 +2203,23 @@ function _svm_tanh_f32(x: f32) -> f32 {
 }
 
 function _svm_kernel_rows(X1: Matrix, i1: i32, X2: Matrix, i2: i32, n_features: i32, kernel: i32, gamma: f32, degree: i32, coef0: f32) -> f32 {
+    # The two rows are addressed once. matrix_at copies the Matrix struct by
+    # value for every element, and this is called once per pair of rows in
+    # every kernel prediction, so it was two struct copies per feature per
+    # pair.
+    let r1: ptr<f32> = X1.data + i1 * X1.cols
+    let r2: ptr<f32> = X2.data + i2 * X2.cols
     if kernel == KERNEL_LINEAR {
         let mut s: f32 = 0.0
         for k in 0 to n_features {
-            s = s + matrix_at(X1, i1, k) * matrix_at(X2, i2, k)
+            s = s + r1[k] * r2[k]
         }
         return s
     }
     if kernel == KERNEL_POLY {
         let mut s: f32 = 0.0
         for k in 0 to n_features {
-            s = s + matrix_at(X1, i1, k) * matrix_at(X2, i2, k)
+            s = s + r1[k] * r2[k]
         }
         let base: f32 = gamma * s + coef0
         let val: f32 = _svm_pow_f32(base, degree)
@@ -2222,7 +2228,7 @@ function _svm_kernel_rows(X1: Matrix, i1: i32, X2: Matrix, i2: i32, n_features: 
     if kernel == KERNEL_RBF {
         let mut s: f32 = 0.0
         for k in 0 to n_features {
-            let d: f32 = matrix_at(X1, i1, k) - matrix_at(X2, i2, k)
+            let d: f32 = r1[k] - r2[k]
             s = s + d * d
         }
         let val: f32 = exp((0.0 - gamma * s) as f64) as f32
@@ -2684,21 +2690,20 @@ export function svr_fit(X: Matrix, y: ptr<f32>, C: f32, epsilon: f32, kernel: i3
         }
         if max_change < tol { break }
     }
-    array_free_f32(f)
-
+    # f already holds the decision value of every sample, because the descent
+    # above kept it up to date as each coefficient moved. Recomputing it here
+    # walked the kernel row of every support vector through matrix_at for a
+    # number the loop had already produced.
     let mut b_sum: f32 = 0.0
     let mut b_count: i32 = 0
     for i in 0 to n {
         let ad: f32 = fabs((alpha_diff[i]) as f64) as f32
         if ad > 0.001 {
-            let mut f_i: f32 = 0.0
-            for j in 0 to n {
-                f_i = f_i + alpha_diff[j] * matrix_at(K, i, j)
-            }
-            b_sum = b_sum + (y[i] - f_i)
+            b_sum = b_sum + (y[i] - f[i])
             b_count = b_count + 1
         }
     }
+    array_free_f32(f)
     if b_count > 0 {
         b = b_sum / (b_count as f32)
     }

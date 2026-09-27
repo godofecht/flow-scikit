@@ -108,6 +108,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_count_vectorizer: CountVectorizer = count_vectorizer_fit(count_vectorizer_docs, 16, 50)
@@ -136,6 +137,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_dbscan: DBSCAN = dbscan_fit(X_c, 0.5, 5)
@@ -153,6 +155,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_decision_tree_classifier: DecisionTreeClassifier = decision_tree_classifier_fit(X_c, y_c, 3, 5, 0)
@@ -179,6 +182,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_decision_tree_regressor: DecisionTreeRegressor = decision_tree_regressor_fit(X_r, y_r, 5, 0)
@@ -219,6 +223,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_dict_vectorizer: DictVectorizer = dict_vectorizer_fit(dv_keys, dv_vals, n_c, dv_counts)
@@ -247,6 +252,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_dictionary_learning: DictionaryLearning = dictionary_learning_fit(X_c, 2, 1.0, 100, 0.0001, 42)
@@ -275,6 +281,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_discriminant_lda: LinearDiscriminantAnalysis = discriminant_lda_fit(X_c, y_c, 3)
@@ -301,6 +308,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_dummy_classifier: DummyClassifier = dummy_classifier_fit(y_c, n_c, 3, 0, 0.0, 42)
@@ -327,6 +335,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_dummy_regressor: DummyRegressor = dummy_regressor_fit(y_r, n_r, 0, 0.0)
@@ -353,6 +362,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_elastic_net_cv: ElasticNetCV = elastic_net_cv_fit(X_r, y_r, 10)
@@ -379,6 +389,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_elastic_net: ElasticNet = elastic_net_fit(X_r, y_r, 1.0, 0.5, 50, 0.01)
@@ -405,6 +416,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_elliptic_envelope: EllipticEnvelope = elliptic_envelope_fit(X_c, 0.1, 10)
@@ -431,6 +443,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_empirical_covariance: EmpiricalCovariance = empirical_covariance_fit(X_c)
@@ -448,6 +461,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_extra_tree_classifier: ExtraTreeClassifier = extra_tree_classifier_fit(X_c, y_c, n_c, f_c, 3, 5, 42)
@@ -474,6 +488,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_extra_tree_regressor: ExtraTreeRegressor = extra_tree_regressor_fit(X_r, y_r, n_r, f_r, 5, 42)
@@ -500,6 +515,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_extra_trees_classifier: ExtraTreesClassifier = extra_trees_classifier_fit(X_c, y_c, 3, 10, 5, 42)
@@ -526,6 +542,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_extra_trees_regressor: ExtraTreesRegressor = extra_trees_regressor_fit(X_r, y_r, 10, 5, 42)
@@ -552,6 +569,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_factor_analysis: FactorAnalysis = factor_analysis_fit(X_c, 2, 100, 0.0001)
@@ -580,6 +598,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_fast_ica: FastICA = fast_ica_fit(X_c, 2, 100, 0.0001, 42)
@@ -608,6 +627,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_feature_agglomeration: FeatureAgglomeration = feature_agglomeration_fit(X_c, 3)

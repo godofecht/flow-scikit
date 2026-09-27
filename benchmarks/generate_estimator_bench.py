@@ -173,6 +173,7 @@ def block(entry: dict) -> str:
     lines.append("    reps = 1")
     lines.append("    if (t1 - t0) < 200000 { reps = 200 }")
     lines.append("    elif (t1 - t0) < 2000000 { reps = 20 }")
+    lines.append("    elif (t1 - t0) < 20000000 { reps = 5 }")
 
     # Timed fit loop.
     lines.append("    t0 = flow_now_ns()")
@@ -258,6 +259,7 @@ def shaped_block(entry: dict) -> str:
     lines.append("    reps = 1")
     lines.append("    if (t1 - t0) < 200000 { reps = 200 }")
     lines.append("    elif (t1 - t0) < 2000000 { reps = 20 }")
+    lines.append("    elif (t1 - t0) < 20000000 { reps = 5 }")
     lines.append("    t0 = flow_now_ns()")
     lines.append("    for rep in 0 to reps {")
     lines.append(f"        let m_{name}: {ret} = {call}")
