@@ -6961,86 +6961,85 @@ export struct MultiTaskElasticNetCV {
     fitted: bool
 }
 
+# Fold loop outside the alpha loop, and the score comes from the test rows
+# only. This used to call predict on the whole design for every fold and every
+# alpha, throwing away four fifths of the result each time, and rebuild both
+# training matrices once per alpha through matrix_at.
 export function multitask_elastic_net_cv_fit(X: Matrix, Y: Matrix, n_alphas: i32) -> MultiTaskElasticNetCV {
     let n: i32 = X.rows
     let n_features: i32 = X.cols
     let n_tasks: i32 = Y.cols
     let l1_ratio: f32 = 0.5
+    let xdata: ptr<f32> = X.data
+    let ydata: ptr<f32> = Y.data
 
     let alphas: ptr<f32> = array_new_f32(n_alphas)
-    let mut i: i32 = 0
-    while i < n_alphas {
+    for i in 0 to n_alphas {
         let t: f32 = (i as f32) / ((n_alphas - 1) as f32)
         alphas[i] = 0.001 * pow(10.0 as f64, (t * 4.0) as f64) as f32
-        i = i + 1
+    }
+
+    let sse: ptr<f32> = array_new_f32(n_alphas)
+    let fold_size: i32 = n / 5
+
+    for fold in 0 to 5 {
+        let test_start: i32 = fold * fold_size
+        let mut test_end: i32 = test_start + fold_size
+        if fold == 4 { test_end = n }
+        let n_test: i32 = test_end - test_start
+        let n_train: i32 = n - n_test
+
+        let X_train: Matrix = matrix_new(n_train, n_features)
+        let Y_train: Matrix = matrix_new(n_train, n_tasks)
+        let xt: ptr<f32> = X_train.data
+        let yt: ptr<f32> = Y_train.data
+        let mut idx: i32 = 0
+        for j in 0 to n {
+            if j < test_start || j >= test_end {
+                let src: ptr<f32> = xdata + j * n_features
+                let dst: ptr<f32> = xt + idx * n_features
+                for k in 0 to n_features { dst[k] = src[k] }
+                let ysrc: ptr<f32> = ydata + j * n_tasks
+                let ydst: ptr<f32> = yt + idx * n_tasks
+                for k2 in 0 to n_tasks { ydst[k2] = ysrc[k2] }
+                idx = idx + 1
+            }
+        }
+
+        for a_idx in 0 to n_alphas {
+            let model: MultiTaskElasticNet = multitask_elastic_net_fit(X_train, Y_train, alphas[a_idx], l1_ratio, 500, 0.01)
+            let mut fold_mse: f32 = 0.0
+            for t2 in test_start to test_end {
+                let xrow: ptr<f32> = xdata + t2 * n_features
+                let yrow: ptr<f32> = ydata + t2 * n_tasks
+                for k3 in 0 to n_tasks {
+                    let wk: ptr<f32> = model.weights[k3]
+                    let mut pred: f32 = model.bias[k3]
+                    for m in 0 to n_features {
+                        pred = pred + wk[m] * xrow[m]
+                    }
+                    let diff: f32 = yrow[k3] - pred
+                    fold_mse = fold_mse + diff * diff
+                }
+            }
+            sse[a_idx] = sse[a_idx] + fold_mse / ((n_test as f32) * (n_tasks as f32))
+            multitask_elastic_net_free(model)
+        }
+
+        matrix_free(X_train)
+        matrix_free(Y_train)
     }
 
     let mut best_alpha: f32 = alphas[0]
     let mut best_mse: f32 = 999999.0
-    let fold_size: i32 = n / 5
-
-    let mut a_idx: i32 = 0
-    while a_idx < n_alphas {
-        let alpha: f32 = alphas[a_idx]
-        let mut total_mse: f32 = 0.0
-        let mut fold: i32 = 0
-        while fold < 5 {
-            let test_start: i32 = fold * fold_size
-            let test_end: i32 = test_start + fold_size
-            if fold == 4 { test_end = n }
-            let n_train: i32 = n - (test_end - test_start)
-
-            let X_train: Matrix = matrix_new(n_train, n_features)
-            let Y_train: Matrix = matrix_new(n_train, n_tasks)
-            let mut idx: i32 = 0
-            let mut j: i32 = 0
-            while j < n {
-                if j < test_start || j >= test_end {
-                    let mut k: i32 = 0
-                    while k < n_features {
-                        matrix_set(X_train, idx, k, matrix_at(X, j, k))
-                        k = k + 1
-                    }
-                    let mut k2: i32 = 0
-                    while k2 < n_tasks {
-                        matrix_set(Y_train, idx, k2, matrix_at(Y, j, k2))
-                        k2 = k2 + 1
-                    }
-                    idx = idx + 1
-                }
-                j = j + 1
-            }
-
-            let model: MultiTaskElasticNet = multitask_elastic_net_fit(X_train, Y_train, alpha, l1_ratio, 500, 0.01)
-            let preds: Matrix = multitask_elastic_net_predict(model, X)
-
-            let mut fold_mse: f32 = 0.0
-            let mut t2: i32 = test_start
-            while t2 < test_end {
-                let mut k3: i32 = 0
-                while k3 < n_tasks {
-                    let diff: f32 = matrix_at(Y, t2, k3) - matrix_at(preds, t2, k3)
-                    fold_mse = fold_mse + diff * diff
-                    k3 = k3 + 1
-                }
-                t2 = t2 + 1
-            }
-            total_mse = total_mse + fold_mse / ((test_end - test_start) as f32 * (n_tasks as f32))
-
-            matrix_free(preds)
-            multitask_elastic_net_free(model)
-            matrix_free(X_train)
-            matrix_free(Y_train)
-            fold = fold + 1
-        }
-
-        let avg_mse: f32 = total_mse / 5.0
+    for a_idx in 0 to n_alphas {
+        let avg_mse: f32 = sse[a_idx] / 5.0
         if avg_mse < best_mse {
             best_mse = avg_mse
-            best_alpha = alpha
+            best_alpha = alphas[a_idx]
         }
-        a_idx = a_idx + 1
     }
+    array_free_f32(sse)
 
     let best_model: MultiTaskElasticNet = multitask_elastic_net_fit(X, Y, best_alpha, l1_ratio, 500, 0.01)
     let weights_copy: ptr<ptr<f32> > = malloc((n_tasks as i64) * 8) as ptr<ptr<f32> >
