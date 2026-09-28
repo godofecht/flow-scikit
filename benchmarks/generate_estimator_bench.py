@@ -119,6 +119,20 @@ def fit_arguments(entry: dict, kind: str) -> tuple[list[str], list[str]]:
     return pre, args
 
 
+# One value out of every result is added to a running sink, which main prints
+# on a line the parser ignores. Without it, clang at -O3 is free to delete a
+# transform whose result is freed without being read, and two rows came back at
+# exactly 0.000000 ms because it did.
+def sink_line(var: str, returns: str, indent: str = "        ") -> list[str]:
+    if returns == "Matrix":
+        return [
+            f"{indent}if {var}.rows > 0 {{",
+            f"{indent}    if {var}.cols > 0 {{ sink = sink + {var}.data[0] }}",
+            f"{indent}}}",
+        ]
+    return [f"{indent}sink = sink + {var}[0]"]
+
+
 def block(entry: dict) -> str:
     """One estimator: probe, choose a repeat count, then time fit and predict.
 
@@ -159,6 +173,7 @@ def block(entry: dict) -> str:
     lines.append("    reps = 1")
     lines.append("    if (t1 - t0) < 200000 { reps = 200 }")
     lines.append("    elif (t1 - t0) < 2000000 { reps = 20 }")
+    lines.append("    elif (t1 - t0) < 20000000 { reps = 5 }")
 
     # Timed fit loop.
     lines.append("    t0 = flow_now_ns()")
@@ -175,6 +190,7 @@ def block(entry: dict) -> str:
         lines.append("    t2 = flow_now_ns()")
         lines.append("    for rep2 in 0 to reps {")
         lines.append(f"        let o_{name}: {comp['returns']} = {comp['name']}(fitted_{name}, X_{suffix})")
+        lines += sink_line(f"o_{name}", comp["returns"])
         lines.append("        " + release(f"o_{name}", comp["returns"]))
         lines.append("    }")
         lines.append("    t3 = flow_now_ns()")
@@ -194,8 +210,97 @@ def block(entry: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def shaped_block(entry: dict) -> str:
+    """One estimator whose fit does not begin with a feature matrix.
+
+    The registry carries the call for these, because the generic path above
+    builds one shape of call and these take a target vector, a feature count or
+    a pair of scalars instead. Everything else about the timing is the same, so
+    a shaped row is ranked like any other.
+    """
+    name = entry["flow_estimator"]
+    shape = entry["shape"]
+    kind = shape["dataset"]
+    ret = entry["fit"]["returns"]
+    call = f"{entry['fit']['name']}({', '.join(shape['flow_fit'])})"
+    free = entry["companions"].get("free")
+    # A fit that takes a composed object built outside the timing mutates that
+    # object and hands it back, so freeing the result on every repeat would free
+    # what the next repeat is about to read. Those rows free once, after the
+    # timing, and leak the state a repeat leaves behind, which is a few hundred
+    # bytes per pass over a four-column design.
+    free_in_loop = shape.get("flow_free", "loop") == "loop"
+    free_ok = free is not None and len(free["parameters"]) == 1
+    comp = entry["companions"].get("transform") or entry["companions"].get("predict")
+    work = shape.get("flow_work")
+    # A recipe can name the work function itself, for an estimator whose
+    # companion is called something other than predict or transform.
+    if shape.get("flow_work_fn"):
+        comp = {"name": shape["flow_work_fn"], "returns": shape["flow_work_returns"]}
+    comp_ok = comp is not None and work is not None and (
+        comp["returns"] in ("Matrix", "ptr<f32>") or shape.get("flow_work_release")
+    )
+
+    lines = [f"    # ---- {name} ({kind}, written out) ----"]
+    if shape.get("corpus"):
+        docs = shape["corpus"]
+        lines.append(f"    let {name}_docs: array<string, {len(docs)}> = [")
+        for i, doc in enumerate(docs):
+            tail = "," if i + 1 < len(docs) else ""
+            lines.append(f'        "{doc}"{tail}')
+        lines.append("    ]")
+    for pre_line in shape.get("flow_preamble", []):
+        lines.append("    " + pre_line)
+    lines.append("    t0 = flow_now_ns()")
+    lines.append(f"    let probe_{name}: {ret} = {call}")
+    lines.append("    t1 = flow_now_ns()")
+    if free_ok and free_in_loop:
+        lines.append(f"    {free['name']}(probe_{name})")
+    lines.append("    reps = 1")
+    lines.append("    if (t1 - t0) < 200000 { reps = 200 }")
+    lines.append("    elif (t1 - t0) < 2000000 { reps = 20 }")
+    lines.append("    elif (t1 - t0) < 20000000 { reps = 5 }")
+    lines.append("    t0 = flow_now_ns()")
+    lines.append("    for rep in 0 to reps {")
+    lines.append(f"        let m_{name}: {ret} = {call}")
+    if free_ok and free_in_loop:
+        lines.append(f"        {free['name']}(m_{name})")
+    lines.append("    }")
+    lines.append("    t1 = flow_now_ns()")
+
+    if comp_ok:
+        release = "matrix_free" if comp["returns"] == "Matrix" else "array_free_f32"
+        lines.append(f"    let fitted_{name}: {ret} = {call}")
+        lines.append("    t2 = flow_now_ns()")
+        lines.append("    for rep2 in 0 to reps {")
+        lines.append(f"        let o_{name}: {comp['returns']} = "
+                     f"{comp['name']}(fitted_{name}, {', '.join(work)})")
+        if comp["returns"] in ("Matrix", "ptr<f32>"):
+            lines += sink_line(f"o_{name}", comp["returns"])
+        if shape.get("flow_work_release"):
+            lines.append("        " + shape["flow_work_release"].format(var=f"o_{name}"))
+        else:
+            lines.append(f"        {release}(o_{name})")
+        lines.append("    }")
+        lines.append("    t3 = flow_now_ns()")
+        if free_ok:
+            lines.append(f"    {free['name']}(fitted_{name})")
+        pred_expr = "ms_between(t2, t3) / (reps as f32)"
+    else:
+        pred_expr = "0.0"
+        if free_ok and not free_in_loop:
+            lines.append(f"    {free['name']}(probe_{name})")
+
+    lines.append(
+        f'    printf("ESTIMATOR|{name}|%.9f|%.9f|%d|ok\\n", '
+        f"ms_between(t0, t1) / (reps as f32), {pred_expr}, reps)"
+    )
+    lines.append("    fflush(null)")
+    return "\n".join(lines) + "\n"
+
+
 def chunk_file(index: int, entries: list[dict]) -> str:
-    body = "\n".join(block(e) for e in entries)
+    body = "\n".join(shaped_block(e) if e["bucket"] == "shaped" else block(e) for e in entries)
     return f'''{HEADER}
 function main() -> i32 {{
     let iris: Dataset = load_iris()
@@ -243,11 +348,22 @@ function main() -> i32 {{
         Y_rows[i] = row
     }}
 
+    # A one-dimensional x for the isotonic row, which regresses against a
+    # single ordered variable rather than a design.
+    let x1d_r: ptr<f32> = array_new_f32(n_r)
+    for i in 0 to n_r {{ x1d_r[i] = matrix_at(X_r, i, 0) }}
+
+    # Per-feature importances for the selector row, which takes the weights a
+    # fitted model would hand it rather than a design.
+    let w_f: ptr<f32> = array_new_f32(f_c)
+    for i in 0 to f_c {{ w_f[i] = 1.0 / ((i + 1) as f32) }}
+
     let mut t0: i64 = 0
     let mut t1: i64 = 0
     let mut t2: i64 = 0
     let mut t3: i64 = 0
     let mut reps: i32 = 1
+    let mut sink: f32 = 0.0
 
 {body}
     for i in 0 to n_c {{ array_free_f32(Y_label_rows[i]) }}
@@ -258,6 +374,11 @@ function main() -> i32 {{
     matrix_free(Y_multi)
     free(yi_c as ptr<void>)
     free(yi_r as ptr<void>)
+    array_free_f32(x1d_r)
+    array_free_f32(w_f)
+    # The sink is printed so the work above cannot be optimized away. The
+    # parser matches ESTIMATOR lines only, so this one is ignored.
+    printf("SINK|%.9f\\n", sink)
     return 0
 }}
 '''
@@ -267,24 +388,35 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--per-file", type=int, default=20)
     ap.add_argument("--outdir", type=Path, default=OUTDIR)
-    ap.add_argument("--only", help="generate a single estimator, for bisecting a compile failure")
+    ap.add_argument("--only", help="comma separated estimator names, for bisecting a compile "
+                                   "failure or re-timing one group")
+    ap.add_argument("--prefix", default="bench_estimators",
+                    help="output file prefix, so a subset written elsewhere cannot collide with "
+                         "the committed files or with another process in the shared build directory")
     args = ap.parse_args()
 
     registry = json.loads(REGISTRY.read_text())
-    runnable = [e for e in registry["entries"] if e["bucket"] == "runnable"]
+    # Simplified implementations are timed too, because compare_estimators.py
+    # shows their times while withholding a ratio. Leaving them out of the
+    # race would make the page quietly drop four rows.
+    timed = ("runnable", "shaped", "simplified")
+    runnable = [e for e in registry["entries"] if e["bucket"] in timed]
     if args.only:
-        runnable = [e for e in runnable if e["flow_estimator"] == args.only]
-        if not runnable:
-            raise SystemExit(f"{args.only} is not a runnable registry entry")
+        wanted = [n.strip() for n in args.only.split(",") if n.strip()]
+        runnable = [e for e in runnable if e["flow_estimator"] in wanted]
+        found = {e["flow_estimator"] for e in runnable}
+        missing = [n for n in wanted if n not in found]
+        if missing:
+            raise SystemExit(f"not timed registry entries: {', '.join(missing)}")
 
     args.outdir.mkdir(parents=True, exist_ok=True)
-    for stale in args.outdir.glob("bench_estimators_*.flow"):
+    for stale in args.outdir.glob(f"{args.prefix}_*.flow"):
         stale.unlink()
 
     written = []
     for i in range(0, len(runnable), args.per_file):
         part = runnable[i : i + args.per_file]
-        path = args.outdir / f"bench_estimators_{i // args.per_file:02d}.flow"
+        path = args.outdir / f"{args.prefix}_{i // args.per_file:02d}.flow"
         path.write_text(chunk_file(i // args.per_file, part))
         written.append((path.name, len(part)))
 

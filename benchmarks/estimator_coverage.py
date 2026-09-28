@@ -7,9 +7,11 @@ the rest are unmeasured. This builds the registry the wider benchmark runs
 from: every exported `*_fit`, its companion predict/transform, the arguments
 to call it with, and the scikit-learn class to race it against.
 
-An estimator lands in one of three buckets, and every one carries a reason:
+An estimator lands in one of these buckets, and every one carries a reason:
 
   runnable   arguments resolved and a scikit-learn counterpart exists
+  shaped     raced through a written out call, because its fit does not begin
+             with a feature matrix
   flow_only  Flow implements it and scikit-learn has no equivalent
   blocked    something about the signature is not resolved yet
 
@@ -175,6 +177,255 @@ PREAMBLE_ARGS: dict[str, tuple[str, str]] = {
     "n_categories": ("array<i32, 4>", "[4, 4, 4, 4]"),
 }
 
+# Flow functions whose scikit-learn namesake does more than they do. Timing
+# them against that class would compare a part against the whole, which is the
+# same objection the simplified rows carry. The wording says which part.
+DIFFERENT_JOB: dict[str, str] = {
+    "stacking_classifier": "takes the base estimators' predictions as input, so it is the "
+                           "meta-learner alone while StackingClassifier also fits the base "
+                           "estimators and cross-validates them",
+    "self_training_classifier": "takes class probabilities as input, so it is the labelling "
+                                "loop alone while SelfTrainingClassifier also fits the base "
+                                "estimator on every round",
+    "voting_classifier": "takes trees that are already fitted, so its fit is the vote alone "
+                         "while VotingClassifier fits every estimator it is given",
+    "voting_regressor": "takes regressors that are already fitted, so its fit is the average "
+                        "alone while VotingRegressor fits every estimator it is given",
+    "incremental_pca_partial": "one partial_fit step over one batch, where IncrementalPCA.fit "
+                               "walks the whole design in batches",
+}
+
+# One corpus for the two text vectorizers, read by the Flow generator and by
+# the scikit-learn harness, so the two sides cannot drift apart.
+CORPUS: list[str] = [
+    "the quick brown fox jumps over the lazy dog",
+    "a lazy dog sleeps in the warm sun",
+    "quick brown foxes are rare in the city",
+    "the dog and the fox share a field",
+    "warm sun and a cold river run together",
+    "a field of brown grass in the sun",
+    "the city river runs past the old field",
+    "old dogs sleep through a quick storm",
+    "a storm over the city wakes the dog",
+    "foxes hunt in the cold river valley",
+    "the valley holds a warm field of grass",
+    "grass grows where the river meets the sun",
+    "a rare fox crosses the old stone bridge",
+    "the stone bridge over the cold river",
+    "dogs and foxes keep their distance here",
+    "here the field the river and the city meet",
+]
+
+# Estimators whose fit does not begin with a feature matrix, and which race
+# scikit-learn perfectly well once the call is written out. Thirteen rows sat
+# in different_shape only because the generic path builds one call shape.
+#
+# `flow_fit` and `flow_work` are argument expressions in terms of the variables
+# the generated harness declares (X_c, y_c, n_c, f_c and the regression pair).
+# `sklearn_input` says what the scikit-learn side fits and transforms: the
+# feature matrix, the target vector, or the first column of the matrix as a
+# one-dimensional x. `sklearn_ctor` overrides the constructor where the default
+# would measure a different size of problem, as it would for a random
+# projection whose n_components is chosen by Johnson-Lindenstrauss.
+SHAPED: dict[str, dict] = {
+    "additive_chi2_sampler": {
+        "dataset": "classification",
+        "flow_fit": ["n_c", "f_c", "2"],
+        "flow_work": ["X_c"],
+        "sklearn_input": "X",
+    },
+    "gaussian_random_projection": {
+        "dataset": "classification",
+        "flow_fit": ["f_c", "2", "42"],
+        "flow_work": ["X_c"],
+        "sklearn_input": "X",
+        "sklearn_ctor": "n_components=2, random_state=42",
+    },
+    "polynomial_count_sketch": {
+        "dataset": "classification",
+        "flow_fit": ["f_c", "2", "2"],
+        "flow_work": ["X_c"],
+        "sklearn_input": "X",
+        "sklearn_ctor": "n_components=2, degree=2, random_state=42",
+    },
+    "polynomial_features": {
+        "dataset": "classification",
+        "flow_fit": ["f_c", "2", "false", "true"],
+        "flow_work": ["X_c"],
+        "sklearn_input": "X",
+    },
+    "rbf_sampler": {
+        "dataset": "classification",
+        "flow_fit": ["f_c", "0.1", "2", "42"],
+        "flow_work": ["X_c"],
+        "sklearn_input": "X",
+        "sklearn_ctor": "gamma=0.1, n_components=2, random_state=42",
+    },
+    "skewed_chi2_sampler": {
+        "dataset": "classification",
+        "flow_fit": ["f_c", "1.0", "2", "42"],
+        "flow_work": ["X_c"],
+        "sklearn_input": "X",
+        "sklearn_ctor": "skewedness=1.0, n_components=2, random_state=42",
+    },
+    "sparse_random_projection": {
+        "dataset": "classification",
+        "flow_fit": ["f_c", "2", "0.3", "42"],
+        "flow_work": ["X_c"],
+        "sklearn_input": "X",
+        "sklearn_ctor": "n_components=2, density=0.3, random_state=42",
+    },
+    "select_from_model": {
+        "dataset": "classification",
+        "flow_fit": ["w_f", "f_c", "0.5"],
+        "flow_work": ["X_c"],
+        "sklearn_input": "X",
+    },
+    "dummy_classifier": {
+        "dataset": "classification",
+        "flow_fit": ["y_c", "n_c", "3", "0", "0.0", "42"],
+        "flow_work": ["n_c"],
+        "sklearn_input": "X",
+    },
+    "dummy_regressor": {
+        "dataset": "regression",
+        "flow_fit": ["y_r", "n_r", "0", "0.0"],
+        "flow_work": ["n_r"],
+        "sklearn_input": "X",
+    },
+    "label_encoder": {
+        "dataset": "classification",
+        "flow_fit": ["y_c", "n_c"],
+        "flow_work": ["y_c", "n_c"],
+        "sklearn_input": "y",
+    },
+    "label_binarizer": {
+        "dataset": "classification",
+        "flow_fit": ["y_c", "n_c", "0.0", "1.0"],
+        "flow_work": ["y_c", "n_c"],
+        "sklearn_input": "y",
+    },
+    "isotonic": {
+        "dataset": "regression",
+        "flow_fit": ["x1d_r", "y_r", "n_r", "true"],
+        "flow_work": ["x1d_r", "n_r"],
+        "sklearn_input": "x1d",
+    },
+    # Two rows whose work function is named for what it returns rather than
+    # predict or transform, so the generic path found nothing to time and the
+    # fit alone fell under the clock's floor.
+    "kernel_density": {
+        "dataset": "classification",
+        "flow_fit": ["X_c", "0.5", "0"],
+        "flow_work": ["X_c"],
+        "flow_work_fn": "kernel_density_score_samples",
+        "flow_work_returns": "ptr<f32>",
+        "sklearn_input": "X",
+        "sklearn_work": "score_samples",
+    },
+    "nearest_neighbors": {
+        "dataset": "classification",
+        "flow_fit": ["X_c", "5"],
+        "flow_work": ["X_c"],
+        "flow_work_fn": "nearest_neighbors_kneighbors",
+        "flow_work_returns": "ptr<NeighborResult>",
+        "flow_work_release": "nearest_neighbors_free_results({var}, n_c)",
+        "sklearn_input": "X",
+        "sklearn_work": "kneighbors",
+    },
+    "multilabel_binarizer": {
+        # The label rows, so the scikit-learn side gets sets of labels rather
+        # than one label per sample.
+        "dataset": "multioutput_class",
+        "flow_preamble": [
+            "let mlb_counts: ptr<i32> = malloc((n_c as i64) * 4) as ptr<i32>",
+            "for i in 0 to n_c { mlb_counts[i] = 2 }",
+        ],
+        "flow_fit": ["Y_label_rows", "n_c", "mlb_counts", "3"],
+        "flow_work": ["Y_label_rows", "n_c", "mlb_counts"],
+        "sklearn_input": "labelsets",
+    },
+    "dict_vectorizer": {
+        "dataset": "classification",
+        "flow_preamble": [
+            "let dv_counts: ptr<i32> = malloc((n_c as i64) * 4) as ptr<i32>",
+            "let dv_keys: ptr<ptr<i32> > = malloc((n_c as i64) * 8) as ptr<ptr<i32> >",
+            "let dv_vals: ptr<ptr<f32> > = malloc((n_c as i64) * 8) as ptr<ptr<f32> >",
+            "for i in 0 to n_c {",
+            "    dv_counts[i] = f_c",
+            "    let dv_kk: ptr<i32> = malloc((f_c as i64) * 4) as ptr<i32>",
+            "    let dv_vv: ptr<f32> = array_new_f32(f_c)",
+            "    for j in 0 to f_c {",
+            "        dv_kk[j] = j",
+            "        dv_vv[j] = matrix_at(X_c, i, j)",
+            "    }",
+            "    dv_keys[i] = dv_kk",
+            "    dv_vals[i] = dv_vv",
+            "}",
+        ],
+        "flow_fit": ["dv_keys", "dv_vals", "n_c", "dv_counts"],
+        "flow_work": ["dv_keys", "dv_vals", "n_c", "dv_counts"],
+        "sklearn_input": "dicts",
+    },
+    "count_vectorizer": {
+        "dataset": "classification",
+        "corpus": CORPUS,
+        "flow_fit": ["count_vectorizer_docs", "16", "50"],
+        "flow_work": ["count_vectorizer_docs", "16"],
+        "sklearn_input": "docs",
+    },
+    "tfidf_vectorizer": {
+        "dataset": "classification",
+        "corpus": CORPUS,
+        "flow_fit": ["tfidf_vectorizer_docs", "16", "50"],
+        "flow_work": ["tfidf_vectorizer_docs", "16"],
+        "sklearn_input": "docs",
+    },
+    "pipeline": {
+        "dataset": "classification",
+        "flow_preamble": [
+            "let pipe_steps: array<PipelineStep, 2> = [",
+            '    step_standard_scaler("scaler"),',
+            '    step_logistic_regression("classifier", 3, 50, 0.5, penalty_none())',
+            "]",
+            "let pipe_obj: Pipeline = pipeline_new(pipe_steps, 2)",
+        ],
+        "flow_fit": ["pipe_obj", "X_c", "y_c"],
+        "flow_work": ["X_c"],
+        "flow_free": "after",
+        "sklearn_input": "X",
+    },
+    "column_transformer": {
+        "dataset": "classification",
+        "flow_preamble": [
+            "let ct_cols: ptr<i32> = malloc((f_c as i64) * 4) as ptr<i32>",
+            "for i in 0 to f_c { ct_cols[i] = i }",
+            "let ct_obj: ColumnTransformer = column_transformer_init(1)",
+            "# 0 is TRANSFORMER_STANDARD_SCALER. The constant is written out",
+            "# because an export const is not visible through the umbrella import.",
+            "column_transformer_set_spec(ct_obj, 0, 0, ct_cols, f_c)",
+        ],
+        "flow_fit": ["ct_obj", "X_c"],
+        "flow_work": ["X_c"],
+        "flow_free": "after",
+        "sklearn_input": "X",
+    },
+    "feature_union": {
+        "dataset": "classification",
+        "flow_preamble": [
+            "let fu_obj: FeatureUnion = feature_union_init(2)",
+            "# 0 is FU_TRANSFORMER_STANDARD_SCALER and 2 is FU_TRANSFORMER_PASSTHROUGH,",
+            "# written out for the reason the column transformer above gives.",
+            "feature_union_set_transformer(fu_obj, 0, 0, 0)",
+            "feature_union_set_transformer(fu_obj, 1, 2, 0)",
+        ],
+        "flow_fit": ["fu_obj", "X_c"],
+        "flow_work": ["X_c"],
+        "flow_free": "after",
+        "sklearn_input": "X",
+    },
+}
+
 # Parameters whose value depends on the dataset rather than on a constant.
 DATASET_ARGS = {"n_classes", "n_samples", "n_features"}
 
@@ -302,6 +553,12 @@ def classify(base: str, spec: dict, known: set[str], exports: dict[str, dict]) -
         unresolved.append(f"{p['name']}: {p['type']}")
     head = spec["params"][0]["type"] if spec["params"] else "absent"
     sk = sklearn_name(base, known)
+    if base in SHAPED and sk is not None:
+        entry.update(bucket="shaped", sklearn_estimator=sk, shape=SHAPED[base])
+        return entry
+    if base in DIFFERENT_JOB:
+        entry.update(bucket="different_shape", reason=DIFFERENT_JOB[base], sklearn_estimator=sk)
+        return entry
     if head != "Matrix":
         entry.update(
             bucket="different_shape",
@@ -326,7 +583,8 @@ def argument_tables() -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", type=Path, default=OUT)
-    ap.add_argument("--show", choices=["blocked", "flow_only", "runnable", "simplified", "different_shape"], help="list one bucket and exit")
+    ap.add_argument("--show", choices=["blocked", "flow_only", "runnable", "shaped", "simplified",
+                                       "different_shape"], help="list one bucket and exit")
     args = ap.parse_args()
 
     exports = parse_exports()
@@ -359,7 +617,7 @@ def main() -> int:
         return 0
 
     print(f"{len(entries)} exported Flow estimators against a {len(known)}-estimator scikit-learn surface")
-    for bucket in ("runnable", "simplified", "different_shape", "flow_only", "blocked"):
+    for bucket in ("runnable", "shaped", "simplified", "different_shape", "flow_only", "blocked"):
         print(f"  {bucket:10s} {counts.get(bucket, 0)}")
     return 0
 

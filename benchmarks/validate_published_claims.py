@@ -27,6 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RESULT = ROOT / "benchmarks" / "headline_result_v2.json"
 ARCH = ROOT / "benchmarks" / "architecture_performance_map.json"
+ESTIMATORS = ROOT / "benchmarks" / "estimator_comparison.json"
 
 # (path, regex with one group per count, builder for the replacement text)
 TARGETS = [
@@ -88,6 +89,22 @@ SUBSTRATE_TARGETS = [
 ]
 
 
+# And the same drift from the wide matrix. The README quotes how many of the
+# ranked rows favour Flow, and that count moves whenever CI re-measures the
+# 192 rows it times.
+ESTIMATOR_TARGETS = [
+    (
+        ROOT / "README.md",
+        re.compile(r"\*\*Flow is faster on (\d+) of the (\d+) ranked rows\.\*\*"),
+        lambda c: f"**Flow is faster on {c['flow_wins']} of the {c['compared']} ranked rows.**",
+    ),
+]
+
+
+def estimator_counts() -> dict:
+    return json.loads(ESTIMATORS.read_text())["counts"]
+
+
 def substrate_means() -> dict[str, float]:
     groups = json.loads(ARCH.read_text())["speedup_by_execution_substrate"]
     return {g["execution_class"]: float(g["mean_flow_speedup"]) for g in groups}
@@ -100,10 +117,13 @@ def main() -> int:
 
     counts = json.loads(RESULT.read_text())["counts"]
     means = substrate_means()
+    est = estimator_counts()
     drifted: list[str] = []
 
     for path, pattern, build in TARGETS + [
         (p, r, (lambda b: lambda _c: b(means))(build)) for p, r, build in SUBSTRATE_TARGETS
+    ] + [
+        (p, r, (lambda b: lambda _c: b(est))(build)) for p, r, build in ESTIMATOR_TARGETS
     ]:
         text = path.read_text()
         match = pattern.search(text)

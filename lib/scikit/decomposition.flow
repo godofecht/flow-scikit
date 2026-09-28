@@ -1164,39 +1164,46 @@ export function kernel_pca_fit(X: Matrix, n_components: i32, kernel: i32, gamma:
     let n: i32 = X.rows
     let p: i32 = X.cols
 
-    let K: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    # The kernel is one contiguous block, built off row pointers and mirrored
+    # across the diagonal. The old loop copied row i into a fresh allocation,
+    # then copied row j into another one for every j, so a fit at 150 samples
+    # made 22500 allocations and read the design through matrix_at 180000
+    # times to produce a symmetric matrix it computed twice over.
+    let xdata: ptr<f32> = X.data
+    let K: ptr<f32> = array_new_f32(n * n)
     for i in 0 to n {
-        K[i] = array_new_f32(n)
-        let xi: ptr<f32> = array_new_f32(p)
-        for j in 0 to p { xi[j] = matrix_at(X, i, j) }
-        for j in 0 to n {
-            let xj: ptr<f32> = array_new_f32(p)
-            for k in 0 to p { xj[k] = matrix_at(X, j, k) }
-            K[i][j] = _kernel_compute(xi, xj, p, kernel, gamma, degree, coef0)
-            array_free_f32(xj)
+        let xi: ptr<f32> = xdata + i * p
+        let ki: ptr<f32> = K + i * n
+        for j in i to n {
+            let xj: ptr<f32> = xdata + j * p
+            let kv: f32 = _kernel_compute(xi, xj, p, kernel, gamma, degree, coef0)
+            ki[j] = kv
+            K[j * n + i] = kv
         }
-        array_free_f32(xi)
     }
 
-    let mut row_mean: ptr<f32> = array_new_f32(n)
+    let row_mean: ptr<f32> = array_new_f32(n)
     for i in 0 to n {
-        for j in 0 to n {
-            row_mean[i] = row_mean[i] + K[i][j]
-        }
-        row_mean[i] = row_mean[i] / (n as f32)
+        let ki2: ptr<f32> = K + i * n
+        let mut s: f32 = 0.0
+        for j in 0 to n { s = s + ki2[j] }
+        row_mean[i] = s / (n as f32)
     }
     let mut total_mean: f32 = 0.0
     for i in 0 to n { total_mean = total_mean + row_mean[i] }
     total_mean = total_mean / (n as f32)
 
     for i in 0 to n {
+        let ki3: ptr<f32> = K + i * n
+        let mi: f32 = row_mean[i]
         for j in 0 to n {
-            K[i][j] = K[i][j] - row_mean[i] - row_mean[j] + total_mean
+            ki3[j] = ki3[j] - mi - row_mean[j] + total_mean
         }
     }
 
     let eigenvectors: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
     let eigenvalues: ptr<f32> = array_new_f32(n_components)
+    let Av: ptr<f32> = array_new_f32(n)
 
     for c in 0 to n_components {
         eigenvectors[c] = array_new_f32(n)
@@ -1206,14 +1213,10 @@ export function kernel_pca_fit(X: Matrix, n_components: i32, kernel: i32, gamma:
         }
 
         for iter in 0 to 200 {
-            let Av: ptr<f32> = array_new_f32(n)
-            for i in 0 to n {
-                let mut s: f32 = 0.0
-                for j in 0 to n {
-                    s = s + K[i][j] * eigenvectors[c][j]
-                }
-                Av[i] = s
-            }
+            # One sgemv, and one buffer for the whole iteration. The buffer
+            # used to be allocated and freed inside it, up to 200 times per
+            # component.
+            blas_matvec(K, n, n, eigenvectors[c], Av, 1.0, 0.0)
 
             if c > 0 {
                 for prev in 0 to c {
@@ -1239,17 +1242,13 @@ export function kernel_pca_fit(X: Matrix, n_components: i32, kernel: i32, gamma:
                 if d > change { change = d }
                 eigenvectors[c][i] = new_val
             }
-            array_free_f32(Av)
             if change < 0.000001 { break }
         }
 
+        blas_matvec(K, n, n, eigenvectors[c], Av, 1.0, 0.0)
         let mut lambda: f32 = 0.0
         for i in 0 to n {
-            let mut s: f32 = 0.0
-            for j in 0 to n {
-                s = s + K[i][j] * eigenvectors[c][j]
-            }
-            lambda = lambda + eigenvectors[c][i] * s
+            lambda = lambda + eigenvectors[c][i] * Av[i]
         }
         eigenvalues[c] = lambda
         if eigenvalues[c] < 0.0000000001 { eigenvalues[c] = 0.0000000001 }
@@ -1262,8 +1261,8 @@ export function kernel_pca_fit(X: Matrix, n_components: i32, kernel: i32, gamma:
         }
     }
 
-    for i in 0 to n { array_free_f32(K[i]) }
-    free(K as ptr<void>)
+    array_free_f32(K)
+    array_free_f32(Av)
     array_free_f32(row_mean)
 
     return KernelPCA {
@@ -1286,33 +1285,32 @@ export function kernel_pca_transform(model: KernelPCA, X: Matrix) -> Matrix {
     let p: i32 = model.n_features
     let n_train: i32 = model.n_samples
 
-    let K_test: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
-    for i in 0 to n {
-        K_test[i] = array_new_f32(n_train)
-        let xi: ptr<f32> = array_new_f32(p)
-        for j in 0 to p { xi[j] = matrix_at(X, i, j) }
-        for j in 0 to n_train {
-            let xj: ptr<f32> = array_new_f32(p)
-            for k in 0 to p { xj[k] = matrix_at(model.X_train, j, k) }
-            K_test[i][j] = _kernel_compute(xi, xj, p, model.kernel, model.gamma, model.degree, model.coef0)
-            array_free_f32(xj)
-        }
-        array_free_f32(xi)
-    }
+    # Row pointers into both designs, and no per-pair allocation, for the
+    # reason the fit above gives.
+    let xdata: ptr<f32> = X.data
+    let tdata: ptr<f32> = model.X_train.data
+    let t_cols: i32 = model.X_train.cols
+    let krow: ptr<f32> = array_new_f32(n_train)
 
     let result: Matrix = matrix_new(n, model.n_components)
+    let rdata: ptr<f32> = result.data
+    let nc: i32 = model.n_components
     for i in 0 to n {
-        for c in 0 to model.n_components {
+        let xi: ptr<f32> = xdata + i * X.cols
+        for j in 0 to n_train {
+            let xj: ptr<f32> = tdata + j * t_cols
+            krow[j] = _kernel_compute(xi, xj, p, model.kernel, model.gamma, model.degree, model.coef0)
+        }
+        let orow: ptr<f32> = rdata + i * nc
+        for c in 0 to nc {
+            let ev: ptr<f32> = model.eigenvectors[c]
             let mut s: f32 = 0.0
-            for j in 0 to n_train {
-                s = s + K_test[i][j] * model.eigenvectors[c][j]
-            }
-            matrix_set(result, i, c, s)
+            for j in 0 to n_train { s = s + krow[j] * ev[j] }
+            orow[c] = s
         }
     }
 
-    for i in 0 to n { array_free_f32(K_test[i]) }
-    free(K_test as ptr<void>)
+    array_free_f32(krow)
 
     return result
 }
@@ -1367,7 +1365,13 @@ export function factor_analysis_fit(X: Matrix, n_components: i32, max_iter: i32,
         }
     }
 
+    # Every component row is allocated here. malloc does not zero what it
+    # hands back, so the loop below used to test components[c] against null and
+    # write through whatever the allocator left in place when the test failed.
+    # On macOS that memory happened to be zero and the fit worked. Under
+    # glibc's allocator it was not, and the fit wrote through a garbage pointer.
     let components: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
+    for c in 0 to n_components { components[c] = array_new_f32(p) }
     let noise_variance: ptr<f32> = array_new_f32(p)
 
     for j in 0 to p {
@@ -1424,9 +1428,6 @@ export function factor_analysis_fit(X: Matrix, n_components: i32, max_iter: i32,
             }
 
             # Store component c
-            if components[c] == null {
-                components[c] = array_new_f32(p)
-            }
             for j in 0 to p {
                 components[c][j] = w[j]
             }

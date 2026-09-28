@@ -33,7 +33,8 @@ REGISTRY = ROOT / "benchmarks" / "estimator_coverage.json"
 # this data. A shallow tree keeps the wrapper's own overhead visible rather than
 # burying it under the base estimator's work.
 def _constructors() -> dict:
-    from sklearn.linear_model import Ridge
+    from sklearn.linear_model import LogisticRegression, Ridge
+    from sklearn.preprocessing import FunctionTransformer, StandardScaler
     from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
     import numpy as np
 
@@ -57,6 +58,16 @@ def _constructors() -> dict:
         "SparseCoder": lambda c: c(dictionary=np.eye(4)),
         # nu=0.5 is infeasible for this class balance.
         "NuSVC": lambda c: c(nu=0.1),
+        # A selector needs something to read importances from.
+        "SelectFromModel": lambda c: c(tree_c(), threshold=-np.inf, max_features=2),
+        # The composed rows, built to match what the Flow harness composes:
+        # a scaler and a logistic regression, a scaler over the columns, and a
+        # scaler beside a passthrough.
+        "Pipeline": lambda c: c([("scaler", StandardScaler()),
+                                 ("classifier", LogisticRegression(max_iter=50))]),
+        "ColumnTransformer": lambda c: c([("scaler", StandardScaler(), [0, 1, 2, 3])]),
+        "FeatureUnion": lambda c: c([("scaler", StandardScaler()),
+                                     ("passthrough", FunctionTransformer())]),
     }
 
 
@@ -91,7 +102,10 @@ def main() -> int:
     args = ap.parse_args()
 
     registry = json.loads(REGISTRY.read_text())
-    runnable = [e for e in registry["entries"] if e["bucket"] == "runnable"]
+    # Matches generate_estimator_bench.py: shaped rows are raced and ranked,
+    # simplified rows are timed on both sides and shown without a ratio.
+    runnable = [e for e in registry["entries"]
+                if e["bucket"] in ("runnable", "shaped", "simplified")]
     classes = dict(all_estimators())
     constructors = _constructors()
 
@@ -115,19 +129,53 @@ def main() -> int:
             rows.append({"flow_estimator": entry["flow_estimator"], "sklearn_estimator": name,
                          "status": "unavailable", "reason": "not in sklearn.utils.all_estimators()"})
             continue
-        kind = dataset_kind(entry)
+        shape = entry.get("shape")
+        kind = shape["dataset"] if shape else dataset_kind(entry)
         X, y = data[kind]
+        ctor_kwargs = {}
+        if shape and shape.get("sklearn_ctor"):
+            # The string is the constructor's own keyword list, kept next to the
+            # Flow call it matches so the two cannot drift apart.
+            ctor_kwargs = eval(f"dict({shape['sklearn_ctor']})")  # noqa: S307
+        # A row whose scikit-learn side fits a target vector or a single ordered
+        # variable rather than a design. The Flow side of these is written out
+        # in the registry for the same reason.
+        fit_input = (shape or {}).get("sklearn_input", "X")
+        if fit_input == "y":
+            first, second = y, None
+        elif fit_input == "x1d":
+            first, second = X[:, 0], y
+        elif fit_input == "docs":
+            # The corpus travels in the registry, so the Flow file and this one
+            # read one copy of it.
+            first, second = list(shape["corpus"]), None
+        elif fit_input == "dicts":
+            first = [{f"f{j}": float(v) for j, v in enumerate(row)} for row in X]
+            second = None
+        elif fit_input == "labelsets":
+            first = [tuple(int(v) for v in row) for row in y]
+            second = None
+        else:
+            first, second = X, y
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 build = constructors.get(name)
-                model = build(cls) if build else cls()
-                fit_ms = timed((lambda: model.fit(X)) if y is None else (lambda: model.fit(X, y)), args.repeats)
+                model = build(cls) if build else cls(**ctor_kwargs)
+                fit_ms = timed(
+                    (lambda: model.fit(first)) if second is None
+                    else (lambda: model.fit(first, second)),
+                    args.repeats,
+                )
                 pred_ms = 0.0
-                for method in ("predict", "transform"):
+                # A recipe can name the method to time, for a class whose work
+                # is called something other than predict or transform.
+                methods = [shape["sklearn_work"]] if shape and shape.get("sklearn_work") \
+                    else ["predict", "transform"]
+                for method in methods:
                     if hasattr(model, method):
                         try:
-                            pred_ms = timed(lambda m=method: getattr(model, m)(X), args.repeats)
+                            pred_ms = timed(lambda m=method: getattr(model, m)(first), args.repeats)
                         except Exception:
                             pred_ms = 0.0
                         break

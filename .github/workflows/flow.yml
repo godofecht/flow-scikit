@@ -157,6 +157,69 @@ jobs:
             benchmarks/parity_diagnostics.json
             benchmarks/headline_environment.json
 
+  estimator-matrix:
+    name: Wide estimator matrix
+    runs-on: ubuntu-latest
+    # Both sides call into OpenBLAS, so the thread count is pinned here for the
+    # reason the canonical job pins it.
+    env:
+      OPENBLAS_NUM_THREADS: "4"
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: flooooooooooow/flow
+          ref: 88aac5095488309813c7173d268c1f8260421c6e
+          path: .flow-toolchain
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install benchmark dependencies
+        run: |
+          pip install -r .flow-toolchain/requirements.txt
+          pip install numpy scikit-learn
+          sudo apt-get update && sudo apt-get install -y libopenblas-dev
+
+      - name: Rebuild the registry and the generated benchmarks
+        run: |
+          python benchmarks/estimator_coverage.py
+          python benchmarks/generate_estimator_bench.py
+          git diff --exit-code benchmarks/estimator_coverage.json benchmarks/generated
+
+      - name: Time every estimator on the Flow side
+        env:
+          FLOW_BIN: ${{ github.workspace }}/.flow-toolchain/flow
+          FLOW_HOST: python
+          FLOW_OPT_LEVEL: "3"
+          FLOW_LDFLAGS: "-lm -lopenblas lib/scikit/flow_time.c lib/scikit/flow_parallel.c"
+        run: python benchmarks/run_estimator_bench.py --rounds 3 --out benchmarks/estimator_flow_raw.txt
+
+      - name: Time every estimator on the scikit-learn side
+        run: python benchmarks/bench_estimators_sklearn.py --repeats 5
+
+      - name: Join the two sides
+        run: |
+          python benchmarks/compare_estimators.py benchmarks/estimator_flow_raw.txt \
+            --note "GitHub Actions ubuntu-latest, Flow at -O3 with adaptive repeats, fastest of 3 rounds; scikit-learn wheel, fastest of 5; OpenBLAS pinned to 4 threads"
+
+      - name: Gate every ranked row against scikit-learn
+        run: python benchmarks/check_estimator_matrix.py benchmarks/estimator_comparison.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: estimator-matrix-${{ github.run_id }}
+          path: |
+            benchmarks/estimator_flow_raw.txt
+            benchmarks/estimators_sklearn.json
+            benchmarks/estimator_comparison.json
+            benchmarks/estimator_coverage.json
+
   scaled-report:
     name: Scaled benchmark report
     runs-on: ubuntu-latest

@@ -73,6 +73,27 @@ The ten rows at 10000 samples, the only sizes in the matrix large enough to meas
 
 `benchmarks/scaled_flow_baseline.json` is a separate Flow-against-itself gate that does fail the build. Refresh it from a CI artifact rather than from a developer machine, or the gate will read a fast laptop as the standard and fail every CI run.
 
+## The whole library
+
+The 19 canonical rows race twelve estimators. `lib/scikit` exports 203, and a
+claim about Flow against scikit-learn covers six percent of the library while
+the rest go unmeasured. A registry maps every exported `fit` to its
+scikit-learn counterpart, times both sides on the same data, and a CI job
+fails the build when a ranked row is slower.
+
+**Flow is faster on 188 of the 188 ranked rows.** The rows that carry no ratio
+carry a reason instead: four implementations say in their own comments that
+they are simplified, so they are timed and shown without being ranked; five
+Flow functions do part of what their scikit-learn namesake does, such as a
+voting estimator that takes models already fitted; six have no scikit-learn
+counterpart at all.
+
+These rows carry no parity contract and no declared tolerances. Each library
+runs its own defaults over the same data, which answers whether an
+implementation is in the same performance league and says nothing about
+whether it computes the same thing. The canonical rows above are where
+numerical equivalence is established.
+
 Detailed artifacts:
 
 - [`benchmarks/SKLEARN_EXECUTION_INVENTORY.md`](benchmarks/SKLEARN_EXECUTION_INVENTORY.md)

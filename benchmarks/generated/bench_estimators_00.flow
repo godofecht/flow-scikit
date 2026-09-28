@@ -65,11 +65,22 @@ function main() -> i32 {
         Y_rows[i] = row
     }
 
+    # A one-dimensional x for the isotonic row, which regresses against a
+    # single ordered variable rather than a design.
+    let x1d_r: ptr<f32> = array_new_f32(n_r)
+    for i in 0 to n_r { x1d_r[i] = matrix_at(X_r, i, 0) }
+
+    # Per-feature importances for the selector row, which takes the weights a
+    # fitted model would hand it rather than a design.
+    let w_f: ptr<f32> = array_new_f32(f_c)
+    for i in 0 to f_c { w_f[i] = 1.0 / ((i + 1) as f32) }
+
     let mut t0: i64 = 0
     let mut t1: i64 = 0
     let mut t2: i64 = 0
     let mut t3: i64 = 0
     let mut reps: i32 = 1
+    let mut sink: f32 = 0.0
 
     # ---- adaboost_classifier (classification) ----
     t0 = flow_now_ns()
@@ -79,6 +90,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_adaboost_classifier: AdaBoostClassifier = adaboost_classifier_fit(X_c, y_c, 3, 10, 5, 42)
@@ -89,6 +101,7 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_adaboost_classifier: ptr<f32> = adaboost_classifier_predict(fitted_adaboost_classifier, X_c)
+        sink = sink + o_adaboost_classifier[0]
         array_free_f32(o_adaboost_classifier)
     }
     t3 = flow_now_ns()
@@ -104,6 +117,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_adaboost_regressor: AdaBoostRegressor = adaboost_regressor_fit(X_r, y_r, 10, 5, 42)
@@ -114,11 +128,41 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_adaboost_regressor: ptr<f32> = adaboost_regressor_predict(fitted_adaboost_regressor, X_r)
+        sink = sink + o_adaboost_regressor[0]
         array_free_f32(o_adaboost_regressor)
     }
     t3 = flow_now_ns()
     adaboost_regressor_free(fitted_adaboost_regressor)
     printf("ESTIMATOR|adaboost_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- additive_chi2_sampler (classification, written out) ----
+    t0 = flow_now_ns()
+    let probe_additive_chi2_sampler: AdditiveChi2Sampler = additive_chi2_sampler_fit(n_c, f_c, 2)
+    t1 = flow_now_ns()
+    additive_chi2_sampler_free(probe_additive_chi2_sampler)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_additive_chi2_sampler: AdditiveChi2Sampler = additive_chi2_sampler_fit(n_c, f_c, 2)
+        additive_chi2_sampler_free(m_additive_chi2_sampler)
+    }
+    t1 = flow_now_ns()
+    let fitted_additive_chi2_sampler: AdditiveChi2Sampler = additive_chi2_sampler_fit(n_c, f_c, 2)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_additive_chi2_sampler: Matrix = additive_chi2_sampler_transform(fitted_additive_chi2_sampler, X_c)
+        if o_additive_chi2_sampler.rows > 0 {
+            if o_additive_chi2_sampler.cols > 0 { sink = sink + o_additive_chi2_sampler.data[0] }
+        }
+        matrix_free(o_additive_chi2_sampler)
+    }
+    t3 = flow_now_ns()
+    additive_chi2_sampler_free(fitted_additive_chi2_sampler)
+    printf("ESTIMATOR|additive_chi2_sampler|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     # ---- affinity_propagation (unsupervised) ----
@@ -129,6 +173,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_affinity_propagation: AffinityPropagation = affinity_propagation_fit(X_c, 0.5, 100, 15)
@@ -146,6 +191,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_agglomerative_clustering: AgglomerativeClustering = agglomerative_clustering_fit(X_c, 3)
@@ -163,6 +209,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_ard_regression: ARDRegression = ard_regression_fit(X_r, y_r, 100, 0.0001)
@@ -173,6 +220,7 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_ard_regression: ptr<f32> = ard_regression_predict(fitted_ard_regression, X_r)
+        sink = sink + o_ard_regression[0]
         array_free_f32(o_ard_regression)
     }
     t3 = flow_now_ns()
@@ -188,6 +236,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_bagging_classifier: BaggingClassifier = bagging_classifier_fit(X_c, y_c, 3, 10, 5, 42)
@@ -198,6 +247,7 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_bagging_classifier: ptr<f32> = bagging_classifier_predict(fitted_bagging_classifier, X_c)
+        sink = sink + o_bagging_classifier[0]
         array_free_f32(o_bagging_classifier)
     }
     t3 = flow_now_ns()
@@ -213,6 +263,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_bagging_regressor: BaggingRegressor = bagging_regressor_fit(X_r, y_r, 10, 5, 42)
@@ -223,6 +274,7 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_bagging_regressor: ptr<f32> = bagging_regressor_predict(fitted_bagging_regressor, X_r)
+        sink = sink + o_bagging_regressor[0]
         array_free_f32(o_bagging_regressor)
     }
     t3 = flow_now_ns()
@@ -238,6 +290,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_bayesian_gaussian_mixture: BayesianGaussianMixture = bayesian_gaussian_mixture_fit(X_c, 2, 100, 0.0001, 42)
@@ -248,6 +301,7 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_bayesian_gaussian_mixture: ptr<f32> = bayesian_gaussian_mixture_predict(fitted_bayesian_gaussian_mixture, X_c)
+        sink = sink + o_bayesian_gaussian_mixture[0]
         array_free_f32(o_bayesian_gaussian_mixture)
     }
     t3 = flow_now_ns()
@@ -263,6 +317,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_bayesian_ridge: BayesianRidge = bayesian_ridge_fit(X_r, y_r, 100, 0.0001)
@@ -273,6 +328,7 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_bayesian_ridge: ptr<f32> = bayesian_ridge_predict(fitted_bayesian_ridge, X_r)
+        sink = sink + o_bayesian_ridge[0]
         array_free_f32(o_bayesian_ridge)
     }
     t3 = flow_now_ns()
@@ -288,6 +344,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_bernoulli_nb: BernoulliNB = bernoulli_nb_fit(X_c, y_c, 3, 1.0)
@@ -298,6 +355,7 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_bernoulli_nb: ptr<f32> = bernoulli_nb_predict(fitted_bernoulli_nb, X_c)
+        sink = sink + o_bernoulli_nb[0]
         array_free_f32(o_bernoulli_nb)
     }
     t3 = flow_now_ns()
@@ -313,6 +371,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_bernoulli_rbm: BernoulliRBM = bernoulli_rbm_fit(X_c, 2, 0.1, 50, 32, 42)
@@ -323,6 +382,9 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_bernoulli_rbm: Matrix = bernoulli_rbm_transform(fitted_bernoulli_rbm, X_c)
+        if o_bernoulli_rbm.rows > 0 {
+            if o_bernoulli_rbm.cols > 0 { sink = sink + o_bernoulli_rbm.data[0] }
+        }
         matrix_free(o_bernoulli_rbm)
     }
     t3 = flow_now_ns()
@@ -338,6 +400,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_birch: Birch = birch_fit(X_c, 0.5, 50)
@@ -355,6 +418,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_bisecting_kmeans: BisectingKMeans = bisecting_kmeans_fit(X_c, 3, 100, 42)
@@ -372,6 +436,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_calibrated_classifier_cv: CalibratedClassifierCV = calibrated_classifier_cv_fit(X_c, y_c, 3, 3, 0)
@@ -382,6 +447,7 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_calibrated_classifier_cv: ptr<f32> = calibrated_classifier_cv_predict(fitted_calibrated_classifier_cv, X_c)
+        sink = sink + o_calibrated_classifier_cv[0]
         array_free_f32(o_calibrated_classifier_cv)
     }
     t3 = flow_now_ns()
@@ -398,6 +464,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_categorical_nb: CategoricalNB = categorical_nb_fit(X_c, y_c, 3, n_categories_categorical_nb, 1.0)
@@ -408,6 +475,7 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_categorical_nb: ptr<f32> = categorical_nb_predict(fitted_categorical_nb, X_c)
+        sink = sink + o_categorical_nb[0]
         array_free_f32(o_categorical_nb)
     }
     t3 = flow_now_ns()
@@ -423,6 +491,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_cca: CCA = cca_fit(X_r, Y_multi, 2, 100, 0.0001)
@@ -433,6 +502,9 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_cca: Matrix = cca_transform(fitted_cca, X_r)
+        if o_cca.rows > 0 {
+            if o_cca.cols > 0 { sink = sink + o_cca.data[0] }
+        }
         matrix_free(o_cca)
     }
     t3 = flow_now_ns()
@@ -448,6 +520,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_classifier_chain: ClassifierChain = classifier_chain_fit(X_c, Y_label_rows, n_c, f_c, 2, 0.01, 50)
@@ -455,6 +528,39 @@ function main() -> i32 {
     }
     t1 = flow_now_ns()
     printf("ESTIMATOR|classifier_chain|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
+    fflush(null)
+
+    # ---- column_transformer (classification, written out) ----
+    let ct_cols: ptr<i32> = malloc((f_c as i64) * 4) as ptr<i32>
+    for i in 0 to f_c { ct_cols[i] = i }
+    let ct_obj: ColumnTransformer = column_transformer_init(1)
+    # 0 is TRANSFORMER_STANDARD_SCALER. The constant is written out
+    # because an export const is not visible through the umbrella import.
+    column_transformer_set_spec(ct_obj, 0, 0, ct_cols, f_c)
+    t0 = flow_now_ns()
+    let probe_column_transformer: ColumnTransformer = column_transformer_fit(ct_obj, X_c)
+    t1 = flow_now_ns()
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_column_transformer: ColumnTransformer = column_transformer_fit(ct_obj, X_c)
+    }
+    t1 = flow_now_ns()
+    let fitted_column_transformer: ColumnTransformer = column_transformer_fit(ct_obj, X_c)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_column_transformer: Matrix = column_transformer_transform(fitted_column_transformer, X_c)
+        if o_column_transformer.rows > 0 {
+            if o_column_transformer.cols > 0 { sink = sink + o_column_transformer.data[0] }
+        }
+        matrix_free(o_column_transformer)
+    }
+    t3 = flow_now_ns()
+    column_transformer_free(fitted_column_transformer)
+    printf("ESTIMATOR|column_transformer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     # ---- complement_nb (classification) ----
@@ -465,6 +571,7 @@ function main() -> i32 {
     reps = 1
     if (t1 - t0) < 200000 { reps = 200 }
     elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
     t0 = flow_now_ns()
     for rep in 0 to reps {
         let m_complement_nb: ComplementNB = complement_nb_fit(X_c, y_c, 3, 1.0)
@@ -475,53 +582,12 @@ function main() -> i32 {
     t2 = flow_now_ns()
     for rep2 in 0 to reps {
         let o_complement_nb: ptr<f32> = complement_nb_predict(fitted_complement_nb, X_c)
+        sink = sink + o_complement_nb[0]
         array_free_f32(o_complement_nb)
     }
     t3 = flow_now_ns()
     complement_nb_free(fitted_complement_nb)
     printf("ESTIMATOR|complement_nb|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- dbscan (unsupervised) ----
-    t0 = flow_now_ns()
-    let probe_dbscan: DBSCAN = dbscan_fit(X_c, 0.5, 5)
-    t1 = flow_now_ns()
-    dbscan_free(probe_dbscan)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_dbscan: DBSCAN = dbscan_fit(X_c, 0.5, 5)
-        dbscan_free(m_dbscan)
-    }
-    t1 = flow_now_ns()
-    printf("ESTIMATOR|dbscan|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
-    fflush(null)
-
-    # ---- decision_tree_classifier (classification) ----
-    t0 = flow_now_ns()
-    let probe_decision_tree_classifier: DecisionTreeClassifier = decision_tree_classifier_fit(X_c, y_c, 3, 5, 0)
-    t1 = flow_now_ns()
-    decision_tree_classifier_free(probe_decision_tree_classifier)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_decision_tree_classifier: DecisionTreeClassifier = decision_tree_classifier_fit(X_c, y_c, 3, 5, 0)
-        decision_tree_classifier_free(m_decision_tree_classifier)
-    }
-    t1 = flow_now_ns()
-    let fitted_decision_tree_classifier: DecisionTreeClassifier = decision_tree_classifier_fit(X_c, y_c, 3, 5, 0)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_decision_tree_classifier: ptr<f32> = decision_tree_classifier_predict(fitted_decision_tree_classifier, X_c)
-        array_free_f32(o_decision_tree_classifier)
-    }
-    t3 = flow_now_ns()
-    decision_tree_classifier_free(fitted_decision_tree_classifier)
-    printf("ESTIMATOR|decision_tree_classifier|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }
@@ -532,5 +598,10 @@ function main() -> i32 {
     matrix_free(Y_multi)
     free(yi_c as ptr<void>)
     free(yi_r as ptr<void>)
+    array_free_f32(x1d_r)
+    array_free_f32(w_f)
+    # The sink is printed so the work above cannot be optimized away. The
+    # parser matches ESTIMATOR lines only, so this one is ignored.
+    printf("SINK|%.9f\n", sink)
     return 0
 }

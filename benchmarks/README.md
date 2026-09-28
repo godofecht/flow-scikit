@@ -241,10 +241,18 @@ reason.
 | bucket | meaning |
 | --- | --- |
 | `runnable` | arguments resolved and a scikit-learn counterpart exists |
-| `different_shape` | takes a pipeline, a vectorizer input or a list of fitted models first, so it is not an estimator over a feature matrix |
+| `shaped` | its fit does not begin with a feature matrix, so the registry carries the call written out, and the row is raced and ranked like any other |
+| `different_shape` | the Flow function does part of what the scikit-learn class does, such as a voting estimator that takes models already fitted |
 | `flow_only` | Flow implements it and scikit-learn has no equivalent |
 | `simplified` | the implementation's own comments call it a simplified stand-in |
 | `blocked` | the signature is not resolved yet, with the missing parameter named |
+
+A `shaped` entry gives the Flow call in terms of the variables the generated
+harness declares, what the scikit-learn side fits and transforms, and where
+needed a preamble that builds the input: a pipeline of a scaler and a logistic
+regression, a corpus for the two text vectorizers, a list of dicts for the dict
+vectorizer. The corpus lives in the registry so the Flow file and the
+scikit-learn harness read one copy of it.
 
 The `simplified` bucket is detected from the source rather than listed, so it
 stays true as the implementations are filled in. It matters: `spectral_biclustering`
@@ -266,10 +274,22 @@ scikit-learn side of the same registry, and
 ```
 python benchmarks/estimator_coverage.py
 python benchmarks/generate_estimator_bench.py
-for f in benchmarks/generated/bench_estimators_*.flow; do flow run "$f"; done | tee /tmp/flow.txt
+python benchmarks/run_estimator_bench.py --rounds 3
 python benchmarks/bench_estimators_sklearn.py
-python benchmarks/compare_estimators.py /tmp/flow.txt
+python benchmarks/compare_estimators.py benchmarks/estimator_flow_raw.txt
+python benchmarks/check_estimator_matrix.py
 ```
+
+[`run_estimator_bench.py`](run_estimator_bench.py) checks every chunk's exit
+status, so a chunk that dies takes its own row count down with it in the
+summary rather than disappearing, and reuses the binary the first round leaves
+behind so later rounds pay for timing instead of for compiling the library
+again. [`check_estimator_matrix.py`](check_estimator_matrix.py) fails on a
+ranked row slower than scikit-learn, on a row that reported no timing, and on a
+ranked count that has quietly shrunk. The `Wide estimator matrix` job in
+`.github/workflows/flow.yml` runs all of it on a runner that is not competing
+with anything, which is where a published number belongs. A developer machine
+under load recorded the same row at 1.72x and at 0.96x in consecutive runs.
 
 Read the result for what it is. These rows have no parity contract, no declared
 tolerances and no disparity report: each library runs its own defaults over the
