@@ -2,6 +2,7 @@
 # Implements LabelPropagation, LabelSpreading, SelfTrainingClassifier.
 
 import "lib/scikit/matrix.flow"
+import "lib/scikit/blas.flow"
 
 extern {
     function malloc(size: i64) -> ptr<void>
@@ -50,10 +51,15 @@ function _build_affinity(X: Matrix, gamma: f32) -> ptr<ptr<f32> > {
         row_i[i] = self_affinity
         for j in i + 1 to n {
             let base_j: i32 = j * p
+            # A while loop with a constant step, because Flow emits a range
+            # loop with a stride chosen at runtime and LLVM will not vectorize
+            # that. Flow issue #1004.
             let mut s: f32 = 0.0
-            for k in 0 to p {
+            let mut k: i32 = 0
+            while k < p {
                 let d: f32 = X.data[base_i + k] - X.data[base_j + k]
                 s = s + d * d
+                k = k + 1
             }
             let w: f32 = exp((-gamma * s) as f64) as f32
             row_i[j] = w
@@ -259,57 +265,68 @@ export function label_spreading_fit(X: Matrix, y: ptr<i32>, n_classes: i32, gamm
         }
     }
 
-    let S: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    # The propagation is new_Y = S * Y, a matrix product, so it is one sgemm
+    # against contiguous storage. It used to be a scalar triple loop that
+    # walked Y down a column of an array of row allocations, which is a cache
+    # miss per element, and it allocated a fresh n by n_classes set of rows on
+    # every iteration.
+    let Sc: ptr<f32> = array_new_f32(n * n)
     for i in 0 to n {
-        S[i] = array_new_f32(n)
-        for j in 0 to n {
-            S[i][j] = alpha * W[i][j] / deg[i]
+        let srow: ptr<f32> = Sc + i * n
+        let wrow: ptr<f32> = W[i]
+        let scale: f32 = alpha / deg[i]
+        let mut j: i32 = 0
+        while j < n {
+            srow[j] = scale * wrow[j]
+            j = j + 1
         }
     }
 
-    let Y: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
-    let clamp: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    let nc: i32 = n_classes
+    let Yc: ptr<f32> = array_new_f32(n * nc)
+    let Ync: ptr<f32> = array_new_f32(n * nc)
+    let clampc: ptr<f32> = array_new_f32(n * nc)
     for i in 0 to n {
-        Y[i] = array_new_f32(n_classes)
-        clamp[i] = array_new_f32(n_classes)
-        if y[i] >= 0 && y[i] < n_classes {
-            clamp[i][y[i]] = 1.0
-            Y[i][y[i]] = 1.0
+        if y[i] >= 0 && y[i] < nc {
+            clampc[i * nc + y[i]] = 1.0
+            Yc[i * nc + y[i]] = 1.0
         }
     }
 
+    let hold: f32 = 1.0 - alpha
+    let total: i32 = n * nc
     let mut n_iter: i32 = 0
     for iter in 0 to max_iter {
         n_iter = iter + 1
         let mut max_change: f32 = 0.0
 
-        let new_Y: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
-        for i in 0 to n {
-            new_Y[i] = array_new_f32(n_classes)
-        }
+        blas_matmat(Sc, Yc, Ync, n, nc, n, 1.0, 0.0)
 
-        for i in 0 to n {
-            for c in 0 to n_classes {
-                let mut s: f32 = 0.0
-                for j in 0 to n {
-                    s = s + S[i][j] * Y[j][c]
-                }
-                new_Y[i][c] = s + (1.0 - alpha) * clamp[i][c]
-            }
+        let mut idx: i32 = 0
+        while idx < total {
+            let v: f32 = Ync[idx] + hold * clampc[idx]
+            let change: f32 = fabs((v - Yc[idx]) as f64) as f32
+            if change > max_change { max_change = change }
+            Yc[idx] = v
+            idx = idx + 1
         }
-
-        for i in 0 to n {
-            for c in 0 to n_classes {
-                let change: f32 = fabs((new_Y[i][c] - Y[i][c]) as f64) as f32
-                if change > max_change { max_change = change }
-                Y[i][c] = new_Y[i][c]
-            }
-            array_free_f32(new_Y[i])
-        }
-        free(new_Y as ptr<void>)
 
         if max_change < tol { break }
     }
+
+    # The model hands back its distributions a row at a time, so the rows are
+    # built once here.
+    let Y: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    for i in 0 to n {
+        let row: ptr<f32> = array_new_f32(nc)
+        let src: ptr<f32> = Yc + i * nc
+        for c in 0 to nc { row[c] = src[c] }
+        Y[i] = row
+    }
+    array_free_f32(Sc)
+    array_free_f32(Yc)
+    array_free_f32(Ync)
+    array_free_f32(clampc)
 
     let labels: ptr<i32> = malloc((n as i64) * 4) as ptr<i32>
     for i in 0 to n {
@@ -326,12 +343,8 @@ export function label_spreading_fit(X: Matrix, y: ptr<i32>, n_classes: i32, gamm
 
     for i in 0 to n {
         array_free_f32(W[i])
-        array_free_f32(S[i])
-        array_free_f32(clamp[i])
     }
     free(W as ptr<void>)
-    free(S as ptr<void>)
-    free(clamp as ptr<void>)
     array_free_f32(deg)
 
     return LabelSpreading {

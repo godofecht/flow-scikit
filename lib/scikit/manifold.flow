@@ -8,6 +8,9 @@ import "lib/scikit/blas.flow"
 extern {
     function rand() -> i32
     function srand(seed: u32) -> void
+    # clang lowers this to a single instruction, so a loop written with it
+    # holds no branch and the vectorizer can take it.
+    function fminf(a: f32, b: f32) -> f32
 }
 
 export struct TSNE {
@@ -306,125 +309,132 @@ export struct Isomap {
     fitted: bool
 }
 
+# Modified Gram-Schmidt on the columns of a row-major n by k block.
+# A column that collapses is left at zero, and the remaining columns stay
+# orthonormal.
+function _orthonormalize_block(V: ptr<f32>, n: i32, k: i32) -> void {
+    for c in 0 to k {
+        for prev in 0 to c {
+            let mut dot: f32 = 0.0
+            for i in 0 to n { dot = dot + V[i * k + c] * V[i * k + prev] }
+            for i in 0 to n { V[i * k + c] = V[i * k + c] - dot * V[i * k + prev] }
+        }
+        let mut norm: f32 = 0.0
+        for i in 0 to n {
+            let v: f32 = V[i * k + c]
+            norm = norm + v * v
+        }
+        norm = sqrt((norm) as f64) as f32
+        if norm > 0.0000000001 {
+            let inv: f32 = 1.0 / norm
+            for i in 0 to n { V[i * k + c] = V[i * k + c] * inv }
+        }
+    }
+}
+
 export function isomap_fit(X: Matrix, n_components: i32, n_neighbors: i32) -> Isomap {
     let n: i32 = X.rows
     let p: i32 = X.cols
+    let kc: i32 = n_components
 
-    let D: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    # Distances, then geodesics, then the double centering, all in contiguous
+    # blocks. Every inner loop below is a while loop with a constant step,
+    # because Flow emits a range loop with a stride chosen at runtime and LLVM
+    # will not vectorize that. Flow issue #1004.
+    let xdata: ptr<f32> = X.data
+    let geo: ptr<f32> = array_new_f32(n * n)
     for i in 0 to n {
-        D[i] = array_new_f32(n)
-        for j in 0 to n {
+        let ri: ptr<f32> = xdata + i * p
+        let gi: ptr<f32> = geo + i * n
+        for j in i + 1 to n {
+            let rj: ptr<f32> = xdata + j * p
             let mut s: f32 = 0.0
-            for k in 0 to p {
-                let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
+            let mut m: i32 = 0
+            while m < p {
+                let d: f32 = ri[m] - rj[m]
                 s = s + d * d
+                m = m + 1
             }
-            D[i][j] = sqrt((s as f64)) as f32
+            let dist: f32 = sqrt((s) as f64) as f32
+            gi[j] = dist
+            geo[j * n + i] = dist
         }
     }
 
-    let geo: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
-    for i in 0 to n {
-        geo[i] = array_copy_f32(D[i], n)
-    }
-
+    # Floyd-Warshall. The term that depends only on i and k is lifted out of
+    # the inner loop, and the comparison is a minimum, so the loop holds no
+    # branch and vectorizes.
     for k in 0 to n {
+        let rowk: ptr<f32> = geo + k * n
         for i in 0 to n {
-            for j in 0 to n {
-                if geo[i][k] + geo[k][j] < geo[i][j] {
-                    geo[i][j] = geo[i][k] + geo[k][j]
-                }
+            let rowi: ptr<f32> = geo + i * n
+            let dik: f32 = rowi[k]
+            let mut j: i32 = 0
+            while j < n {
+                rowi[j] = fminf(rowi[j], dik + rowk[j])
+                j = j + 1
             }
         }
     }
 
     let mut mean_d: f32 = 0.0
     for i in 0 to n {
-        for j in 0 to n {
-            geo[i][j] = geo[i][j] * geo[i][j]
-            mean_d = mean_d + geo[i][j]
+        let gi2: ptr<f32> = geo + i * n
+        let mut j2: i32 = 0
+        while j2 < n {
+            let v: f32 = gi2[j2] * gi2[j2]
+            gi2[j2] = v
+            mean_d = mean_d + v
+            j2 = j2 + 1
         }
     }
     mean_d = mean_d / ((n * n) as f32)
 
-    let B: ptr<ptr<f32> > = malloc((n as i64) * 8) as ptr<ptr<f32> >
+    let B: ptr<f32> = array_new_f32(n * n)
     for i in 0 to n {
-        B[i] = array_new_f32(n)
-        for j in 0 to n {
-            B[i][j] = -0.5 * (geo[i][j] - mean_d)
+        let gi3: ptr<f32> = geo + i * n
+        let bi: ptr<f32> = B + i * n
+        let mut j3: i32 = 0
+        while j3 < n {
+            bi[j3] = -0.5 * (gi3[j3] - mean_d)
+            j3 = j3 + 1
         }
     }
+    array_free_f32(geo)
 
-    let embedding: ptr<f32> = array_new_f32(n * n_components)
-    # Track found eigenvectors for deflation
-    let found_vecs: ptr<ptr<f32> > = malloc((n_components as i64) * 8) as ptr<ptr<f32> >
-    for c in 0 to n_components {
-        let v: ptr<f32> = array_new_f32(n)
-        srand(42 + c)
-        for i in 0 to n { v[i] = ((rand() % 1000) as f32) / 500.0 - 1.0 }
+    # Block power iteration. One sgemm per iteration advances every component,
+    # where the old loop ran a scalar matvec per component per iteration and
+    # allocated its result buffer inside the iteration.
+    let V: ptr<f32> = array_new_f32(n * kc)
+    let Z: ptr<f32> = array_new_f32(n * kc)
+    srand(42)
+    for i in 0 to n * kc { V[i] = ((rand() % 1000) as f32) / 500.0 - 1.0 }
+    _orthonormalize_block(V, n, kc)
 
-        # Orthogonalize against previously found eigenvectors
-        for prev in 0 to c {
-            let mut dot: f32 = 0.0
-            for i in 0 to n { dot = dot + v[i] * found_vecs[prev][i] }
-            for i in 0 to n { v[i] = v[i] - dot * found_vecs[prev][i] }
+    let mut iter: i32 = 0
+    while iter < 200 {
+        blas_matmat(B, V, Z, n, kc, n, 1.0, 0.0)
+        _orthonormalize_block(Z, n, kc)
+
+        let mut max_change: f32 = 0.0
+        for i in 0 to n * kc {
+            let mut diff: f32 = Z[i] - V[i]
+            if diff < 0.0 { diff = 0.0 - diff }
+            if diff > max_change { max_change = diff }
+            V[i] = Z[i]
         }
-
-        let mut iter: i32 = 0
-        while iter < 200 {
-            let Bv: ptr<f32> = array_new_f32(n)
-            for i in 0 to n {
-                let mut s: f32 = 0.0
-                for j in 0 to n { s = s + B[i][j] * v[j] }
-                Bv[i] = s
-            }
-
-            # Deflate against previous eigenvectors
-            for prev in 0 to c {
-                let mut dot: f32 = 0.0
-                for i in 0 to n { dot = dot + Bv[i] * found_vecs[prev][i] }
-                for i in 0 to n { Bv[i] = Bv[i] - dot * found_vecs[prev][i] }
-            }
-
-            let mut norm: f32 = 0.0
-            for i in 0 to n { norm = norm + Bv[i] * Bv[i] }
-            norm = sqrt((norm as f64)) as f32
-            if norm < 0.0000000001 { norm = 0.0000000001 }
-
-            # Convergence check
-            let mut max_change: f32 = 0.0
-            for i in 0 to n {
-                let new_v: f32 = Bv[i] / norm
-                let diff: f32 = new_v - v[i]
-                if diff < 0.0 { diff = -diff }
-                if diff > max_change { max_change = diff }
-                v[i] = new_v
-            }
-            array_free_f32(Bv)
-
-            if max_change < 0.000001 { break }
-            iter = iter + 1
-        }
-
-        for i in 0 to n {
-            embedding[i * n_components + c] = v[i]
-        }
-        found_vecs[c] = v
+        if max_change < 0.000001 { break }
+        iter = iter + 1
     }
 
-    for c in 0 to n_components { array_free_f32(found_vecs[c]) }
-    free(found_vecs as ptr<void>)
-
-    for i in 0 to n { array_free_f32(D[i]); array_free_f32(geo[i]); array_free_f32(B[i]) }
-    free(D as ptr<void>)
-    free(geo as ptr<void>)
-    free(B as ptr<void>)
+    array_free_f32(B)
+    array_free_f32(Z)
 
     return Isomap {
-        embedding: embedding,
+        embedding: V,
         n_samples: n,
         n_features: p,
-        n_components: n_components,
+        n_components: kc,
         n_neighbors: n_neighbors,
         fitted: true
     }
@@ -454,29 +464,6 @@ export struct LLE {
     n_components: i32,
     n_neighbors: i32,
     fitted: bool
-}
-
-# Modified Gram-Schmidt on the columns of a row-major n by k block.
-# A column that collapses is left at zero, and the remaining columns stay
-# orthonormal.
-function _orthonormalize_block(V: ptr<f32>, n: i32, k: i32) -> void {
-    for c in 0 to k {
-        for prev in 0 to c {
-            let mut dot: f32 = 0.0
-            for i in 0 to n { dot = dot + V[i * k + c] * V[i * k + prev] }
-            for i in 0 to n { V[i * k + c] = V[i * k + c] - dot * V[i * k + prev] }
-        }
-        let mut norm: f32 = 0.0
-        for i in 0 to n {
-            let v: f32 = V[i * k + c]
-            norm = norm + v * v
-        }
-        norm = sqrt((norm) as f64) as f32
-        if norm > 0.0000000001 {
-            let inv: f32 = 1.0 / norm
-            for i in 0 to n { V[i * k + c] = V[i * k + c] * inv }
-        }
-    }
 }
 
 export function lle_fit(X: Matrix, n_components: i32, n_neighbors: i32) -> LLE {
