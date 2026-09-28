@@ -7252,8 +7252,12 @@ function _glm_gradient_fit(X: Matrix, y: ptr<f32>, weights: ptr<f32>, bias_init:
 
     for iter in 0 to max_iter {
         blas_matvec(xdata, n, p, weights, eta, 1.0, 0.0)
+        # While loops with a constant step. Flow emits a range loop with a
+        # stride chosen at runtime, which LLVM will not vectorize. Flow issue
+        # #1004.
         let mut grad_b: f32 = 0.0
-        for i in 0 to n {
+        let mut i: i32 = 0
+        while i < n {
             let e: f32 = eta[i] + bias
             let mut mu: f32 = 0.0
             if kind == 0 { mu = _poisson_inverse_link(e) }
@@ -7262,11 +7266,14 @@ function _glm_gradient_fit(X: Matrix, y: ptr<f32>, weights: ptr<f32>, bias_init:
             let r: f32 = y[i] - mu
             resid[i] = r
             grad_b = grad_b + r
+            i = i + 1
         }
         blas_matvec_trans(xdata, n, p, resid, grad_w, 1.0, 0.0)
-        for j in 0 to p {
+        let mut j: i32 = 0
+        while j < p {
             let g: f32 = grad_w[j] * inv_n - alpha * weights[j]
             weights[j] = weights[j] + lr * g
+            j = j + 1
         }
         bias = bias + lr * grad_b * inv_n
     }
