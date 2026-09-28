@@ -81,7 +81,7 @@ the rest go unmeasured. A registry maps every exported `fit` to its
 scikit-learn counterpart, times both sides on the same data, and a CI job
 fails the build when a ranked row is slower.
 
-**Flow is faster on 145 of the 166 ranked rows.** The rows that carry no ratio
+**Flow is faster on 188 of the 188 ranked rows.** The rows that carry no ratio
 carry a reason instead: four implementations say in their own comments that
 they are simplified, so they are timed and shown without being ranked; five
 Flow functions do part of what their scikit-learn namesake does, such as a
