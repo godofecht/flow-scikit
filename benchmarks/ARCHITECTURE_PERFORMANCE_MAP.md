@@ -6,30 +6,30 @@ This report is generated from the committed inventory, mixed-stack profiles, par
 
 | Algorithm | sklearn estimator | Dataset | Substrate | Parity | Flow/sklearn speedup | Python self share |
 |---|---|---|---|---|---:|---:|
-| `LogisticRegression` | `LogisticRegression` | iris | mixed | approximately equivalent | 16.64× | 77.1% |
-| `LinearSVC` | `LinearSVC` | iris | external-native-bound | approximately equivalent | 6.76× |  |
-| `KernelSVC_RBF` | `SVC` | iris | external-native-bound | approximately equivalent | 4.10× | 88.1% |
-| `DecisionTree` | `DecisionTreeClassifier` | iris | mixed | approximately equivalent | 20.02× |  |
-| `RandomForest` | `RandomForestClassifier` | iris | mixed | approximately equivalent | 11.22× |  |
-| `GaussianNB` | `GaussianNB` | iris | python-bound | parity verified | 140.96× | 77.4% |
-| `KMeans` | `KMeans` | iris | mixed | approximately equivalent | 23.60× | 83.5% |
-| `PCA` | `PCA` | iris | python-bound | parity verified | 29.24× | 78.0% |
-| `LogisticRegression` | `LogisticRegression` | digits | mixed | approximately equivalent | 29.87× | 77.1% |
-| `LinearSVC` | `LinearSVC` | digits | external-native-bound | approximately equivalent | 2.23× |  |
-| `KernelSVC_RBF` | `SVC` | digits | external-native-bound | approximately equivalent | 1.52× | 88.1% |
-| `DecisionTree` | `DecisionTreeClassifier` | digits | mixed | approximately equivalent | 1.41× |  |
-| `RandomForest` | `RandomForestClassifier` | digits | mixed | approximately equivalent | 2.83× |  |
-| `GaussianNB` | `GaussianNB` | digits | python-bound | parity verified | 3.24× | 77.4% |
-| `KMeans` | `KMeans` | digits | mixed | approximately equivalent | 2.26× | 83.5% |
-| `Ridge` | `Ridge` | diabetes | python-bound | approximately equivalent | 10.31× |  |
-| `Lasso` | `Lasso` | diabetes | mixed | approximately equivalent | 9.94× |  |
-| `LinearRegression` | `LinearRegression` | diabetes | mixed | parity verified | 10.97× | 76.0% |
-| `KernelRidge_RBF` | `KernelRidge` | diabetes | mixed | parity verified | 3.59× |  |
+| `LogisticRegression` | `LogisticRegression` | iris | mixed | approximately equivalent | 10.24× | 76.4% |
+| `LinearSVC` | `LinearSVC` | iris | external-native-bound | approximately equivalent | 4.38× |  |
+| `KernelSVC_RBF` | `SVC` | iris | external-native-bound | approximately equivalent | 3.10× | 89.2% |
+| `DecisionTree` | `DecisionTreeClassifier` | iris | mixed | approximately equivalent | 17.15× |  |
+| `RandomForest` | `RandomForestClassifier` | iris | mixed | approximately equivalent | 11.37× |  |
+| `GaussianNB` | `GaussianNB` | iris | python-bound | parity verified | 95.12× | 78.7% |
+| `KMeans` | `KMeans` | iris | mixed | approximately equivalent | 16.26× | 83.0% |
+| `PCA` | `PCA` | iris | python-bound | parity verified | 21.89× | 77.3% |
+| `LogisticRegression` | `LogisticRegression` | digits | mixed | approximately equivalent | 2.73× | 76.4% |
+| `LinearSVC` | `LinearSVC` | digits | external-native-bound | approximately equivalent | 2.16× |  |
+| `KernelSVC_RBF` | `SVC` | digits | external-native-bound | approximately equivalent | 1.22× | 89.2% |
+| `DecisionTree` | `DecisionTreeClassifier` | digits | mixed | approximately equivalent | 1.21× |  |
+| `RandomForest` | `RandomForestClassifier` | digits | mixed | approximately equivalent | 2.70× |  |
+| `GaussianNB` | `GaussianNB` | digits | python-bound | parity verified | 2.63× | 78.7% |
+| `KMeans` | `KMeans` | digits | mixed | approximately equivalent | 1.68× | 83.0% |
+| `Ridge` | `Ridge` | diabetes | python-bound | approximately equivalent | 5.93× |  |
+| `Lasso` | `Lasso` | diabetes | mixed | approximately equivalent | 5.40× |  |
+| `LinearRegression` | `LinearRegression` | diabetes | mixed | parity verified | 5.97× | 75.0% |
+| `KernelRidge_RBF` | `KernelRidge` | diabetes | mixed | parity verified | 2.42× |  |
 
 ## Speedup grouped by execution substrate
 
 | Substrate | Rows | Mean speedup | Flow win fraction |
 |---|---:|---:|---:|
-| external-native-bound | 4 | 3.65× | 100% |
-| mixed | 11 | 12.03× | 100% |
-| python-bound | 4 | 45.94× | 100% |
+| external-native-bound | 4 | 2.71× | 100% |
+| mixed | 11 | 7.01× | 100% |
+| python-bound | 4 | 31.39× | 100% |
