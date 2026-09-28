@@ -5,6 +5,13 @@ import "lib/scikit/matrix.flow"
 import "lib/scikit/prng.flow"
 import "lib/scikit/blas.flow"
 
+extern {
+    # clang lowers both to a single instruction, so a loop written with them
+    # holds no branch and the vectorizer can take it.
+    function fmaxf(a: f32, b: f32) -> f32
+    function fminf(a: f32, b: f32) -> f32
+}
+
 export struct KMeans {
     centroids: ptr<ptr<f32> >,
     n_clusters: i32,
@@ -2007,17 +2014,34 @@ export function affinity_propagation_fit(X: Matrix, damping: f32, max_iter: i32,
                 }
             }
 
-            for k in 0 to n {
-                let mut max_other: f32 = best
-                if k == best_k { max_other = second }
-                let v: f32 = take * (si3[k] - max_other) + keep * ri2[k]
+            # Every element of the row takes the row maximum, and the two
+            # elements that do not are corrected afterwards. Deciding it per
+            # element put a branch on k against best_k and another on k
+            # against i inside a loop that is otherwise a fused multiply add
+            # and a max, which is the difference between a vector loop and a
+            # scalar one.
+            let old_best: f32 = ri2[best_k]
+            # Written as a while loop with a constant step. A `for k in 0 to n`
+            # emits an increment chosen by a runtime test of the bounds, which
+            # is not a stride the LLVM vectorizer will accept, and this loop
+            # was scalar with it.
+            let mut k: i32 = 0
+            while k < n {
+                let v: f32 = take * (si3[k] - best) + keep * ri2[k]
                 ri2[k] = v
-                if k == i {
-                    rkk[i] = v
-                } elif v > 0.0 {
-                    col_pos[k] = col_pos[k] + v
-                }
+                col_pos[k] = col_pos[k] + fmaxf(v, 0.0)
+                k = k + 1
             }
+
+            # The largest entry of the row competes against the runner up.
+            let fixed: f32 = take * (si3[best_k] - second) + keep * old_best
+            col_pos[best_k] = col_pos[best_k] + fmaxf(fixed, 0.0) - fmaxf(ri2[best_k], 0.0)
+            ri2[best_k] = fixed
+
+            # The diagonal is the self responsibility, and it is not part of
+            # the column sum.
+            rkk[i] = ri2[i]
+            col_pos[i] = col_pos[i] - fmaxf(ri2[i], 0.0)
         }
 
         # The availability update. The term that depends only on the column is
@@ -2029,21 +2053,16 @@ export function affinity_propagation_fit(X: Matrix, damping: f32, max_iter: i32,
         for i in 0 to n {
             let ai2: ptr<f32> = A + i * n
             let ri4: ptr<f32> = R + i * n
-            for k in 0 to i {
-                let mut val: f32 = base[k]
-                let r_ik: f32 = ri4[k]
-                if r_ik > 0.0 { val = val - r_ik }
-                if val > 0.0 { val = 0.0 }
-                ai2[k] = take * val + keep * ai2[k]
+            let old_diag: f32 = ai2[i]
+            let mut k2: i32 = 0
+            while k2 < n {
+                let val: f32 = fminf(base[k2] - fmaxf(ri4[k2], 0.0), 0.0)
+                ai2[k2] = take * val + keep * ai2[k2]
+                k2 = k2 + 1
             }
-            ai2[i] = take * base[i] + keep * ai2[i]
-            for k in i + 1 to n {
-                let mut val2: f32 = base[k]
-                let r_ik2: f32 = ri4[k]
-                if r_ik2 > 0.0 { val2 = val2 - r_ik2 }
-                if val2 > 0.0 { val2 = 0.0 }
-                ai2[k] = take * val2 + keep * ai2[k]
-            }
+            # The diagonal keeps the whole column sum rather than the clipped
+            # one, and is written after the loop for the reason above.
+            ai2[i] = take * base[i] + keep * old_diag
         }
 
         # Convergence is the set of exemplars holding still, which is what
