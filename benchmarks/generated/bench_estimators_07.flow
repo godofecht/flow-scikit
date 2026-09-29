@@ -82,6 +82,35 @@ function main() -> i32 {
     let mut reps: i32 = 1
     let mut sink: f32 = 0.0
 
+    # ---- power_transformer (unsupervised) ----
+    t0 = flow_now_ns()
+    let probe_power_transformer: PowerTransformer = power_transformer_fit(X_c, 0)
+    t1 = flow_now_ns()
+    power_transformer_free(probe_power_transformer)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_power_transformer: PowerTransformer = power_transformer_fit(X_c, 0)
+        power_transformer_free(m_power_transformer)
+    }
+    t1 = flow_now_ns()
+    let fitted_power_transformer: PowerTransformer = power_transformer_fit(X_c, 0)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_power_transformer: Matrix = power_transformer_transform(fitted_power_transformer, X_c)
+        if o_power_transformer.rows > 0 {
+            if o_power_transformer.cols > 0 { sink = sink + o_power_transformer.data[0] }
+        }
+        matrix_free(o_power_transformer)
+    }
+    t3 = flow_now_ns()
+    power_transformer_free(fitted_power_transformer)
+    printf("ESTIMATOR|power_transformer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
     # ---- qda (classification) ----
     t0 = flow_now_ns()
     let probe_qda: QuadraticDiscriminantAnalysis = qda_fit(X_c, y_c, 3)
@@ -587,35 +616,6 @@ function main() -> i32 {
     t3 = flow_now_ns()
     robust_scaler_free(fitted_robust_scaler)
     printf("ESTIMATOR|robust_scaler|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- select_fdr (regression) ----
-    t0 = flow_now_ns()
-    let probe_select_fdr: SelectFdr = select_fdr_fit(X_r, y_r, 1.0)
-    t1 = flow_now_ns()
-    select_fdr_free(probe_select_fdr)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    elif (t1 - t0) < 20000000 { reps = 5 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_select_fdr: SelectFdr = select_fdr_fit(X_r, y_r, 1.0)
-        select_fdr_free(m_select_fdr)
-    }
-    t1 = flow_now_ns()
-    let fitted_select_fdr: SelectFdr = select_fdr_fit(X_r, y_r, 1.0)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_select_fdr: Matrix = select_fdr_transform(fitted_select_fdr, X_r)
-        if o_select_fdr.rows > 0 {
-            if o_select_fdr.cols > 0 { sink = sink + o_select_fdr.data[0] }
-        }
-        matrix_free(o_select_fdr)
-    }
-    t3 = flow_now_ns()
-    select_fdr_free(fitted_select_fdr)
-    printf("ESTIMATOR|select_fdr|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }

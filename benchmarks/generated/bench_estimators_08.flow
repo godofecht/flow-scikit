@@ -82,6 +82,35 @@ function main() -> i32 {
     let mut reps: i32 = 1
     let mut sink: f32 = 0.0
 
+    # ---- select_fdr (regression) ----
+    t0 = flow_now_ns()
+    let probe_select_fdr: SelectFdr = select_fdr_fit(X_r, y_r, 1.0)
+    t1 = flow_now_ns()
+    select_fdr_free(probe_select_fdr)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_select_fdr: SelectFdr = select_fdr_fit(X_r, y_r, 1.0)
+        select_fdr_free(m_select_fdr)
+    }
+    t1 = flow_now_ns()
+    let fitted_select_fdr: SelectFdr = select_fdr_fit(X_r, y_r, 1.0)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_select_fdr: Matrix = select_fdr_transform(fitted_select_fdr, X_r)
+        if o_select_fdr.rows > 0 {
+            if o_select_fdr.cols > 0 { sink = sink + o_select_fdr.data[0] }
+        }
+        matrix_free(o_select_fdr)
+    }
+    t3 = flow_now_ns()
+    select_fdr_free(fitted_select_fdr)
+    printf("ESTIMATOR|select_fdr|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
     # ---- select_fpr (regression) ----
     t0 = flow_now_ns()
     let probe_select_fpr: SelectFpr = select_fpr_fit(X_r, y_r, 1.0)
@@ -225,6 +254,27 @@ function main() -> i32 {
     t3 = flow_now_ns()
     select_percentile_free(fitted_select_percentile)
     printf("ESTIMATOR|select_percentile|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- self_training_classifier_full (classification, written out) ----
+    let st_labels: ptr<i32> = malloc((n_c as i64) * 4 + 64) as ptr<i32>
+    for i in 0 to n_c {
+        if i % 3 == 0 { st_labels[i] = yi_c[i] }
+        else { st_labels[i] = 0 - 1 }
+    }
+    t0 = flow_now_ns()
+    let probe_self_training_classifier_full: SelfTrainingClassifier = self_training_classifier_full_fit(X_c, st_labels, 3, 0.7, 10, 50, 0.1)
+    t1 = flow_now_ns()
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_self_training_classifier_full: SelfTrainingClassifier = self_training_classifier_full_fit(X_c, st_labels, 3, 0.7, 10, 50, 0.1)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|self_training_classifier_full|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
     fflush(null)
 
     # ---- sequential_feature_selector (regression) ----
@@ -552,53 +602,6 @@ function main() -> i32 {
     }
     t1 = flow_now_ns()
     printf("ESTIMATOR|spectral_coclustering|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
-    fflush(null)
-
-    # ---- spectral_embedding (unsupervised) ----
-    t0 = flow_now_ns()
-    let probe_spectral_embedding: SpectralEmbedding = spectral_embedding_fit(X_c, 2, 0.1)
-    t1 = flow_now_ns()
-    spectral_embedding_free(probe_spectral_embedding)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    elif (t1 - t0) < 20000000 { reps = 5 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_spectral_embedding: SpectralEmbedding = spectral_embedding_fit(X_c, 2, 0.1)
-        spectral_embedding_free(m_spectral_embedding)
-    }
-    t1 = flow_now_ns()
-    printf("ESTIMATOR|spectral_embedding|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
-    fflush(null)
-
-    # ---- spline_transformer (unsupervised) ----
-    t0 = flow_now_ns()
-    let probe_spline_transformer: SplineTransformer = spline_transformer_fit(X_c, 4, 2)
-    t1 = flow_now_ns()
-    spline_transformer_free(probe_spline_transformer)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    elif (t1 - t0) < 20000000 { reps = 5 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_spline_transformer: SplineTransformer = spline_transformer_fit(X_c, 4, 2)
-        spline_transformer_free(m_spline_transformer)
-    }
-    t1 = flow_now_ns()
-    let fitted_spline_transformer: SplineTransformer = spline_transformer_fit(X_c, 4, 2)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_spline_transformer: Matrix = spline_transformer_transform(fitted_spline_transformer, X_c)
-        if o_spline_transformer.rows > 0 {
-            if o_spline_transformer.cols > 0 { sink = sink + o_spline_transformer.data[0] }
-        }
-        matrix_free(o_spline_transformer)
-    }
-    t3 = flow_now_ns()
-    spline_transformer_free(fitted_spline_transformer)
-    printf("ESTIMATOR|spline_transformer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }

@@ -440,6 +440,35 @@ function main() -> i32 {
     printf("ESTIMATOR|huber_regressor|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
+    # ---- incremental_pca (unsupervised) ----
+    t0 = flow_now_ns()
+    let probe_incremental_pca: IncrementalPCA = incremental_pca_fit(X_c, 2, 32)
+    t1 = flow_now_ns()
+    incremental_pca_free(probe_incremental_pca)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_incremental_pca: IncrementalPCA = incremental_pca_fit(X_c, 2, 32)
+        incremental_pca_free(m_incremental_pca)
+    }
+    t1 = flow_now_ns()
+    let fitted_incremental_pca: IncrementalPCA = incremental_pca_fit(X_c, 2, 32)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_incremental_pca: Matrix = incremental_pca_transform(fitted_incremental_pca, X_c)
+        if o_incremental_pca.rows > 0 {
+            if o_incremental_pca.cols > 0 { sink = sink + o_incremental_pca.data[0] }
+        }
+        matrix_free(o_incremental_pca)
+    }
+    t3 = flow_now_ns()
+    incremental_pca_free(fitted_incremental_pca)
+    printf("ESTIMATOR|incremental_pca|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
     # ---- isolation_forest (unsupervised) ----
     t0 = flow_now_ns()
     let probe_isolation_forest: IsolationForest = isolation_forest_fit(X_c, 10, 5, 42)
@@ -559,33 +588,6 @@ function main() -> i32 {
     t3 = flow_now_ns()
     kbins_discretizer_free(fitted_kbins_discretizer)
     printf("ESTIMATOR|kbins_discretizer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- kernel_density (classification, written out) ----
-    t0 = flow_now_ns()
-    let probe_kernel_density: KernelDensity = kernel_density_fit(X_c, 0.5, 0)
-    t1 = flow_now_ns()
-    kernel_density_free(probe_kernel_density)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    elif (t1 - t0) < 20000000 { reps = 5 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_kernel_density: KernelDensity = kernel_density_fit(X_c, 0.5, 0)
-        kernel_density_free(m_kernel_density)
-    }
-    t1 = flow_now_ns()
-    let fitted_kernel_density: KernelDensity = kernel_density_fit(X_c, 0.5, 0)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_kernel_density: ptr<f32> = kernel_density_score_samples(fitted_kernel_density, X_c)
-        sink = sink + o_kernel_density[0]
-        array_free_f32(o_kernel_density)
-    }
-    t3 = flow_now_ns()
-    kernel_density_free(fitted_kernel_density)
-    printf("ESTIMATOR|kernel_density|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }

@@ -82,6 +82,35 @@ function main() -> i32 {
     let mut reps: i32 = 1
     let mut sink: f32 = 0.0
 
+    # ---- missing_indicator (unsupervised) ----
+    t0 = flow_now_ns()
+    let probe_missing_indicator: MissingIndicator = missing_indicator_fit(X_c, 0.0, 0)
+    t1 = flow_now_ns()
+    missing_indicator_free(probe_missing_indicator)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_missing_indicator: MissingIndicator = missing_indicator_fit(X_c, 0.0, 0)
+        missing_indicator_free(m_missing_indicator)
+    }
+    t1 = flow_now_ns()
+    let fitted_missing_indicator: MissingIndicator = missing_indicator_fit(X_c, 0.0, 0)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_missing_indicator: Matrix = missing_indicator_transform(fitted_missing_indicator, X_c)
+        if o_missing_indicator.rows > 0 {
+            if o_missing_indicator.cols > 0 { sink = sink + o_missing_indicator.data[0] }
+        }
+        matrix_free(o_missing_indicator)
+    }
+    t3 = flow_now_ns()
+    missing_indicator_free(fitted_missing_indicator)
+    printf("ESTIMATOR|missing_indicator|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
     # ---- mlp_classifier (classification) ----
     let hidden_sizes_mlp_classifier: array<i32, 1> = [8]
     t0 = flow_now_ns()
@@ -609,33 +638,6 @@ function main() -> i32 {
     }
     t1 = flow_now_ns()
     printf("ESTIMATOR|oas_estimator|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
-    fflush(null)
-
-    # ---- omp_cv (regression) ----
-    t0 = flow_now_ns()
-    let probe_omp_cv: OrthogonalMatchingPursuitCV = omp_cv_fit(X_r, y_r, 3)
-    t1 = flow_now_ns()
-    omp_cv_free(probe_omp_cv)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    elif (t1 - t0) < 20000000 { reps = 5 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_omp_cv: OrthogonalMatchingPursuitCV = omp_cv_fit(X_r, y_r, 3)
-        omp_cv_free(m_omp_cv)
-    }
-    t1 = flow_now_ns()
-    let fitted_omp_cv: OrthogonalMatchingPursuitCV = omp_cv_fit(X_r, y_r, 3)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_omp_cv: ptr<f32> = omp_cv_predict(fitted_omp_cv, X_r)
-        sink = sink + o_omp_cv[0]
-        array_free_f32(o_omp_cv)
-    }
-    t3 = flow_now_ns()
-    omp_cv_free(fitted_omp_cv)
-    printf("ESTIMATOR|omp_cv|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }

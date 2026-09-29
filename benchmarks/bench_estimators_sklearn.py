@@ -51,10 +51,16 @@ def _constructors() -> dict:
         "RFE": lambda c: c(tree_c()),
         "RFECV": lambda c: c(tree_c()),
         "SequentialFeatureSelector": lambda c: c(tree_c(), n_features_to_select=2),
-        "StackingClassifier": lambda c: c(estimators=[("t", tree_c())]),
+        # Three base estimators on both sides, because a vote or a stack of
+        # one is not the thing either library is being asked to do.
+        "StackingClassifier": lambda c: c(
+            estimators=[("t1", tree_c()), ("t2", tree_c()), ("t3", tree_c())], cv=5),
         "StackingRegressor": lambda c: c(estimators=[("r", Ridge())]),
-        "VotingClassifier": lambda c: c(estimators=[("t", tree_c())]),
-        "VotingRegressor": lambda c: c(estimators=[("r", Ridge())]),
+        "VotingClassifier": lambda c: c(
+            estimators=[("t1", tree_c()), ("t2", tree_c()), ("t3", tree_c())]),
+        "VotingRegressor": lambda c: c(
+            estimators=[("t1", tree_r()), ("t2", tree_r()), ("t3", tree_r())]),
+        "SelfTrainingClassifier": lambda c: c(LogisticRegression(max_iter=50)),
         "SparseCoder": lambda c: c(dictionary=np.eye(4)),
         # nu=0.5 is infeasible for this class balance.
         "NuSVC": lambda c: c(nu=0.1),
@@ -152,6 +158,11 @@ def main() -> int:
         elif fit_input == "dicts":
             first = [{f"f{j}": float(v) for j, v in enumerate(row)} for row in X]
             second = None
+        elif fit_input == "semi_labels":
+            # Every third row keeps its label and the rest are unlabelled,
+            # which is what the Flow harness hands its own side.
+            masked = np.array([val if i % 3 == 0 else -1 for i, val in enumerate(y)])
+            first, second = X, masked
         elif fit_input == "labelsets":
             first = [tuple(int(v) for v in row) for row in y]
             second = None
