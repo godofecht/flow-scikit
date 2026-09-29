@@ -55,7 +55,7 @@ The win count is machine-dependent and the committed artifact says which machine
 
 Do not read that 23x as a property of the library. scikit-learn's own fit of that row takes about 25 ms on the Intel runner and about 181 ms on the AMD one, for the same code and the same data, so the AMD figure is measuring an OpenBLAS path that suits that machine badly rather than anything Flow does well. Flow's own time on the two runners is 8.9 ms and 7.5 ms. The Intel ratio is the honest one to quote, and a row whose margin sits near 1x can still land either way. The parity contract gates on correctness and measurement resolution rather than on the win count.
 
-The current grouped headline evidence is descriptive rather than causal: Flow wins every row in all three substrate groups, at a mean of 31.23x on Python-bound rows, 7.19x on mixed rows and 2.71x on external-native-bound rows in the committed architecture map.
+The current grouped headline evidence is descriptive rather than causal: Flow wins every row in all three substrate groups, at a mean of 31.14x on Python-bound rows, 7.51x on mixed rows and 2.94x on external-native-bound rows in the committed architecture map.
 
 Two earlier readings of this table were wrong, and both were artifacts of how Flow was built rather than of the substrate. While the Flow side was compiled unoptimized, external-native-bound rows all lost, which read as sklearn-owned compiled code being out of reach. The grouping is a guide to where the Python boundary costs most. It is not a ceiling.
 
@@ -81,16 +81,12 @@ the rest go unmeasured. A registry maps every exported `fit` to its
 scikit-learn counterpart, times both sides on the same data, and a CI job
 fails the build when a ranked row is slower.
 
-**Flow is faster on 197 of the 197 ranked rows.** Eleven rows carry no ratio.
-Six of them have no scikit-learn counterpart at all. The other five are the
-older entry points of estimators that are raced through a second one: a
-voting estimator that takes models already fitted is half of what
-`VotingClassifier` does, and `voting_classifier_full_fit` beside it is the row
-that races the class.
-
-Nothing is excluded for being a stand-in any more. Four implementations used
-to say in their own comments that they were simplified, and each runs the
-algorithm its counterpart runs now.
+**Flow is faster on 188 of the 188 ranked rows.** The rows that carry no ratio
+carry a reason instead: four implementations say in their own comments that
+they are simplified, so they are timed and shown without being ranked; five
+Flow functions do part of what their scikit-learn namesake does, such as a
+voting estimator that takes models already fitted; six have no scikit-learn
+counterpart at all.
 
 These rows carry no parity contract and no declared tolerances. Each library
 runs its own defaults over the same data, which answers whether an
