@@ -1,0 +1,139 @@
+# Spectral co-clustering has to recover a block structure that is obvious by
+# eye. The implementation it replaced bucketed row sums between the smallest
+# and the largest, which cannot recover a checkerboard at all, and nothing in
+# the suite noticed because nothing asked it to.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+}
+
+# Two blocks: the first half of the rows goes with the first half of the
+# columns, the second with the second, and the off-blocks are weak.
+function coc_fixture(n: i32, p: i32) -> Matrix {
+    let X: Matrix = matrix_new(n, p)
+    let half_r: i32 = n / 2
+    let half_c: i32 = p / 2
+    for i in 0 to n {
+        for j in 0 to p {
+            let same: bool = (i < half_r && j < half_c) || (i >= half_r && j >= half_c)
+            if same { matrix_set(X, i, j, 10.0) }
+            else { matrix_set(X, i, j, 1.0) }
+        }
+    }
+    return X
+}
+
+# The labels are arbitrary up to renaming, so agreement is checked as "the
+# same partition", by requiring every member of a block to share one label and
+# the two blocks to differ.
+function coc_block_is_uniform(labels: ptr<i32>, from_idx: i32, to_idx: i32) -> bool {
+    let first: i32 = labels[from_idx]
+    for i in from_idx to to_idx {
+        if labels[i] != first { return false }
+    }
+    return true
+}
+
+function test_recovers_two_blocks() -> i32 {
+    println("Test: SpectralCoclustering recovers two blocks")
+    let n: i32 = 12
+    let p: i32 = 8
+    let X: Matrix = coc_fixture(n, p)
+    let model: SpectralCoclustering = spectral_coclustering_fit(X, 2)
+
+    let mut failures: i32 = 0
+    if not coc_block_is_uniform(model.row_labels, 0, n / 2) {
+        println("  FAIL: the first row block did not get one label")
+        failures = failures + 1
+    }
+    if not coc_block_is_uniform(model.row_labels, n / 2, n) {
+        println("  FAIL: the second row block did not get one label")
+        failures = failures + 1
+    }
+    if model.row_labels[0] == model.row_labels[n - 1] {
+        println("  FAIL: the two row blocks landed in the same cluster")
+        failures = failures + 1
+    }
+    if not coc_block_is_uniform(model.col_labels, 0, p / 2) {
+        println("  FAIL: the first column block did not get one label")
+        failures = failures + 1
+    }
+    if not coc_block_is_uniform(model.col_labels, p / 2, p) {
+        println("  FAIL: the second column block did not get one label")
+        failures = failures + 1
+    }
+    if model.col_labels[0] == model.col_labels[p - 1] {
+        println("  FAIL: the two column blocks landed in the same cluster")
+        failures = failures + 1
+    }
+
+    # A row block and the column block it belongs with have to agree, which is
+    # the whole point of embedding rows and columns in one space.
+    if model.row_labels[0] != model.col_labels[0] {
+        println("  FAIL: the first row block and first column block disagree")
+        failures = failures + 1
+    }
+
+    if failures == 0 {
+        printf("  OK: rows %d %d, columns %d %d\n", model.row_labels[0], model.row_labels[n - 1], model.col_labels[0], model.col_labels[p - 1])
+    }
+    spectral_coclustering_free(model)
+    matrix_free(X)
+    return failures
+}
+
+function test_biclustering_recovers_blocks() -> i32 {
+    println("Test: SpectralBiclustering recovers a checkerboard")
+    let n: i32 = 12
+    let p: i32 = 8
+    let X: Matrix = coc_fixture(n, p)
+    let model: SpectralBiclustering = spectral_biclustering_fit(X, 2, 2)
+
+    let mut failures: i32 = 0
+    if not coc_block_is_uniform(model.row_labels, 0, n / 2) {
+        println("  FAIL: the first row block did not get one label")
+        failures = failures + 1
+    }
+    if not coc_block_is_uniform(model.row_labels, n / 2, n) {
+        println("  FAIL: the second row block did not get one label")
+        failures = failures + 1
+    }
+    if model.row_labels[0] == model.row_labels[n - 1] {
+        println("  FAIL: the two row blocks landed in the same cluster")
+        failures = failures + 1
+    }
+    if not coc_block_is_uniform(model.col_labels, 0, p / 2) {
+        println("  FAIL: the first column block did not get one label")
+        failures = failures + 1
+    }
+    if not coc_block_is_uniform(model.col_labels, p / 2, p) {
+        println("  FAIL: the second column block did not get one label")
+        failures = failures + 1
+    }
+    if model.col_labels[0] == model.col_labels[p - 1] {
+        println("  FAIL: the two column blocks landed in the same cluster")
+        failures = failures + 1
+    }
+
+    if failures == 0 {
+        printf("  OK: rows %d %d, columns %d %d\n", model.row_labels[0], model.row_labels[n - 1], model.col_labels[0], model.col_labels[p - 1])
+    }
+    spectral_biclustering_free(model)
+    matrix_free(X)
+    return failures
+}
+
+function main() -> i32 {
+    println("=== Spectral biclustering ===")
+    let mut failures: i32 = 0
+    failures = failures + test_recovers_two_blocks()
+    failures = failures + test_biclustering_recovers_blocks()
+    if failures > 0 {
+        printf("%d failure(s)\n", failures)
+        return 1
+    }
+    println("All spectral biclustering tests passed!")
+    return 0
+}
