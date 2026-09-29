@@ -1,10 +1,9 @@
 {
   "schema_version": 1,
   "counts": {
-    "estimators": 203,
-    "runnable": 166,
-    "shaped": 22,
-    "simplified": 4,
+    "estimators": 208,
+    "runnable": 171,
+    "shaped": 26,
     "flow_only": 6,
     "different_shape": 5
   },
@@ -2079,8 +2078,7 @@
         "contamination",
         "n_trials"
       ],
-      "bucket": "simplified",
-      "reason": "the implementation's own comments call it simplified, so timing it against scikit-learn's algorithm compares two different things",
+      "bucket": "runnable",
       "sklearn_estimator": "EllipticEnvelope"
     },
     {
@@ -3547,6 +3545,61 @@
       "sklearn_estimator": "HuberRegressor"
     },
     {
+      "flow_estimator": "incremental_pca",
+      "module": "decomposition.flow",
+      "fit": {
+        "name": "incremental_pca_fit",
+        "returns": "IncrementalPCA",
+        "parameters": [
+          {
+            "name": "X",
+            "type": "Matrix"
+          },
+          {
+            "name": "n_components",
+            "type": "i32"
+          },
+          {
+            "name": "batch_size",
+            "type": "i32"
+          }
+        ]
+      },
+      "companions": {
+        "transform": {
+          "name": "incremental_pca_transform",
+          "returns": "Matrix",
+          "parameters": [
+            {
+              "name": "model",
+              "type": "IncrementalPCA"
+            },
+            {
+              "name": "X",
+              "type": "Matrix"
+            }
+          ]
+        },
+        "free": {
+          "name": "incremental_pca_free",
+          "returns": "void",
+          "parameters": [
+            {
+              "name": "model",
+              "type": "IncrementalPCA"
+            }
+          ]
+        }
+      },
+      "parameters": [
+        "X",
+        "n_components",
+        "batch_size"
+      ],
+      "bucket": "runnable",
+      "sklearn_estimator": "IncrementalPCA"
+    },
+    {
       "flow_estimator": "incremental_pca_partial",
       "module": "decomposition.flow",
       "fit": {
@@ -3569,7 +3622,7 @@
         "X"
       ],
       "bucket": "different_shape",
-      "reason": "one partial_fit step over one batch, where IncrementalPCA.fit walks the whole design in batches",
+      "reason": "one partial_fit step over one batch. incremental_pca_fit walks the whole design in batches and is the row that races IncrementalPCA",
       "sklearn_estimator": "IncrementalPCA"
     },
     {
@@ -7395,8 +7448,7 @@
         "epochs",
         "lr"
       ],
-      "bucket": "simplified",
-      "reason": "the implementation's own comments call it simplified, so timing it against scikit-learn's algorithm compares two different things",
+      "bucket": "runnable",
       "sklearn_estimator": "NeighborhoodComponentsAnalysis"
     },
     {
@@ -10776,8 +10828,78 @@
         "max_iter"
       ],
       "bucket": "different_shape",
-      "reason": "takes class probabilities as input, so it is the labelling loop alone while SelfTrainingClassifier also fits the base estimator on every round",
+      "reason": "takes class probabilities as input, so it is the labelling loop alone. self_training_classifier_full_fit refits the base estimator every round and is the row that races the class",
       "sklearn_estimator": "SelfTrainingClassifier"
+    },
+    {
+      "flow_estimator": "self_training_classifier_full",
+      "module": "semi_supervised.flow",
+      "fit": {
+        "name": "self_training_classifier_full_fit",
+        "returns": "SelfTrainingClassifier",
+        "parameters": [
+          {
+            "name": "X",
+            "type": "Matrix"
+          },
+          {
+            "name": "y_initial",
+            "type": "ptr<i32>"
+          },
+          {
+            "name": "n_classes",
+            "type": "i32"
+          },
+          {
+            "name": "threshold",
+            "type": "f32"
+          },
+          {
+            "name": "max_iter",
+            "type": "i32"
+          },
+          {
+            "name": "base_iter",
+            "type": "i32"
+          },
+          {
+            "name": "lr",
+            "type": "f32"
+          }
+        ]
+      },
+      "companions": {},
+      "parameters": [
+        "X",
+        "y_initial",
+        "n_classes",
+        "threshold",
+        "max_iter",
+        "base_iter",
+        "lr"
+      ],
+      "bucket": "shaped",
+      "sklearn_estimator": "SelfTrainingClassifier",
+      "shape": {
+        "dataset": "classification",
+        "flow_preamble": [
+          "let st_labels: ptr<i32> = malloc((n_c as i64) * 4 + 64) as ptr<i32>",
+          "for i in 0 to n_c {",
+          "    if i % 3 == 0 { st_labels[i] = yi_c[i] }",
+          "    else { st_labels[i] = 0 - 1 }",
+          "}"
+        ],
+        "flow_fit": [
+          "X_c",
+          "st_labels",
+          "3",
+          "0.7",
+          "10",
+          "50",
+          "0.1"
+        ],
+        "sklearn_input": "semi_labels"
+      }
     },
     {
       "flow_estimator": "sequential_feature_selector",
@@ -11470,8 +11592,7 @@
         "n_row_clusters",
         "n_col_clusters"
       ],
-      "bucket": "simplified",
-      "reason": "the implementation's own comments call it simplified, so timing it against scikit-learn's algorithm compares two different things",
+      "bucket": "runnable",
       "sklearn_estimator": "SpectralBiclustering"
     },
     {
@@ -11553,8 +11674,7 @@
         "X",
         "n_clusters"
       ],
-      "bucket": "simplified",
-      "reason": "the implementation's own comments call it simplified, so timing it against scikit-learn's algorithm compares two different things",
+      "bucket": "runnable",
       "sklearn_estimator": "SpectralCoclustering"
     },
     {
@@ -11730,8 +11850,108 @@
         "n_iter"
       ],
       "bucket": "different_shape",
-      "reason": "takes the base estimators' predictions as input, so it is the meta-learner alone while StackingClassifier also fits the base estimators and cross-validates them",
+      "reason": "takes the base estimators' predictions as input, so it is the meta-learner alone. stacking_classifier_full_fit does the whole job and is the row that races StackingClassifier",
       "sklearn_estimator": "StackingClassifier"
+    },
+    {
+      "flow_estimator": "stacking_classifier_full",
+      "module": "ensemble.flow",
+      "fit": {
+        "name": "stacking_classifier_full_fit",
+        "returns": "StackingClassifierFull",
+        "parameters": [
+          {
+            "name": "X",
+            "type": "Matrix"
+          },
+          {
+            "name": "y",
+            "type": "ptr<f32>"
+          },
+          {
+            "name": "n_classes",
+            "type": "i32"
+          },
+          {
+            "name": "n_base",
+            "type": "i32"
+          },
+          {
+            "name": "max_depth",
+            "type": "i32"
+          },
+          {
+            "name": "seed",
+            "type": "i32"
+          },
+          {
+            "name": "lr",
+            "type": "f32"
+          },
+          {
+            "name": "n_iter",
+            "type": "i32"
+          }
+        ]
+      },
+      "companions": {
+        "predict": {
+          "name": "stacking_classifier_full_predict",
+          "returns": "ptr<f32>",
+          "parameters": [
+            {
+              "name": "model",
+              "type": "StackingClassifierFull"
+            },
+            {
+              "name": "X",
+              "type": "Matrix"
+            }
+          ]
+        },
+        "free": {
+          "name": "stacking_classifier_full_free",
+          "returns": "void",
+          "parameters": [
+            {
+              "name": "model",
+              "type": "StackingClassifierFull"
+            }
+          ]
+        }
+      },
+      "parameters": [
+        "X",
+        "y",
+        "n_classes",
+        "n_base",
+        "max_depth",
+        "seed",
+        "lr",
+        "n_iter"
+      ],
+      "bucket": "shaped",
+      "sklearn_estimator": "StackingClassifier",
+      "shape": {
+        "dataset": "classification",
+        "flow_fit": [
+          "X_c",
+          "y_c",
+          "3",
+          "3",
+          "3",
+          "42",
+          "0.01",
+          "50"
+        ],
+        "flow_work": [
+          "X_c"
+        ],
+        "flow_work_fn": "stacking_classifier_full_predict",
+        "flow_work_returns": "ptr<f32>",
+        "flow_free_fn": "stacking_classifier_full_free",
+        "sklearn_input": "X"
+      }
     },
     {
       "flow_estimator": "stacking_regressor",
@@ -12576,8 +12796,77 @@
         "voting"
       ],
       "bucket": "different_shape",
-      "reason": "takes trees that are already fitted, so its fit is the vote alone while VotingClassifier fits every estimator it is given",
+      "reason": "takes trees that are already fitted, so its fit is the vote alone. voting_classifier_full_fit fits the ensemble and is the row that races VotingClassifier",
       "sklearn_estimator": "VotingClassifier"
+    },
+    {
+      "flow_estimator": "voting_classifier_full",
+      "module": "ensemble.flow",
+      "fit": {
+        "name": "voting_classifier_full_fit",
+        "returns": "VotingClassifier",
+        "parameters": [
+          {
+            "name": "X",
+            "type": "Matrix"
+          },
+          {
+            "name": "y",
+            "type": "ptr<f32>"
+          },
+          {
+            "name": "n_classes",
+            "type": "i32"
+          },
+          {
+            "name": "n_estimators",
+            "type": "i32"
+          },
+          {
+            "name": "max_depth",
+            "type": "i32"
+          },
+          {
+            "name": "seed",
+            "type": "i32"
+          },
+          {
+            "name": "voting",
+            "type": "i32"
+          }
+        ]
+      },
+      "companions": {},
+      "parameters": [
+        "X",
+        "y",
+        "n_classes",
+        "n_estimators",
+        "max_depth",
+        "seed",
+        "voting"
+      ],
+      "bucket": "shaped",
+      "sklearn_estimator": "VotingClassifier",
+      "shape": {
+        "dataset": "classification",
+        "flow_fit": [
+          "X_c",
+          "y_c",
+          "3",
+          "3",
+          "3",
+          "42",
+          "0"
+        ],
+        "flow_work": [
+          "X_c"
+        ],
+        "flow_work_fn": "voting_classifier_predict",
+        "flow_work_returns": "ptr<f32>",
+        "flow_free_fn": "voting_classifier_free",
+        "sklearn_input": "X"
+      }
     },
     {
       "flow_estimator": "voting_regressor",
@@ -12632,8 +12921,65 @@
         "weights"
       ],
       "bucket": "different_shape",
-      "reason": "takes regressors that are already fitted, so its fit is the average alone while VotingRegressor fits every estimator it is given",
+      "reason": "takes regressors that are already fitted, so its fit is the average alone. voting_regressor_full_fit fits the ensemble and is the row that races VotingRegressor",
       "sklearn_estimator": "VotingRegressor"
+    },
+    {
+      "flow_estimator": "voting_regressor_full",
+      "module": "ensemble.flow",
+      "fit": {
+        "name": "voting_regressor_full_fit",
+        "returns": "VotingRegressor",
+        "parameters": [
+          {
+            "name": "X",
+            "type": "Matrix"
+          },
+          {
+            "name": "y",
+            "type": "ptr<f32>"
+          },
+          {
+            "name": "n_estimators",
+            "type": "i32"
+          },
+          {
+            "name": "max_depth",
+            "type": "i32"
+          },
+          {
+            "name": "seed",
+            "type": "i32"
+          }
+        ]
+      },
+      "companions": {},
+      "parameters": [
+        "X",
+        "y",
+        "n_estimators",
+        "max_depth",
+        "seed"
+      ],
+      "bucket": "shaped",
+      "sklearn_estimator": "VotingRegressor",
+      "shape": {
+        "dataset": "regression",
+        "flow_fit": [
+          "X_r",
+          "y_r",
+          "3",
+          "3",
+          "42"
+        ],
+        "flow_work": [
+          "X_r"
+        ],
+        "flow_work_fn": "voting_regressor_predict",
+        "flow_work_returns": "ptr<f32>",
+        "flow_free_fn": "voting_regressor_free",
+        "sklearn_input": "X"
+      }
     }
   ]
 }

@@ -82,6 +82,33 @@ function main() -> i32 {
     let mut reps: i32 = 1
     let mut sink: f32 = 0.0
 
+    # ---- omp_cv (regression) ----
+    t0 = flow_now_ns()
+    let probe_omp_cv: OrthogonalMatchingPursuitCV = omp_cv_fit(X_r, y_r, 3)
+    t1 = flow_now_ns()
+    omp_cv_free(probe_omp_cv)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_omp_cv: OrthogonalMatchingPursuitCV = omp_cv_fit(X_r, y_r, 3)
+        omp_cv_free(m_omp_cv)
+    }
+    t1 = flow_now_ns()
+    let fitted_omp_cv: OrthogonalMatchingPursuitCV = omp_cv_fit(X_r, y_r, 3)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_omp_cv: ptr<f32> = omp_cv_predict(fitted_omp_cv, X_r)
+        sink = sink + o_omp_cv[0]
+        array_free_f32(o_omp_cv)
+    }
+    t3 = flow_now_ns()
+    omp_cv_free(fitted_omp_cv)
+    printf("ESTIMATOR|omp_cv|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
     # ---- one_class_svm (unsupervised) ----
     t0 = flow_now_ns()
     let probe_one_class_svm: OneClassSVM = one_class_svm_fit(X_c, 0.5, 0.1, 100)
@@ -594,35 +621,6 @@ function main() -> i32 {
     t3 = flow_now_ns()
     polynomial_features_free(fitted_polynomial_features)
     printf("ESTIMATOR|polynomial_features|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- power_transformer (unsupervised) ----
-    t0 = flow_now_ns()
-    let probe_power_transformer: PowerTransformer = power_transformer_fit(X_c, 0)
-    t1 = flow_now_ns()
-    power_transformer_free(probe_power_transformer)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    elif (t1 - t0) < 20000000 { reps = 5 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_power_transformer: PowerTransformer = power_transformer_fit(X_c, 0)
-        power_transformer_free(m_power_transformer)
-    }
-    t1 = flow_now_ns()
-    let fitted_power_transformer: PowerTransformer = power_transformer_fit(X_c, 0)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_power_transformer: Matrix = power_transformer_transform(fitted_power_transformer, X_c)
-        if o_power_transformer.rows > 0 {
-            if o_power_transformer.cols > 0 { sink = sink + o_power_transformer.data[0] }
-        }
-        matrix_free(o_power_transformer)
-    }
-    t3 = flow_now_ns()
-    power_transformer_free(fitted_power_transformer)
-    printf("ESTIMATOR|power_transformer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }

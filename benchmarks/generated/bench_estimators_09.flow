@@ -82,6 +82,80 @@ function main() -> i32 {
     let mut reps: i32 = 1
     let mut sink: f32 = 0.0
 
+    # ---- spectral_embedding (unsupervised) ----
+    t0 = flow_now_ns()
+    let probe_spectral_embedding: SpectralEmbedding = spectral_embedding_fit(X_c, 2, 0.1)
+    t1 = flow_now_ns()
+    spectral_embedding_free(probe_spectral_embedding)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_spectral_embedding: SpectralEmbedding = spectral_embedding_fit(X_c, 2, 0.1)
+        spectral_embedding_free(m_spectral_embedding)
+    }
+    t1 = flow_now_ns()
+    printf("ESTIMATOR|spectral_embedding|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), 0.0, reps)
+    fflush(null)
+
+    # ---- spline_transformer (unsupervised) ----
+    t0 = flow_now_ns()
+    let probe_spline_transformer: SplineTransformer = spline_transformer_fit(X_c, 4, 2)
+    t1 = flow_now_ns()
+    spline_transformer_free(probe_spline_transformer)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_spline_transformer: SplineTransformer = spline_transformer_fit(X_c, 4, 2)
+        spline_transformer_free(m_spline_transformer)
+    }
+    t1 = flow_now_ns()
+    let fitted_spline_transformer: SplineTransformer = spline_transformer_fit(X_c, 4, 2)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_spline_transformer: Matrix = spline_transformer_transform(fitted_spline_transformer, X_c)
+        if o_spline_transformer.rows > 0 {
+            if o_spline_transformer.cols > 0 { sink = sink + o_spline_transformer.data[0] }
+        }
+        matrix_free(o_spline_transformer)
+    }
+    t3 = flow_now_ns()
+    spline_transformer_free(fitted_spline_transformer)
+    printf("ESTIMATOR|spline_transformer|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- stacking_classifier_full (classification, written out) ----
+    t0 = flow_now_ns()
+    let probe_stacking_classifier_full: StackingClassifierFull = stacking_classifier_full_fit(X_c, y_c, 3, 3, 3, 42, 0.01, 50)
+    t1 = flow_now_ns()
+    stacking_classifier_full_free(probe_stacking_classifier_full)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_stacking_classifier_full: StackingClassifierFull = stacking_classifier_full_fit(X_c, y_c, 3, 3, 3, 42, 0.01, 50)
+        stacking_classifier_full_free(m_stacking_classifier_full)
+    }
+    t1 = flow_now_ns()
+    let fitted_stacking_classifier_full: StackingClassifierFull = stacking_classifier_full_fit(X_c, y_c, 3, 3, 3, 42, 0.01, 50)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_stacking_classifier_full: ptr<f32> = stacking_classifier_full_predict(fitted_stacking_classifier_full, X_c)
+        sink = sink + o_stacking_classifier_full[0]
+        array_free_f32(o_stacking_classifier_full)
+    }
+    t3 = flow_now_ns()
+    stacking_classifier_full_free(fitted_stacking_classifier_full)
+    printf("ESTIMATOR|stacking_classifier_full|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
     # ---- stacking_regressor (regression) ----
     t0 = flow_now_ns()
     let probe_stacking_regressor: StackingRegressor = stacking_regressor_fit(X_r, y_r, 3, 5, 42)
@@ -423,6 +497,60 @@ function main() -> i32 {
     t3 = flow_now_ns()
     variance_threshold_free(fitted_variance_threshold)
     printf("ESTIMATOR|variance_threshold|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- voting_classifier_full (classification, written out) ----
+    t0 = flow_now_ns()
+    let probe_voting_classifier_full: VotingClassifier = voting_classifier_full_fit(X_c, y_c, 3, 3, 3, 42, 0)
+    t1 = flow_now_ns()
+    voting_classifier_free(probe_voting_classifier_full)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_voting_classifier_full: VotingClassifier = voting_classifier_full_fit(X_c, y_c, 3, 3, 3, 42, 0)
+        voting_classifier_free(m_voting_classifier_full)
+    }
+    t1 = flow_now_ns()
+    let fitted_voting_classifier_full: VotingClassifier = voting_classifier_full_fit(X_c, y_c, 3, 3, 3, 42, 0)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_voting_classifier_full: ptr<f32> = voting_classifier_predict(fitted_voting_classifier_full, X_c)
+        sink = sink + o_voting_classifier_full[0]
+        array_free_f32(o_voting_classifier_full)
+    }
+    t3 = flow_now_ns()
+    voting_classifier_free(fitted_voting_classifier_full)
+    printf("ESTIMATOR|voting_classifier_full|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
+    # ---- voting_regressor_full (regression, written out) ----
+    t0 = flow_now_ns()
+    let probe_voting_regressor_full: VotingRegressor = voting_regressor_full_fit(X_r, y_r, 3, 3, 42)
+    t1 = flow_now_ns()
+    voting_regressor_free(probe_voting_regressor_full)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_voting_regressor_full: VotingRegressor = voting_regressor_full_fit(X_r, y_r, 3, 3, 42)
+        voting_regressor_free(m_voting_regressor_full)
+    }
+    t1 = flow_now_ns()
+    let fitted_voting_regressor_full: VotingRegressor = voting_regressor_full_fit(X_r, y_r, 3, 3, 42)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_voting_regressor_full: ptr<f32> = voting_regressor_predict(fitted_voting_regressor_full, X_r)
+        sink = sink + o_voting_regressor_full[0]
+        array_free_f32(o_voting_regressor_full)
+    }
+    t3 = flow_now_ns()
+    voting_regressor_free(fitted_voting_regressor_full)
+    printf("ESTIMATOR|voting_regressor_full|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }

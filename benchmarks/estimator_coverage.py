@@ -182,17 +182,20 @@ PREAMBLE_ARGS: dict[str, tuple[str, str]] = {
 # same objection the simplified rows carry. The wording says which part.
 DIFFERENT_JOB: dict[str, str] = {
     "stacking_classifier": "takes the base estimators' predictions as input, so it is the "
-                           "meta-learner alone while StackingClassifier also fits the base "
-                           "estimators and cross-validates them",
+                           "meta-learner alone. stacking_classifier_full_fit does the whole "
+                           "job and is the row that races StackingClassifier",
     "self_training_classifier": "takes class probabilities as input, so it is the labelling "
-                                "loop alone while SelfTrainingClassifier also fits the base "
-                                "estimator on every round",
-    "voting_classifier": "takes trees that are already fitted, so its fit is the vote alone "
-                         "while VotingClassifier fits every estimator it is given",
+                                "loop alone. self_training_classifier_full_fit refits the base "
+                                "estimator every round and is the row that races the class",
+    "voting_classifier": "takes trees that are already fitted, so its fit is the vote alone. "
+                         "voting_classifier_full_fit fits the ensemble and is the row that "
+                         "races VotingClassifier",
     "voting_regressor": "takes regressors that are already fitted, so its fit is the average "
-                        "alone while VotingRegressor fits every estimator it is given",
-    "incremental_pca_partial": "one partial_fit step over one batch, where IncrementalPCA.fit "
-                               "walks the whole design in batches",
+                        "alone. voting_regressor_full_fit fits the ensemble and is the row "
+                        "that races VotingRegressor",
+    "incremental_pca_partial": "one partial_fit step over one batch. incremental_pca_fit walks "
+                               "the whole design in batches and is the row that races "
+                               "IncrementalPCA",
 }
 
 # One corpus for the two text vectorizers, read by the Flow generator and by
@@ -314,6 +317,47 @@ SHAPED: dict[str, dict] = {
     # Two rows whose work function is named for what it returns rather than
     # predict or transform, so the generic path found nothing to time and the
     # fit alone fell under the clock's floor.
+    "voting_classifier_full": {
+        "dataset": "classification",
+        "flow_fit": ["X_c", "y_c", "3", "3", "3", "42", "0"],
+        "flow_work": ["X_c"],
+        "flow_work_fn": "voting_classifier_predict",
+        "flow_work_returns": "ptr<f32>",
+        "flow_free_fn": "voting_classifier_free",
+        "sklearn_input": "X",
+    },
+    "voting_regressor_full": {
+        "dataset": "regression",
+        "flow_fit": ["X_r", "y_r", "3", "3", "42"],
+        "flow_work": ["X_r"],
+        "flow_work_fn": "voting_regressor_predict",
+        "flow_work_returns": "ptr<f32>",
+        "flow_free_fn": "voting_regressor_free",
+        "sklearn_input": "X",
+    },
+    "stacking_classifier_full": {
+        "dataset": "classification",
+        "flow_fit": ["X_c", "y_c", "3", "3", "3", "42", "0.01", "50"],
+        "flow_work": ["X_c"],
+        "flow_work_fn": "stacking_classifier_full_predict",
+        "flow_work_returns": "ptr<f32>",
+        "flow_free_fn": "stacking_classifier_full_free",
+        "sklearn_input": "X",
+    },
+    "self_training_classifier_full": {
+        # Every third row keeps its label and the rest are unlabelled, on both
+        # sides, which is the shape the estimator exists for.
+        "dataset": "classification",
+        "flow_preamble": [
+            "let st_labels: ptr<i32> = malloc((n_c as i64) * 4 + 64) as ptr<i32>",
+            "for i in 0 to n_c {",
+            "    if i % 3 == 0 { st_labels[i] = yi_c[i] }",
+            "    else { st_labels[i] = 0 - 1 }",
+            "}",
+        ],
+        "flow_fit": ["X_c", "st_labels", "3", "0.7", "10", "50", "0.1"],
+        "sklearn_input": "semi_labels",
+    },
     "kernel_density": {
         "dataset": "classification",
         "flow_fit": ["X_c", "0.5", "0"],
@@ -431,6 +475,13 @@ DATASET_ARGS = {"n_classes", "n_samples", "n_features"}
 
 # Flow names whose scikit-learn counterpart is not a case change away.
 ALIASES: dict[str, str] = {
+    # The full fits, which do what the scikit-learn class does rather than the
+    # part of it the older function covers. Both entries stay in the registry:
+    # the older one keeps its reason for not being raced.
+    "voting_classifier_full": "VotingClassifier",
+    "voting_regressor_full": "VotingRegressor",
+    "stacking_classifier_full": "StackingClassifier",
+    "self_training_classifier_full": "SelfTrainingClassifier",
     # decomposition.flow, and it takes n_topics and eta, so this is Latent
     # Dirichlet Allocation. discriminant_analysis.flow holds the other one.
     "lda": "LatentDirichletAllocation",

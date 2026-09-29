@@ -1,0 +1,232 @@
+# The five estimators whose Flow functions used to cover part of what their
+# scikit-learn namesake does. Each has a fit here that does the whole job, and
+# each is checked for a result rather than for a shape.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+}
+
+# Two well separated classes in two dimensions, with a third noise feature.
+function fe_classes(n: i32) -> Matrix {
+    let X: Matrix = matrix_new(n, 3)
+    srand(5)
+    for i in 0 to n {
+        let cls: i32 = i % 2
+        let centre: f32 = (cls as f32) * 6.0
+        matrix_set(X, i, 0, centre + ((rand() % 100) as f32) / 100.0)
+        matrix_set(X, i, 1, centre + ((rand() % 100) as f32) / 100.0)
+        matrix_set(X, i, 2, ((rand() % 500) as f32) / 100.0)
+    }
+    return X
+}
+
+function fe_labels(n: i32) -> ptr<f32> {
+    let y: ptr<f32> = array_new_f32(n)
+    for i in 0 to n { y[i] = (i % 2) as f32 }
+    return y
+}
+
+function fe_accuracy(pred: ptr<f32>, y: ptr<f32>, n: i32) -> f32 {
+    let mut right: i32 = 0
+    for i in 0 to n {
+        if (pred[i] as i32) == (y[i] as i32) { right = right + 1 }
+    }
+    return (right as f32) / (n as f32)
+}
+
+function test_voting_classifier_full() -> i32 {
+    println("Test: VotingClassifier fits its own ensemble")
+    let n: i32 = 60
+    let X: Matrix = fe_classes(n)
+    let y: ptr<f32> = fe_labels(n)
+    let model: VotingClassifier = voting_classifier_full_fit(X, y, 2, 3, 3, 42, 0)
+    let pred: ptr<f32> = voting_classifier_predict(model, X)
+    let acc: f32 = fe_accuracy(pred, y, n)
+
+    let mut failures: i32 = 0
+    if acc < 0.9 {
+        printf("  FAIL: accuracy %.4f, expected at least 0.9\n", acc)
+        failures = failures + 1
+    } else {
+        printf("  OK: accuracy %.4f\n", acc)
+    }
+    array_free_f32(pred)
+    voting_classifier_free(model)
+    array_free_f32(y)
+    matrix_free(X)
+    return failures
+}
+
+function test_stacking_classifier_full() -> i32 {
+    println("Test: StackingClassifier fits and cross-validates its base estimators")
+    let n: i32 = 60
+    let X: Matrix = fe_classes(n)
+    let y: ptr<f32> = fe_labels(n)
+    let model: StackingClassifierFull = stacking_classifier_full_fit(X, y, 2, 3, 3, 42, 0.05, 60)
+    let pred: ptr<f32> = stacking_classifier_full_predict(model, X)
+    let acc: f32 = fe_accuracy(pred, y, n)
+
+    let mut failures: i32 = 0
+    if acc < 0.9 {
+        printf("  FAIL: accuracy %.4f, expected at least 0.9\n", acc)
+        failures = failures + 1
+    } else {
+        printf("  OK: accuracy %.4f\n", acc)
+    }
+    array_free_f32(pred)
+    stacking_classifier_full_free(model)
+    array_free_f32(y)
+    matrix_free(X)
+    return failures
+}
+
+function test_voting_regressor_full() -> i32 {
+    println("Test: VotingRegressor fits its own ensemble")
+    let n: i32 = 60
+    let X: Matrix = matrix_new(n, 2)
+    let y: ptr<f32> = array_new_f32(n)
+    srand(9)
+    for i in 0 to n {
+        let a: f32 = ((rand() % 1000) as f32) / 100.0
+        let b: f32 = ((rand() % 1000) as f32) / 100.0
+        matrix_set(X, i, 0, a)
+        matrix_set(X, i, 1, b)
+        y[i] = 3.0 * a - 2.0 * b
+    }
+    let model: VotingRegressor = voting_regressor_full_fit(X, y, 3, 6, 42)
+    let pred: ptr<f32> = voting_regressor_predict(model, X)
+
+    let mut mean: f32 = 0.0
+    for i in 0 to n { mean = mean + y[i] }
+    mean = mean / (n as f32)
+    let mut ss_res: f32 = 0.0
+    let mut ss_tot: f32 = 0.0
+    for i in 0 to n {
+        let d: f32 = y[i] - pred[i]
+        ss_res = ss_res + d * d
+        let dm: f32 = y[i] - mean
+        ss_tot = ss_tot + dm * dm
+    }
+    let r2: f32 = 1.0 - ss_res / ss_tot
+
+    let mut failures: i32 = 0
+    if r2 < 0.8 {
+        printf("  FAIL: R2 %.4f, expected at least 0.8\n", r2)
+        failures = failures + 1
+    } else {
+        printf("  OK: R2 %.4f\n", r2)
+    }
+    array_free_f32(pred)
+    voting_regressor_free(model)
+    array_free_f32(y)
+    matrix_free(X)
+    return failures
+}
+
+function test_self_training_full() -> i32 {
+    println("Test: SelfTrainingClassifier labels from its own base estimator")
+    let n: i32 = 60
+    let X: Matrix = fe_classes(n)
+    let y: ptr<f32> = fe_labels(n)
+    let y0: ptr<i32> = malloc((n as i64) * 4 + 64) as ptr<i32>
+    for i in 0 to n {
+        if i % 3 == 0 { y0[i] = y[i] as i32 }
+        else { y0[i] = 0 - 1 }
+    }
+
+    let model: SelfTrainingClassifier = self_training_classifier_full_fit(X, y0, 2, 0.7, 10, 60, 0.1)
+
+    let mut labelled: i32 = 0
+    let mut right: i32 = 0
+    for i in 0 to n {
+        if model.labels[i] >= 0 {
+            labelled = labelled + 1
+            if model.labels[i] == (y[i] as i32) { right = right + 1 }
+        }
+    }
+    let coverage: f32 = (labelled as f32) / (n as f32)
+    let acc: f32 = (right as f32) / (labelled as f32)
+
+    let mut failures: i32 = 0
+    if coverage < 0.6 {
+        printf("  FAIL: only %.2f of the rows ended up labelled\n", coverage)
+        failures = failures + 1
+    }
+    if acc < 0.9 {
+        printf("  FAIL: %.4f of the labels it assigned are right\n", acc)
+        failures = failures + 1
+    }
+    if failures == 0 {
+        printf("  OK: %.2f labelled, %.4f of them right\n", coverage, acc)
+    }
+
+    free(y0 as ptr<void>)
+    self_training_classifier_free(model)
+    array_free_f32(y)
+    matrix_free(X)
+    return failures
+}
+
+function test_incremental_pca_batches() -> i32 {
+    println("Test: IncrementalPCA walks the whole design")
+    let n: i32 = 60
+    let X: Matrix = matrix_new(n, 3)
+    srand(3)
+    for i in 0 to n {
+        let t: f32 = ((rand() % 1000) as f32) / 100.0
+        # The first two features carry most of the spread, the third little.
+        matrix_set(X, i, 0, t)
+        matrix_set(X, i, 1, 0.5 * t + ((rand() % 100) as f32) / 100.0)
+        matrix_set(X, i, 2, ((rand() % 20) as f32) / 100.0)
+    }
+
+    let model: IncrementalPCA = incremental_pca_fit(X, 2, 16)
+    let Z: Matrix = incremental_pca_transform(model, X)
+
+    # The leading component has to carry more spread than the second, which is
+    # the one property a principal component decomposition has to have.
+    let mut var0: f32 = 0.0
+    let mut var1: f32 = 0.0
+    for i in 0 to n {
+        let a: f32 = matrix_at(Z, i, 0)
+        let b: f32 = matrix_at(Z, i, 1)
+        var0 = var0 + a * a
+        var1 = var1 + b * b
+    }
+
+    let mut failures: i32 = 0
+    if model.n_samples_seen != n {
+        printf("  FAIL: saw %d rows of %d\n", model.n_samples_seen, n)
+        failures = failures + 1
+    }
+    if var0 <= var1 {
+        printf("  FAIL: leading component spread %.4f, second %.4f\n", var0, var1)
+        failures = failures + 1
+    }
+    if failures == 0 {
+        printf("  OK: %d rows seen, spread %.4f then %.4f\n", model.n_samples_seen, var0, var1)
+    }
+
+    matrix_free(Z)
+    incremental_pca_free(model)
+    matrix_free(X)
+    return failures
+}
+
+function main() -> i32 {
+    println("=== Ensembles that fit their own estimators ===")
+    let mut failures: i32 = 0
+    failures = failures + test_voting_classifier_full()
+    failures = failures + test_stacking_classifier_full()
+    failures = failures + test_voting_regressor_full()
+    failures = failures + test_self_training_full()
+    failures = failures + test_incremental_pca_batches()
+    if failures > 0 {
+        printf("%d failure(s)\n", failures)
+        return 1
+    }
+    println("All full ensemble tests passed!")
+    return 0
+}

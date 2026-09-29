@@ -198,62 +198,373 @@ export struct SpectralBiclustering {
     fitted: bool
 }
 
+# Modified Gram-Schmidt over the columns of a row-major m by k block.
+function _bic_orthonormalize(V: ptr<f32>, m: i32, k: i32) -> void {
+    for c in 0 to k {
+        for prev in 0 to c {
+            let mut dot: f32 = 0.0
+            let mut i: i32 = 0
+            while i < m {
+                dot = dot + V[i * k + c] * V[i * k + prev]
+                i = i + 1
+            }
+            let mut i2: i32 = 0
+            while i2 < m {
+                V[i2 * k + c] = V[i2 * k + c] - dot * V[i2 * k + prev]
+                i2 = i2 + 1
+            }
+        }
+        let mut norm: f32 = 0.0
+        let mut i3: i32 = 0
+        while i3 < m {
+            let v: f32 = V[i3 * k + c]
+            norm = norm + v * v
+            i3 = i3 + 1
+        }
+        norm = sqrt((norm) as f64) as f32
+        if norm > 0.0000000001 {
+            let inv: f32 = 1.0 / norm
+            let mut i4: i32 = 0
+            while i4 < m {
+                V[i4 * k + c] = V[i4 * k + c] * inv
+                i4 = i4 + 1
+            }
+        }
+    }
+}
+
+# The k leading right singular vectors of A, as the k leading eigenvectors of
+# A^T A by block power iteration. A is row-major n by p, V is p by k.
+function _bic_right_singular(A: ptr<f32>, n: i32, p: i32, k: i32, V: ptr<f32>) -> void {
+    let M: ptr<f32> = array_new_f32(p * p)
+    cblas_sgemm(101, 112, 111, p, p, n, 1.0, A, p, A, p, 0.0, M, p)
+
+    let Z: ptr<f32> = array_new_f32(p * k)
+    srand(42)
+    for i in 0 to p * k { V[i] = ((rand() % 1000) as f32) / 500.0 - 1.0 }
+    _bic_orthonormalize(V, p, k)
+
+    let mut iter: i32 = 0
+    while iter < 300 {
+        blas_matmat(M, V, Z, p, k, p, 1.0, 0.0)
+        _bic_orthonormalize(Z, p, k)
+        let mut max_change: f32 = 0.0
+        let mut i2: i32 = 0
+        let total: i32 = p * k
+        while i2 < total {
+            let mut diff: f32 = Z[i2] - V[i2]
+            if diff < 0.0 { diff = 0.0 - diff }
+            if diff > max_change { max_change = diff }
+            V[i2] = Z[i2]
+            i2 = i2 + 1
+        }
+        if max_change < 0.0000001 { break }
+        iter = iter + 1
+    }
+
+    array_free_f32(M)
+    array_free_f32(Z)
+}
+
+# Lloyd's algorithm over m points in d dimensions, seeded by points spread
+# evenly through the set so a fit is reproducible.
+function _bic_kmeans(Z: ptr<f32>, m: i32, d: i32, k: i32, labels: ptr<i32>) -> void {
+    let centers: ptr<f32> = array_new_f32(k * d)
+    let counts: ptr<i32> = malloc((k as i64) * 4 + 64) as ptr<i32>
+    for c in 0 to k {
+        let src: i32 = (c * m) / k
+        let mut j: i32 = 0
+        while j < d {
+            centers[c * d + j] = Z[src * d + j]
+            j = j + 1
+        }
+    }
+    for i in 0 to m { labels[i] = 0 }
+
+    let mut iter: i32 = 0
+    while iter < 100 {
+        let mut moved: i32 = 0
+        let mut i: i32 = 0
+        while i < m {
+            let zi: ptr<f32> = Z + i * d
+            let mut best: i32 = 0
+            let mut best_d: f32 = 999999999999.0
+            let mut c: i32 = 0
+            while c < k {
+                let cc: ptr<f32> = centers + c * d
+                let mut acc: f32 = 0.0
+                let mut j2: i32 = 0
+                while j2 < d {
+                    let diff: f32 = zi[j2] - cc[j2]
+                    acc = acc + diff * diff
+                    j2 = j2 + 1
+                }
+                if acc < best_d {
+                    best_d = acc
+                    best = c
+                }
+                c = c + 1
+            }
+            if labels[i] != best {
+                labels[i] = best
+                moved = moved + 1
+            }
+            i = i + 1
+        }
+
+        for c2 in 0 to k {
+            counts[c2] = 0
+            let mut j3: i32 = 0
+            while j3 < d {
+                centers[c2 * d + j3] = 0.0
+                j3 = j3 + 1
+            }
+        }
+        let mut i2: i32 = 0
+        while i2 < m {
+            let lab: i32 = labels[i2]
+            let zi2: ptr<f32> = Z + i2 * d
+            let cc2: ptr<f32> = centers + lab * d
+            let mut j4: i32 = 0
+            while j4 < d {
+                cc2[j4] = cc2[j4] + zi2[j4]
+                j4 = j4 + 1
+            }
+            counts[lab] = counts[lab] + 1
+            i2 = i2 + 1
+        }
+        for c3 in 0 to k {
+            if counts[c3] > 0 {
+                let inv: f32 = 1.0 / (counts[c3] as f32)
+                let mut j5: i32 = 0
+                while j5 < d {
+                    centers[c3 * d + j5] = centers[c3 * d + j5] * inv
+                    j5 = j5 + 1
+                }
+            }
+        }
+
+        if moved == 0 { break }
+        iter = iter + 1
+    }
+
+    array_free_f32(centers)
+    free(counts as ptr<void>)
+}
+
+# Spectral biclustering, after Kluger et al. (2003), which is what
+# scikit-learn's SpectralBiclustering implements.
+#
+# The checkerboard structure it looks for shows up in the singular vectors of
+# the bistochastically normalized matrix: a vector that fits the structure is
+# close to piecewise constant. So the leading vectors are ranked by how well a
+# one dimensional k-means fits each of them, the best few are kept, and rows
+# and columns are clustered separately in the space they span.
+#
+# What stood here bucketed row means and column means between their smallest
+# and largest values, which finds no checkerboard and came out at thirty
+# thousand times scikit-learn for doing almost nothing.
+
+# Sinkhorn-Knopp, which is the default normalization scikit-learn uses.
+function _bic_bistochastic(A: ptr<f32>, n: i32, p: i32) -> void {
+    let r: ptr<f32> = array_new_f32(n)
+    let c: ptr<f32> = array_new_f32(p)
+    let mut iter: i32 = 0
+    while iter < 100 {
+        for i in 0 to n { r[i] = 0.0 }
+        for j in 0 to p { c[j] = 0.0 }
+        let mut i2: i32 = 0
+        while i2 < n {
+            let row: ptr<f32> = A + i2 * p
+            let mut s: f32 = 0.0
+            let mut j2: i32 = 0
+            while j2 < p {
+                s = s + row[j2]
+                j2 = j2 + 1
+            }
+            if s < 0.0000000001 { s = 0.0000000001 }
+            r[i2] = 1.0 / (sqrt((s) as f64) as f32)
+            i2 = i2 + 1
+        }
+        let mut i3: i32 = 0
+        while i3 < n {
+            let row2: ptr<f32> = A + i3 * p
+            let ri: f32 = r[i3]
+            let mut j3: i32 = 0
+            while j3 < p {
+                let v: f32 = row2[j3] * ri
+                row2[j3] = v
+                c[j3] = c[j3] + v
+                j3 = j3 + 1
+            }
+            i3 = i3 + 1
+        }
+        let mut max_dev: f32 = 0.0
+        let mut j4: i32 = 0
+        while j4 < p {
+            let mut s2: f32 = c[j4]
+            if s2 < 0.0000000001 { s2 = 0.0000000001 }
+            let scale: f32 = 1.0 / (sqrt((s2) as f64) as f32)
+            c[j4] = scale
+            let dev: f32 = fabs((scale - 1.0) as f64) as f32
+            if dev > max_dev { max_dev = dev }
+            j4 = j4 + 1
+        }
+        let mut i4: i32 = 0
+        while i4 < n {
+            let row3: ptr<f32> = A + i4 * p
+            let mut j5: i32 = 0
+            while j5 < p {
+                row3[j5] = row3[j5] * c[j5]
+                j5 = j5 + 1
+            }
+            i4 = i4 + 1
+        }
+        if max_dev < 0.00001 { break }
+        iter = iter + 1
+    }
+    array_free_f32(r)
+    array_free_f32(c)
+}
+
+# How well a one dimensional k-means fits a vector, as the sum of squared
+# distances to the assigned centroid. A vector that carries the checkerboard
+# is close to piecewise constant and scores low.
+function _bic_piecewise_error(v: ptr<f32>, m: i32, k: i32) -> f32 {
+    let labels: ptr<i32> = malloc((m as i64) * 4 + 64) as ptr<i32>
+    _bic_kmeans(v, m, 1, k, labels)
+
+    let sums: ptr<f32> = array_new_f32(k)
+    let counts: ptr<i32> = malloc((k as i64) * 4 + 64) as ptr<i32>
+    for c in 0 to k { counts[c] = 0 }
+    let mut i: i32 = 0
+    while i < m {
+        sums[labels[i]] = sums[labels[i]] + v[i]
+        counts[labels[i]] = counts[labels[i]] + 1
+        i = i + 1
+    }
+    for c2 in 0 to k {
+        if counts[c2] > 0 { sums[c2] = sums[c2] / (counts[c2] as f32) }
+    }
+    let mut err: f32 = 0.0
+    let mut i2: i32 = 0
+    while i2 < m {
+        let d: f32 = v[i2] - sums[labels[i2]]
+        err = err + d * d
+        i2 = i2 + 1
+    }
+
+    free(labels as ptr<void>)
+    free(counts as ptr<void>)
+    array_free_f32(sums)
+    return err
+}
+
 export function spectral_biclustering_fit(X: Matrix, n_row_clusters: i32, n_col_clusters: i32) -> SpectralBiclustering {
     let n: i32 = X.rows
     let p: i32 = X.cols
+    let xdata: ptr<f32> = X.data
 
-    # Simplified: assign rows and columns to clusters by k-means on row/col means
-    let row_means: ptr<f32> = array_new_f32(n)
-    let col_means: ptr<f32> = array_new_f32(p)
-    for i in 0 to n {
-        let mut m: f32 = 0.0
-        for j in 0 to p { m = m + matrix_at(X, i, j) }
-        row_means[i] = m / (p as f32)
-    }
-    for j in 0 to p {
-        let mut m: f32 = 0.0
-        for i in 0 to n { m = m + matrix_at(X, i, j) }
-        col_means[j] = m / (n as f32)
-    }
+    let An: ptr<f32> = array_new_f32(n * p)
+    for i in 0 to n * p { An[i] = xdata[i] }
+    _bic_bistochastic(An, n, p)
 
-    let row_labels: ptr<i32> = array_new_f32(n) as ptr<i32>
-    let col_labels: ptr<i32> = array_new_f32(p) as ptr<i32>
+    # scikit-learn takes six singular vectors and keeps the best three of
+    # them, which is as many as the matrix has here when it is narrow.
+    let mut n_vecs: i32 = 6
+    if n_vecs > p { n_vecs = p }
+    if n_vecs < 2 { n_vecs = 2 }
 
-    # Simple threshold-based clustering
-    let mut row_min: f32 = row_means[0]
-    let mut row_max: f32 = row_means[0]
-    for i in 0 to n {
-        if row_means[i] < row_min { row_min = row_means[i] }
-        if row_means[i] > row_max { row_max = row_means[i] }
-    }
-    let row_range: f32 = row_max - row_min
-    for i in 0 to n {
-        if row_range > 0.0000000001 {
-            row_labels[i] = ((row_means[i] - row_min) / row_range * (n_row_clusters as f32)) as i32
-            if row_labels[i] >= n_row_clusters { row_labels[i] = n_row_clusters - 1 }
-        } else {
-            row_labels[i] = 0
+    let V: ptr<f32> = array_new_f32(p * n_vecs)
+    _bic_right_singular(An, n, p, n_vecs, V)
+
+    let U: ptr<f32> = array_new_f32(n * n_vecs)
+    blas_matmat(An, V, U, n, n_vecs, p, 1.0, 0.0)
+    for c in 0 to n_vecs {
+        let mut norm: f32 = 0.0
+        let mut i2: i32 = 0
+        while i2 < n {
+            let v: f32 = U[i2 * n_vecs + c]
+            norm = norm + v * v
+            i2 = i2 + 1
+        }
+        norm = sqrt((norm) as f64) as f32
+        if norm > 0.0000000001 {
+            let inv: f32 = 1.0 / norm
+            let mut i3: i32 = 0
+            while i3 < n {
+                U[i3 * n_vecs + c] = U[i3 * n_vecs + c] * inv
+                i3 = i3 + 1
+            }
         }
     }
 
-    let mut col_min: f32 = col_means[0]
-    let mut col_max: f32 = col_means[0]
-    for j in 0 to p {
-        if col_means[j] < col_min { col_min = col_means[j] }
-        if col_means[j] > col_max { col_max = col_means[j] }
+    # Rank the vectors after the trivial one by how close to piecewise
+    # constant they are, and keep the best few.
+    let mut n_best: i32 = 3
+    if n_best > n_vecs - 1 { n_best = n_vecs - 1 }
+    if n_best < 1 { n_best = 1 }
+
+    let scratch: ptr<f32> = array_new_f32(n)
+    let errs: ptr<f32> = array_new_f32(n_vecs)
+    let chosen: ptr<i32> = malloc((n_vecs as i64) * 4 + 64) as ptr<i32>
+    for c2 in 0 to n_vecs { chosen[c2] = 0 }
+    for c3 in 1 to n_vecs {
+        let mut i4: i32 = 0
+        while i4 < n {
+            scratch[i4] = U[i4 * n_vecs + c3]
+            i4 = i4 + 1
+        }
+        errs[c3] = _bic_piecewise_error(scratch, n, n_row_clusters)
     }
-    let col_range: f32 = col_max - col_min
-    for j in 0 to p {
-        if col_range > 0.0000000001 {
-            col_labels[j] = ((col_means[j] - col_min) / col_range * (n_col_clusters as f32)) as i32
-            if col_labels[j] >= n_col_clusters { col_labels[j] = n_col_clusters - 1 }
-        } else {
-            col_labels[j] = 0
+    for b in 0 to n_best {
+        let mut best_c: i32 = -1
+        let mut best_err: f32 = 999999999999.0
+        for c4 in 1 to n_vecs {
+            if chosen[c4] == 0 {
+                if errs[c4] < best_err {
+                    best_err = errs[c4]
+                    best_c = c4
+                }
+            }
+        }
+        if best_c >= 0 { chosen[best_c] = 1 }
+    }
+
+    # Rows and columns are clustered separately, in the space the kept
+    # vectors span.
+    let Zr: ptr<f32> = array_new_f32(n * n_best)
+    let Zc: ptr<f32> = array_new_f32(p * n_best)
+    let mut slot: i32 = 0
+    for c5 in 1 to n_vecs {
+        if chosen[c5] == 1 {
+            let mut i5: i32 = 0
+            while i5 < n {
+                Zr[i5 * n_best + slot] = U[i5 * n_vecs + c5]
+                i5 = i5 + 1
+            }
+            let mut j2: i32 = 0
+            while j2 < p {
+                Zc[j2 * n_best + slot] = V[j2 * n_vecs + c5]
+                j2 = j2 + 1
+            }
+            slot = slot + 1
         }
     }
 
-    array_free_f32(row_means)
-    array_free_f32(col_means)
+    let row_labels: ptr<i32> = malloc((n as i64) * 4 + 64) as ptr<i32>
+    let col_labels: ptr<i32> = malloc((p as i64) * 4 + 64) as ptr<i32>
+    _bic_kmeans(Zr, n, n_best, n_row_clusters, row_labels)
+    _bic_kmeans(Zc, p, n_best, n_col_clusters, col_labels)
+
+    array_free_f32(An)
+    array_free_f32(U)
+    array_free_f32(V)
+    array_free_f32(Zr)
+    array_free_f32(Zc)
+    array_free_f32(scratch)
+    array_free_f32(errs)
+    free(chosen as ptr<void>)
 
     return SpectralBiclustering {
         row_labels: row_labels,
@@ -284,49 +595,137 @@ export struct SpectralCoclustering {
     fitted: bool
 }
 
+# Spectral co-clustering, after Dhillon (2001), which is what scikit-learn's
+# SpectralCoclustering implements.
+#
+# The data matrix is treated as the adjacency of a bipartite graph. Normalizing
+# it by the square roots of its row and column sums turns the partitioning
+# problem into a singular value problem: the leading pair is trivial, and the
+# next ceil(log2(k)) pairs embed rows and columns in a common space where a
+# k-means run recovers the co-clusters.
+#
+# What stood here scaled each row sum into a bucket between the smallest and
+# the largest, which is not that algorithm and is not any other one. It came
+# out at three thousand times scikit-learn because it did almost nothing.
+#
+# The helper names carry a prefix because a non-exported function with the same
+# name in two modules collides in the generated C. Flow issue #465.
+
 export function spectral_coclustering_fit(X: Matrix, n_clusters: i32) -> SpectralCoclustering {
     let n: i32 = X.rows
     let p: i32 = X.cols
+    let xdata: ptr<f32> = X.data
 
-    let row_labels: ptr<i32> = array_new_f32(n) as ptr<i32>
-    let col_labels: ptr<i32> = array_new_f32(p) as ptr<i32>
+    let row_labels: ptr<i32> = malloc((n as i64) * 4 + 64) as ptr<i32>
+    let col_labels: ptr<i32> = malloc((p as i64) * 4 + 64) as ptr<i32>
 
-    # Simplified: cluster rows and columns together by value magnitude
-    let mut row_sums: ptr<f32> = array_new_f32(n)
+    # Row and column sums, and the inverse square roots the normalization uses.
+    let r_inv: ptr<f32> = array_new_f32(n)
+    let c_inv: ptr<f32> = array_new_f32(p)
+    let c_sum: ptr<f32> = array_new_f32(p)
     for i in 0 to n {
+        let row: ptr<f32> = xdata + i * p
         let mut s: f32 = 0.0
-        for j in 0 to p { s = s + matrix_at(X, i, j) }
-        row_sums[i] = s
+        let mut j: i32 = 0
+        while j < p {
+            let v: f32 = row[j]
+            s = s + v
+            c_sum[j] = c_sum[j] + v
+            j = j + 1
+        }
+        if s < 0.0000000001 { s = 0.0000000001 }
+        r_inv[i] = 1.0 / (sqrt((s) as f64) as f32)
+    }
+    for j2 in 0 to p {
+        let mut s2: f32 = c_sum[j2]
+        if s2 < 0.0000000001 { s2 = 0.0000000001 }
+        c_inv[j2] = 1.0 / (sqrt((s2) as f64) as f32)
     }
 
-    let mut min_val: f32 = row_sums[0]
-    let mut max_val: f32 = row_sums[0]
-    for i in 0 to n {
-        if row_sums[i] < min_val { min_val = row_sums[i] }
-        if row_sums[i] > max_val { max_val = row_sums[i] }
-    }
-    let range: f32 = max_val - min_val
-    for i in 0 to n {
-        if range > 0.0000000001 {
-            row_labels[i] = ((row_sums[i] - min_val) / range * (n_clusters as f32)) as i32
-            if row_labels[i] >= n_clusters { row_labels[i] = n_clusters - 1 }
-        } else {
-            row_labels[i] = 0
+    let An: ptr<f32> = array_new_f32(n * p)
+    for i2 in 0 to n {
+        let src: ptr<f32> = xdata + i2 * p
+        let dst: ptr<f32> = An + i2 * p
+        let ri: f32 = r_inv[i2]
+        let mut j3: i32 = 0
+        while j3 < p {
+            dst[j3] = ri * src[j3] * c_inv[j3]
+            j3 = j3 + 1
         }
     }
 
-    for j in 0 to p {
-        let mut s: f32 = 0.0
-        for i in 0 to n { s = s + matrix_at(X, i, j) }
-        if range > 0.0000000001 {
-            col_labels[j] = ((s - min_val) / range * (n_clusters as f32)) as i32
-            if col_labels[j] >= n_clusters { col_labels[j] = n_clusters - 1 }
-        } else {
-            col_labels[j] = 0
+    # The leading pair is trivial, so ceil(log2(k)) more are needed after it.
+    let mut n_keep: i32 = 0
+    let mut reach: i32 = 1
+    while reach < n_clusters {
+        reach = reach * 2
+        n_keep = n_keep + 1
+    }
+    if n_keep < 1 { n_keep = 1 }
+    let mut n_vecs: i32 = n_keep + 1
+    if n_vecs > p { n_vecs = p }
+
+    let V: ptr<f32> = array_new_f32(p * n_vecs)
+    _bic_right_singular(An, n, p, n_vecs, V)
+
+    # The matching left vectors, as A v, which is what the normalized matrix
+    # maps the right vectors to.
+    let U: ptr<f32> = array_new_f32(n * n_vecs)
+    blas_matmat(An, V, U, n, n_vecs, p, 1.0, 0.0)
+    for c in 0 to n_vecs {
+        let mut norm: f32 = 0.0
+        let mut i3: i32 = 0
+        while i3 < n {
+            let v: f32 = U[i3 * n_vecs + c]
+            norm = norm + v * v
+            i3 = i3 + 1
+        }
+        norm = sqrt((norm) as f64) as f32
+        if norm > 0.0000000001 {
+            let inv: f32 = 1.0 / norm
+            let mut i4: i32 = 0
+            while i4 < n {
+                U[i4 * n_vecs + c] = U[i4 * n_vecs + c] * inv
+                i4 = i4 + 1
+            }
         }
     }
 
-    array_free_f32(row_sums)
+    # Rows and columns land in one space, scaled back by the same square roots,
+    # and one k-means run over the stack assigns both.
+    let d: i32 = n_vecs - 1
+    let m: i32 = n + p
+    let Z: ptr<f32> = array_new_f32(m * d)
+    for i5 in 0 to n {
+        let ri2: f32 = r_inv[i5]
+        let mut j4: i32 = 0
+        while j4 < d {
+            Z[i5 * d + j4] = ri2 * U[i5 * n_vecs + j4 + 1]
+            j4 = j4 + 1
+        }
+    }
+    for j5 in 0 to p {
+        let cj: f32 = c_inv[j5]
+        let mut j6: i32 = 0
+        while j6 < d {
+            Z[(n + j5) * d + j6] = cj * V[j5 * n_vecs + j6 + 1]
+            j6 = j6 + 1
+        }
+    }
+
+    let labels: ptr<i32> = malloc((m as i64) * 4 + 64) as ptr<i32>
+    _bic_kmeans(Z, m, d, n_clusters, labels)
+    for i6 in 0 to n { row_labels[i6] = labels[i6] }
+    for j7 in 0 to p { col_labels[j7] = labels[n + j7] }
+
+    free(labels as ptr<void>)
+    array_free_f32(Z)
+    array_free_f32(U)
+    array_free_f32(V)
+    array_free_f32(An)
+    array_free_f32(r_inv)
+    array_free_f32(c_inv)
+    array_free_f32(c_sum)
 
     return SpectralCoclustering {
         row_labels: row_labels,
@@ -629,75 +1028,148 @@ export struct NeighborhoodComponentsAnalysis {
     fitted: bool
 }
 
+# Neighbourhood components analysis, after Goldberger et al. (2004), which is
+# what scikit-learn's NeighborhoodComponentsAnalysis maximizes.
+#
+# The objective is the expected number of correctly classified points under
+# stochastic nearest neighbours: with p_ik proportional to exp of minus the
+# squared distance between the projected points, the score of a point is the
+# probability mass its own class receives, and the gradient of that sum with
+# respect to the projection is
+#
+#   2 * sum_i ( p_i * sum_k p_ik C_ik  -  sum_{k in class of i} p_ik C_ik ) * T
+#
+# with C_ik the outer product of the difference of the two rows.
+#
+# What stood here computed neither. Its distance summed the squares of the
+# individual products rather than squaring the projected difference, which is
+# not the distance in the projected space unless the projection has one
+# column, and its gradient kept only the second of the two terms above, so it
+# pulled same-class points together with nothing pushing back.
 export function nca_fit(X: Matrix, y: ptr<f32>, n_components: i32, epochs: i32, lr: f32) -> NeighborhoodComponentsAnalysis {
     let n: i32 = X.rows
     let p: i32 = X.cols
+    let d: i32 = n_components
+    let xdata: ptr<f32> = X.data
 
-    let transform: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    # The projection, held flat while it is being fitted and handed back a row
+    # at a time at the end.
+    let T: ptr<f32> = array_new_f32(p * d)
     for i in 0 to p {
-        transform[i] = array_new_f32(n_components)
-        for j in 0 to n_components {
-            if i == j {
-                transform[i][j] = 1.0
-            } else {
-                transform[i][j] = 0.0
-            }
+        let mut j: i32 = 0
+        while j < d {
+            if i == j { T[i * d + j] = 1.0 }
+            else { T[i * d + j] = 0.0 }
+            j = j + 1
         }
     }
 
-    # Simplified: gradient descent on leave-one-out NN score
+    let proj: ptr<f32> = array_new_f32(n * d)
+    let prob: ptr<f32> = array_new_f32(n)
+    let W: ptr<f32> = array_new_f32(p * p)
+    let grad: ptr<f32> = array_new_f32(p * d)
+    let diff: ptr<f32> = array_new_f32(p)
+
     for epoch in 0 to epochs {
-        let grad: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
-        for i in 0 to p {
-            grad[i] = array_new_f32(n_components)
-            for j in 0 to n_components { grad[i][j] = 0.0 }
-        }
+        # One projection of the whole design per epoch.
+        blas_matmat(xdata, T, proj, n, d, p, 1.0, 0.0)
+        for i in 0 to p * p { W[i] = 0.0 }
 
         for i in 0 to n {
-            # Compute softmax weights for all other samples
+            let pi: ptr<f32> = proj + i * d
+            let yi: f32 = y[i]
+
+            # The softmax over the other points, and the mass its own class
+            # receives.
             let mut total: f32 = 0.0
-            let dists: ptr<f32> = array_new_f32(n)
-            for k in 0 to n {
-                if k == i { dists[k] = 0.0; continue }
-                let mut d: f32 = 0.0
-                for a in 0 to p {
-                    let diff: f32 = matrix_at(X, i, a) - matrix_at(X, k, a)
-                    for b in 0 to n_components {
-                        d = d + diff * transform[a][b] * diff * transform[a][b]
+            let mut same: f32 = 0.0
+            let mut k: i32 = 0
+            while k < n {
+                if k != i {
+                    let pk: ptr<f32> = proj + k * d
+                    let mut dist: f32 = 0.0
+                    let mut b: i32 = 0
+                    while b < d {
+                        let dv: f32 = pi[b] - pk[b]
+                        dist = dist + dv * dv
+                        b = b + 1
                     }
+                    let w: f32 = exp((0.0 - dist) as f64) as f32
+                    prob[k] = w
+                    total = total + w
+                    if y[k] == yi { same = same + w }
+                } else {
+                    prob[k] = 0.0
                 }
-                let w: f32 = exp((-d) as f64) as f32
-                dists[k] = w
-                total = total + w
+                k = k + 1
             }
+            if total < 0.0000000001 { continue }
 
-            if total < 0.0000000001 { array_free_f32(dists); continue }
+            let inv_total: f32 = 1.0 / total
+            let p_i: f32 = same * inv_total
 
-            # Gradient: encourage same-class neighbors
-            for k in 0 to n {
-                if k == i { continue }
-                let p_ik: f32 = dists[k] / total
-                if y[i] == y[k] {
-                    for a in 0 to p {
-                        let diff: f32 = matrix_at(X, i, a) - matrix_at(X, k, a)
-                        for b in 0 to n_components {
-                            grad[a][b] = grad[a][b] - p_ik * 2.0 * diff * transform[a][b] * diff
+            # Each pair contributes its outer product, weighted by how much
+            # the pair helps or hurts the score of this point.
+            let row_i: ptr<f32> = xdata + i * p
+            let mut k2: i32 = 0
+            while k2 < n {
+                if k2 != i {
+                    let p_ik: f32 = prob[k2] * inv_total
+                    let mut coeff: f32 = p_i * p_ik
+                    if y[k2] == yi { coeff = coeff - p_ik }
+                    if coeff > 0.0000001 || coeff < 0.0 - 0.0000001 {
+                        let row_k: ptr<f32> = xdata + k2 * p
+                        let mut a: i32 = 0
+                        while a < p {
+                            diff[a] = row_i[a] - row_k[a]
+                            a = a + 1
+                        }
+                        let mut a2: i32 = 0
+                        while a2 < p {
+                            let da: f32 = coeff * diff[a2]
+                            let wrow: ptr<f32> = W + a2 * p
+                            let mut b2: i32 = 0
+                            while b2 < p {
+                                wrow[b2] = wrow[b2] + da * diff[b2]
+                                b2 = b2 + 1
+                            }
+                            a2 = a2 + 1
                         }
                     }
                 }
+                k2 = k2 + 1
             }
-
-            array_free_f32(dists)
         }
 
-        for a in 0 to p {
-            for b in 0 to n_components {
-                transform[a][b] = transform[a][b] - lr * grad[a][b] / (n as f32)
-            }
-            array_free_f32(grad[a])
+        # Ascend the objective. The step is scaled by the sample count so a
+        # learning rate means the same thing whatever the size of the data.
+        blas_matmat(W, T, grad, p, d, p, 1.0, 0.0)
+        let step: f32 = 2.0 * lr / (n as f32)
+        let mut t: i32 = 0
+        let total_t: i32 = p * d
+        while t < total_t {
+            T[t] = T[t] + step * grad[t]
+            t = t + 1
         }
-        free(grad as ptr<void>)
     }
+
+    let transform: ptr<ptr<f32> > = malloc((p as i64) * 8) as ptr<ptr<f32> >
+    for i2 in 0 to p {
+        let row: ptr<f32> = array_new_f32(d)
+        let mut j2: i32 = 0
+        while j2 < d {
+            row[j2] = T[i2 * d + j2]
+            j2 = j2 + 1
+        }
+        transform[i2] = row
+    }
+
+    array_free_f32(T)
+    array_free_f32(proj)
+    array_free_f32(prob)
+    array_free_f32(W)
+    array_free_f32(grad)
+    array_free_f32(diff)
 
     return NeighborhoodComponentsAnalysis {
         transformation: transform,

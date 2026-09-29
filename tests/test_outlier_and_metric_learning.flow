@@ -1,0 +1,143 @@
+# EllipticEnvelope has to find the outliers, and NCA has to improve the
+# separation it was asked to improve. Both implementations were stand-ins
+# before, and nothing in the suite asked either of them for a result.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+}
+
+# A tight cluster with a few points thrown far away from it.
+function oml_fixture(n_inliers: i32, n_outliers: i32) -> Matrix {
+    let n: i32 = n_inliers + n_outliers
+    let X: Matrix = matrix_new(n, 2)
+    srand(7)
+    for i in 0 to n_inliers {
+        let a: f32 = ((rand() % 200) as f32) / 100.0 - 1.0
+        let b: f32 = ((rand() % 200) as f32) / 100.0 - 1.0
+        matrix_set(X, i, 0, a)
+        matrix_set(X, i, 1, b)
+    }
+    for k in 0 to n_outliers {
+        matrix_set(X, n_inliers + k, 0, 40.0 + (k as f32))
+        matrix_set(X, n_inliers + k, 1, 40.0 + (k as f32))
+    }
+    return X
+}
+
+function test_envelope_finds_the_outliers() -> i32 {
+    println("Test: EllipticEnvelope marks the far points")
+    let n_in: i32 = 60
+    let n_out: i32 = 6
+    let X: Matrix = oml_fixture(n_in, n_out)
+    let contamination: f32 = (n_out as f32) / ((n_in + n_out) as f32)
+    let model: EllipticEnvelope = elliptic_envelope_fit(X, contamination, 10)
+    let pred: ptr<f32> = elliptic_envelope_predict(model, X)
+
+    let mut missed: i32 = 0
+    for k in 0 to n_out {
+        if pred[n_in + k] > 0.0 { missed = missed + 1 }
+    }
+    let mut false_alarms: i32 = 0
+    for i in 0 to n_in {
+        if pred[i] < 0.0 { false_alarms = false_alarms + 1 }
+    }
+
+    let mut failures: i32 = 0
+    if missed > 0 {
+        printf("  FAIL: %d of %d outliers were called inliers\n", missed, n_out)
+        failures = failures + 1
+    }
+    if false_alarms > 0 {
+        printf("  FAIL: %d inliers were called outliers\n", false_alarms)
+        failures = failures + 1
+    }
+    if failures == 0 {
+        printf("  OK: all %d outliers found, no false alarms\n", n_out)
+    }
+
+    array_free_f32(pred)
+    elliptic_envelope_free(model)
+    matrix_free(X)
+    return failures
+}
+
+# The mean distance between points of different classes, over the mean
+# distance within a class, in whatever space the argument is given in.
+function oml_separation(Z: Matrix, y: ptr<f32>, n: i32) -> f32 {
+    let mut between: f32 = 0.0
+    let mut n_between: f32 = 0.0
+    let mut within: f32 = 0.0
+    let mut n_within: f32 = 0.0
+    for i in 0 to n {
+        for j in i + 1 to n {
+            let mut d: f32 = 0.0
+            for c in 0 to Z.cols {
+                let diff: f32 = matrix_at(Z, i, c) - matrix_at(Z, j, c)
+                d = d + diff * diff
+            }
+            d = sqrt((d) as f64) as f32
+            if y[i] == y[j] {
+                within = within + d
+                n_within = n_within + 1.0
+            } else {
+                between = between + d
+                n_between = n_between + 1.0
+            }
+        }
+    }
+    if n_within < 1.0 || within < 0.0000001 { return 0.0 }
+    return (between / n_between) / (within / n_within)
+}
+
+function test_nca_improves_separation() -> i32 {
+    println("Test: NCA separates the classes better than the identity")
+    let n: i32 = 60
+    let X: Matrix = matrix_new(n, 4)
+    let y: ptr<f32> = array_new_f32(n)
+    srand(11)
+    for i in 0 to n {
+        let cls: i32 = i % 2
+        # The first feature carries the class, the rest are noise, so a
+        # projection that learns anything has to lean on the first.
+        let centre: f32 = (cls as f32) * 4.0
+        matrix_set(X, i, 0, centre + ((rand() % 100) as f32) / 100.0)
+        matrix_set(X, i, 1, ((rand() % 400) as f32) / 100.0)
+        matrix_set(X, i, 2, ((rand() % 400) as f32) / 100.0)
+        matrix_set(X, i, 3, ((rand() % 400) as f32) / 100.0)
+        y[i] = cls as f32
+    }
+
+    let before: f32 = oml_separation(X, y, n)
+    let model: NeighborhoodComponentsAnalysis = nca_fit(X, y, 2, 30, 0.01)
+    let Z: Matrix = nca_transform(model, X)
+    let after: f32 = oml_separation(Z, y, n)
+
+    let mut failures: i32 = 0
+    if after <= before {
+        printf("  FAIL: separation %.4f before, %.4f after\n", before, after)
+        failures = failures + 1
+    } else {
+        printf("  OK: separation %.4f before, %.4f after\n", before, after)
+    }
+
+    matrix_free(Z)
+    nca_free(model)
+    array_free_f32(y)
+    matrix_free(X)
+    return failures
+}
+
+function main() -> i32 {
+    println("=== Outlier detection and metric learning ===")
+    let mut failures: i32 = 0
+    failures = failures + test_envelope_finds_the_outliers()
+    failures = failures + test_nca_improves_separation()
+    if failures > 0 {
+        printf("%d failure(s)\n", failures)
+        return 1
+    }
+    println("All outlier and metric learning tests passed!")
+    return 0
+}

@@ -697,6 +697,37 @@ export struct VotingClassifier {
     fitted: bool
 }
 
+# The whole ensemble, fitted from the data, which is what scikit-learn's
+# VotingClassifier does when it is handed estimators: it clones and fits each
+# one, then votes. The function below takes trees that are already fitted, so
+# its cost is the vote alone and racing it against the class compares a part
+# against the whole.
+#
+# The trees differ by the seed they draw their feature subsets from, which is
+# what makes a vote of identical learners worth taking.
+export function voting_classifier_full_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_estimators: i32, max_depth: i32, seed: i32, voting: i32) -> VotingClassifier {
+    let trees: ptr<DecisionTreeClassifier> = malloc((n_estimators as i64) * 256) as ptr<DecisionTreeClassifier>
+    let state: ptr<u32> = malloc(8) as ptr<u32>
+    let n_features: i32 = X.cols
+    for e in 0 to n_estimators {
+        state[0] = (seed + e * 7919) as u32
+        trees[e] = decision_tree_classifier_fit_rf(X, y, n_classes, max_depth, 0, n_features, state)
+    }
+    free(state as ptr<void>)
+
+    let classes: ptr<f32> = array_new_f32(n_classes)
+    let found: DistinctF32 = distinct_f32(y, X.rows, n_classes)
+    for c in 0 to n_classes {
+        if c < found.count { classes[c] = found.values[c] }
+        else { classes[c] = c as f32 }
+    }
+    array_free_f32(found.values)
+
+    let model: VotingClassifier = voting_classifier_fit(trees, n_estimators, n_classes, classes, voting)
+    array_free_f32(classes)
+    return model
+}
+
 export function voting_classifier_fit(estimators: ptr<DecisionTreeClassifier>, n_estimators: i32, n_classes: i32, classes: ptr<f32>, voting: i32) -> VotingClassifier {
     return VotingClassifier {
         # The model takes over the fitted sub-estimators and its free
@@ -1809,6 +1840,190 @@ export struct StackingClassifier {
     fitted: bool
 }
 
+export struct StackingClassifierFull {
+    trees: ptr<DecisionTreeClassifier>,
+    n_base: i32,
+    n_classes: i32,
+    meta_weights: ptr<ptr<f32> >,
+    meta_bias: ptr<f32>,
+    fitted: bool
+}
+
+# Stacking with the base estimators fitted and cross-validated here, which is
+# what scikit-learn's StackingClassifier does.
+#
+# The function below takes the base estimators' predictions as input, so its
+# cost is the meta-learner alone. The class it is named after fits every base
+# estimator once per fold to build the meta-features, fits the meta-learner on
+# those, and then refits the base estimators on all of the data. That is
+# almost all of the work, and leaving it out compares a part against the whole.
+export function stacking_classifier_full_fit(X: Matrix, y: ptr<f32>, n_classes: i32, n_base: i32, max_depth: i32, seed: i32, lr: f32, n_iter: i32) -> StackingClassifierFull {
+    let n: i32 = X.rows
+    let p: i32 = X.cols
+    let xdata: ptr<f32> = X.data
+
+    # Out of fold predictions, which is what the meta-learner has to be
+    # trained on: a base estimator's prediction for a row it helped fit would
+    # tell the meta-learner more than it will know at prediction time.
+    let meta: ptr<f32> = array_new_f32(n * n_base)
+    let n_folds: i32 = 5
+    let fold_size: i32 = n / n_folds
+    let state: ptr<u32> = malloc(8) as ptr<u32>
+
+    for fold in 0 to n_folds {
+        let test_start: i32 = fold * fold_size
+        let mut test_end: i32 = test_start + fold_size
+        if fold == n_folds - 1 { test_end = n }
+        let n_test: i32 = test_end - test_start
+        let n_train: i32 = n - n_test
+        if n_train < 2 { continue }
+
+        let X_tr: Matrix = matrix_new(n_train, p)
+        let y_tr: ptr<f32> = array_new_f32(n_train)
+        let dst: ptr<f32> = X_tr.data
+        let mut at: i32 = 0
+        for i in 0 to n {
+            if i < test_start || i >= test_end {
+                let src: ptr<f32> = xdata + i * p
+                let drow: ptr<f32> = dst + at * p
+                let mut j: i32 = 0
+                while j < p {
+                    drow[j] = src[j]
+                    j = j + 1
+                }
+                y_tr[at] = y[i]
+                at = at + 1
+            }
+        }
+
+        let X_te: Matrix = matrix_new(n_test, p)
+        let tdst: ptr<f32> = X_te.data
+        for t in 0 to n_test {
+            let src2: ptr<f32> = xdata + (test_start + t) * p
+            let trow: ptr<f32> = tdst + t * p
+            let mut j2: i32 = 0
+            while j2 < p {
+                trow[j2] = src2[j2]
+                j2 = j2 + 1
+            }
+        }
+
+        for b in 0 to n_base {
+            state[0] = (seed + b * 7919 + fold * 104729) as u32
+            let tree: DecisionTreeClassifier = decision_tree_classifier_fit_rf(X_tr, y_tr, n_classes, max_depth, 0, p, state)
+            let preds: ptr<f32> = decision_tree_classifier_predict(tree, X_te)
+            for t2 in 0 to n_test {
+                meta[(test_start + t2) * n_base + b] = preds[t2]
+            }
+            array_free_f32(preds)
+            decision_tree_classifier_free(tree)
+        }
+
+        array_free_f32(y_tr)
+        matrix_free(X_tr)
+        matrix_free(X_te)
+    }
+
+    # The meta-learner, one sigmoid per class over the base predictions.
+    let meta_weights: ptr<ptr<f32> > = malloc((n_classes as i64) * 8) as ptr<ptr<f32> >
+    let meta_bias: ptr<f32> = array_new_f32(n_classes)
+    for c in 0 to n_classes {
+        meta_weights[c] = array_new_f32(n_base)
+        meta_bias[c] = 0.0
+    }
+    for iter in 0 to n_iter {
+        for i2 in 0 to n {
+            let row: ptr<f32> = meta + i2 * n_base
+            let yi: i32 = y[i2] as i32
+            for c2 in 0 to n_classes {
+                let wc: ptr<f32> = meta_weights[c2]
+                let mut z: f32 = meta_bias[c2]
+                let mut j3: i32 = 0
+                while j3 < n_base {
+                    z = z + wc[j3] * row[j3]
+                    j3 = j3 + 1
+                }
+                let mut target: f32 = 0.0
+                if yi == c2 { target = 1.0 }
+                let pred: f32 = 1.0 / (1.0 + (exp((0.0 - z) as f64) as f32))
+                let err: f32 = (target - pred) * lr
+                let mut j4: i32 = 0
+                while j4 < n_base {
+                    wc[j4] = wc[j4] + err * row[j4]
+                    j4 = j4 + 1
+                }
+                meta_bias[c2] = meta_bias[c2] + err
+            }
+        }
+    }
+
+    # The base estimators are refitted on all of the data, which is what
+    # predicts for a row nobody has seen.
+    let trees: ptr<DecisionTreeClassifier> = malloc((n_base as i64) * 256) as ptr<DecisionTreeClassifier>
+    for b2 in 0 to n_base {
+        state[0] = (seed + b2 * 7919) as u32
+        trees[b2] = decision_tree_classifier_fit_rf(X, y, n_classes, max_depth, 0, p, state)
+    }
+
+    free(state as ptr<void>)
+    array_free_f32(meta)
+
+    return StackingClassifierFull {
+        trees: trees,
+        n_base: n_base,
+        n_classes: n_classes,
+        meta_weights: meta_weights,
+        meta_bias: meta_bias,
+        fitted: true
+    }
+}
+
+export function stacking_classifier_full_predict(model: StackingClassifierFull, X: Matrix) -> ptr<f32> {
+    let n: i32 = X.rows
+    let n_base: i32 = model.n_base
+    let meta: ptr<f32> = array_new_f32(n * n_base)
+    for b in 0 to n_base {
+        let preds: ptr<f32> = decision_tree_classifier_predict(model.trees[b], X)
+        for i in 0 to n { meta[i * n_base + b] = preds[i] }
+        array_free_f32(preds)
+    }
+
+    let result: ptr<f32> = array_new_f32(n)
+    for i2 in 0 to n {
+        let row: ptr<f32> = meta + i2 * n_base
+        let mut best: i32 = 0
+        let mut best_z: f32 = -1000000.0
+        for c in 0 to model.n_classes {
+            let wc: ptr<f32> = model.meta_weights[c]
+            let mut z: f32 = model.meta_bias[c]
+            let mut j: i32 = 0
+            while j < n_base {
+                z = z + wc[j] * row[j]
+                j = j + 1
+            }
+            if z > best_z {
+                best_z = z
+                best = c
+            }
+        }
+        result[i2] = best as f32
+    }
+    array_free_f32(meta)
+    return result
+}
+
+export function stacking_classifier_full_free(model: StackingClassifierFull) -> void {
+    for b in 0 to model.n_base {
+        decision_tree_classifier_free(model.trees[b])
+    }
+    free(model.trees as ptr<void>)
+    for c in 0 to model.n_classes {
+        array_free_f32(model.meta_weights[c])
+    }
+    free(model.meta_weights as ptr<void>)
+    array_free_f32(model.meta_bias)
+}
+
 export function stacking_classifier_fit(
     base_preds: ptr<ptr<f32> >,
     y: ptr<f32>,
@@ -2698,6 +2913,19 @@ export struct VotingRegressor {
     n_features: i32,
     weights: ptr<f32>,
     fitted: bool
+}
+
+# The regression counterpart, for the reason the classifier above gives.
+export function voting_regressor_full_fit(X: Matrix, y: ptr<f32>, n_estimators: i32, max_depth: i32, seed: i32) -> VotingRegressor {
+    let trees: ptr<DecisionTreeRegressor> = malloc((n_estimators as i64) * 256) as ptr<DecisionTreeRegressor>
+    for e in 0 to n_estimators {
+        trees[e] = decision_tree_regressor_fit(X, y, max_depth, 0)
+    }
+    let weights: ptr<f32> = array_new_f32(n_estimators)
+    for e2 in 0 to n_estimators { weights[e2] = 1.0 }
+    let model: VotingRegressor = voting_regressor_fit(trees, n_estimators, weights)
+    array_free_f32(weights)
+    return model
 }
 
 export function voting_regressor_fit(estimators: ptr<DecisionTreeRegressor>, n_estimators: i32, weights: ptr<f32>) -> VotingRegressor {

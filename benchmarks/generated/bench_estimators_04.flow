@@ -82,6 +82,33 @@ function main() -> i32 {
     let mut reps: i32 = 1
     let mut sink: f32 = 0.0
 
+    # ---- lasso_lars_ic (regression) ----
+    t0 = flow_now_ns()
+    let probe_lasso_lars_ic: LassoLarsIC = lasso_lars_ic_fit(X_r, y_r, 0)
+    t1 = flow_now_ns()
+    lasso_lars_ic_free(probe_lasso_lars_ic)
+    reps = 1
+    if (t1 - t0) < 200000 { reps = 200 }
+    elif (t1 - t0) < 2000000 { reps = 20 }
+    elif (t1 - t0) < 20000000 { reps = 5 }
+    t0 = flow_now_ns()
+    for rep in 0 to reps {
+        let m_lasso_lars_ic: LassoLarsIC = lasso_lars_ic_fit(X_r, y_r, 0)
+        lasso_lars_ic_free(m_lasso_lars_ic)
+    }
+    t1 = flow_now_ns()
+    let fitted_lasso_lars_ic: LassoLarsIC = lasso_lars_ic_fit(X_r, y_r, 0)
+    t2 = flow_now_ns()
+    for rep2 in 0 to reps {
+        let o_lasso_lars_ic: ptr<f32> = lasso_lars_ic_predict(fitted_lasso_lars_ic, X_r)
+        sink = sink + o_lasso_lars_ic[0]
+        array_free_f32(o_lasso_lars_ic)
+    }
+    t3 = flow_now_ns()
+    lasso_lars_ic_free(fitted_lasso_lars_ic)
+    printf("ESTIMATOR|lasso_lars_ic|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
+    fflush(null)
+
     # ---- lda (unsupervised) ----
     t0 = flow_now_ns()
     let probe_lda: LatentDirichletAllocation = lda_fit(X_c, 3, 50, 1.0, 0.1, 42)
@@ -531,35 +558,6 @@ function main() -> i32 {
     t3 = flow_now_ns()
     minmax_scaler_free(fitted_minmax_scaler)
     printf("ESTIMATOR|minmax_scaler|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
-    fflush(null)
-
-    # ---- missing_indicator (unsupervised) ----
-    t0 = flow_now_ns()
-    let probe_missing_indicator: MissingIndicator = missing_indicator_fit(X_c, 0.0, 0)
-    t1 = flow_now_ns()
-    missing_indicator_free(probe_missing_indicator)
-    reps = 1
-    if (t1 - t0) < 200000 { reps = 200 }
-    elif (t1 - t0) < 2000000 { reps = 20 }
-    elif (t1 - t0) < 20000000 { reps = 5 }
-    t0 = flow_now_ns()
-    for rep in 0 to reps {
-        let m_missing_indicator: MissingIndicator = missing_indicator_fit(X_c, 0.0, 0)
-        missing_indicator_free(m_missing_indicator)
-    }
-    t1 = flow_now_ns()
-    let fitted_missing_indicator: MissingIndicator = missing_indicator_fit(X_c, 0.0, 0)
-    t2 = flow_now_ns()
-    for rep2 in 0 to reps {
-        let o_missing_indicator: Matrix = missing_indicator_transform(fitted_missing_indicator, X_c)
-        if o_missing_indicator.rows > 0 {
-            if o_missing_indicator.cols > 0 { sink = sink + o_missing_indicator.data[0] }
-        }
-        matrix_free(o_missing_indicator)
-    }
-    t3 = flow_now_ns()
-    missing_indicator_free(fitted_missing_indicator)
-    printf("ESTIMATOR|missing_indicator|%.9f|%.9f|%d|ok\n", ms_between(t0, t1) / (reps as f32), ms_between(t2, t3) / (reps as f32), reps)
     fflush(null)
 
     for i in 0 to n_c { array_free_f32(Y_label_rows[i]) }

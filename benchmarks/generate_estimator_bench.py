@@ -224,6 +224,10 @@ def shaped_block(entry: dict) -> str:
     ret = entry["fit"]["returns"]
     call = f"{entry['fit']['name']}({', '.join(shape['flow_fit'])})"
     free = entry["companions"].get("free")
+    # A recipe can name the free function, for a row whose model type is not
+    # named after its own fit.
+    if shape.get("flow_free_fn"):
+        free = {"name": shape["flow_free_fn"], "parameters": [{"name": "model"}]}
     # A fit that takes a composed object built outside the timing mutates that
     # object and hands it back, so freeing the result on every repeat would free
     # what the next repeat is about to read. Those rows free once, after the
