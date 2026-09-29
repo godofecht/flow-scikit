@@ -81,12 +81,16 @@ the rest go unmeasured. A registry maps every exported `fit` to its
 scikit-learn counterpart, times both sides on the same data, and a CI job
 fails the build when a ranked row is slower.
 
-**Flow is faster on 188 of the 188 ranked rows.** The rows that carry no ratio
-carry a reason instead: four implementations say in their own comments that
-they are simplified, so they are timed and shown without being ranked; five
-Flow functions do part of what their scikit-learn namesake does, such as a
-voting estimator that takes models already fitted; six have no scikit-learn
-counterpart at all.
+**Flow is faster on 197 of the 197 ranked rows.** Eleven rows carry no ratio.
+Six of them have no scikit-learn counterpart at all. The other five are the
+older entry points of estimators that are raced through a second one: a
+voting estimator that takes models already fitted is half of what
+`VotingClassifier` does, and `voting_classifier_full_fit` beside it is the row
+that races the class.
+
+Nothing is excluded for being a stand-in any more. Four implementations used
+to say in their own comments that they were simplified, and each runs the
+algorithm its counterpart runs now.
 
 These rows carry no parity contract and no declared tolerances. Each library
 runs its own defaults over the same data, which answers whether an
