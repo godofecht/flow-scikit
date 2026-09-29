@@ -240,19 +240,27 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # This workflow can start from an event SHA that predates an earlier
+          # queued freeze commit. Preserve this run's generated evidence, move
+          # the worktree to the current main tip, then reapply the evidence.
+          # That avoids rebasing a generated-evidence commit through another
+          # generated-evidence commit, which is guaranteed to conflict.
+          tmpdir="$(mktemp -d)"
+          cp -a benchmarks/. "$tmpdir/benchmarks/"
+          cp README.md "$tmpdir/README.md"
+
+          git fetch origin main
+          git reset --hard origin/main
+
+          cp -a "$tmpdir/benchmarks/." benchmarks/
+          cp "$tmpdir/README.md" README.md
+
           git add benchmarks/ README.md
           if git diff --cached --quiet; then
             echo 'Generated evidence already current.'
             exit 0
           fi
+
           git commit -m "Freeze validated benchmark, disparity history, and architecture evidence [skip ci]"
-          for attempt in 1 2 3; do
-            if git push origin HEAD:main; then
-              exit 0
-            fi
-            echo "push rejected (attempt ${attempt}); rebasing onto origin/main and retrying"
-            git fetch origin main
-            git rebase origin/main
-          done
-          echo 'Could not push frozen evidence after 3 attempts.'
-          exit 1
+          git push origin HEAD:main
