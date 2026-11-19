@@ -478,7 +478,12 @@ export function spectral_biclustering_fit(X: Matrix, n_row_clusters: i32, n_col_
     let V: ptr<f32> = array_new_f32(p * n_vecs)
     _bic_right_singular(An, n, p, n_vecs, V)
 
+    # U = An V has the singular values as its column norms. Keep them, because
+    # a matrix of rank r has only r vectors that mean anything: past that the
+    # block power iteration returns whatever rounding left in the null space,
+    # and that differs from one BLAS to the next.
     let U: ptr<f32> = array_new_f32(n * n_vecs)
+    let sigma: ptr<f32> = array_new_f32(n_vecs)
     blas_matmat(An, V, U, n, n_vecs, p, 1.0, 0.0)
     for c in 0 to n_vecs {
         let mut norm: f32 = 0.0
@@ -489,6 +494,7 @@ export function spectral_biclustering_fit(X: Matrix, n_row_clusters: i32, n_col_
             i2 = i2 + 1
         }
         norm = sqrt((norm) as f64) as f32
+        sigma[c] = norm
         if norm > 0.0000000001 {
             let inv: f32 = 1.0 / norm
             let mut i3: i32 = 0
@@ -500,57 +506,99 @@ export function spectral_biclustering_fit(X: Matrix, n_row_clusters: i32, n_col_
     }
 
     # Rank the vectors after the trivial one by how close to piecewise
-    # constant they are, and keep the best few.
+    # constant they are, and keep the best few. Left vectors are ranked
+    # against the row clusters and right vectors against the column clusters,
+    # as scikit-learn does.
     let mut n_best: i32 = 3
     if n_best > n_vecs - 1 { n_best = n_vecs - 1 }
     if n_best < 1 { n_best = 1 }
 
-    let scratch: ptr<f32> = array_new_f32(n)
-    let errs: ptr<f32> = array_new_f32(n_vecs)
+    let mut scratch_len: i32 = n
+    if p > scratch_len { scratch_len = p }
+    let scratch: ptr<f32> = array_new_f32(scratch_len)
+    let errs_u: ptr<f32> = array_new_f32(n_vecs)
+    let errs_v: ptr<f32> = array_new_f32(n_vecs)
+    # A vector whose singular value is rounding noise next to the leading one
+    # carries no structure. It goes to the back of the ranking, so it is kept
+    # only when the matrix has fewer real vectors than n_best.
+    let sigma_floor: f32 = sigma[0] * 0.0001
+    for c3 in 1 to n_vecs {
+        if sigma[c3] > sigma_floor {
+            let mut i4: i32 = 0
+            while i4 < n {
+                scratch[i4] = U[i4 * n_vecs + c3]
+                i4 = i4 + 1
+            }
+            errs_u[c3] = _bic_piecewise_error(scratch, n, n_row_clusters)
+            let mut j4: i32 = 0
+            while j4 < p {
+                scratch[j4] = V[j4 * n_vecs + c3]
+                j4 = j4 + 1
+            }
+            errs_v[c3] = _bic_piecewise_error(scratch, p, n_col_clusters)
+        } else {
+            errs_u[c3] = 1000000.0 + (c3 as f32)
+            errs_v[c3] = 1000000.0 + (c3 as f32)
+        }
+    }
+
+    # The best left vectors go into Ub, n by n_best, and the best right
+    # vectors into Vb, p by n_best.
+    let Ub: ptr<f32> = array_new_f32(n * n_best)
+    let Vb: ptr<f32> = array_new_f32(p * n_best)
     let chosen: ptr<i32> = malloc((n_vecs as i64) * 4 + 64) as ptr<i32>
     for c2 in 0 to n_vecs { chosen[c2] = 0 }
-    for c3 in 1 to n_vecs {
-        let mut i4: i32 = 0
-        while i4 < n {
-            scratch[i4] = U[i4 * n_vecs + c3]
-            i4 = i4 + 1
-        }
-        errs[c3] = _bic_piecewise_error(scratch, n, n_row_clusters)
-    }
     for b in 0 to n_best {
         let mut best_c: i32 = -1
         let mut best_err: f32 = 999999999999.0
         for c4 in 1 to n_vecs {
             if chosen[c4] == 0 {
-                if errs[c4] < best_err {
-                    best_err = errs[c4]
+                if errs_u[c4] < best_err {
+                    best_err = errs_u[c4]
                     best_c = c4
                 }
             }
         }
-        if best_c >= 0 { chosen[best_c] = 1 }
-    }
-
-    # Rows and columns are clustered separately, in the space the kept
-    # vectors span.
-    let Zr: ptr<f32> = array_new_f32(n * n_best)
-    let Zc: ptr<f32> = array_new_f32(p * n_best)
-    let mut slot: i32 = 0
-    for c5 in 1 to n_vecs {
-        if chosen[c5] == 1 {
+        if best_c >= 0 {
+            chosen[best_c] = 1
             let mut i5: i32 = 0
             while i5 < n {
-                Zr[i5 * n_best + slot] = U[i5 * n_vecs + c5]
+                Ub[i5 * n_best + b] = U[i5 * n_vecs + best_c]
                 i5 = i5 + 1
             }
-            let mut j2: i32 = 0
-            while j2 < p {
-                Zc[j2 * n_best + slot] = V[j2 * n_vecs + c5]
-                j2 = j2 + 1
-            }
-            slot = slot + 1
         }
     }
+    for c6 in 0 to n_vecs { chosen[c6] = 0 }
+    for b2 in 0 to n_best {
+        let mut best_c2: i32 = -1
+        let mut best_err2: f32 = 999999999999.0
+        for c7 in 1 to n_vecs {
+            if chosen[c7] == 0 {
+                if errs_v[c7] < best_err2 {
+                    best_err2 = errs_v[c7]
+                    best_c2 = c7
+                }
+            }
+        }
+        if best_c2 >= 0 {
+            chosen[best_c2] = 1
+            let mut j5: i32 = 0
+            while j5 < p {
+                Vb[j5 * n_best + b2] = V[j5 * n_vecs + best_c2]
+                j5 = j5 + 1
+            }
+        }
+    }
+
+    # Rows and columns are clustered separately, and what is clustered is the
+    # normalized data projected onto the kept vectors: rows as An Vb, columns
+    # as An^T Ub. Clustering the unit vectors themselves gave a null space
+    # vector the same weight as one that carries the checkerboard. Projected,
+    # it lands near zero and cannot move a point between clusters.
+    let Zr: ptr<f32> = array_new_f32(n * n_best)
+    let Zc: ptr<f32> = array_new_f32(p * n_best)
+    blas_matmat(An, Vb, Zr, n, n_best, p, 1.0, 0.0)
+    cblas_sgemm(101, 112, 111, p, n_best, n, 1.0, An, p, Ub, n_best, 0.0, Zc, n_best)
 
     let row_labels: ptr<i32> = malloc((n as i64) * 4 + 64) as ptr<i32>
     let col_labels: ptr<i32> = malloc((p as i64) * 4 + 64) as ptr<i32>
@@ -560,10 +608,14 @@ export function spectral_biclustering_fit(X: Matrix, n_row_clusters: i32, n_col_
     array_free_f32(An)
     array_free_f32(U)
     array_free_f32(V)
+    array_free_f32(Ub)
+    array_free_f32(Vb)
     array_free_f32(Zr)
     array_free_f32(Zc)
     array_free_f32(scratch)
-    array_free_f32(errs)
+    array_free_f32(errs_u)
+    array_free_f32(errs_v)
+    array_free_f32(sigma)
     free(chosen as ptr<void>)
 
     return SpectralBiclustering {
