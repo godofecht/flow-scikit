@@ -1,0 +1,200 @@
+# Regression test for the vectorized GaussianNB inference path (issue #484).
+#
+# The per-class likelihood is evaluated eight features at a time with a scalar
+# tail, and the per-class constants are computed by fit. The checks below
+# recompute the joint log-likelihood independently in f64 from the fitted
+# means, variances and priors, and compare every entry. The feature counts
+# straddle the block width so the tail loop, the block loop and their join are
+# each exercised: 1, 3 and 7 are tail only, 8, 16 and 64 are blocks only, and
+# 9, 23 and 67 are both.
+
+import "lib/scikit/scikit.flow"
+
+function gnbopt_abs(v: f64) -> f64 {
+    if v < 0.0 { return 0.0 - v }
+    return v
+}
+
+function gnbopt_log(v: f64) -> f64 {
+    let r: f64 = log(v)
+    return r
+}
+
+function gnbopt_exp(v: f64) -> f64 {
+    let r: f64 = exp(v)
+    return r
+}
+
+# Deterministic feature value. Column 2 is constant, which leaves its variance
+# at the var_smoothing floor and its weight 1 / (2 * var) very large.
+function gnbopt_value(i: i32, j: i32, cls: i32) -> f32 {
+    if j == 2 { return 0.5 }
+    let noise: f32 = (((i * 37 + j * 19 + cls * 7) % 101) as f32) / 101.0
+    let shift: f32 = (cls as f32) * (0.4 + (((j * 5) % 7) as f32) * 0.1)
+    return noise + shift
+}
+
+# Independent f64 joint log-likelihood for one sample and one class.
+function gnbopt_ref_jll(model: GaussianNB, X: Matrix, i: i32, c: i32) -> f64 {
+    let two_pi: f64 = 2.0 * 3.14159265358979
+    let mut total: f64 = gnbopt_log((model.priors[c]) as f64)
+    for j in 0 to model.n_features {
+        let v: f64 = (model.variances[c][j]) as f64
+        let d: f64 = ((matrix_at(X, i, j)) as f64) - ((model.means[c][j]) as f64)
+        total = total - 0.5 * gnbopt_log(two_pi * v) - d * d / (2.0 * v)
+    }
+    return total
+}
+
+function gnbopt_case(p: i32) -> i32 {
+    let nc: i32 = 3
+    let n_train: i32 = 90
+    let n_query: i32 = 41
+    let mut failures: i32 = 0
+
+    let X: Matrix = matrix_new(n_train, p)
+    let y: ptr<f32> = array_new_f32(n_train)
+    for i in 0 to n_train {
+        let cls: i32 = i % nc
+        y[i] = cls as f32
+        for j in 0 to p { matrix_set(X, i, j, gnbopt_value(i, j, cls)) }
+    }
+    let Q: Matrix = matrix_new(n_query, p)
+    for i in 0 to n_query {
+        let cls: i32 = (i * 2 + 1) % nc
+        for j in 0 to p { matrix_set(Q, i, j, gnbopt_value(i * 3 + 500, j, cls)) }
+    }
+
+    let model: GaussianNB = gaussian_nb_fit(X, y, nc, 0.000000001)
+
+    # 1. Fit must have stored the per-class constants.
+    for c in 0 to nc {
+        let mut ref_const: f64 = gnbopt_log((model.priors[c]) as f64)
+        for j in 0 to p {
+            ref_const = ref_const - 0.5 * gnbopt_log(2.0 * 3.14159265358979 * ((model.variances[c][j]) as f64))
+            let ref_w: f64 = 1.0 / (2.0 * ((model.variances[c][j]) as f64))
+            let got_w: f64 = (model.inv_two_var[c * p + j]) as f64
+            if gnbopt_abs(got_w - ref_w) > 0.00001 * ref_w {
+                printf("FAIL: p=%d class %d feature %d weight %.9g, expected %.9g\n", p, c, j, got_w, ref_w)
+                failures = failures + 1
+            }
+        }
+        let got_const: f64 = (model.class_const[c]) as f64
+        if gnbopt_abs(got_const - ref_const) > 0.0001 * (1.0 + gnbopt_abs(ref_const)) {
+            printf("FAIL: p=%d class %d constant %.9g, expected %.9g\n", p, c, got_const, ref_const)
+            failures = failures + 1
+        }
+    }
+
+    # 2. Every joint log-likelihood entry must match the f64 reference.
+    let jll: Matrix = gaussian_nb_predict_joint_log_proba(model, Q)
+    if jll.rows != n_query || jll.cols != nc {
+        printf("FAIL: p=%d joint log-likelihood shape %d x %d\n", p, jll.rows, jll.cols)
+        failures = failures + 1
+    }
+    let pred: ptr<f32> = gaussian_nb_predict(model, Q)
+    let proba: Matrix = gaussian_nb_predict_proba(model, Q)
+    let mut max_rel: f64 = 0.0
+    let mut decided: i32 = 0
+    for i in 0 to n_query {
+        let mut best_c: i32 = 0
+        let mut best: f64 = gnbopt_ref_jll(model, Q, i, 0)
+        let mut second: f64 = -1000000000000000000.0
+        let mut ref_norm: f64 = 0.0
+        for c in 0 to nc {
+            let r: f64 = gnbopt_ref_jll(model, Q, i, c)
+            let got: f64 = (matrix_at(jll, i, c)) as f64
+            let rel: f64 = gnbopt_abs(got - r) / (1.0 + gnbopt_abs(r))
+            if rel > max_rel { max_rel = rel }
+            if rel > 0.00001 {
+                printf("FAIL: p=%d row %d class %d joint log-likelihood %.9g, expected %.9g\n", p, i, c, got, r)
+                failures = failures + 1
+            }
+            if c > 0 {
+                if r > best {
+                    second = best
+                    best = r
+                    best_c = c
+                } else {
+                    if r > second { second = r }
+                }
+            }
+        }
+
+        # 3. predict is the argmax. Rows whose top two classes sit within
+        #    f32 rounding of each other are not decided by the reference.
+        if best - second > 0.001 * (1.0 + gnbopt_abs(best)) {
+            decided = decided + 1
+            if pred[i] != model.classes[best_c] {
+                printf("FAIL: p=%d row %d predicted %.1f, reference argmax %.1f\n", p, i, pred[i], model.classes[best_c])
+                failures = failures + 1
+            }
+        }
+
+        # 4. predict_proba is the softmax of the same row.
+        for c in 0 to nc {
+            ref_norm = ref_norm + gnbopt_exp(gnbopt_ref_jll(model, Q, i, c) - best)
+        }
+        let mut row_sum: f64 = 0.0
+        for c in 0 to nc {
+            let ref_p: f64 = gnbopt_exp(gnbopt_ref_jll(model, Q, i, c) - best) / ref_norm
+            let got_p: f64 = (matrix_at(proba, i, c)) as f64
+            row_sum = row_sum + got_p
+            if gnbopt_abs(got_p - ref_p) > 0.001 {
+                printf("FAIL: p=%d row %d class %d probability %.9g, expected %.9g\n", p, i, c, got_p, ref_p)
+                failures = failures + 1
+            }
+        }
+        if gnbopt_abs(row_sum - 1.0) > 0.00001 {
+            printf("FAIL: p=%d row %d probabilities sum to %.9g\n", p, i, row_sum)
+            failures = failures + 1
+        }
+    }
+    if decided * 2 < n_query {
+        printf("FAIL: p=%d only %d of %d rows had a decided reference argmax\n", p, decided, n_query)
+        failures = failures + 1
+    }
+    printf("p=%d max relative joint log-likelihood error %.3g, %d of %d rows decided\n", p, max_rel, decided, n_query)
+
+    # 5. A single-row batch must reproduce the batched row.
+    let one: Matrix = matrix_new(1, p)
+    for j in 0 to p { matrix_set(one, 0, j, matrix_at(Q, n_query - 1, j)) }
+    let jll_one: Matrix = gaussian_nb_predict_joint_log_proba(model, one)
+    for c in 0 to nc {
+        if matrix_at(jll_one, 0, c) != matrix_at(jll, n_query - 1, c) {
+            printf("FAIL: p=%d single-row batch differs from the batched row for class %d\n", p, c)
+            failures = failures + 1
+        }
+    }
+
+    matrix_free(jll_one)
+    matrix_free(one)
+    matrix_free(proba)
+    array_free_f32(pred)
+    matrix_free(jll)
+    gaussian_nb_free(model)
+    matrix_free(Q)
+    matrix_free(X)
+    array_free_f32(y)
+    return failures
+}
+
+function main() -> i32 {
+    let mut failures: i32 = 0
+    failures = failures + gnbopt_case(1)
+    failures = failures + gnbopt_case(3)
+    failures = failures + gnbopt_case(7)
+    failures = failures + gnbopt_case(8)
+    failures = failures + gnbopt_case(9)
+    failures = failures + gnbopt_case(16)
+    failures = failures + gnbopt_case(23)
+    failures = failures + gnbopt_case(64)
+    failures = failures + gnbopt_case(67)
+
+    if failures > 0 {
+        printf("FAIL: %d GaussianNB inference checks failed\n", failures)
+        return 1
+    }
+    printf("OK: vectorized GaussianNB inference matches the f64 reference\n")
+    return 0
+}
