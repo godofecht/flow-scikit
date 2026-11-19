@@ -160,7 +160,7 @@ jobs:
 
   estimator-matrix:
     name: Wide estimator matrix
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Both sides call into OpenBLAS, so the thread count is pinned here for the
     # reason the canonical job pins it.
     env:
@@ -223,7 +223,7 @@ jobs:
 
   scaled-report:
     name: Scaled benchmark report
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     continue-on-error: true
     env:
       OPENBLAS_NUM_THREADS: "4"
