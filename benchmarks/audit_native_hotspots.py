@@ -44,7 +44,8 @@ def main():
     p.add_argument("--markdown", type=Path, default=ROOT / "benchmarks" / "NATIVE_HOTSPOT_AUDIT.md")
     args = p.parse_args()
     inv = json.loads(args.inventory.read_text())["rows"]
-    roadmap = json.loads(args.roadmap.read_text())["rows"] if args.roadmap.exists() else []
+    roadmap_doc = json.loads(args.roadmap.read_text()) if args.roadmap.exists() else {"rows": []}
+    roadmap = roadmap_doc["rows"]
     priority = {(r["estimator"], r["operation"]): r["priority_score"] for r in roadmap}
     candidates = [r for r in inv if r["execution_class"] in {"cython-bound","c-bound","cpp-bound","external-native-bound","blas-lapack-bound","mixed"}]
     rows = []
@@ -63,7 +64,7 @@ def main():
             ),
         })
     rows.sort(key=lambda r: (r["priority_score"] is not None, r["priority_score"] or 0), reverse=True)
-    args.json.write_text(json.dumps({"schema_version": 1, "rows": rows}, indent=2) + "\n")
+    args.json.write_text(json.dumps({"schema_version": 1, "provenance": roadmap_doc.get("provenance"), "rows": rows}, indent=2) + "\n")
     md = ["# Native hotspot audit", "", "| Estimator | Operation | Class | Owner | Disposition | Priority |", "|---|---|---|---|---|---:|"]
     for r in rows:
         score = "" if r["priority_score"] is None else f"{r['priority_score']:.1f}"
