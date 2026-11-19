@@ -234,6 +234,7 @@ jobs:
         run: cp benchmarks/headline_summary.json benchmarks/headline_result_v2.json
       - name: Sync published claims to the frozen artifact
         run: |
+          python benchmarks/generate_operation_rows.py
           python benchmarks/validate_published_claims.py --fix
           python benchmarks/validate_published_claims.py
       - name: Commit generated evidence if changed
