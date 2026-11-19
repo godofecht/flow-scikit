@@ -1,0 +1,157 @@
+# Shared squared-distance primitives must reproduce the loops they replaced.
+#
+# Issue #498. sqdist_f32 and sqdist_f32_acc_f64 stand in for inline loops in
+# KMeans, KernelRidge, KernelSVC, GaussianProcess, TSNE, SpectralClustering,
+# LabelSpreading and kernel approximation. Each reference below is the loop as
+# it was written at those sites, in its original form. The primitive must give
+# the same bits, with and without a row offset, for the lengths that matter
+# to the vector and tail paths. A mismatch exits non-zero.
+
+import "lib/scikit/scikit.flow"
+
+function sp_fill(a: ptr<f32>, n: i32, seed: i32) -> void {
+    let mut i: i32 = 0
+    while i < n {
+        let raw: i32 = (i * 37 + seed * 11 + (i * i) % 17) % 101
+        a[i] = ((raw - 50) as f32) * 0.173 + ((seed % 5) as f32) * 0.0371
+        i = i + 1
+    }
+}
+
+# The KMeans, KernelRidge, GaussianProcess and kernel approximation form.
+function sp_ref_for(a: ptr<f32>, b: ptr<f32>, n: i32) -> f32 {
+    let mut s: f32 = 0.0
+    for i in 0 to n {
+        let d: f32 = a[i] - b[i]
+        s = s + d * d
+    }
+    return s
+}
+
+# The TSNE, SpectralClustering and GaussianProcessClassifier form, which read
+# both rows through matrix_at.
+function sp_ref_matrix_at(A: Matrix, ra: i32, B: Matrix, rb: i32) -> f32 {
+    let mut s: f32 = 0.0
+    for k in 0 to A.cols {
+        let d: f32 = matrix_at(A, ra, k) - matrix_at(B, rb, k)
+        s = s + d * d
+    }
+    return s
+}
+
+# The KernelSVC form: f32 difference, f64 accumulation.
+function sp_ref_f64(A: Matrix, ra: i32, B: Matrix, rb: i32) -> f64 {
+    let mut sum: f64 = 0.0
+    for k in 0 to A.cols {
+        let d: f64 = (matrix_at(A, ra, k) - matrix_at(B, rb, k)) as f64
+        sum = sum + d * d
+    }
+    return sum
+}
+
+function sp_check_length(n: i32) -> i32 {
+    let rows: i32 = 5
+    let A: Matrix = matrix_new(rows, n)
+    let B: Matrix = matrix_new(rows, n)
+    sp_fill(A.data, rows * n, 1)
+    sp_fill(B.data, rows * n, 4)
+    let mut bad: i32 = 0
+    let mut i: i32 = 0
+    while i < rows {
+        let mut j: i32 = 0
+        while j < rows {
+            let got: f32 = sqdist_f32(A.data + i * n, B.data + j * n, n)
+            let want_for: f32 = sp_ref_for(A.data + i * n, B.data + j * n, n)
+            let want_at: f32 = sp_ref_matrix_at(A, i, B, j)
+            if got != want_for { bad = bad + 1 }
+            if got != want_at { bad = bad + 1 }
+            let got64: f64 = sqdist_f32_acc_f64(A.data + i * n, B.data + j * n, n)
+            let want64: f64 = sp_ref_f64(A, i, B, j)
+            if got64 != want64 { bad = bad + 1 }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    matrix_free(A)
+    matrix_free(B)
+    return bad
+}
+
+function test_sqdist_bit_exact() -> i32 {
+    println("Test: sqdist primitives are bit-identical to the loops they replaced")
+    let lengths: ptr<i32> = malloc(14 * 4) as ptr<i32>
+    lengths[0] = 1; lengths[1] = 2; lengths[2] = 3; lengths[3] = 4; lengths[4] = 7
+    lengths[5] = 8; lengths[6] = 9; lengths[7] = 16; lengths[8] = 31; lengths[9] = 64
+    lengths[10] = 100; lengths[11] = 257; lengths[12] = 784; lengths[13] = 1024
+    let mut bad: i32 = 0
+    let mut i: i32 = 0
+    while i < 14 {
+        let b: i32 = sp_check_length(lengths[i])
+        if b != 0 {
+            print("  FAIL: length ")
+            print(lengths[i])
+            print(" differs in ")
+            print(b)
+            println(" pairs")
+        }
+        bad = bad + b
+        i = i + 1
+    }
+    free(lengths as ptr<void>)
+    if bad != 0 { return 1 }
+    println("  OK: 14 lengths, 25 row pairs each, three reference forms")
+    return 0
+}
+
+function test_sqdist_known_values() -> i32 {
+    println("Test: sqdist known values")
+    let a: ptr<f32> = array_new_f32(3)
+    let b: ptr<f32> = array_new_f32(3)
+    a[0] = 1.0; a[1] = 2.0; a[2] = 3.0
+    b[0] = 4.0; b[1] = 6.0; b[2] = 3.0
+    if sqdist_f32(a, b, 3) != 25.0 {
+        println("  FAIL: (3,4,0) should give 25")
+        return 1
+    }
+    if sqdist_f32(a, a, 3) != 0.0 {
+        println("  FAIL: a vector is at distance 0 from itself")
+        return 1
+    }
+    if sqdist_f32(a, b, 0) != 0.0 {
+        println("  FAIL: an empty vector has distance 0")
+        return 1
+    }
+    println("  OK")
+    return 0
+}
+
+function test_dot_product_is_array_dot() -> i32 {
+    println("Test: dot_product and array_dot are one implementation")
+    let n: i32 = 103
+    let a: ptr<f32> = array_new_f32(n)
+    let b: ptr<f32> = array_new_f32(n)
+    sp_fill(a, n, 2)
+    sp_fill(b, n, 3)
+    if dot_product(a, b, n) != array_dot(a, b, n) {
+        println("  FAIL: results differ")
+        return 1
+    }
+    println("  OK")
+    return 0
+}
+
+function main() -> i32 {
+    println("Running shared primitive tests...")
+    let mut failures: i32 = 0
+    if test_sqdist_bit_exact() != 0 { failures = failures + 1 }
+    if test_sqdist_known_values() != 0 { failures = failures + 1 }
+    if test_dot_product_is_array_dot() != 0 { failures = failures + 1 }
+    if failures == 0 {
+        println("All shared primitive tests passed!")
+        return 0
+    }
+    print("FAILED: ")
+    print(failures)
+    println(" tests")
+    return 1
+}

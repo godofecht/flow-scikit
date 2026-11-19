@@ -31,11 +31,7 @@ function compute_pairwise_distances(X: Matrix) -> ptr<f32> {
             if i == j {
                 dist[i * n + j] = 0.0
             } else {
-                let mut sum: f32 = 0.0
-                for k in 0 to X.cols {
-                    let d: f32 = matrix_at(X, i, k) - matrix_at(X, j, k)
-                    sum = sum + d * d
-                }
+                let sum: f32 = sqdist_f32(X.data + i * X.cols, X.data + j * X.cols, X.cols)
                 dist[i * n + j] = sqrt(sum as f64) as f32
             }
         }

@@ -1,0 +1,3892 @@
+{
+  "schema_version": 1,
+  "defined_primitives": [
+    "array_dot",
+    "blas_dot",
+    "blas_dot_strided_f64",
+    "blas_matvec",
+    "cblas_ddot",
+    "cblas_dgemm",
+    "cblas_sdot",
+    "cblas_sgemm",
+    "dot_product",
+    "sqdist_f32",
+    "sqdist_f32_acc_f64"
+  ],
+  "primitive_call_sites": {
+    "array_dot": 1,
+    "blas_dot": 11,
+    "blas_dot_strided_f64": 3,
+    "blas_matvec": 13,
+    "cblas_ddot": 1,
+    "cblas_dgemm": 2,
+    "cblas_sdot": 1,
+    "cblas_sgemm": 15,
+    "dot_product": 4,
+    "sqdist_f32": 10,
+    "sqdist_f32_acc_f64": 1
+  },
+  "summary": {
+    "squared-distance": {
+      "primitive": 2,
+      "shared": 0,
+      "inline": 116,
+      "inline_functions": [
+        "_bic_kmeans",
+        "_bic_piecewise_error",
+        "_euclidean_dist_row",
+        "_fs_anova_f_scores",
+        "_kernel_compute",
+        "_kmeans_assign",
+        "_kmeans_lloyd_scratch",
+        "_kmeans_nearest_centroid",
+        "_kmeans_run",
+        "_kmeans_sk_pp_init",
+        "_mse",
+        "_mtl_columns",
+        "_r2_score",
+        "affinity_propagation_fit",
+        "agglomerative_clustering_fit",
+        "array_std",
+        "bayesian_ridge_fit",
+        "birch_fit",
+        "birch_predict",
+        "bisecting_kmeans_fit",
+        "brier_score_loss",
+        "calinski_harabasz_score",
+        "compute_std_col",
+        "davies_bouldin_score",
+        "dbscan_fit",
+        "elastic_net_cv_fit",
+        "estimate_bandwidth",
+        "euclidean_distances",
+        "explained_variance_score",
+        "f_classif",
+        "f_regression",
+        "gaussian_mixture_fit",
+        "hdbscan_fit",
+        "isolation_forest_fit",
+        "isomap_fit",
+        "iterative_imputer_fit",
+        "kernel_density_score_samples",
+        "kmeans_plusplus_init",
+        "kmeans_transform",
+        "kneighbors_transformer_transform",
+        "knn_classifier_predict_proba",
+        "knn_regressor_predict",
+        "lars_cv_fit",
+        "lasso_cv_fit",
+        "lasso_fit",
+        "lasso_lars_cv_fit",
+        "lasso_lars_ic_fit",
+        "ledoit_wolf_cv_fit",
+        "ledoit_wolf_estimate",
+        "ledoit_wolf_estimate_weighted",
+        "lin353_sse",
+        "lin357_newton_fit",
+        "lle_fit",
+        "local_outlier_factor_fit",
+        "mds_fit",
+        "mean_shift_fit",
+        "mean_shift_predict",
+        "mean_squared_error",
+        "mean_squared_log_error",
+        "minibatch_kmeans_fit",
+        "minibatch_kmeans_predict",
+        "minibatch_nmf_fit",
+        "multitask_elastic_net_cv_fit",
+        "multitask_lasso_cv_fit",
+        "nca_fit",
+        "nearest_centroid_predict",
+        "nearest_neighbors_kneighbors",
+        "nmf_fit",
+        "nu_svc_predict",
+        "nu_svr_predict",
+        "one_class_svm_predict",
+        "optics_fit",
+        "permutation_importance_classifier",
+        "permutation_importance_regression",
+        "permutation_importance_rf_classifier",
+        "permutation_importance_rf_regression",
+        "pls_fit",
+        "power_transformer_transform",
+        "r2_score",
+        "radius_neighbors_classifier_predict",
+        "radius_neighbors_regressor_predict",
+        "radius_neighbors_transformer_transform",
+        "rfecv_fit",
+        "ridge_cv_fit",
+        "select_k_best_fit",
+        "sequential_feature_selector_fit",
+        "silhouette_samples",
+        "silhouette_score",
+        "spectral_embedding_fit",
+        "standard_scaler_fit",
+        "transformed_target_regressor_fit",
+        "trustworthiness",
+        "tsne_fit"
+      ]
+    },
+    "dot": {
+      "primitive": 1,
+      "shared": 14,
+      "inline": 233,
+      "inline_functions": [
+        "_build_regressor_tree",
+        "_centered_dot",
+        "_gp_linear_kernel",
+        "_gram_schmidt",
+        "_ipca_top_eigenvectors",
+        "_kernel_compute",
+        "_kernel_func",
+        "_kernel_svc_smo_precomputed",
+        "_kmeans_sk_pp_init",
+        "_kr_dot_f64",
+        "_mcd_distances",
+        "_omp_sparse_coding_update",
+        "_svm_compute_ej",
+        "_svm_kernel_vec",
+        "ard_regression_fit",
+        "ard_regression_predict",
+        "bayesian_gaussian_mixture_fit",
+        "bayesian_ridge_fit",
+        "bayesian_ridge_predict",
+        "bernoulli_rbm_fit",
+        "bernoulli_rbm_gibbs_sample",
+        "bernoulli_rbm_transform",
+        "cca_fit",
+        "cca_transform",
+        "complement_nb_predict",
+        "cosine_distances",
+        "dictionary_learning_fit",
+        "elastic_net_cv_fit",
+        "elastic_net_cv_predict",
+        "elastic_net_predict",
+        "empirical_covariance_mahalanobis",
+        "factor_analysis_fit",
+        "factor_analysis_transform",
+        "fast_ica_fit",
+        "fast_ica_transform",
+        "gaussian_process_classifier_fit",
+        "gaussian_process_regressor_predict",
+        "gaussian_process_regressor_predict_with_std",
+        "gaussian_random_projection_transform",
+        "graphical_lasso_cv_fit",
+        "graphical_lasso_fit",
+        "huber_regressor_fit",
+        "huber_regressor_predict",
+        "incremental_pca_transform",
+        "iterative_imputer_fit",
+        "label_propagation_fit",
+        "lars_cv_predict",
+        "lars_fit",
+        "lars_predict",
+        "lasso_cd_cols_f64",
+        "lasso_cd_stream_f64",
+        "lasso_cv_fit",
+        "lasso_cv_predict",
+        "lasso_fit",
+        "lasso_lars_cv_predict",
+        "lasso_lars_fit",
+        "lasso_lars_ic_predict",
+        "lasso_lars_predict",
+        "lasso_predict",
+        "lda_transform",
+        "ledoit_wolf_estimate_weighted",
+        "ledoit_wolf_estimator_fit_weighted",
+        "lin353_sse",
+        "linear_regression_predict",
+        "linear_svc_decision_function",
+        "linear_svc_fit",
+        "linear_svc_fit_sparse",
+        "linear_svc_multi_decision_function",
+        "linear_svr_fit",
+        "logistic_decision_function",
+        "logistic_inference_fit",
+        "logistic_regression_cv_predict",
+        "logistic_regression_fit_sparse",
+        "make_regression",
+        "matrix_multiply",
+        "matrix_multiply_vec",
+        "minibatch_dictionary_learning_transform",
+        "minibatch_nmf_fit",
+        "minibatch_nmf_transform",
+        "minibatch_sparse_pca_fit",
+        "minibatch_sparse_pca_transform",
+        "mlp_classifier_fit",
+        "mlp_classifier_predict",
+        "mlp_regressor_fit",
+        "mlp_regressor_predict",
+        "multiclass_logistic_fit",
+        "multiclass_logistic_predict",
+        "multiclass_precision_ovr",
+        "multiclass_recall_ovr",
+        "multinomial_nb_predict",
+        "multinomial_nb_predict_proba",
+        "multitask_elastic_net_cv_fit",
+        "multitask_elastic_net_cv_predict",
+        "multitask_elastic_net_predict",
+        "multitask_lasso_cv_fit",
+        "multitask_lasso_cv_predict",
+        "multitask_lasso_predict",
+        "nca_transform",
+        "nmf_transform",
+        "nu_svc_fit",
+        "nu_svc_predict",
+        "nystroem_fit",
+        "nystroem_transform",
+        "oas_cv_fit",
+        "ols_inference_fit",
+        "omp_cv_fit",
+        "omp_cv_predict",
+        "one_class_svm_fit",
+        "one_vs_one_predict",
+        "one_vs_rest_predict",
+        "orthogonal_matching_pursuit_fit",
+        "orthogonal_matching_pursuit_predict",
+        "output_code_predict",
+        "passive_aggressive_classifier_fit",
+        "passive_aggressive_classifier_predict",
+        "passive_aggressive_regressor_fit",
+        "passive_aggressive_regressor_predict",
+        "pca_inverse_transform",
+        "perceptron_fit",
+        "perceptron_predict",
+        "pls_canonical_transform",
+        "pls_fit",
+        "pls_svd_fit",
+        "pls_svd_transform",
+        "quantile_regressor_fit",
+        "quantile_regressor_predict",
+        "ransac_regressor_predict",
+        "rbf_sampler_transform",
+        "rfe_fit",
+        "ridge_classifier_cv_fit",
+        "ridge_classifier_cv_predict",
+        "ridge_classifier_decision_function",
+        "ridge_classifier_fit",
+        "ridge_classifier_predict",
+        "ridge_cv_fit",
+        "ridge_cv_predict",
+        "ridge_predict",
+        "sgd_classifier_fit",
+        "sgd_classifier_predict",
+        "sgd_one_class_svm_decision_function",
+        "sgd_one_class_svm_fit",
+        "sgd_one_class_svm_predict",
+        "sgd_regressor_fit",
+        "sgd_regressor_predict",
+        "sparse_coder_transform",
+        "sparse_dot_dense",
+        "sparse_dot_row",
+        "sparse_pca_fit",
+        "sparse_pca_transform",
+        "sparse_random_projection_transform",
+        "spectral_clustering_fit",
+        "stacking_classifier_fit",
+        "stacking_classifier_full_fit",
+        "stacking_classifier_full_predict",
+        "stacking_classifier_predict",
+        "stacking_regressor_fit",
+        "theil_sen_regressor_predict",
+        "truncated_svd_fit",
+        "truncated_svd_transform"
+      ]
+    },
+    "sum-reduction": {
+      "primitive": 0,
+      "shared": 0,
+      "inline": 93,
+      "inline_functions": [
+        "_array_sum_f32",
+        "_bic_bistochastic",
+        "_build_classifier_tree",
+        "_build_classifier_tree_rf",
+        "_build_regressor_tree",
+        "_col_means",
+        "_find_best_hist_split",
+        "_fs_anova_f_scores",
+        "_kmeans_assign",
+        "_kmeans_sk_pp_init",
+        "_mean_val",
+        "_mse",
+        "_softmax",
+        "_softmax_probs",
+        "adaboost_classifier_fit",
+        "adaboost_regressor_fit",
+        "adaboost_regressor_predict",
+        "affinity_propagation_fit",
+        "array_mean",
+        "bernoulli_nb_predict",
+        "bernoulli_rbm_fit",
+        "bisecting_kmeans_fit",
+        "calinski_harabasz_score",
+        "chi2",
+        "compute_joint_probabilities",
+        "compute_mean_col",
+        "d2_absolute_error_score",
+        "decision_tree_classifier_feature_importances",
+        "decision_tree_regressor_feature_importances",
+        "dict_vectorizer_fit",
+        "dict_vectorizer_transform",
+        "dummy_regressor_fit",
+        "empirical_covariance_fit",
+        "f_classif",
+        "fast_ica_fit",
+        "feature_agglomeration_transform",
+        "gaussian_mixture_fit",
+        "graphical_lasso_cv_fit",
+        "graphical_lasso_fit",
+        "hist_gradient_boosting_regressor_fit",
+        "iterative_imputer_fit",
+        "kmeans_plusplus_init",
+        "knn_imputer_fit",
+        "knn_imputer_transform",
+        "label_propagation_fit",
+        "lasso_lars_fit",
+        "lda_transform",
+        "ledoit_wolf_cv_fit",
+        "ledoit_wolf_estimate",
+        "ledoit_wolf_estimate_weighted",
+        "ledoit_wolf_estimator_fit_weighted",
+        "lin433_softmax_block",
+        "linear_svc_fit",
+        "min_cov_det_fit",
+        "minibatch_sparse_pca_fit",
+        "multiclass_f1_ovr",
+        "multiclass_precision_ovo",
+        "multiclass_precision_ovr",
+        "multiclass_recall_ovo",
+        "multiclass_recall_ovr",
+        "multinomial_nb_fit",
+        "multinomial_nb_predict_proba",
+        "oas_cv_fit",
+        "oas_estimate",
+        "partial_dependence",
+        "pca_fit",
+        "permutation_test_score",
+        "select_k_best_fit",
+        "shrunk_covariance_fit",
+        "sparse_pca_fit",
+        "truncated_svd_fit",
+        "tsne_fit"
+      ]
+    },
+    "rbf": {
+      "primitive": 0,
+      "shared": 0,
+      "inline": 16,
+      "inline_functions": [
+        "_beta_func",
+        "_build_affinity",
+        "_build_rbf_affinity",
+        "_gp_rbf_kernel",
+        "_kernel_compute",
+        "_kernel_func",
+        "_rbf_exp",
+        "_rbf_exp_f64",
+        "_svm_kernel_vec",
+        "gaussian_process_classifier_fit",
+        "gaussian_process_classifier_predict",
+        "kernel_compute",
+        "nu_svr_predict",
+        "one_class_svm_predict",
+        "spectral_embedding_fit"
+      ]
+    },
+    "row-partition": {
+      "primitive": 0,
+      "shared": 0,
+      "inline": 20,
+      "inline_functions": [
+        "_find_best_hist_split",
+        "_hist_tree_add_split",
+        "_split_samples",
+        "_tree_split_goes_left",
+        "bootstrap_oob_get_split",
+        "bootstrap_oob_init",
+        "group_kfold_split",
+        "group_shuffle_split_get_split",
+        "group_shuffle_split_init",
+        "leave_one_group_out_split",
+        "leave_p_group_out_split",
+        "leave_p_out_get_split",
+        "repeated_stratified_k_fold_split",
+        "shuffle_split_get_split",
+        "shuffle_split_init",
+        "stratified_shuffle_split_get_split",
+        "stratified_shuffle_split_init",
+        "time_series_split",
+        "train_test_split",
+        "train_test_split_free"
+      ]
+    }
+  },
+  "sites": [
+    {
+      "file": "lib/scikit/calibration.flow",
+      "function": "_beta_func",
+      "line": 228,
+      "category": "rbf",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "_kmeans_assign",
+      "line": 153,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "_kmeans_assign",
+      "line": 208,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "_kmeans_run",
+      "line": 298,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "_kmeans_sk_pp_init",
+      "line": 387,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "_kmeans_sk_pp_init",
+      "line": 406,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "_kmeans_sk_pp_init",
+      "line": 426,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "_kmeans_sk_pp_init",
+      "line": 440,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "_kmeans_sk_pp_init",
+      "line": 460,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "_kmeans_lloyd_scratch",
+      "line": 585,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "_kmeans_nearest_centroid",
+      "line": 697,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "kmeans_transform",
+      "line": 869,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "dbscan_fit",
+      "line": 981,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "dbscan_fit",
+      "line": 1016,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "agglomerative_clustering_fit",
+      "line": 1140,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "minibatch_kmeans_fit",
+      "line": 1335,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "minibatch_kmeans_predict",
+      "line": 1379,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "mean_shift_fit",
+      "line": 1437,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "mean_shift_fit",
+      "line": 1458,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "mean_shift_fit",
+      "line": 1480,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "mean_shift_predict",
+      "line": 1522,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "birch_fit",
+      "line": 1624,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "birch_predict",
+      "line": 1725,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "_build_rbf_affinity",
+      "line": 1775,
+      "category": "rbf",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "spectral_clustering_fit",
+      "line": 1820,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "spectral_clustering_fit",
+      "line": 1829,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "spectral_clustering_fit",
+      "line": 1839,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "affinity_propagation_fit",
+      "line": 1934,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "affinity_propagation_fit",
+      "line": 1947,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "optics_fit",
+      "line": 2169,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "optics_fit",
+      "line": 2211,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "bisecting_kmeans_fit",
+      "line": 2314,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "bisecting_kmeans_fit",
+      "line": 2342,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "hdbscan_fit",
+      "line": 2448,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "feature_agglomeration_transform",
+      "line": 2849,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "estimate_bandwidth",
+      "line": 2893,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "kmeans_plusplus_init",
+      "line": 2962,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cluster.flow",
+      "function": "kmeans_plusplus_init",
+      "line": 2986,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/compose.flow",
+      "function": "transformed_target_regressor_fit",
+      "line": 296,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "empirical_covariance_fit",
+      "line": 34,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "empirical_covariance_mahalanobis",
+      "line": 163,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "shrunk_covariance_fit",
+      "line": 207,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "oas_estimate",
+      "line": 280,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "ledoit_wolf_estimate",
+      "line": 352,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "ledoit_wolf_estimate",
+      "line": 390,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "ledoit_wolf_estimate",
+      "line": 403,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "ledoit_wolf_estimate_weighted",
+      "line": 438,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "ledoit_wolf_estimate_weighted",
+      "line": 449,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "ledoit_wolf_estimate_weighted",
+      "line": 487,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "ledoit_wolf_estimator_fit_weighted",
+      "line": 538,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "ledoit_wolf_estimator_fit_weighted",
+      "line": 548,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "graphical_lasso_fit",
+      "line": 623,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "graphical_lasso_fit",
+      "line": 700,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "min_cov_det_fit",
+      "line": 775,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "graphical_lasso_cv_fit",
+      "line": 889,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "graphical_lasso_cv_fit",
+      "line": 951,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "ledoit_wolf_cv_fit",
+      "line": 1008,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "ledoit_wolf_cv_fit",
+      "line": 1058,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "oas_cv_fit",
+      "line": 1126,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "oas_cv_fit",
+      "line": 1151,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "oas_cv_fit",
+      "line": 1160,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/covariance.flow",
+      "function": "_mcd_distances",
+      "line": 1288,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cross_decomposition.flow",
+      "function": "compute_mean_col",
+      "line": 29,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cross_decomposition.flow",
+      "function": "compute_std_col",
+      "line": 38,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cross_decomposition.flow",
+      "function": "pls_fit",
+      "line": 102,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cross_decomposition.flow",
+      "function": "pls_fit",
+      "line": 108,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cross_decomposition.flow",
+      "function": "pls_fit",
+      "line": 120,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cross_decomposition.flow",
+      "function": "pls_fit",
+      "line": 129,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cross_decomposition.flow",
+      "function": "pls_fit",
+      "line": 138,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cross_decomposition.flow",
+      "function": "pls_fit",
+      "line": 146,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cross_decomposition.flow",
+      "function": "pls_fit",
+      "line": 169,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cross_decomposition.flow",
+      "function": "pls_fit",
+      "line": 176,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cross_decomposition.flow",
+      "function": "cca_fit",
+      "line": 438,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cross_decomposition.flow",
+      "function": "cca_fit",
+      "line": 474,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cross_decomposition.flow",
+      "function": "cca_fit",
+      "line": 489,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cross_decomposition.flow",
+      "function": "cca_transform",
+      "line": 550,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cross_decomposition.flow",
+      "function": "pls_canonical_transform",
+      "line": 717,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cross_decomposition.flow",
+      "function": "pls_svd_fit",
+      "line": 784,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/cross_decomposition.flow",
+      "function": "pls_svd_transform",
+      "line": 885,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/datasets.flow",
+      "function": "make_regression",
+      "line": 103,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "pca_fit",
+      "line": 130,
+      "category": "dot",
+      "status": "shared"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "pca_fit",
+      "line": 137,
+      "category": "dot",
+      "status": "shared"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "pca_fit",
+      "line": 153,
+      "category": "dot",
+      "status": "shared"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "pca_fit",
+      "line": 158,
+      "category": "dot",
+      "status": "shared"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "pca_fit",
+      "line": 177,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "pca_inverse_transform",
+      "line": 251,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "nmf_fit",
+      "line": 370,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "nmf_transform",
+      "line": 405,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "truncated_svd_fit",
+      "line": 451,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "truncated_svd_fit",
+      "line": 458,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "truncated_svd_fit",
+      "line": 473,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "truncated_svd_fit",
+      "line": 478,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "truncated_svd_fit",
+      "line": 495,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "truncated_svd_transform",
+      "line": 527,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "_gram_schmidt",
+      "line": 567,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "_gram_schmidt",
+      "line": 575,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "fast_ica_fit",
+      "line": 597,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "fast_ica_fit",
+      "line": 638,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "fast_ica_fit",
+      "line": 678,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "fast_ica_fit",
+      "line": 697,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "fast_ica_fit",
+      "line": 711,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "fast_ica_transform",
+      "line": 746,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "sparse_pca_fit",
+      "line": 812,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "sparse_pca_fit",
+      "line": 836,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "sparse_pca_fit",
+      "line": 858,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "sparse_pca_fit",
+      "line": 886,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "sparse_pca_transform",
+      "line": 930,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "minibatch_sparse_pca_fit",
+      "line": 972,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "minibatch_sparse_pca_fit",
+      "line": 996,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "minibatch_sparse_pca_fit",
+      "line": 1023,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "minibatch_sparse_pca_fit",
+      "line": 1053,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "minibatch_sparse_pca_transform",
+      "line": 1097,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "_kernel_compute",
+      "line": 1140,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "_kernel_compute",
+      "line": 1142,
+      "category": "rbf",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "_kernel_compute",
+      "line": 1147,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "_kernel_compute",
+      "line": 1158,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "kernel_pca_fit",
+      "line": 1225,
+      "category": "dot",
+      "status": "shared"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "kernel_pca_fit",
+      "line": 1251,
+      "category": "dot",
+      "status": "shared"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "factor_analysis_fit",
+      "line": 1417,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "factor_analysis_fit",
+      "line": 1450,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "factor_analysis_transform",
+      "line": 1494,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "_ipca_top_eigenvectors",
+      "line": 1600,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "incremental_pca_transform",
+      "line": 1800,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "dictionary_learning_fit",
+      "line": 1871,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "dictionary_learning_transform",
+      "line": 2025,
+      "category": "dot",
+      "status": "shared"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "_omp_sparse_coding_update",
+      "line": 2086,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "minibatch_dictionary_learning_transform",
+      "line": 2250,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "_array_sum_f32",
+      "line": 2299,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "lda_transform",
+      "line": 2464,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "lda_transform",
+      "line": 2474,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "minibatch_nmf_fit",
+      "line": 2559,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "minibatch_nmf_fit",
+      "line": 2590,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "minibatch_nmf_fit",
+      "line": 2599,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "minibatch_nmf_fit",
+      "line": 2630,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/decomposition.flow",
+      "function": "minibatch_nmf_transform",
+      "line": 2660,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/dummy.flow",
+      "function": "dummy_regressor_fit",
+      "line": 163,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "adaboost_classifier_fit",
+      "line": 1102,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "adaboost_classifier_fit",
+      "line": 1110,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "adaboost_classifier_fit",
+      "line": 1135,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "adaboost_classifier_fit",
+      "line": 1153,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "adaboost_regressor_fit",
+      "line": 1279,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "adaboost_regressor_fit",
+      "line": 1287,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "adaboost_regressor_fit",
+      "line": 1350,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "adaboost_regressor_predict",
+      "line": 1461,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "isolation_forest_fit",
+      "line": 1780,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "stacking_classifier_full_fit",
+      "line": 1943,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "stacking_classifier_full_predict",
+      "line": 2001,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "stacking_classifier_fit",
+      "line": 2052,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "stacking_classifier_predict",
+      "line": 2089,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "_hist_tree_add_split",
+      "line": 2289,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "_find_best_hist_split",
+      "line": 2349,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "_find_best_hist_split",
+      "line": 2350,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "_find_best_hist_split",
+      "line": 2367,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "_find_best_hist_split",
+      "line": 2368,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "_find_best_hist_split",
+      "line": 2334,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "_split_samples",
+      "line": 2399,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "hist_gradient_boosting_regressor_fit",
+      "line": 2696,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "stacking_regressor_fit",
+      "line": 3067,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/ensemble.flow",
+      "function": "stacking_regressor_fit",
+      "line": 3068,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/extra_estimators.flow",
+      "function": "sparse_coder_transform",
+      "line": 77,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/extra_estimators.flow",
+      "function": "sparse_coder_transform",
+      "line": 99,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/extra_estimators.flow",
+      "function": "_bic_kmeans",
+      "line": 299,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/extra_estimators.flow",
+      "function": "_bic_bistochastic",
+      "line": 382,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/extra_estimators.flow",
+      "function": "_bic_piecewise_error",
+      "line": 453,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/extra_estimators.flow",
+      "function": "lasso_lars_ic_fit",
+      "line": 835,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/extra_estimators.flow",
+      "function": "lasso_lars_ic_predict",
+      "line": 907,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/extra_estimators.flow",
+      "function": "omp_cv_fit",
+      "line": 957,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/extra_estimators.flow",
+      "function": "omp_cv_fit",
+      "line": 976,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/extra_estimators.flow",
+      "function": "omp_cv_fit",
+      "line": 988,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/extra_estimators.flow",
+      "function": "omp_cv_fit",
+      "line": 1015,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/extra_estimators.flow",
+      "function": "omp_cv_fit",
+      "line": 1033,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/extra_estimators.flow",
+      "function": "omp_cv_predict",
+      "line": 1060,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/extra_estimators.flow",
+      "function": "nca_fit",
+      "line": 1146,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/extra_estimators.flow",
+      "function": "nca_transform",
+      "line": 1241,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/extra_estimators.flow",
+      "function": "sgd_one_class_svm_fit",
+      "line": 1282,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/extra_estimators.flow",
+      "function": "sgd_one_class_svm_predict",
+      "line": 1317,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/extra_estimators.flow",
+      "function": "sgd_one_class_svm_decision_function",
+      "line": 1334,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/feature_extraction_extra.flow",
+      "function": "dict_vectorizer_fit",
+      "line": 76,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/feature_extraction_extra.flow",
+      "function": "dict_vectorizer_transform",
+      "line": 185,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/feature_selection.flow",
+      "function": "select_k_best_fit",
+      "line": 47,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/feature_selection.flow",
+      "function": "select_k_best_fit",
+      "line": 59,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/feature_selection.flow",
+      "function": "select_k_best_fit",
+      "line": 71,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/feature_selection.flow",
+      "function": "select_k_best_fit",
+      "line": 194,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/feature_selection.flow",
+      "function": "select_k_best_fit",
+      "line": 195,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/feature_selection.flow",
+      "function": "rfe_fit",
+      "line": 432,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/feature_selection.flow",
+      "function": "rfecv_fit",
+      "line": 529,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/feature_selection.flow",
+      "function": "sequential_feature_selector_fit",
+      "line": 634,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/feature_selection.flow",
+      "function": "sequential_feature_selector_fit",
+      "line": 690,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/feature_selection.flow",
+      "function": "_fs_anova_f_scores",
+      "line": 796,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/feature_selection.flow",
+      "function": "_fs_anova_f_scores",
+      "line": 808,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/feature_selection.flow",
+      "function": "_fs_anova_f_scores",
+      "line": 819,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/feature_selection.flow",
+      "function": "chi2",
+      "line": 1650,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/feature_selection.flow",
+      "function": "f_classif",
+      "line": 1723,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/feature_selection.flow",
+      "function": "f_classif",
+      "line": 1734,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/feature_selection.flow",
+      "function": "f_regression",
+      "line": 1792,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/feature_selection.flow",
+      "function": "f_regression",
+      "line": 1793,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/gaussian_process.flow",
+      "function": "_gp_rbf_kernel",
+      "line": 36,
+      "category": "rbf",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/gaussian_process.flow",
+      "function": "_gp_linear_kernel",
+      "line": 42,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/gaussian_process.flow",
+      "function": "gaussian_process_regressor_predict",
+      "line": 193,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/gaussian_process.flow",
+      "function": "gaussian_process_regressor_predict_with_std",
+      "line": 236,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/gaussian_process.flow",
+      "function": "gaussian_process_classifier_fit",
+      "line": 306,
+      "category": "rbf",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/gaussian_process.flow",
+      "function": "gaussian_process_classifier_fit",
+      "line": 314,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/gaussian_process.flow",
+      "function": "gaussian_process_classifier_predict",
+      "line": 348,
+      "category": "rbf",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/impute.flow",
+      "function": "_euclidean_dist_row",
+      "line": 41,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/impute.flow",
+      "function": "knn_imputer_fit",
+      "line": 112,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/impute.flow",
+      "function": "knn_imputer_transform",
+      "line": 150,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/impute.flow",
+      "function": "iterative_imputer_fit",
+      "line": 241,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/impute.flow",
+      "function": "iterative_imputer_fit",
+      "line": 251,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/impute.flow",
+      "function": "iterative_imputer_fit",
+      "line": 262,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/impute.flow",
+      "function": "iterative_imputer_fit",
+      "line": 276,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/inspection.flow",
+      "function": "_r2_score",
+      "line": 34,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/inspection.flow",
+      "function": "_r2_score",
+      "line": 36,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/inspection.flow",
+      "function": "permutation_importance_regression",
+      "line": 116,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/inspection.flow",
+      "function": "permutation_importance_classifier",
+      "line": 170,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/inspection.flow",
+      "function": "permutation_importance_rf_regression",
+      "line": 224,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/inspection.flow",
+      "function": "permutation_importance_rf_classifier",
+      "line": 278,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/inspection.flow",
+      "function": "partial_dependence",
+      "line": 375,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/kernel_approximation.flow",
+      "function": "rbf_sampler_transform",
+      "line": 74,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/kernel_approximation.flow",
+      "function": "_kernel_func",
+      "line": 115,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/kernel_approximation.flow",
+      "function": "_kernel_func",
+      "line": 120,
+      "category": "rbf",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/kernel_approximation.flow",
+      "function": "nystroem_fit",
+      "line": 180,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/kernel_approximation.flow",
+      "function": "nystroem_fit",
+      "line": 187,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/kernel_approximation.flow",
+      "function": "nystroem_fit",
+      "line": 203,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/kernel_approximation.flow",
+      "function": "nystroem_fit",
+      "line": 209,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/kernel_approximation.flow",
+      "function": "nystroem_transform",
+      "line": 279,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/kernel_ridge.flow",
+      "function": "kernel_compute",
+      "line": 52,
+      "category": "rbf",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/kernel_ridge.flow",
+      "function": "_kr_dot_f64",
+      "line": 308,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/kernel_ridge.flow",
+      "function": "_kr_dot_f64",
+      "line": 309,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/kernel_ridge.flow",
+      "function": "_kr_dot_f64",
+      "line": 310,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/kernel_ridge.flow",
+      "function": "_kr_dot_f64",
+      "line": 311,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/kernel_ridge.flow",
+      "function": "_kr_dot_f64",
+      "line": 312,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/kernel_ridge.flow",
+      "function": "_kr_dot_f64",
+      "line": 313,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/kernel_ridge.flow",
+      "function": "_kr_dot_f64",
+      "line": 314,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/kernel_ridge.flow",
+      "function": "_kr_dot_f64",
+      "line": 315,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/kernel_ridge.flow",
+      "function": "_kr_dot_f64",
+      "line": 320,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/kernel_ridge.flow",
+      "function": "_kr_predict_rbf",
+      "line": 367,
+      "category": "dot",
+      "status": "shared"
+    },
+    {
+      "file": "lib/scikit/kernel_ridge.flow",
+      "function": "kernel_ridge_predict",
+      "line": 422,
+      "category": "dot",
+      "status": "shared"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "linear_regression_predict",
+      "line": 563,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lin353_sse",
+      "line": 714,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lin353_sse",
+      "line": 717,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "ols_inference_fit",
+      "line": 866,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lin433_softmax_block",
+      "line": 1029,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lin357_newton_fit",
+      "line": 1756,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "logistic_regression_fit_sparse",
+      "line": 2153,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "logistic_decision_function",
+      "line": 2345,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "logistic_inference_fit",
+      "line": 2527,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "ridge_predict",
+      "line": 2796,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lasso_cd_cols_f64",
+      "line": 2901,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lasso_cd_cols_f64",
+      "line": 2903,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lasso_cd_stream_f64",
+      "line": 2947,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lasso_fit",
+      "line": 3021,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lasso_fit",
+      "line": 3069,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lasso_fit",
+      "line": 3079,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lasso_predict",
+      "line": 3142,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "sgd_classifier_fit",
+      "line": 3189,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "sgd_classifier_predict",
+      "line": 3239,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "sgd_regressor_fit",
+      "line": 3290,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "sgd_regressor_predict",
+      "line": 3336,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "multiclass_logistic_fit",
+      "line": 3393,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "_softmax_probs",
+      "line": 3461,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "multiclass_logistic_predict",
+      "line": 3476,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "elastic_net_predict",
+      "line": 3681,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "ridge_classifier_fit",
+      "line": 3713,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "ridge_classifier_predict",
+      "line": 3746,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "ridge_classifier_decision_function",
+      "line": 3765,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "huber_regressor_fit",
+      "line": 3803,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "huber_regressor_predict",
+      "line": 3886,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "bayesian_ridge_fit",
+      "line": 4004,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "bayesian_ridge_fit",
+      "line": 4009,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "bayesian_ridge_predict",
+      "line": 4050,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "ransac_regressor_predict",
+      "line": 4167,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "theil_sen_regressor_predict",
+      "line": 4272,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "perceptron_fit",
+      "line": 4306,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "perceptron_predict",
+      "line": 4336,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "passive_aggressive_classifier_fit",
+      "line": 4371,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "passive_aggressive_classifier_fit",
+      "line": 4379,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "passive_aggressive_classifier_predict",
+      "line": 4406,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lars_fit",
+      "line": 4467,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lars_fit",
+      "line": 4483,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lars_fit",
+      "line": 4484,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lars_predict",
+      "line": 4541,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "ard_regression_fit",
+      "line": 4605,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "ard_regression_fit",
+      "line": 4606,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "ard_regression_fit",
+      "line": 4614,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "ard_regression_fit",
+      "line": 4623,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "ard_regression_fit",
+      "line": 4625,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "ard_regression_predict",
+      "line": 4657,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "orthogonal_matching_pursuit_fit",
+      "line": 4724,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "orthogonal_matching_pursuit_fit",
+      "line": 4750,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "orthogonal_matching_pursuit_fit",
+      "line": 4756,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "orthogonal_matching_pursuit_fit",
+      "line": 4790,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "orthogonal_matching_pursuit_predict",
+      "line": 4825,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "quantile_regressor_fit",
+      "line": 4863,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "quantile_regressor_predict",
+      "line": 4907,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "_mtl_columns",
+      "line": 4961,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "multitask_lasso_predict",
+      "line": 5142,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "multitask_elastic_net_predict",
+      "line": 5225,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "ridge_cv_fit",
+      "line": 5375,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "ridge_cv_fit",
+      "line": 5378,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "ridge_cv_predict",
+      "line": 5426,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lasso_cv_fit",
+      "line": 5504,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lasso_cv_fit",
+      "line": 5508,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lasso_cv_predict",
+      "line": 5551,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "elastic_net_cv_fit",
+      "line": 5623,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "elastic_net_cv_fit",
+      "line": 5626,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "elastic_net_cv_predict",
+      "line": 5672,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "ridge_classifier_cv_fit",
+      "line": 5749,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "ridge_classifier_cv_predict",
+      "line": 5804,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "passive_aggressive_regressor_fit",
+      "line": 5844,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "passive_aggressive_regressor_fit",
+      "line": 5854,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "passive_aggressive_regressor_predict",
+      "line": 5897,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "logistic_regression_cv_predict",
+      "line": 6028,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lars_cv_fit",
+      "line": 6121,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lars_cv_predict",
+      "line": 6172,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "_col_means",
+      "line": 6207,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "_centered_dot",
+      "line": 6339,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lasso_lars_fit",
+      "line": 6466,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lasso_lars_fit",
+      "line": 6499,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lasso_lars_predict",
+      "line": 6658,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lasso_lars_cv_fit",
+      "line": 6734,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "lasso_lars_cv_predict",
+      "line": 6800,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "multitask_lasso_cv_fit",
+      "line": 6899,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "multitask_lasso_cv_fit",
+      "line": 6902,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "multitask_lasso_cv_predict",
+      "line": 6966,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "multitask_elastic_net_cv_fit",
+      "line": 7086,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "multitask_elastic_net_cv_fit",
+      "line": 7089,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/linear.flow",
+      "function": "multitask_elastic_net_cv_predict",
+      "line": 7154,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/manifold.flow",
+      "function": "compute_joint_probabilities",
+      "line": 63,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/manifold.flow",
+      "function": "tsne_fit",
+      "line": 151,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/manifold.flow",
+      "function": "tsne_fit",
+      "line": 154,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/manifold.flow",
+      "function": "tsne_fit",
+      "line": 182,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/manifold.flow",
+      "function": "tsne_fit",
+      "line": 206,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/manifold.flow",
+      "function": "tsne_fit",
+      "line": 225,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/manifold.flow",
+      "function": "tsne_fit",
+      "line": 228,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/manifold.flow",
+      "function": "isomap_fit",
+      "line": 351,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/manifold.flow",
+      "function": "lle_fit",
+      "line": 482,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/manifold.flow",
+      "function": "spectral_embedding_fit",
+      "line": 614,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/manifold.flow",
+      "function": "spectral_embedding_fit",
+      "line": 616,
+      "category": "rbf",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/manifold.flow",
+      "function": "mds_fit",
+      "line": 726,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/manifold.flow",
+      "function": "mds_fit",
+      "line": 770,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/manifold.flow",
+      "function": "mds_fit",
+      "line": 777,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/manifold.flow",
+      "function": "trustworthiness",
+      "line": 848,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/manifold.flow",
+      "function": "trustworthiness",
+      "line": 868,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/matrix.flow",
+      "function": "matrix_multiply",
+      "line": 83,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/matrix.flow",
+      "function": "matrix_multiply_vec",
+      "line": 95,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/matrix.flow",
+      "function": "array_mean",
+      "line": 351,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/matrix.flow",
+      "function": "array_std",
+      "line": 360,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/matrix.flow",
+      "function": "array_dot",
+      "line": 403,
+      "category": "dot",
+      "status": "primitive"
+    },
+    {
+      "file": "lib/scikit/matrix.flow",
+      "function": "sqdist_f32",
+      "line": 444,
+      "category": "squared-distance",
+      "status": "primitive"
+    },
+    {
+      "file": "lib/scikit/matrix.flow",
+      "function": "sqdist_f32_acc_f64",
+      "line": 457,
+      "category": "squared-distance",
+      "status": "primitive"
+    },
+    {
+      "file": "lib/scikit/meta_estimators.flow",
+      "function": "one_vs_rest_predict",
+      "line": 93,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/meta_estimators.flow",
+      "function": "one_vs_one_predict",
+      "line": 221,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/meta_estimators.flow",
+      "function": "output_code_predict",
+      "line": 359,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "mean_squared_error",
+      "line": 319,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "r2_score",
+      "line": 347,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "r2_score",
+      "line": 349,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "explained_variance_score",
+      "line": 716,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "explained_variance_score",
+      "line": 717,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "mean_squared_log_error",
+      "line": 818,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "silhouette_score",
+      "line": 836,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "silhouette_score",
+      "line": 865,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "brier_score_loss",
+      "line": 1135,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "euclidean_distances",
+      "line": 1151,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "cosine_distances",
+      "line": 1178,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "cosine_distances",
+      "line": 1187,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "cosine_distances",
+      "line": 1188,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "multiclass_precision_ovr",
+      "line": 1245,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "multiclass_precision_ovr",
+      "line": 1246,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "multiclass_precision_ovr",
+      "line": 1247,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "multiclass_recall_ovr",
+      "line": 1312,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "multiclass_recall_ovr",
+      "line": 1313,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "multiclass_recall_ovr",
+      "line": 1314,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "multiclass_f1_ovr",
+      "line": 1371,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "multiclass_precision_ovo",
+      "line": 1466,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "multiclass_recall_ovo",
+      "line": 1505,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "calinski_harabasz_score",
+      "line": 2045,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "calinski_harabasz_score",
+      "line": 2077,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "davies_bouldin_score",
+      "line": 2140,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "davies_bouldin_score",
+      "line": 2160,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "d2_absolute_error_score",
+      "line": 2596,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "silhouette_samples",
+      "line": 2637,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/metrics.flow",
+      "function": "silhouette_samples",
+      "line": 2661,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/mixture.flow",
+      "function": "gaussian_mixture_fit",
+      "line": 122,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/mixture.flow",
+      "function": "gaussian_mixture_fit",
+      "line": 150,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/mixture.flow",
+      "function": "gaussian_mixture_fit",
+      "line": 219,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/mixture.flow",
+      "function": "bayesian_gaussian_mixture_fit",
+      "line": 498,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/model_selection.flow",
+      "function": "train_test_split",
+      "line": 37,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/model_selection.flow",
+      "function": "train_test_split_free",
+      "line": 192,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/model_selection.flow",
+      "function": "shuffle_split_init",
+      "line": 874,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/model_selection.flow",
+      "function": "shuffle_split_get_split",
+      "line": 878,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/model_selection.flow",
+      "function": "time_series_split",
+      "line": 942,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/model_selection.flow",
+      "function": "bootstrap_oob_init",
+      "line": 1155,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/model_selection.flow",
+      "function": "bootstrap_oob_get_split",
+      "line": 1163,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/model_selection.flow",
+      "function": "permutation_test_score",
+      "line": 1429,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/model_selection.flow",
+      "function": "leave_p_out_get_split",
+      "line": 1534,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/model_selection.flow",
+      "function": "stratified_shuffle_split_init",
+      "line": 1597,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/model_selection.flow",
+      "function": "stratified_shuffle_split_get_split",
+      "line": 1608,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/model_selection.flow",
+      "function": "group_kfold_split",
+      "line": 1727,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/model_selection.flow",
+      "function": "repeated_stratified_k_fold_split",
+      "line": 1864,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/model_selection.flow",
+      "function": "leave_one_group_out_split",
+      "line": 1963,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/model_selection.flow",
+      "function": "leave_p_group_out_split",
+      "line": 2052,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/model_selection.flow",
+      "function": "group_shuffle_split_init",
+      "line": 2193,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/model_selection.flow",
+      "function": "group_shuffle_split_get_split",
+      "line": 2200,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/naive_bayes.flow",
+      "function": "multinomial_nb_fit",
+      "line": 392,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/naive_bayes.flow",
+      "function": "multinomial_nb_predict",
+      "line": 426,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/naive_bayes.flow",
+      "function": "multinomial_nb_predict_proba",
+      "line": 450,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/naive_bayes.flow",
+      "function": "multinomial_nb_predict_proba",
+      "line": 461,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/naive_bayes.flow",
+      "function": "bernoulli_nb_predict",
+      "line": 604,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/naive_bayes.flow",
+      "function": "bernoulli_nb_predict",
+      "line": 606,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/naive_bayes.flow",
+      "function": "complement_nb_predict",
+      "line": 734,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neighbors.flow",
+      "function": "knn_classifier_predict_proba",
+      "line": 134,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neighbors.flow",
+      "function": "knn_regressor_predict",
+      "line": 244,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neighbors.flow",
+      "function": "nearest_neighbors_kneighbors",
+      "line": 315,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neighbors.flow",
+      "function": "radius_neighbors_classifier_predict",
+      "line": 423,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neighbors.flow",
+      "function": "radius_neighbors_regressor_predict",
+      "line": 481,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neighbors.flow",
+      "function": "nearest_centroid_predict",
+      "line": 566,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neighbors.flow",
+      "function": "local_outlier_factor_fit",
+      "line": 629,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neighbors.flow",
+      "function": "local_outlier_factor_fit",
+      "line": 712,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neighbors.flow",
+      "function": "kernel_density_score_samples",
+      "line": 898,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neighbors.flow",
+      "function": "kneighbors_transformer_transform",
+      "line": 997,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neighbors.flow",
+      "function": "radius_neighbors_transformer_transform",
+      "line": 1065,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neural_network.flow",
+      "function": "_softmax",
+      "line": 74,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neural_network.flow",
+      "function": "mlp_classifier_fit",
+      "line": 168,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neural_network.flow",
+      "function": "mlp_classifier_fit",
+      "line": 196,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neural_network.flow",
+      "function": "mlp_classifier_predict",
+      "line": 259,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neural_network.flow",
+      "function": "mlp_regressor_fit",
+      "line": 391,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neural_network.flow",
+      "function": "mlp_regressor_fit",
+      "line": 409,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neural_network.flow",
+      "function": "mlp_regressor_predict",
+      "line": 468,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neural_network.flow",
+      "function": "bernoulli_rbm_fit",
+      "line": 550,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neural_network.flow",
+      "function": "bernoulli_rbm_fit",
+      "line": 577,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neural_network.flow",
+      "function": "bernoulli_rbm_fit",
+      "line": 613,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neural_network.flow",
+      "function": "bernoulli_rbm_fit",
+      "line": 636,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neural_network.flow",
+      "function": "bernoulli_rbm_fit",
+      "line": 654,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neural_network.flow",
+      "function": "bernoulli_rbm_transform",
+      "line": 720,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neural_network.flow",
+      "function": "bernoulli_rbm_gibbs_sample",
+      "line": 742,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/neural_network.flow",
+      "function": "bernoulli_rbm_gibbs_sample",
+      "line": 760,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/preprocessing.flow",
+      "function": "standard_scaler_fit",
+      "line": 59,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/preprocessing.flow",
+      "function": "power_transformer_transform",
+      "line": 1339,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/random_projection.flow",
+      "function": "gaussian_random_projection_transform",
+      "line": 70,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/random_projection.flow",
+      "function": "sparse_random_projection_transform",
+      "line": 146,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/semi_supervised.flow",
+      "function": "_build_affinity",
+      "line": 48,
+      "category": "rbf",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/semi_supervised.flow",
+      "function": "_build_affinity",
+      "line": 59,
+      "category": "rbf",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/semi_supervised.flow",
+      "function": "label_propagation_fit",
+      "line": 78,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/semi_supervised.flow",
+      "function": "label_propagation_fit",
+      "line": 139,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/sparse.flow",
+      "function": "sparse_dot_row",
+      "line": 130,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/sparse.flow",
+      "function": "sparse_dot_dense",
+      "line": 148,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "linear_svc_fit",
+      "line": 86,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "linear_svc_fit",
+      "line": 88,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "linear_svc_fit",
+      "line": 117,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "linear_svc_fit",
+      "line": 224,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "linear_svc_fit",
+      "line": 226,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "linear_svc_fit_sparse",
+      "line": 365,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "linear_svc_decision_function",
+      "line": 429,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "linear_svc_multi_decision_function",
+      "line": 529,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "linear_svr_fit",
+      "line": 620,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "linear_svr_fit",
+      "line": 621,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "linear_svr_fit",
+      "line": 622,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "linear_svr_fit",
+      "line": 623,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "linear_svr_fit",
+      "line": 628,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "_svm_compute_ej",
+      "line": 717,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "_kernel_svc_smo_precomputed",
+      "line": 1003,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "_rbf_exp",
+      "line": 1048,
+      "category": "rbf",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "_rbf_exp_f64",
+      "line": 1053,
+      "category": "rbf",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "_rbf_row",
+      "line": 1303,
+      "category": "dot",
+      "status": "shared"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "_rbf_row",
+      "line": 1304,
+      "category": "dot",
+      "status": "shared"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "_rbf_row",
+      "line": 1305,
+      "category": "dot",
+      "status": "shared"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "_rbf_row",
+      "line": 1306,
+      "category": "dot",
+      "status": "shared"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "_rbf_row",
+      "line": 1311,
+      "category": "dot",
+      "status": "shared"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "nu_svc_fit",
+      "line": 1680,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "nu_svc_fit",
+      "line": 1760,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "nu_svc_predict",
+      "line": 1876,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "nu_svc_predict",
+      "line": 1878,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "nu_svr_predict",
+      "line": 2004,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "nu_svr_predict",
+      "line": 2006,
+      "category": "rbf",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "one_class_svm_fit",
+      "line": 2059,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "one_class_svm_fit",
+      "line": 2082,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "one_class_svm_predict",
+      "line": 2122,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "one_class_svm_predict",
+      "line": 2124,
+      "category": "rbf",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "_svm_kernel_vec",
+      "line": 2210,
+      "category": "rbf",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/svm.flow",
+      "function": "_svm_kernel_vec",
+      "line": 2216,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/tree.flow",
+      "function": "_mse",
+      "line": 142,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/tree.flow",
+      "function": "_mse",
+      "line": 148,
+      "category": "squared-distance",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/tree.flow",
+      "function": "_mean_val",
+      "line": 180,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/tree.flow",
+      "function": "_tree_split_goes_left",
+      "line": 514,
+      "category": "row-partition",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/tree.flow",
+      "function": "_build_classifier_tree",
+      "line": 913,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/tree.flow",
+      "function": "_build_classifier_tree_rf",
+      "line": 1404,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/tree.flow",
+      "function": "decision_tree_classifier_feature_importances",
+      "line": 1802,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/tree.flow",
+      "function": "_build_regressor_tree",
+      "line": 1920,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/tree.flow",
+      "function": "_build_regressor_tree",
+      "line": 1921,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/tree.flow",
+      "function": "_build_regressor_tree",
+      "line": 1977,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/tree.flow",
+      "function": "_build_regressor_tree",
+      "line": 1978,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/tree.flow",
+      "function": "_build_regressor_tree",
+      "line": 1979,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/tree.flow",
+      "function": "_build_regressor_tree",
+      "line": 2035,
+      "category": "sum-reduction",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/tree.flow",
+      "function": "_build_regressor_tree",
+      "line": 2036,
+      "category": "dot",
+      "status": "inline"
+    },
+    {
+      "file": "lib/scikit/tree.flow",
+      "function": "decision_tree_regressor_feature_importances",
+      "line": 2188,
+      "category": "sum-reduction",
+      "status": "inline"
+    }
+  ]
+}

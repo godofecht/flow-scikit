@@ -66,6 +66,8 @@ jobs:
             benchmarks/test_config_equivalence.py \
             benchmarks/test_disparity_regression_policy.py \
             benchmarks/publish_headline_v2.py \
+            benchmarks/audit_hot_primitives.py \
+            benchmarks/check_primitive_bench.py \
             benchmarks/validate_execution_substrate.py
           python - <<'PY'
           import json
@@ -145,7 +147,10 @@ jobs:
           FLOW_OPT_LEVEL: "3"
           FLOW_LDFLAGS: "-lm -lopenblas lib/scikit/flow_time.c lib/scikit/flow_parallel.c"
           FLOW_HEADLINE_COMMAND: ${{ github.workspace }}/.flow-toolchain/flow run benchmarks/bench_flow_v2.flow
-        run: python benchmarks/run_headline.py --repeats 5
+        run: |
+          python benchmarks/run_headline.py --repeats 5
+          ${{ github.workspace }}/.flow-toolchain/flow run benchmarks/bench_primitives.flow > /tmp/primitives.txt
+          python benchmarks/check_primitive_bench.py /tmp/primitives.txt
 
       - uses: actions/upload-artifact@v4
         with:

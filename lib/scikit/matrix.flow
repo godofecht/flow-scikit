@@ -422,9 +422,40 @@ export function sigmoid(x: f32) -> f32 {
 }
 
 export function dot_product(a: ptr<f32>, b: ptr<f32>, n: i32) -> f32 {
-    let mut sum: f32 = 0.0
-    for i in 0 to n {
-        sum = sum + a[i] * b[i]
+    return array_dot(a, b, n)
+}
+
+# Squared euclidean distance between two contiguous f32 vectors.
+#
+# Strict mode: the terms are added in ascending index order with the recurrence
+#   s = f32(s + f32(d * d)),  d = f32(a[k] - b[k])
+# with no norm expansion and no reassociation, so a caller that used to carry
+# this loop inline gets the same bits. A row at an offset is passed as
+# `data + offset`. The loop is a while loop with a constant step because Flow
+# emits a range loop with a runtime stride that LLVM will not vectorize
+# (Flow issue #1004). A strict f32 sum is a serial dependency, so the compiler
+# cannot widen it without reassociation; a relaxed variant, if one is added,
+# must be a separate function with its own tolerance.
+export function sqdist_f32(a: ptr<f32>, b: ptr<f32>, n: i32) -> f32 {
+    let mut s: f32 = 0.0
+    let mut k: i32 = 0
+    while k < n {
+        let d: f32 = a[k] - b[k]
+        s = s + d * d
+        k = k + 1
     }
-    return sum
+    return s
+}
+
+# The same distance with the f32 difference widened and summed in f64:
+#   s = f64(s + f64(d) * f64(d)),  d = f32(a[k] - b[k])
+export function sqdist_f32_acc_f64(a: ptr<f32>, b: ptr<f32>, n: i32) -> f64 {
+    let mut s: f64 = 0.0
+    let mut k: i32 = 0
+    while k < n {
+        let d: f64 = (a[k] - b[k]) as f64
+        s = s + d * d
+        k = k + 1
+    }
+    return s
 }
