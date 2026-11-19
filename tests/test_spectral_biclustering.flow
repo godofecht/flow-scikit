@@ -125,11 +125,81 @@ function test_biclustering_recovers_blocks() -> i32 {
     return failures
 }
 
+# A two block matrix has rank two, so four of the six singular vectors the fit
+# asks for span its null space. What the block power iteration leaves there is
+# rounding, and it differs between BLAS builds: on some it came back as zero
+# vectors, which are perfectly piecewise constant and so outranked the one
+# vector that carries the checkerboard. The fit then put every row in one
+# cluster. One shape cannot pin that down, because which shapes fail depends
+# on the BLAS, so this sweeps shapes and block contrasts.
+function coc_contrast_fixture(n: i32, p: i32, strong: f32, weak: f32) -> Matrix {
+    let X: Matrix = matrix_new(n, p)
+    let half_r: i32 = n / 2
+    let half_c: i32 = p / 2
+    for i in 0 to n {
+        for j in 0 to p {
+            let same: bool = (i < half_r && j < half_c) || (i >= half_r && j >= half_c)
+            if same { matrix_set(X, i, j, strong) }
+            else { matrix_set(X, i, j, weak) }
+        }
+    }
+    return X
+}
+
+function coc_two_blocks_recovered(labels: ptr<i32>, m: i32) -> bool {
+    if not coc_block_is_uniform(labels, 0, m / 2) { return false }
+    if not coc_block_is_uniform(labels, m / 2, m) { return false }
+    return labels[0] != labels[m - 1]
+}
+
+function test_biclustering_rank_deficient_sweep() -> i32 {
+    println("Test: SpectralBiclustering recovers rank two blocks at every shape")
+    let mut fits: i32 = 0
+    let mut wrong: i32 = 0
+    let mut n: i32 = 4
+    while n <= 40 {
+        let mut p: i32 = 4
+        while p <= 40 {
+            for h in 0 to 3 {
+                let mut strong: f32 = 10.0
+                let mut weak: f32 = 1.0
+                if h == 1 { strong = 2.0 }
+                if h == 2 {
+                    strong = 7.5
+                    weak = 2.5
+                }
+                let X: Matrix = coc_contrast_fixture(n, p, strong, weak)
+                let model: SpectralBiclustering = spectral_biclustering_fit(X, 2, 2)
+                let rows_ok: bool = coc_two_blocks_recovered(model.row_labels, n)
+                let cols_ok: bool = coc_two_blocks_recovered(model.col_labels, p)
+                fits = fits + 1
+                if not (rows_ok && cols_ok) {
+                    wrong = wrong + 1
+                    if wrong <= 5 {
+                        printf("  FAIL: %d by %d, blocks %.1f and %.1f\n", n, p, strong as f64, weak as f64)
+                    }
+                }
+                spectral_biclustering_free(model)
+                matrix_free(X)
+            }
+            p = p + 2
+        }
+        n = n + 2
+    }
+    if wrong == 0 {
+        printf("  OK: %d fits\n", fits)
+        return 0
+    }
+    printf("  FAIL: %d of %d fits did not recover the blocks\n", wrong, fits)
+    return 1
+}
+
 function main() -> i32 {
     println("=== Spectral biclustering ===")
     let mut failures: i32 = 0
     failures = failures + test_recovers_two_blocks()
     failures = failures + test_biclustering_recovers_blocks()
+    failures = failures + test_biclustering_rank_deficient_sweep()
     if failures > 0 {
         printf("%d failure(s)\n", failures)
         return 1
