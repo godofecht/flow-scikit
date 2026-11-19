@@ -20,7 +20,13 @@ export struct KernelRidge {
     n_samples: i32,
     n_features: i32,
     n_outputs: i32,
-    fitted: bool
+    fitted: bool,
+    # Squared norm of every training row, and the dual coefficients widened to
+    # f64. RBF prediction needs both on every call and both depend on the
+    # fitted state alone, so fit computes them once. They are derived from
+    # X_train and dual_coef and must be rebuilt if either is edited by hand.
+    x_train_sq: ptr<f32>,
+    dual_coef_d: ptr<f64>
 }
 
 const KR_KERNEL_LINEAR: i32 = 0
@@ -185,9 +191,25 @@ export function kernel_ridge_fit(X: Matrix, y: ptr<f32>, alpha: f32, kernel_type
     }
 
     array_free_f64(K_reg)
-    array_free_f64(dual_coef_d)
+
+    # Store the f32 coefficients widened to f64. Prediction has always summed
+    # the rounded values, and widening the stored ones keeps that unchanged.
+    # The unrounded f64 solution would move every prediction.
+    for i in 0 to n {
+        dual_coef_d[i] = (dual_coef[i]) as f64
+    }
 
     let X_copy: Matrix = matrix_copy(X)
+    let x_train_sq: ptr<f32> = array_new_f32(n)
+    for i in 0 to n {
+        let r: ptr<f32> = X_copy.data + i * n_features
+        let mut s: f32 = 0.0
+        for f in 0 to n_features {
+            let v: f32 = r[f]
+            s = s + v * v
+        }
+        x_train_sq[i] = s
+    }
 
     return KernelRidge {
         alpha: alpha,
@@ -200,7 +222,9 @@ export function kernel_ridge_fit(X: Matrix, y: ptr<f32>, alpha: f32, kernel_type
         n_samples: n,
         n_features: X.cols,
         n_outputs: 1,
-        fitted: true
+        fitted: true,
+        x_train_sq: x_train_sq,
+        dual_coef_d: dual_coef_d
     }
 }
 
@@ -219,63 +243,169 @@ function _kr_exp_f32(x: f32) -> f32 {
     return expf(x)
 }
 
+# exp(v[k]) in place for a block of RBF exponents.
+#
+# An RBF kernel entry is exp(-gamma * d^2). Its argument is never positive for
+# a valid gamma, and an argument below -104 gives a value under the smallest
+# f32 denormal. On that range the exponential needs no libm call:
+#
+#   exp(x) = exp(x / 1024) ^ 1024
+#
+# x / 1024 lies in [-0.1016, 0], where the degree 8 Taylor polynomial is
+# within 3.2e-15 relative, and ten squarings raise the result to the 1024th
+# power. Each squaring doubles the relative error, so truncation contributes
+# at most 3.3e-12 at x = -104 and far less towards x = 0. With rounding the
+# measured worst case over the range is 3.6e-12. The squared distance
+# feeding it is assembled from f32 norms and an sgemm cross term and carries
+# about 1e-6 relative, so this is far below what the input can resolve.
+#
+# The point of the form is that the body is straight-line arithmetic with no
+# call and no data-dependent branch, so the compiler vectorizes the loop. A
+# libm exp per element is a call the loop vectorizer cannot see through, and
+# it was 97 percent of predict time on the Diabetes row.
+#
+# Arguments below -104 return exactly 0. The polynomial is symmetric in the
+# size of its argument, so a positive exponent up to 104, which is past where
+# an f32 result overflows, meets the same bound. A negative gamma therefore
+# needs no separate path.
+export function rbf_exp_block(v: ptr<f64>, n: i32) -> void {
+    let mut k: i32 = 0
+    while k < n {
+        let x: f64 = v[k]
+        let mut xc: f64 = x
+        if xc < -104.0 { xc = -104.0 }
+        let y: f64 = xc * 0.0009765625
+        let mut e: f64 = 1.0 + y * (1.0 + y * (0.5 + y * (0.16666666666666666 + y * (0.041666666666666664 + y * (0.008333333333333333 + y * (0.001388888888888889 + y * (0.0001984126984126984 + y * 0.0000248015873015873)))))))
+        e = e * e
+        e = e * e
+        e = e * e
+        e = e * e
+        e = e * e
+        e = e * e
+        e = e * e
+        e = e * e
+        e = e * e
+        e = e * e
+        if x < -104.0 { e = 0.0 }
+        v[k] = e
+        k = k + 1
+    }
+}
+
+# f64 dot product over eight partial sums. One running sum is a single
+# dependency chain the compiler may not reorder; eight give it vector lanes.
+# This stays in Flow rather than calling cblas_ddot or cblas_dgemv because a
+# block is small enough that a threaded BLAS spends longer dispatching than
+# computing, which AGENTS.md records at roughly 0.1 ms per call on OpenBLAS.
+function _kr_dot_f64(a: ptr<f64>, b: ptr<f64>, n: i32) -> f64 {
+    let mut s0: f64 = 0.0
+    let mut s1: f64 = 0.0
+    let mut s2: f64 = 0.0
+    let mut s3: f64 = 0.0
+    let mut s4: f64 = 0.0
+    let mut s5: f64 = 0.0
+    let mut s6: f64 = 0.0
+    let mut s7: f64 = 0.0
+    let n8: i32 = (n / 8) * 8
+    let mut j: i32 = 0
+    while j < n8 {
+        s0 = s0 + a[j] * b[j]
+        s1 = s1 + a[j + 1] * b[j + 1]
+        s2 = s2 + a[j + 2] * b[j + 2]
+        s3 = s3 + a[j + 3] * b[j + 3]
+        s4 = s4 + a[j + 4] * b[j + 4]
+        s5 = s5 + a[j + 5] * b[j + 5]
+        s6 = s6 + a[j + 6] * b[j + 6]
+        s7 = s7 + a[j + 7] * b[j + 7]
+        j = j + 8
+    }
+    let mut tail: f64 = 0.0
+    while j < n {
+        tail = tail + a[j] * b[j]
+        j = j + 1
+    }
+    return ((s0 + s1) + (s2 + s3)) + ((s4 + s5) + (s6 + s7)) + tail
+}
+
+# Rows of the test-to-train kernel evaluated per block. The block holds one
+# f32 cross term and one f64 kernel entry per pair, 12 bytes, and is sized to
+# stay inside a 256 KiB second-level cache however large the batch is. The
+# full kernel used to be materialized at n_queries * n_train.
+function _kr_rbf_block_rows(n: i32, nt: i32) -> i32 {
+    let mut rows: i32 = 16384
+    if nt > 0 { rows = 16384 / nt }
+    if rows < 1 { rows = 1 }
+    if rows > n { rows = n }
+    return rows
+}
+
+function _kr_predict_rbf(model: KernelRidge, X: Matrix, result: ptr<f32>) -> void {
+    let n: i32 = X.rows
+    let nt: i32 = model.n_samples
+    let nf: i32 = model.n_features
+    let x_data: ptr<f32> = X.data
+    let xt_data: ptr<f32> = model.X_train.data
+    let xt_sq: ptr<f32> = model.x_train_sq
+    let neg_gamma: f64 = 0.0 - ((model.gamma) as f64)
+
+    let block: i32 = _kr_rbf_block_rows(n, nt)
+    let cross: ptr<f32> = malloc((block as i64) * (nt as i64) * 4) as ptr<f32>
+    let kern: ptr<f64> = malloc((block as i64) * (nt as i64) * 8) as ptr<f64>
+
+    let mut start: i32 = 0
+    while start < n {
+        let mut rows: i32 = n - start
+        if rows > block { rows = block }
+        let xb: ptr<f32> = x_data + start * nf
+
+        # Cross terms for the block: one sgemm.
+        cblas_sgemm(101, 111, 112, rows, nt, nf, 1.0, xb, nf, xt_data, nf, 0.0, cross, nt)
+
+        # Exponent -gamma * max(0, |x|^2 + |t|^2 - 2 x.t) for every pair.
+        let mut i: i32 = 0
+        while i < rows {
+            let r: ptr<f32> = xb + i * nf
+            let mut xi_sq: f32 = 0.0
+            let mut f: i32 = 0
+            while f < nf {
+                xi_sq = xi_sq + r[f] * r[f]
+                f = f + 1
+            }
+            let cross_row: ptr<f32> = cross + i * nt
+            let kern_row: ptr<f64> = kern + i * nt
+            let mut j: i32 = 0
+            while j < nt {
+                let mut sq: f64 = (xi_sq + xt_sq[j] - 2.0 * cross_row[j]) as f64
+                if sq < 0.0 { sq = 0.0 }
+                kern_row[j] = neg_gamma * sq
+                j = j + 1
+            }
+            i = i + 1
+        }
+
+        rbf_exp_block(kern, rows * nt)
+
+        # Kernel row times the dual coefficients.
+        i = 0
+        while i < rows {
+            result[start + i] = _kr_dot_f64(kern + i * nt, model.dual_coef_d, nt) as f32
+            i = i + 1
+        }
+        start = start + rows
+    }
+
+    free(kern as ptr<void>)
+    free(cross as ptr<void>)
+}
+
 export function kernel_ridge_predict(model: KernelRidge, X: Matrix) -> ptr<f32> {
     let n: i32 = X.rows
     let nt: i32 = model.n_samples
     let nf: i32 = model.n_features
     let result: ptr<f32> = array_new_f32(n)
-    let gamma_d: f64 = (model.gamma) as f64
 
     if model.kernel_type == 2 || model.kernel_type == KR_KERNEL_RBF {
-        let x_data: ptr<f32> = X.data
-        let xt_data: ptr<f32> = model.X_train.data
-
-        let x_sq: ptr<f32> = array_new_f32(n)
-        for i in 0 to n {
-            let r: ptr<f32> = x_data + i * nf
-            let mut s: f32 = 0.0
-            for f in 0 to nf {
-                let v: f32 = r[f]
-                s = s + v * v
-            }
-            x_sq[i] = s
-        }
-
-        let xt_sq: ptr<f32> = array_new_f32(nt)
-        for j in 0 to nt {
-            let r: ptr<f32> = xt_data + j * nf
-            let mut s: f32 = 0.0
-            for f in 0 to nf {
-                let v: f32 = r[f]
-                s = s + v * v
-            }
-            xt_sq[j] = s
-        }
-
-        let cross: ptr<f32> = malloc((n as i64) * (nt as i64) * 4) as ptr<f32>
-        cblas_sgemm(101, 111, 112, n, nt, nf, 1.0, x_data, nf, xt_data, nf, 0.0, cross, nt)
-
-        let dual_coef_d: ptr<f64> = array_new_f64(nt)
-        for j in 0 to nt {
-            dual_coef_d[j] = (model.dual_coef[j]) as f64
-        }
-
-        for i in 0 to n {
-            let xi_sq: f32 = x_sq[i]
-            let cross_row: ptr<f32> = cross + i * nt
-            let mut sum: f64 = 0.0
-            for j in 0 to nt {
-                let mut sq: f64 = (xi_sq + xt_sq[j] - 2.0 * cross_row[j]) as f64
-                if sq < 0.0 { sq = 0.0 }
-                sum = sum + dual_coef_d[j] * _kr_exp_f64(0.0 - gamma_d * sq)
-            }
-            result[i] = sum as f32
-        }
-
-        array_free_f64(dual_coef_d)
-        free(cross as ptr<void>)
-        array_free_f32(x_sq)
-        array_free_f32(xt_sq)
+        _kr_predict_rbf(model, X, result)
     } else {
         let xt_data2: ptr<f32> = model.X_train.data
         if model.kernel_type == KR_KERNEL_LINEAR {
@@ -306,5 +436,7 @@ export function kernel_ridge_predict(model: KernelRidge, X: Matrix) -> ptr<f32> 
 
 export function kernel_ridge_free(model: KernelRidge) -> void {
     array_free_f32(model.dual_coef)
+    array_free_f32(model.x_train_sq)
+    array_free_f64(model.dual_coef_d)
     matrix_free(model.X_train)
 }

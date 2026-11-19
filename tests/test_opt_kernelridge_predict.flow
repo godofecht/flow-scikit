@@ -1,0 +1,302 @@
+# Regression test for blocked KernelRidge RBF prediction (issue #488).
+#
+# Prediction evaluates the test-to-train kernel a block of rows at a time,
+# takes the exponential with a vectorizable polynomial in place of a libm call
+# per pair, and reads the training-row norms and f64 dual coefficients that
+# fit stored on the model. The checks below:
+#
+#   1. bound the polynomial exponential against libm on [-104, 104],
+#   2. confirm fit stored the derived state,
+#   3. compare predictions with an independent f64 sum that takes direct
+#      squared differences and libm exp, on shapes that fit in one block, end
+#      exactly on a block edge, and span several blocks. The inputs sit on a
+#      1/128 grid, so the f32 norms and cross terms are exact and the only
+#      differences left are the exponential and the final f32 rounding,
+#   4. require a row predicted alone to match the same row in a batch,
+#   5. predict with a negative gamma, where every exponent is positive,
+#   6. confirm the polynomial kernel branch still matches its reference.
+
+import "lib/scikit/scikit.flow"
+
+function kropt_abs(v: f64) -> f64 {
+    if v < 0.0 { return 0.0 - v }
+    return v
+}
+
+function kropt_exp(v: f64) -> f64 {
+    let r: f64 = exp(v)
+    return r
+}
+
+function kropt_value(i: i32, j: i32) -> f32 {
+    return (((i * 131 + j * 17) % 257) as f32) / 128.0 - 1.0
+}
+
+function kropt_fill(X: Matrix, first_row: i32) -> void {
+    for i in 0 to X.rows {
+        for j in 0 to X.cols { matrix_set(X, i, j, kropt_value(first_row + i, j)) }
+    }
+}
+
+function kropt_target(X: Matrix, i: i32) -> f32 {
+    let mut s: f32 = 0.0
+    for j in 0 to X.cols {
+        let v: f32 = matrix_at(X, i, j)
+        s = s + v * (0.5 + (j as f32) * 0.25) + v * v
+    }
+    return s
+}
+
+function kropt_check_exp() -> i32 {
+    let mut failures: i32 = 0
+    let n: i32 = 16001
+    let v: ptr<f64> = array_new_f64(n)
+    let x: ptr<f64> = array_new_f64(n)
+    # 104 down to -116 in steps of 0.01375, which crosses the -104 cutoff.
+    for k in 0 to n {
+        x[k] = 104.0 - (k as f64) * 0.01375
+        v[k] = x[k]
+    }
+    rbf_exp_block(v, n)
+
+    let mut max_rel: f64 = 0.0
+    let mut below_cutoff: i32 = 0
+    for k in 0 to n {
+        if x[k] < -104.0 {
+            below_cutoff = below_cutoff + 1
+            if v[k] != 0.0 {
+                printf("FAIL: exp(%.6f) below the cutoff returned %.9g, expected 0\n", x[k], v[k])
+                failures = failures + 1
+            }
+        } else {
+            let r: f64 = kropt_exp(x[k])
+            let rel: f64 = kropt_abs(v[k] - r) / r
+            if rel > max_rel { max_rel = rel }
+        }
+    }
+    printf("polynomial exp max relative error on [-104, 104] = %.3g\n", max_rel)
+    if max_rel > 0.00000000001 {
+        printf("FAIL: polynomial exp relative error %.3g exceeds 1e-11\n", max_rel)
+        failures = failures + 1
+    }
+    if below_cutoff < 100 {
+        printf("FAIL: the grid no longer reaches below the cutoff\n")
+        failures = failures + 1
+    }
+    v[0] = 0.0
+    rbf_exp_block(v, 1)
+    if v[0] != 1.0 {
+        printf("FAIL: exp(0) returned %.17g\n", v[0])
+        failures = failures + 1
+    }
+
+    # Lengths around the vector width, so a remainder loop is covered.
+    for len in 1 to 10 {
+        for k in 0 to len { v[k] = 0.0 - (k as f64) * 0.75 - 0.125 }
+        rbf_exp_block(v, len)
+        for k in 0 to len {
+            let r: f64 = kropt_exp(0.0 - (k as f64) * 0.75 - 0.125)
+            if kropt_abs(v[k] - r) > 0.00000000001 * r {
+                printf("FAIL: length %d entry %d returned %.17g, expected %.17g\n", len, k, v[k], r)
+                failures = failures + 1
+            }
+        }
+    }
+
+    array_free_f64(v)
+    array_free_f64(x)
+    return failures
+}
+
+# Independent f64 RBF prediction for row i of Q. abs_out[0] receives the sum
+# of |dual * kernel|, the scale rounding in the f32 distance acts on.
+function kropt_ref_rbf(model: KernelRidge, gamma: f64, Q: Matrix, i: i32, abs_out: ptr<f64>) -> f64 {
+    let mut total: f64 = 0.0
+    let mut total_abs: f64 = 0.0
+    for j in 0 to model.n_samples {
+        let mut d2: f64 = 0.0
+        for f in 0 to model.n_features {
+            let d: f64 = ((matrix_at(Q, i, f)) as f64) - ((matrix_at(model.X_train, j, f)) as f64)
+            d2 = d2 + d * d
+        }
+        let term: f64 = ((model.dual_coef[j]) as f64) * kropt_exp(0.0 - gamma * d2)
+        total = total + term
+        total_abs = total_abs + kropt_abs(term)
+    }
+    abs_out[0] = total_abs
+    return total
+}
+
+function kropt_case(n_train: i32, nf: i32, n_query: i32, gamma: f32) -> i32 {
+    let mut failures: i32 = 0
+    let X: Matrix = matrix_new(n_train, nf)
+    kropt_fill(X, 0)
+    let y: ptr<f32> = array_new_f32(n_train)
+    for i in 0 to n_train { y[i] = kropt_target(X, i) }
+    let Q: Matrix = matrix_new(n_query, nf)
+    kropt_fill(Q, n_train + 7)
+
+    let model: KernelRidge = kernel_ridge_fit(X, y, 1.0, KERNEL_TYPE_RBF, gamma, 3, 0.0)
+
+    # 2. Derived state stored by fit.
+    for j in 0 to n_train {
+        let mut sq: f64 = 0.0
+        for f in 0 to nf {
+            let v: f64 = (matrix_at(X, j, f)) as f64
+            sq = sq + v * v
+        }
+        if kropt_abs(((model.x_train_sq[j]) as f64) - sq) > 0.00001 * (1.0 + sq) {
+            printf("FAIL: train=%d row %d stored squared norm %.9g, expected %.9g\n", n_train, j, model.x_train_sq[j], sq)
+            failures = failures + 1
+        }
+        if model.dual_coef_d[j] != ((model.dual_coef[j]) as f64) {
+            printf("FAIL: train=%d row %d f64 dual coefficient differs from the stored f32 one\n", n_train, j)
+            failures = failures + 1
+        }
+    }
+
+    # 3. Batched prediction against the f64 reference.
+    let pred: ptr<f32> = kernel_ridge_predict(model, Q)
+    let scale: ptr<f64> = array_new_f64(1)
+    let mut max_err: f64 = 0.0
+    for i in 0 to n_query {
+        let r: f64 = kropt_ref_rbf(model, gamma as f64, Q, i, scale)
+        let err: f64 = kropt_abs(((pred[i]) as f64) - r)
+        if err > max_err { max_err = err }
+        if err > 0.000001 * (1.0 + scale[0]) {
+            printf("FAIL: train=%d features=%d row %d predicted %.9g, expected %.9g\n", n_train, nf, i, pred[i], r)
+            failures = failures + 1
+        }
+    }
+    printf("train=%d features=%d queries=%d max abs prediction error %.3g\n", n_train, nf, n_query, max_err)
+
+    # 4. A row predicted alone must match the same row inside the batch.
+    let one: Matrix = matrix_new(1, nf)
+    let mut i: i32 = 0
+    while i < n_query {
+        for f in 0 to nf { matrix_set(one, 0, f, matrix_at(Q, i, f)) }
+        let p1: ptr<f32> = kernel_ridge_predict(model, one)
+        if kropt_abs(((p1[0]) as f64) - ((pred[i]) as f64)) > 0.00001 * (1.0 + kropt_abs((pred[i]) as f64)) {
+            printf("FAIL: train=%d row %d alone %.9g, in batch %.9g\n", n_train, i, p1[0], pred[i])
+            failures = failures + 1
+        }
+        array_free_f32(p1)
+        i = i + 13
+    }
+
+    # An empty batch is valid and must not read or write anything.
+    let empty: Matrix = matrix_new(0, nf)
+    let p0: ptr<f32> = kernel_ridge_predict(model, empty)
+    array_free_f32(p0)
+    matrix_free(empty)
+
+    matrix_free(one)
+    array_free_f64(scale)
+    array_free_f32(pred)
+    kernel_ridge_free(model)
+    matrix_free(Q)
+    array_free_f32(y)
+    matrix_free(X)
+    return failures
+}
+
+# 5. Negative gamma makes every exponent positive. It is not a meaningful
+#    kernel, but predict must still evaluate what it was asked for.
+function kropt_negative_gamma() -> i32 {
+    let mut failures: i32 = 0
+    let n_train: i32 = 40
+    let nf: i32 = 3
+    let X: Matrix = matrix_new(n_train, nf)
+    kropt_fill(X, 0)
+    let y: ptr<f32> = array_new_f32(n_train)
+    for i in 0 to n_train { y[i] = kropt_target(X, i) }
+    let Q: Matrix = matrix_new(11, nf)
+    kropt_fill(Q, 300)
+
+    let mut model: KernelRidge = kernel_ridge_fit(X, y, 1.0, KERNEL_TYPE_RBF, 0.5, 3, 0.0)
+    model.gamma = -0.25
+    let pred: ptr<f32> = kernel_ridge_predict(model, Q)
+    let scale: ptr<f64> = array_new_f64(1)
+    for i in 0 to Q.rows {
+        let r: f64 = kropt_ref_rbf(model, -0.25, Q, i, scale)
+        if kropt_abs(((pred[i]) as f64) - r) > 0.000001 * (1.0 + scale[0]) {
+            printf("FAIL: negative gamma row %d predicted %.9g, expected %.9g\n", i, pred[i], r)
+            failures = failures + 1
+        }
+    }
+
+    array_free_f64(scale)
+    array_free_f32(pred)
+    kernel_ridge_free(model)
+    matrix_free(Q)
+    array_free_f32(y)
+    matrix_free(X)
+    return failures
+}
+
+# 6. The polynomial branch is untouched and must still match its reference.
+function kropt_poly() -> i32 {
+    let mut failures: i32 = 0
+    let n_train: i32 = 30
+    let nf: i32 = 4
+    let X: Matrix = matrix_new(n_train, nf)
+    kropt_fill(X, 0)
+    let y: ptr<f32> = array_new_f32(n_train)
+    for i in 0 to n_train { y[i] = kropt_target(X, i) }
+    let Q: Matrix = matrix_new(9, nf)
+    kropt_fill(Q, 200)
+
+    let model: KernelRidge = kernel_ridge_fit(X, y, 1.0, KERNEL_TYPE_POLY, 0.5, 2, 1.0)
+    let pred: ptr<f32> = kernel_ridge_predict(model, Q)
+    for i in 0 to Q.rows {
+        let mut total: f64 = 0.0
+        let mut total_abs: f64 = 0.0
+        for j in 0 to n_train {
+            let mut dot: f64 = 0.0
+            for f in 0 to nf {
+                dot = dot + ((matrix_at(Q, i, f)) as f64) * ((matrix_at(X, j, f)) as f64)
+            }
+            let base: f64 = 0.5 * dot + 1.0
+            let term: f64 = ((model.dual_coef[j]) as f64) * base * base
+            total = total + term
+            total_abs = total_abs + kropt_abs(term)
+        }
+        if kropt_abs(((pred[i]) as f64) - total) > 0.0002 * (1.0 + total_abs) {
+            printf("FAIL: polynomial row %d predicted %.9g, expected %.9g\n", i, pred[i], total)
+            failures = failures + 1
+        }
+    }
+
+    array_free_f32(pred)
+    kernel_ridge_free(model)
+    matrix_free(Q)
+    array_free_f32(y)
+    matrix_free(X)
+    return failures
+}
+
+function main() -> i32 {
+    let mut failures: i32 = 0
+    failures = failures + kropt_check_exp()
+
+    # One block: 37 training rows allow 442 query rows per block.
+    failures = failures + kropt_case(37, 3, 50, 0.5)
+    # Exactly on a block edge: 16384 / 128 = 128 rows, and 256 queries.
+    failures = failures + kropt_case(128, 5, 256, 0.25)
+    # Several blocks with a short last one: 16384 / 200 = 81 rows, 300 queries.
+    failures = failures + kropt_case(200, 10, 300, 0.1)
+    # A single query row.
+    failures = failures + kropt_case(60, 7, 1, 0.3)
+    # Large gamma drives distant pairs past the -104 cutoff.
+    failures = failures + kropt_case(50, 6, 40, 40.0)
+
+    failures = failures + kropt_negative_gamma()
+    failures = failures + kropt_poly()
+
+    if failures > 0 {
+        printf("FAIL: %d KernelRidge prediction checks failed\n", failures)
+        return 1
+    }
+    printf("OK: blocked KernelRidge RBF prediction matches the f64 reference\n")
+    return 0
+}

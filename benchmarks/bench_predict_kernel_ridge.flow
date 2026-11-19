@@ -1,0 +1,154 @@
+# Prediction-only scaling benchmark for KernelRidge with an RBF kernel
+# (issue #488).
+#
+# Times kernel_ridge_predict alone, with fit outside the timing window, along
+# three axes: query batch size, training-set size and feature count. Every
+# case is generated from integers on a dyadic grid, so
+# bench_predict_kernel_ridge.py builds bit-identical float32 inputs and the
+# two sides can be joined row for row.
+#
+#   FLOW_OPT_LEVEL=3 flow run benchmarks/bench_predict_kernel_ridge.flow > flow_predict_krr.txt
+#   python benchmarks/bench_predict_kernel_ridge.py --flow flow_predict_krr.txt
+#
+# Each sample is an aggregate window of at least 10 ms, repeated 7 times after
+# 2 warmups, and the reported latency is the per-call median, the same scheme
+# as benchmarks/timing.py.
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+    function flow_now_ns() -> i64
+}
+
+function pkrr_fill(X: Matrix, y: ptr<f32>, first_row: i32) -> void {
+    let p: i32 = X.cols
+    let mut i: i32 = 0
+    while i < X.rows {
+        let src: i32 = first_row + i
+        y[i] = (((src * 29 + 3) % 97) as f32) / 8.0
+        let row: ptr<f32> = X.data + i * p
+        let mut j: i32 = 0
+        while j < p {
+            row[j] = (((src * 131 + j * 17) % 257) as f32) / 128.0 - 1.0
+            j = j + 1
+        }
+        i = i + 1
+    }
+}
+
+function pkrr_sort(v: ptr<f64>, n: i32) -> void {
+    let mut i: i32 = 1
+    while i < n {
+        let key: f64 = v[i]
+        let mut j: i32 = i - 1
+        while j >= 0 && v[j] > key {
+            v[j + 1] = v[j]
+            j = j - 1
+        }
+        v[j + 1] = key
+        i = i + 1
+    }
+}
+
+function pkrr_percentile(sorted: ptr<f64>, n: i32, q: f64) -> f64 {
+    let pos: f64 = ((n - 1) as f64) * q
+    let lo: i32 = pos as i32
+    let mut hi: i32 = lo + 1
+    if hi > n - 1 { hi = n - 1 }
+    let frac: f64 = pos - (lo as f64)
+    return sorted[lo] * (1.0 - frac) + sorted[hi] * frac
+}
+
+function pkrr_window_ms(model: KernelRidge, Q: Matrix, repeats: i32) -> f64 {
+    let t0: i64 = flow_now_ns()
+    let mut k: i32 = 0
+    while k < repeats {
+        let pred: ptr<f32> = kernel_ridge_predict(model, Q)
+        array_free_f32(pred)
+        k = k + 1
+    }
+    let t1: i64 = flow_now_ns()
+    return ((t1 - t0) as f64) / 1000000.0
+}
+
+function pkrr_case(axis: string, n_query: i32, n_train: i32, p: i32) -> void {
+    let samples: i32 = 7
+    let X: Matrix = matrix_new(n_train, p)
+    let y: ptr<f32> = array_new_f32(n_train)
+    pkrr_fill(X, y, 0)
+    let Q: Matrix = matrix_new(n_query, p)
+    let yq: ptr<f32> = array_new_f32(n_query)
+    pkrr_fill(Q, yq, n_train)
+
+    let model: KernelRidge = kernel_ridge_fit(X, y, 1.0, KERNEL_TYPE_RBF, 0.1, 3, 0.0)
+
+    let warm: f64 = pkrr_window_ms(model, Q, 2)
+    let mut repeats: i32 = 1
+    let mut window: f64 = pkrr_window_ms(model, Q, repeats)
+    while window < 10.0 && repeats < 1048576 {
+        repeats = repeats * 2
+        window = pkrr_window_ms(model, Q, repeats)
+    }
+
+    let per_call: ptr<f64> = array_new_f64(samples)
+    let mut s: i32 = 0
+    while s < samples {
+        per_call[s] = pkrr_window_ms(model, Q, repeats) / (repeats as f64)
+        s = s + 1
+    }
+    pkrr_sort(per_call, samples)
+    let median: f64 = pkrr_percentile(per_call, samples, 0.5)
+    let iqr: f64 = pkrr_percentile(per_call, samples, 0.75) - pkrr_percentile(per_call, samples, 0.25)
+
+    # Two checksums of the predictions: a plain sum and a position-weighted
+    # one, so a permuted or shifted output cannot pass as agreement.
+    let pred: ptr<f32> = kernel_ridge_predict(model, Q)
+    let mut total: f64 = 0.0
+    let mut weighted: f64 = 0.0
+    let mut total_abs: f64 = 0.0
+    let mut i: i32 = 0
+    while i < n_query {
+        let v: f64 = (pred[i]) as f64
+        total = total + v
+        weighted = weighted + v * (((i % 7) + 1) as f64)
+        if v < 0.0 { total_abs = total_abs - v } else { total_abs = total_abs + v }
+        i = i + 1
+    }
+
+    printf("PREDICT|KernelRidge_RBF|%s|%d|%d|%d|%.9f|%.9f|%d|%.9g|%.9g|%.9g\n", axis, n_query, n_train, p, median, iqr, repeats, total, weighted, total_abs)
+
+    if warm < 0.0 { printf("unreachable\n") }
+    array_free_f32(pred)
+    array_free_f64(per_call)
+    kernel_ridge_free(model)
+    matrix_free(Q)
+    array_free_f32(yq)
+    matrix_free(X)
+    array_free_f32(y)
+}
+
+function main() -> i32 {
+    printf("TIMING_UNIT|ms\n")
+    printf("BENCHMARK_MODE|predict_only\n")
+    printf("COLUMNS|estimator|axis|n_query|n_train|features|median_ms|iqr_ms|repeats|pred_sum|pred_weighted_sum|pred_abs_sum\n")
+
+    # Batch size at the Diabetes shape: 353 training rows, 10 features.
+    pkrr_case("batch", 1, 353, 10)
+    pkrr_case("batch", 10, 353, 10)
+    pkrr_case("batch", 89, 353, 10)
+    pkrr_case("batch", 1000, 353, 10)
+    pkrr_case("batch", 10000, 353, 10)
+
+    # Training-set size, which is the support size for kernel ridge, at 1000
+    # queries and 10 features.
+    pkrr_case("train", 1000, 100, 10)
+    pkrr_case("train", 1000, 1000, 10)
+    pkrr_case("train", 1000, 3000, 10)
+
+    # Feature count at 1000 queries and 353 training rows.
+    pkrr_case("features", 1000, 353, 2)
+    pkrr_case("features", 1000, 353, 32)
+    pkrr_case("features", 1000, 353, 128)
+    return 0
+}
