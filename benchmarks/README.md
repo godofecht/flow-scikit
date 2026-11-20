@@ -303,6 +303,24 @@ of it found a heap-buffer-overflow in `_solve_lstsq_qr`, which assumed a design
 has at least as many rows as columns; RANSAC reaches it by fitting 5 sampled
 rows against the 10 features of diabetes.
 
+## Operation rows
+
+The canonical result classifies an estimator and dataset from fit plus
+prediction time. [`operation_rows.json`](operation_rows.json) lists each timed
+operation on its own: `fit`, and the prediction stage, which is `predict` for
+every estimator except PCA where it is `transform`. Each row has the median and
+IQR of both implementations, the speedup, a status, the parity status that
+makes the row eligible, and a tracking issue when the operation loses.
+
+`predict_proba`, `decision_function` and the other operations of a benchmarked
+estimator are not timed separately. They appear with status `not measured`.
+
+[`operation_loss_issues.json`](operation_loss_issues.json) maps each losing
+operation to its focused issue. `generate_operation_rows.py` rebuilds the file
+from `headline_result_v2.json`, and `--check` fails when the committed file
+differs from that build. The #478 exit criterion is evaluated here:
+`every_measured_operation_wins` is true only when no timed operation loses.
+
 ## Pages publication
 
 [`publish_headline_v2.py`](publish_headline_v2.py) validates the committed canonical benchmark and architecture map, then copies the JSON artifacts into `docs/` for the static site. The public benchmark and architecture pages render those artifacts directly instead of embedding hand-maintained timing claims.

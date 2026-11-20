@@ -236,6 +236,7 @@ jobs:
           python benchmarks/refresh_derived_evidence.py
       - name: Sync published claims to the frozen artifact
         run: |
+          python benchmarks/generate_operation_rows.py
           python benchmarks/validate_published_claims.py --fix
           python benchmarks/validate_published_claims.py
       - name: Commit generated evidence if changed
