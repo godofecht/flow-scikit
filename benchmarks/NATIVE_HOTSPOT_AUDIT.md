@@ -12,7 +12,7 @@
 | `RandomForestClassifier` | `fit` | mixed | sklearn | already-equivalent | 48.0 |
 | `RandomForestClassifier` | `predict` | mixed | sklearn | already-equivalent | 48.0 |
 | `RandomForestClassifier` | `predict_proba` | mixed | sklearn | already-equivalent | 48.0 |
-| `SVC` | `fit` | external-native-bound | external | retain-native | 41.8 |
+| `SVC` | `fit` | external-native-bound | external | retain-native | 41.5 |
 | `ARDRegression` | `fit` | mixed | sklearn | already-equivalent | 40.5 |
 | `AdaBoostClassifier` | `fit` | mixed | sklearn | already-equivalent | 40.5 |
 | `AdaBoostRegressor` | `fit` | mixed | sklearn | already-equivalent | 40.5 |

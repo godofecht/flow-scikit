@@ -52,7 +52,9 @@ jobs:
       - name: Materialize disparity history for this Pages build
         run: python benchmarks/check_disparity_regression.py --baseline /tmp/no-disparity-baseline.json --commit "${GITHUB_SHA}"
       - name: Publish canonical benchmark, disparity, history and architecture evidence
-        run: python benchmarks/publish_headline_v2.py
+        run: |
+          python benchmarks/check_evidence_drift.py
+          python benchmarks/publish_headline_v2.py
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
