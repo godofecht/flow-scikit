@@ -11,6 +11,8 @@ import argparse
 import json
 from pathlib import Path
 
+from evidence_provenance import provenance
+
 ROOT = Path(__file__).resolve().parents[1]
 
 SUBSTRATE_OPPORTUNITY = {
@@ -199,7 +201,7 @@ def main():
             },
         })
     rows.sort(key=lambda x: x["priority_score"], reverse=True)
-    args.json.write_text(json.dumps({"schema_version": 1, "rows": rows}, indent=2) + "\n")
+    args.json.write_text(json.dumps({"schema_version": 1, "provenance": provenance(args.headline), "rows": rows}, indent=2) + "\n")
     md = ["# Flow optimization roadmap", "", "Generated from committed inventory/profile/benchmark evidence.", "", "Observed Flow speedup is the mean over the estimator's canonical rows of the stage that times the operation: the fit stage for `fit`, the prediction stage for `predict`, `predict_proba`, `decision_function` and `transform`. The Basis column names the stage. End-to-end totals are kept in the JSON as `end_to_end_flow_speedup` and are not used for ranking.", "", "| Rank | Estimator | Operation | Substrate | Score | Disposition | Observed Flow speedup | Basis | Hypothesis |", "|---:|---|---|---|---:|---|---:|---|---|"]
     for i, r in enumerate(rows[:100], 1):
         observed = "" if r["observed_flow_speedup"] is None else f"{r['observed_flow_speedup']:.2f}×"

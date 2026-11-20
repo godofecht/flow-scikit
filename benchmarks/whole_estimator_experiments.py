@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+from evidence_provenance import provenance
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import make_pipeline
@@ -90,7 +91,7 @@ def main():
             row["kernel_baseline"] = {"status": "unavailable", "reason": "no stable public isolated kernel exposes identical estimator semantics"}
         rows.append(row)
     rows.append({"execution_class": "mixed", "representative": "Pipeline(StandardScaler,LinearRegression)", "kernel_baseline": direct[-1], "profile": None, "flow_rows": [], "hypothesis": "whole-program fusion can eliminate intermediate standardized arrays and repeated validation"})
-    args.output.write_text(json.dumps({"schema_version": 1, "question": "does whole-estimator compilation reduce orchestration/allocation overhead beyond kernel speed?", "rows": rows, "direct_kernel_experiments": direct}, indent=2) + "\n")
+    args.output.write_text(json.dumps({"schema_version": 1, "provenance": provenance(args.headline), "question": "does whole-estimator compilation reduce orchestration/allocation overhead beyond kernel speed?", "rows": rows, "direct_kernel_experiments": direct}, indent=2) + "\n")
     print(f"wrote {len(rows)} whole-estimator experiment rows")
     return 0
 
