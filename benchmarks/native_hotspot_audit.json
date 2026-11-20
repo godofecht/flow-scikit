@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "provenance": {
-    "result_sha256": "466fd432d26dd8042a24425290d5c09ff749b3c504b137930334d97b7bb397be",
-    "environment_id": "8f11a9c3927a0fee",
-    "source_commit": "f1ed528c85871eb6174e614cb2070cf9d8f285c7"
+    "result_sha256": "0608960087bd56fe0fb13544948fc16c41804aa5a35f9f574574811905f87dac",
+    "environment_id": "dfc7d2341e474c4a",
+    "source_commit": "35a49cf615452ef7734dc584815802e161e87083"
   },
   "rows": [
     {
@@ -18,7 +18,7 @@
         "python-control-loops:4"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 72.137,
+      "priority_score": 72.151,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -37,7 +37,7 @@
         "python-control-loops:2"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 71.741,
+      "priority_score": 71.85,
       "disposition": "retain-native",
       "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
     },
@@ -57,7 +57,7 @@
         "python-control-loops:5"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 68.569,
+      "priority_score": 68.573,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -128,24 +128,6 @@
     {
       "module": "sklearn.ensemble._forest",
       "estimator": "RandomForestClassifier",
-      "operation": "fit",
-      "execution_class": "mixed",
-      "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
-      "evidence": [
-        "cython-bound:_forest",
-        "cython-bound:_tree",
-        "numpy-bound:np.",
-        "python-control-loops:11"
-      ],
-      "flow_scikit_status": "present",
-      "priority_score": 48.0,
-      "disposition": "already-equivalent",
-      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
-    },
-    {
-      "module": "sklearn.ensemble._forest",
-      "estimator": "RandomForestClassifier",
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
@@ -178,20 +160,22 @@
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
     {
-      "module": "sklearn.svm._classes",
-      "estimator": "SVC",
+      "module": "sklearn.ensemble._forest",
+      "estimator": "RandomForestClassifier",
       "operation": "fit",
-      "execution_class": "external-native-bound",
-      "ownership": "external",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/svm/_base.py",
+      "execution_class": "mixed",
+      "ownership": "sklearn",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
       "evidence": [
-        "external-native-bound:libsvm",
-        "numpy-bound:np."
+        "cython-bound:_forest",
+        "cython-bound:_tree",
+        "numpy-bound:np.",
+        "python-control-loops:11"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 41.493,
-      "disposition": "retain-native",
-      "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
+      "priority_score": 47.482,
+      "disposition": "already-equivalent",
+      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
     {
       "module": "sklearn.linear_model._bayes",
@@ -2080,6 +2064,22 @@
       "priority_score": 40.5,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
+    },
+    {
+      "module": "sklearn.svm._classes",
+      "estimator": "SVC",
+      "operation": "fit",
+      "execution_class": "external-native-bound",
+      "ownership": "external",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/svm/_base.py",
+      "evidence": [
+        "external-native-bound:libsvm",
+        "numpy-bound:np."
+      ],
+      "flow_scikit_status": "present",
+      "priority_score": 40.138,
+      "disposition": "retain-native",
+      "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
     },
     {
       "module": "sklearn.cluster._bisect_k_means",

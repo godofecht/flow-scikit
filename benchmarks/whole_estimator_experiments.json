@@ -1,102 +1,107 @@
 {
   "schema_version": 1,
+  "provenance": {
+    "result_sha256": "0608960087bd56fe0fb13544948fc16c41804aa5a35f9f574574811905f87dac",
+    "environment_id": "dfc7d2341e474c4a",
+    "source_commit": "35a49cf615452ef7734dc584815802e161e87083"
+  },
   "question": "does whole-estimator compilation reduce orchestration/allocation overhead beyond kernel speed?",
   "rows": [
     {
       "execution_class": "python-bound",
       "representative": "GaussianNB",
       "profile": {
-        "total_wall_ms": 5.851438999997072,
-        "python_self_ms": 4.545683000000003,
-        "python_visible_self_share": 0.7768487375502466,
-        "estimated_native_or_wait_share": 0.22315126244975336,
+        "total_wall_ms": 4.489707000004728,
+        "python_self_ms": 3.4836409999999987,
+        "python_visible_self_share": 0.7759172257780587,
+        "estimated_native_or_wait_share": 0.22408277422194134,
         "python_to_native_call_count_proxy": 854,
-        "profiled_call_count": 1938,
-        "python_peak_alloc_bytes": 139085,
+        "profiled_call_count": 1937,
+        "python_peak_alloc_bytes": 139181,
         "dominant_symbols": [
           {
-            "cum_ms": 5.768986,
+            "cum_ms": 4.426292,
             "file": "/home/runner/work/flow-scikit/flow-scikit/benchmarks/profile_execution.py",
             "line": 63,
             "function": "<lambda>",
             "calls": 1
           },
           {
-            "cum_ms": 5.7635380000000005,
+            "cum_ms": 4.422647,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/base.py",
             "line": 1381,
             "function": "wrapper",
             "calls": 1
           },
           {
-            "cum_ms": 5.138038,
+            "cum_ms": 3.936277,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/naive_bayes.py",
             "line": 253,
             "function": "fit",
             "calls": 1
           },
           {
-            "cum_ms": 3.8937890000000004,
+            "cum_ms": 2.993852,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/naive_bayes.py",
             "line": 407,
             "function": "_partial_fit",
             "calls": 1
           },
           {
-            "cum_ms": 1.679777,
+            "cum_ms": 1.283029,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/externals/array_api_compat/_internal.py",
             "line": 33,
             "function": "wrapped_f",
             "calls": 11
           },
           {
-            "cum_ms": 1.6384560000000001,
+            "cum_ms": 1.248088,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/utils/validation.py",
             "line": 2929,
             "function": "validate_data",
             "calls": 2
           },
           {
-            "cum_ms": 1.489335,
+            "cum_ms": 1.1405100000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/utils/validation.py",
             "line": 733,
             "function": "check_array",
             "calls": 5
           },
           {
-            "cum_ms": 1.1897490000000002,
+            "cum_ms": 0.9340720000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/inspect.py",
             "line": 3346,
             "function": "signature",
             "calls": 3
           },
           {
-            "cum_ms": 1.181156,
+            "cum_ms": 0.9282340000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/inspect.py",
             "line": 3081,
             "function": "from_callable",
             "calls": 3
           },
           {
-            "cum_ms": 1.169118,
+            "cum_ms": 0.9186310000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/inspect.py",
             "line": 2501,
             "function": "_signature_from_callable",
             "calls": 3
           },
           {
-            "cum_ms": 1.007889,
-            "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/externals/array_api_compat/common/_aliases.py",
-            "line": 254,
-            "function": "unique_values",
-            "calls": 2
-          },
-          {
-            "cum_ms": 1.004312,
+            "cum_ms": 0.7891290000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/inspect.py",
             "line": 2397,
             "function": "_signature_from_function",
             "calls": 3
+          },
+          {
+            "cum_ms": 0.762178,
+            "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/externals/array_api_compat/common/_aliases.py",
+            "line": 254,
+            "function": "unique_values",
+            "calls": 2
           }
         ],
         "estimator": "GaussianNB",
@@ -114,25 +119,25 @@
           "category": "supervised",
           "sklearn_score": 0.966666667,
           "flow_score": 0.966666639,
-          "sklearn_fit_ms": 0.458299266,
-          "sklearn_pred_ms": 0.0873740117,
-          "flow_fit_ms": 0.005032,
-          "flow_pred_ms": 0.000671,
-          "sklearn_fit_iqr_ms": 0.001183953,
-          "sklearn_pred_iqr_ms": 0.0009356406,
-          "flow_fit_iqr_ms": 0.000343,
-          "flow_pred_iqr_ms": 0.000175,
-          "sklearn_ms": 0.5456732777,
-          "flow_ms": 0.005703,
+          "sklearn_fit_ms": 0.379546328,
+          "sklearn_pred_ms": 0.0726670996,
+          "flow_fit_ms": 0.007592,
+          "flow_pred_ms": 0.000741,
+          "sklearn_fit_iqr_ms": 0.006292938,
+          "sklearn_pred_iqr_ms": 0.0003653633,
+          "flow_fit_iqr_ms": 0.001072,
+          "flow_pred_iqr_ms": 0.00017,
+          "sklearn_ms": 0.4522134276,
+          "flow_ms": 0.008333,
           "timing_unit": "ms",
           "benchmark_mode": "end_to_end",
           "fixture_source": "benchmarks/split_indices.json + split_*.bin",
           "parity_status": "parity verified",
           "measurement_status": "resolved",
           "comparable": true,
-          "environment_id": "8f11a9c3927a0fee",
+          "environment_id": "dfc7d2341e474c4a",
           "classification": "flow win",
-          "speedup": 95.68179514290723
+          "speedup": 54.26778202328093
         },
         {
           "algorithm": "GaussianNB",
@@ -141,25 +146,25 @@
           "category": "supervised",
           "sklearn_score": 0.741666667,
           "flow_score": 0.741666675,
-          "sklearn_fit_ms": 0.955796563,
-          "sklearn_pred_ms": 0.392142016,
-          "flow_fit_ms": 0.168266997,
-          "flow_pred_ms": 0.081519,
-          "sklearn_fit_iqr_ms": 0.010119219,
-          "sklearn_pred_iqr_ms": 0.006483219,
-          "flow_fit_iqr_ms": 0.003013998,
-          "flow_pred_iqr_ms": 0.000372998,
-          "sklearn_ms": 1.347938579,
-          "flow_ms": 0.24978599699999998,
+          "sklearn_fit_ms": 0.717537219,
+          "sklearn_pred_ms": 0.3054055,
+          "flow_fit_ms": 0.134313002,
+          "flow_pred_ms": 0.071287997,
+          "sklearn_fit_iqr_ms": 0.018948563,
+          "sklearn_pred_iqr_ms": 0.004286797,
+          "flow_fit_iqr_ms": 0.004046992,
+          "flow_pred_iqr_ms": 0.002182997,
+          "sklearn_ms": 1.022942719,
+          "flow_ms": 0.205600999,
           "timing_unit": "ms",
           "benchmark_mode": "end_to_end",
           "fixture_source": "benchmarks/split_indices.json + split_*.bin",
           "parity_status": "parity verified",
           "measurement_status": "resolved",
           "comparable": true,
-          "environment_id": "8f11a9c3927a0fee",
+          "environment_id": "dfc7d2341e474c4a",
           "classification": "flow win",
-          "speedup": 5.396373676623674
+          "speedup": 4.975378154655756
         }
       ],
       "kernel_baseline": {
@@ -171,97 +176,97 @@
       "execution_class": "numpy-bound",
       "representative": "GaussianNB",
       "profile": {
-        "total_wall_ms": 5.851438999997072,
-        "python_self_ms": 4.545683000000003,
-        "python_visible_self_share": 0.7768487375502466,
-        "estimated_native_or_wait_share": 0.22315126244975336,
+        "total_wall_ms": 4.489707000004728,
+        "python_self_ms": 3.4836409999999987,
+        "python_visible_self_share": 0.7759172257780587,
+        "estimated_native_or_wait_share": 0.22408277422194134,
         "python_to_native_call_count_proxy": 854,
-        "profiled_call_count": 1938,
-        "python_peak_alloc_bytes": 139085,
+        "profiled_call_count": 1937,
+        "python_peak_alloc_bytes": 139181,
         "dominant_symbols": [
           {
-            "cum_ms": 5.768986,
+            "cum_ms": 4.426292,
             "file": "/home/runner/work/flow-scikit/flow-scikit/benchmarks/profile_execution.py",
             "line": 63,
             "function": "<lambda>",
             "calls": 1
           },
           {
-            "cum_ms": 5.7635380000000005,
+            "cum_ms": 4.422647,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/base.py",
             "line": 1381,
             "function": "wrapper",
             "calls": 1
           },
           {
-            "cum_ms": 5.138038,
+            "cum_ms": 3.936277,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/naive_bayes.py",
             "line": 253,
             "function": "fit",
             "calls": 1
           },
           {
-            "cum_ms": 3.8937890000000004,
+            "cum_ms": 2.993852,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/naive_bayes.py",
             "line": 407,
             "function": "_partial_fit",
             "calls": 1
           },
           {
-            "cum_ms": 1.679777,
+            "cum_ms": 1.283029,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/externals/array_api_compat/_internal.py",
             "line": 33,
             "function": "wrapped_f",
             "calls": 11
           },
           {
-            "cum_ms": 1.6384560000000001,
+            "cum_ms": 1.248088,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/utils/validation.py",
             "line": 2929,
             "function": "validate_data",
             "calls": 2
           },
           {
-            "cum_ms": 1.489335,
+            "cum_ms": 1.1405100000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/utils/validation.py",
             "line": 733,
             "function": "check_array",
             "calls": 5
           },
           {
-            "cum_ms": 1.1897490000000002,
+            "cum_ms": 0.9340720000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/inspect.py",
             "line": 3346,
             "function": "signature",
             "calls": 3
           },
           {
-            "cum_ms": 1.181156,
+            "cum_ms": 0.9282340000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/inspect.py",
             "line": 3081,
             "function": "from_callable",
             "calls": 3
           },
           {
-            "cum_ms": 1.169118,
+            "cum_ms": 0.9186310000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/inspect.py",
             "line": 2501,
             "function": "_signature_from_callable",
             "calls": 3
           },
           {
-            "cum_ms": 1.007889,
-            "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/externals/array_api_compat/common/_aliases.py",
-            "line": 254,
-            "function": "unique_values",
-            "calls": 2
-          },
-          {
-            "cum_ms": 1.004312,
+            "cum_ms": 0.7891290000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/inspect.py",
             "line": 2397,
             "function": "_signature_from_function",
             "calls": 3
+          },
+          {
+            "cum_ms": 0.762178,
+            "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/externals/array_api_compat/common/_aliases.py",
+            "line": 254,
+            "function": "unique_values",
+            "calls": 2
           }
         ],
         "estimator": "GaussianNB",
@@ -279,25 +284,25 @@
           "category": "supervised",
           "sklearn_score": 0.966666667,
           "flow_score": 0.966666639,
-          "sklearn_fit_ms": 0.458299266,
-          "sklearn_pred_ms": 0.0873740117,
-          "flow_fit_ms": 0.005032,
-          "flow_pred_ms": 0.000671,
-          "sklearn_fit_iqr_ms": 0.001183953,
-          "sklearn_pred_iqr_ms": 0.0009356406,
-          "flow_fit_iqr_ms": 0.000343,
-          "flow_pred_iqr_ms": 0.000175,
-          "sklearn_ms": 0.5456732777,
-          "flow_ms": 0.005703,
+          "sklearn_fit_ms": 0.379546328,
+          "sklearn_pred_ms": 0.0726670996,
+          "flow_fit_ms": 0.007592,
+          "flow_pred_ms": 0.000741,
+          "sklearn_fit_iqr_ms": 0.006292938,
+          "sklearn_pred_iqr_ms": 0.0003653633,
+          "flow_fit_iqr_ms": 0.001072,
+          "flow_pred_iqr_ms": 0.00017,
+          "sklearn_ms": 0.4522134276,
+          "flow_ms": 0.008333,
           "timing_unit": "ms",
           "benchmark_mode": "end_to_end",
           "fixture_source": "benchmarks/split_indices.json + split_*.bin",
           "parity_status": "parity verified",
           "measurement_status": "resolved",
           "comparable": true,
-          "environment_id": "8f11a9c3927a0fee",
+          "environment_id": "dfc7d2341e474c4a",
           "classification": "flow win",
-          "speedup": 95.68179514290723
+          "speedup": 54.26778202328093
         },
         {
           "algorithm": "GaussianNB",
@@ -306,25 +311,25 @@
           "category": "supervised",
           "sklearn_score": 0.741666667,
           "flow_score": 0.741666675,
-          "sklearn_fit_ms": 0.955796563,
-          "sklearn_pred_ms": 0.392142016,
-          "flow_fit_ms": 0.168266997,
-          "flow_pred_ms": 0.081519,
-          "sklearn_fit_iqr_ms": 0.010119219,
-          "sklearn_pred_iqr_ms": 0.006483219,
-          "flow_fit_iqr_ms": 0.003013998,
-          "flow_pred_iqr_ms": 0.000372998,
-          "sklearn_ms": 1.347938579,
-          "flow_ms": 0.24978599699999998,
+          "sklearn_fit_ms": 0.717537219,
+          "sklearn_pred_ms": 0.3054055,
+          "flow_fit_ms": 0.134313002,
+          "flow_pred_ms": 0.071287997,
+          "sklearn_fit_iqr_ms": 0.018948563,
+          "sklearn_pred_iqr_ms": 0.004286797,
+          "flow_fit_iqr_ms": 0.004046992,
+          "flow_pred_iqr_ms": 0.002182997,
+          "sklearn_ms": 1.022942719,
+          "flow_ms": 0.205600999,
           "timing_unit": "ms",
           "benchmark_mode": "end_to_end",
           "fixture_source": "benchmarks/split_indices.json + split_*.bin",
           "parity_status": "parity verified",
           "measurement_status": "resolved",
           "comparable": true,
-          "environment_id": "8f11a9c3927a0fee",
+          "environment_id": "dfc7d2341e474c4a",
           "classification": "flow win",
-          "speedup": 5.396373676623674
+          "speedup": 4.975378154655756
         }
       ],
       "kernel_baseline": {
@@ -336,93 +341,93 @@
       "execution_class": "scipy-bound",
       "representative": "LogisticRegression",
       "profile": {
-        "total_wall_ms": 14.002207000004319,
-        "python_self_ms": 10.647242999999989,
-        "python_visible_self_share": 0.7603974859103786,
-        "estimated_native_or_wait_share": 0.2396025140896214,
+        "total_wall_ms": 10.811813999993092,
+        "python_self_ms": 8.268490000000005,
+        "python_visible_self_share": 0.7647643586918244,
+        "estimated_native_or_wait_share": 0.23523564130817565,
         "python_to_native_call_count_proxy": 2295,
         "profiled_call_count": 5002,
-        "python_peak_alloc_bytes": 112937,
+        "python_peak_alloc_bytes": 112869,
         "dominant_symbols": [
           {
-            "cum_ms": 13.916659000000001,
+            "cum_ms": 10.759007,
             "file": "/home/runner/work/flow-scikit/flow-scikit/benchmarks/profile_execution.py",
             "line": 63,
             "function": "<lambda>",
             "calls": 1
           },
           {
-            "cum_ms": 13.911742000000002,
+            "cum_ms": 10.755782,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/base.py",
             "line": 1381,
             "function": "wrapper",
             "calls": 1
           },
           {
-            "cum_ms": 12.285985,
+            "cum_ms": 9.528795,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/linear_model/_logistic.py",
             "line": 1354,
             "function": "fit",
             "calls": 1
           },
           {
-            "cum_ms": 9.09472,
+            "cum_ms": 7.080792000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/linear_model/_logistic.py",
             "line": 219,
             "function": "_logistic_regression_path",
             "calls": 1
           },
           {
-            "cum_ms": 7.3657,
+            "cum_ms": 5.711485000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/scipy/optimize/_minimize.py",
             "line": 54,
             "function": "minimize",
             "calls": 1
           },
           {
-            "cum_ms": 7.163249000000001,
+            "cum_ms": 5.557167,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/scipy/optimize/_lbfgsb_py.py",
             "line": 272,
             "function": "_minimize_lbfgsb",
             "calls": 1
           },
           {
-            "cum_ms": 4.967272,
+            "cum_ms": 3.8599430000000003,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/scipy/optimize/_differentiable_functions.py",
             "line": 409,
             "function": "fun_and_grad",
             "calls": 13
           },
           {
-            "cum_ms": 4.595991000000001,
+            "cum_ms": 3.575924,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/scipy/optimize/_optimize.py",
             "line": 71,
             "function": "_compute_if_needed",
             "calls": 26
           },
           {
-            "cum_ms": 4.577977000000001,
+            "cum_ms": 3.56191,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/scipy/optimize/_differentiable_functions.py",
             "line": 360,
             "function": "_update_fun",
             "calls": 14
           },
           {
-            "cum_ms": 4.5525590000000005,
+            "cum_ms": 3.5426840000000004,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/scipy/_lib/_util.py",
             "line": 541,
             "function": "__call__",
             "calls": 13
           },
           {
-            "cum_ms": 4.435613000000001,
+            "cum_ms": 3.4514280000000004,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/scipy/optimize/_optimize.py",
             "line": 78,
             "function": "__call__",
             "calls": 13
           },
           {
-            "cum_ms": 4.057040000000001,
+            "cum_ms": 3.159097,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/linear_model/_linear_loss.py",
             "line": 291,
             "function": "loss_gradient",
@@ -444,25 +449,25 @@
           "category": "supervised",
           "sklearn_score": 0.933333333,
           "flow_score": 0.933333337,
-          "sklearn_fit_ms": 2.33989094,
-          "sklearn_pred_ms": 0.0800641953,
-          "flow_fit_ms": 0.127223998,
-          "flow_pred_ms": 0.004827,
-          "sklearn_fit_iqr_ms": 0.00226838,
-          "sklearn_pred_iqr_ms": 0.0001028789,
-          "flow_fit_iqr_ms": 0.003358006,
-          "flow_pred_iqr_ms": 0.000417,
-          "sklearn_ms": 2.4199551353,
-          "flow_ms": 0.132050998,
+          "sklearn_fit_ms": 2.11839519,
+          "sklearn_pred_ms": 0.0652844023,
+          "flow_fit_ms": 0.121533997,
+          "flow_pred_ms": 0.004446,
+          "sklearn_fit_iqr_ms": 0.14069706,
+          "sklearn_pred_iqr_ms": 0.0013809922,
+          "flow_fit_iqr_ms": 0.007381007,
+          "flow_pred_iqr_ms": 4.9e-05,
+          "sklearn_ms": 2.1836795923000003,
+          "flow_ms": 0.125979997,
           "timing_unit": "ms",
           "benchmark_mode": "end_to_end",
           "fixture_source": "benchmarks/split_indices.json + split_*.bin",
           "parity_status": "approximately equivalent",
           "measurement_status": "resolved",
           "comparable": true,
-          "environment_id": "8f11a9c3927a0fee",
+          "environment_id": "dfc7d2341e474c4a",
           "classification": "flow win",
-          "speedup": 18.325913260420794
+          "speedup": 17.333542183684923
         },
         {
           "algorithm": "LogisticRegression",
@@ -471,25 +476,25 @@
           "category": "supervised",
           "sklearn_score": 0.972222222,
           "flow_score": 0.972222209,
-          "sklearn_fit_ms": 12.1236595,
-          "sklearn_pred_ms": 0.0979806484,
-          "flow_fit_ms": 4.01118994,
-          "flow_pred_ms": 0.030834001,
-          "sklearn_fit_iqr_ms": 0.1280435,
-          "sklearn_pred_iqr_ms": 0.0005349805,
-          "flow_fit_iqr_ms": 0.058334112,
-          "flow_pred_iqr_ms": 0.000497999,
-          "sklearn_ms": 12.2216401484,
-          "flow_ms": 4.042023941,
+          "sklearn_fit_ms": 11.076771,
+          "sklearn_pred_ms": 0.0765767891,
+          "flow_fit_ms": 3.46457791,
+          "flow_pred_ms": 0.027721999,
+          "sklearn_fit_iqr_ms": 1.2677195,
+          "sklearn_pred_iqr_ms": 0.0014441132,
+          "flow_fit_iqr_ms": 0.160593987,
+          "flow_pred_iqr_ms": 0.002232998,
+          "sklearn_ms": 11.153347789100001,
+          "flow_ms": 3.492299909,
           "timing_unit": "ms",
           "benchmark_mode": "end_to_end",
           "fixture_source": "benchmarks/split_indices.json + split_*.bin",
           "parity_status": "approximately equivalent",
           "measurement_status": "resolved",
           "comparable": true,
-          "environment_id": "8f11a9c3927a0fee",
+          "environment_id": "dfc7d2341e474c4a",
           "classification": "flow win",
-          "speedup": 3.023643681184223
+          "speedup": 3.1936970133512097
         }
       ],
       "kernel_baseline": {
@@ -501,93 +506,93 @@
       "execution_class": "blas-lapack-bound",
       "representative": "LinearRegression",
       "profile": {
-        "total_wall_ms": 4.164291000002152,
-        "python_self_ms": 3.1563799999999995,
-        "python_visible_self_share": 0.757963360389168,
-        "estimated_native_or_wait_share": 0.242036639610832,
+        "total_wall_ms": 3.214729000006855,
+        "python_self_ms": 2.4371459999999994,
+        "python_visible_self_share": 0.7581186470134192,
+        "estimated_native_or_wait_share": 0.24188135298658076,
         "python_to_native_call_count_proxy": 728,
         "profiled_call_count": 1597,
-        "python_peak_alloc_bytes": 131405,
+        "python_peak_alloc_bytes": 131543,
         "dominant_symbols": [
           {
-            "cum_ms": 4.0968100000000005,
+            "cum_ms": 3.16177,
             "file": "/home/runner/work/flow-scikit/flow-scikit/benchmarks/profile_execution.py",
             "line": 63,
             "function": "<lambda>",
             "calls": 1
           },
           {
-            "cum_ms": 4.0915230000000005,
+            "cum_ms": 3.1579150000000005,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/base.py",
             "line": 1381,
             "function": "wrapper",
             "calls": 1
           },
           {
-            "cum_ms": 3.2435720000000003,
+            "cum_ms": 2.518158,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/linear_model/_base.py",
             "line": 653,
             "function": "fit",
             "calls": 1
           },
           {
-            "cum_ms": 1.7369830000000002,
+            "cum_ms": 1.3373300000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/utils/validation.py",
             "line": 733,
             "function": "check_array",
             "calls": 4
           },
           {
-            "cum_ms": 1.3195610000000002,
+            "cum_ms": 1.034642,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/linear_model/_base.py",
             "line": 113,
             "function": "_preprocess_data",
             "calls": 1
           },
           {
-            "cum_ms": 1.218461,
+            "cum_ms": 0.9371980000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/utils/validation.py",
             "line": 2929,
             "function": "validate_data",
             "calls": 1
           },
           {
-            "cum_ms": 0.9902720000000002,
+            "cum_ms": 0.754857,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/utils/validation.py",
             "line": 1183,
             "function": "check_X_y",
             "calls": 1
           },
           {
-            "cum_ms": 0.7515170000000001,
+            "cum_ms": 0.564266,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/base.py",
             "line": 546,
             "function": "_validate_params",
             "calls": 1
           },
           {
-            "cum_ms": 0.6192810000000001,
+            "cum_ms": 0.48030100000000003,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/scipy/linalg/_basic.py",
             "line": 1246,
             "function": "lstsq",
             "calls": 1
           },
           {
-            "cum_ms": 0.585089,
+            "cum_ms": 0.466822,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/utils/validation.py",
             "line": 44,
             "function": "_nw_into_df_or_series",
             "calls": 4
           },
           {
-            "cum_ms": 0.5386810000000001,
+            "cum_ms": 0.401635,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/base.py",
             "line": 248,
             "function": "get_params",
             "calls": 1
           },
           {
-            "cum_ms": 0.526323,
+            "cum_ms": 0.39192000000000005,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/base.py",
             "line": 218,
             "function": "_get_param_names",
@@ -609,33 +614,33 @@
           "category": "supervised",
           "sklearn_score": 0.452602744,
           "flow_score": 0.452602625,
-          "sklearn_fit_ms": 0.350535297,
-          "sklearn_pred_ms": 0.0507998848,
-          "flow_fit_ms": 0.042238999,
-          "flow_pred_ms": 0.000507,
-          "sklearn_fit_iqr_ms": 0.001480359,
-          "sklearn_pred_iqr_ms": 0.0007798164,
-          "flow_fit_iqr_ms": 0.000530001,
-          "flow_pred_iqr_ms": 3.9e-05,
-          "sklearn_ms": 0.40133518180000005,
-          "flow_ms": 0.042745999,
+          "sklearn_fit_ms": 0.287610586,
+          "sklearn_pred_ms": 0.0380527383,
+          "flow_fit_ms": 0.041072,
+          "flow_pred_ms": 0.000531,
+          "sklearn_fit_iqr_ms": 0.006575133,
+          "sklearn_pred_iqr_ms": 0.0002601729,
+          "flow_fit_iqr_ms": 0.000991002,
+          "flow_pred_iqr_ms": 1e-05,
+          "sklearn_ms": 0.3256633243,
+          "flow_ms": 0.041602999999999994,
           "timing_unit": "ms",
           "benchmark_mode": "end_to_end",
           "fixture_source": "benchmarks/split_indices.json + split_*.bin",
           "parity_status": "parity verified",
           "measurement_status": "resolved",
           "comparable": true,
-          "environment_id": "8f11a9c3927a0fee",
+          "environment_id": "dfc7d2341e474c4a",
           "classification": "flow win",
-          "speedup": 9.388836176223185
+          "speedup": 7.827880785039541
         }
       ],
       "kernel_baseline": {
         "estimator": "LinearRegression",
         "operation": "fit",
         "execution_class": "blas-lapack-bound",
-        "sklearn_end_to_end_ms": 2.8182490000006055,
-        "isolated_kernel_ms": 17.87816800000286,
+        "sklearn_end_to_end_ms": 2.2436620000121366,
+        "isolated_kernel_ms": 5.921736000004785,
         "kernel": "numpy.linalg.lstsq",
         "orchestration_overhead_ms": 0.0
       }
@@ -644,93 +649,93 @@
       "execution_class": "cython-bound",
       "representative": "RandomForest",
       "profile": {
-        "total_wall_ms": 140.59640600000023,
-        "python_self_ms": 118.02905500000006,
-        "python_visible_self_share": 0.8394884219159903,
-        "estimated_native_or_wait_share": 0.16051157808400973,
+        "total_wall_ms": 106.99309299999982,
+        "python_self_ms": 89.8086010000001,
+        "python_visible_self_share": 0.8393869032274845,
+        "estimated_native_or_wait_share": 0.16061309677251545,
         "python_to_native_call_count_proxy": 14468,
         "profiled_call_count": 28877,
-        "python_peak_alloc_bytes": 170517,
+        "python_peak_alloc_bytes": 170166,
         "dominant_symbols": [
           {
-            "cum_ms": 140.505681,
+            "cum_ms": 106.921738,
             "file": "/home/runner/work/flow-scikit/flow-scikit/benchmarks/profile_execution.py",
             "line": 63,
             "function": "<lambda>",
             "calls": 1
           },
           {
-            "cum_ms": 140.500884,
+            "cum_ms": 106.918153,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/base.py",
             "line": 1381,
             "function": "wrapper",
             "calls": 1
           },
           {
-            "cum_ms": 138.46366600000002,
+            "cum_ms": 105.408747,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
             "line": 302,
             "function": "fit",
             "calls": 1
           },
           {
-            "cum_ms": 89.38849800000001,
+            "cum_ms": 67.994553,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/utils/parallel.py",
             "line": 54,
             "function": "__call__",
             "calls": 1
           },
           {
-            "cum_ms": 89.364363,
+            "cum_ms": 67.97905,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/joblib/parallel.py",
             "line": 1995,
             "function": "__call__",
             "calls": 1
           },
           {
-            "cum_ms": 89.251777,
+            "cum_ms": 67.891779,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/joblib/parallel.py",
             "line": 1914,
             "function": "_get_sequential_output",
             "calls": 12
           },
           {
-            "cum_ms": 88.576722,
+            "cum_ms": 67.437217,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/utils/parallel.py",
             "line": 140,
             "function": "__call__",
             "calls": 10
           },
           {
-            "cum_ms": 85.801477,
+            "cum_ms": 65.385341,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
             "line": 132,
             "function": "_parallel_build_trees",
             "calls": 10
           },
           {
-            "cum_ms": 64.41399,
+            "cum_ms": 49.018446,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/tree/_classes.py",
             "line": 226,
             "function": "_fit",
             "calls": 10
           },
           {
-            "cum_ms": 44.099355,
+            "cum_ms": 33.587599000000004,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/inspect.py",
             "line": 3346,
             "function": "signature",
             "calls": 62
           },
           {
-            "cum_ms": 44.012238,
+            "cum_ms": 33.525748,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/inspect.py",
             "line": 3081,
             "function": "from_callable",
             "calls": 62
           },
           {
-            "cum_ms": 43.935284,
+            "cum_ms": 33.470971,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/inspect.py",
             "line": 2501,
             "function": "_signature_from_callable",
@@ -752,25 +757,25 @@
           "category": "supervised",
           "sklearn_score": 0.966666667,
           "flow_score": 0.966666639,
-          "sklearn_fit_ms": 7.08113325,
-          "sklearn_pred_ms": 0.465911281,
-          "flow_fit_ms": 1.04771697,
-          "flow_pred_ms": 0.008199,
-          "sklearn_fit_iqr_ms": 0.0568885,
-          "sklearn_pred_iqr_ms": 0.000123266,
-          "flow_fit_iqr_ms": 0.290257037,
-          "flow_pred_iqr_ms": 0.000651,
-          "sklearn_ms": 7.547044531,
-          "flow_ms": 1.05591597,
+          "sklearn_fit_ms": 6.041173,
+          "sklearn_pred_ms": 0.397137203,
+          "flow_fit_ms": 1.45727801,
+          "flow_pred_ms": 0.007021,
+          "sklearn_fit_iqr_ms": 0.067872,
+          "sklearn_pred_iqr_ms": 0.003804188,
+          "flow_fit_iqr_ms": 0.402799964,
+          "flow_pred_iqr_ms": 0.001141,
+          "sklearn_ms": 6.4383102029999995,
+          "flow_ms": 1.46429901,
           "timing_unit": "ms",
           "benchmark_mode": "end_to_end",
           "fixture_source": "benchmarks/split_indices.json + split_*.bin",
           "parity_status": "approximately equivalent",
           "measurement_status": "resolved",
           "comparable": true,
-          "environment_id": "8f11a9c3927a0fee",
+          "environment_id": "dfc7d2341e474c4a",
           "classification": "flow win",
-          "speedup": 7.147391218072022
+          "speedup": 4.396854849338456
         },
         {
           "algorithm": "RandomForest",
@@ -779,25 +784,25 @@
           "category": "supervised",
           "sklearn_score": 0.936111111,
           "flow_score": 0.955555558,
-          "sklearn_fit_ms": 18.7362865,
-          "sklearn_pred_ms": 0.705887656,
-          "flow_fit_ms": 12.2515287,
-          "flow_pred_ms": 0.253333986,
-          "sklearn_fit_iqr_ms": 0.0804385,
-          "sklearn_pred_iqr_ms": 0.006308844,
-          "flow_fit_iqr_ms": 3.04496956,
-          "flow_pred_iqr_ms": 0.003629982,
-          "sklearn_ms": 19.442174156,
-          "flow_ms": 12.504862686,
+          "sklearn_fit_ms": 17.0487845,
+          "sklearn_pred_ms": 0.476265188,
+          "flow_fit_ms": 10.3493366,
+          "flow_pred_ms": 0.239041999,
+          "sklearn_fit_iqr_ms": 0.542993,
+          "sklearn_pred_iqr_ms": 0.026332656,
+          "flow_fit_iqr_ms": 0.242107392,
+          "flow_pred_iqr_ms": 0.012419,
+          "sklearn_ms": 17.525049688,
+          "flow_ms": 10.588378599,
           "timing_unit": "ms",
           "benchmark_mode": "end_to_end",
           "fixture_source": "benchmarks/split_indices.json + split_*.bin",
           "parity_status": "approximately equivalent",
           "measurement_status": "resolved",
           "comparable": true,
-          "environment_id": "8f11a9c3927a0fee",
+          "environment_id": "dfc7d2341e474c4a",
           "classification": "flow win",
-          "speedup": 1.5547691041635163
+          "speedup": 1.655121180655093
         }
       ],
       "kernel_baseline": {
@@ -809,93 +814,93 @@
       "execution_class": "external-native-bound",
       "representative": "SVC",
       "profile": {
-        "total_wall_ms": 14.463112000001388,
-        "python_self_ms": 12.865646999999996,
-        "python_visible_self_share": 0.8895490126881933,
-        "estimated_native_or_wait_share": 0.11045098731180669,
+        "total_wall_ms": 10.568844999994553,
+        "python_self_ms": 9.311739999999993,
+        "python_visible_self_share": 0.8810555931139867,
+        "estimated_native_or_wait_share": 0.11894440688601327,
         "python_to_native_call_count_proxy": 1154,
         "profiled_call_count": 2345,
-        "python_peak_alloc_bytes": 267279,
+        "python_peak_alloc_bytes": 267357,
         "dominant_symbols": [
           {
-            "cum_ms": 14.371856000000001,
+            "cum_ms": 10.49826,
             "file": "/home/runner/work/flow-scikit/flow-scikit/benchmarks/profile_execution.py",
             "line": 63,
             "function": "<lambda>",
             "calls": 1
           },
           {
-            "cum_ms": 14.365807000000002,
+            "cum_ms": 10.493193000000002,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/base.py",
             "line": 1381,
             "function": "wrapper",
             "calls": 1
           },
           {
-            "cum_ms": 12.602936,
+            "cum_ms": 9.043697,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/svm/_base.py",
             "line": 170,
             "function": "fit",
             "calls": 1
           },
           {
-            "cum_ms": 8.319608,
+            "cum_ms": 5.793256,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/svm/_base.py",
             "line": 347,
             "function": "_dense_fit",
             "calls": 1
           },
           {
-            "cum_ms": 2.464874,
+            "cum_ms": 1.855166,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/svm/_base.py",
             "line": 783,
             "function": "_validate_targets",
             "calls": 1
           },
           {
-            "cum_ms": 1.820166,
+            "cum_ms": 1.5052280000000002,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/inspect.py",
             "line": 3346,
             "function": "signature",
             "calls": 3
           },
           {
-            "cum_ms": 1.8115420000000002,
+            "cum_ms": 1.49949,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/inspect.py",
             "line": 3081,
             "function": "from_callable",
             "calls": 3
           },
           {
-            "cum_ms": 1.797753,
+            "cum_ms": 1.488484,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/inspect.py",
             "line": 2501,
             "function": "_signature_from_callable",
             "calls": 3
           },
           {
-            "cum_ms": 1.6441540000000001,
+            "cum_ms": 1.353033,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/base.py",
             "line": 546,
             "function": "_validate_params",
             "calls": 1
           },
           {
-            "cum_ms": 1.6286100000000001,
+            "cum_ms": 1.3482370000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/inspect.py",
             "line": 2397,
             "function": "_signature_from_function",
             "calls": 3
           },
           {
-            "cum_ms": 1.533921,
+            "cum_ms": 1.14832,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/utils/validation.py",
             "line": 733,
             "function": "check_array",
             "calls": 5
           },
           {
-            "cum_ms": 1.2239590000000002,
+            "cum_ms": 0.9276030000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/utils/validation.py",
             "line": 2929,
             "function": "validate_data",
@@ -919,97 +924,97 @@
       "execution_class": "mixed",
       "representative": "PipelineScalerLogReg",
       "profile": {
-        "total_wall_ms": 19.579376999999454,
-        "python_self_ms": 15.021327000000007,
-        "python_visible_self_share": 0.767201479393365,
-        "estimated_native_or_wait_share": 0.23279852060663497,
+        "total_wall_ms": 14.733059999997522,
+        "python_self_ms": 11.229288000000004,
+        "python_visible_self_share": 0.7621830088251791,
+        "estimated_native_or_wait_share": 0.2378169911748209,
         "python_to_native_call_count_proxy": 3204,
         "profiled_call_count": 6964,
-        "python_peak_alloc_bytes": 309203,
+        "python_peak_alloc_bytes": 309166,
         "dominant_symbols": [
           {
-            "cum_ms": 19.503986,
+            "cum_ms": 14.678088,
             "file": "/home/runner/work/flow-scikit/flow-scikit/benchmarks/profile_execution.py",
             "line": 63,
             "function": "<lambda>",
             "calls": 1
           },
           {
-            "cum_ms": 19.499959,
+            "cum_ms": 14.673701000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/base.py",
             "line": 1381,
             "function": "wrapper",
             "calls": 3
           },
           {
-            "cum_ms": 18.729975000000003,
+            "cum_ms": 14.101625000000002,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/pipeline.py",
             "line": 582,
             "function": "fit",
             "calls": 1
           },
           {
-            "cum_ms": 12.28952,
+            "cum_ms": 9.290743,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/linear_model/_logistic.py",
             "line": 1354,
             "function": "fit",
             "calls": 1
           },
           {
-            "cum_ms": 9.243252,
+            "cum_ms": 7.014003000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/linear_model/_logistic.py",
             "line": 219,
             "function": "_logistic_regression_path",
             "calls": 1
           },
           {
-            "cum_ms": 7.54054,
+            "cum_ms": 5.749491000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/scipy/optimize/_minimize.py",
             "line": 54,
             "function": "minimize",
             "calls": 1
           },
           {
-            "cum_ms": 7.362004,
+            "cum_ms": 5.619338000000001,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/scipy/optimize/_lbfgsb_py.py",
             "line": 272,
             "function": "_minimize_lbfgsb",
             "calls": 1
           },
           {
-            "cum_ms": 5.140541,
+            "cum_ms": 3.9435680000000004,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/scipy/optimize/_differentiable_functions.py",
             "line": 409,
             "function": "fun_and_grad",
             "calls": 13
           },
           {
-            "cum_ms": 4.724327000000001,
+            "cum_ms": 3.6063590000000003,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/scipy/optimize/_optimize.py",
             "line": 71,
             "function": "_compute_if_needed",
             "calls": 26
           },
           {
-            "cum_ms": 4.7031920000000005,
+            "cum_ms": 3.5875900000000005,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/scipy/optimize/_differentiable_functions.py",
             "line": 360,
             "function": "_update_fun",
             "calls": 14
           },
           {
-            "cum_ms": 4.675823,
+            "cum_ms": 3.568322,
             "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/scipy/_lib/_util.py",
             "line": 541,
             "function": "__call__",
             "calls": 13
           },
           {
-            "cum_ms": 4.617314,
-            "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/pipeline.py",
-            "line": 520,
-            "function": "_fit",
-            "calls": 1
+            "cum_ms": 3.478609,
+            "file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/scipy/optimize/_optimize.py",
+            "line": 78,
+            "function": "__call__",
+            "calls": 13
           }
         ],
         "estimator": "PipelineScalerLogReg",
@@ -1032,10 +1037,10 @@
         "estimator": "Pipeline(StandardScaler,LinearRegression)",
         "operation": "fit",
         "execution_class": "mixed",
-        "sklearn_end_to_end_ms": 5.521919000003095,
-        "isolated_kernel_ms": 22.94831599999725,
+        "sklearn_end_to_end_ms": 18.003520999997136,
+        "isolated_kernel_ms": 6.00300700000389,
         "kernel": "fused NumPy scaling + lstsq reference",
-        "orchestration_overhead_ms": 0.0
+        "orchestration_overhead_ms": 12.000513999993245
       },
       "profile": null,
       "flow_rows": [],
@@ -1047,8 +1052,8 @@
       "estimator": "LinearRegression",
       "operation": "fit",
       "execution_class": "blas-lapack-bound",
-      "sklearn_end_to_end_ms": 2.8182490000006055,
-      "isolated_kernel_ms": 17.87816800000286,
+      "sklearn_end_to_end_ms": 2.2436620000121366,
+      "isolated_kernel_ms": 5.921736000004785,
       "kernel": "numpy.linalg.lstsq",
       "orchestration_overhead_ms": 0.0
     },
@@ -1056,8 +1061,8 @@
       "estimator": "PCA",
       "operation": "fit",
       "execution_class": "blas-lapack-bound",
-      "sklearn_end_to_end_ms": 0.9837830000023473,
-      "isolated_kernel_ms": 5.269182999995792,
+      "sklearn_end_to_end_ms": 0.7425090000197088,
+      "isolated_kernel_ms": 4.223401999979615,
       "kernel": "numpy.linalg.svd",
       "orchestration_overhead_ms": 0.0
     },
@@ -1065,15 +1070,10 @@
       "estimator": "Pipeline(StandardScaler,LinearRegression)",
       "operation": "fit",
       "execution_class": "mixed",
-      "sklearn_end_to_end_ms": 5.521919000003095,
-      "isolated_kernel_ms": 22.94831599999725,
+      "sklearn_end_to_end_ms": 18.003520999997136,
+      "isolated_kernel_ms": 6.00300700000389,
       "kernel": "fused NumPy scaling + lstsq reference",
-      "orchestration_overhead_ms": 0.0
+      "orchestration_overhead_ms": 12.000513999993245
     }
-  ],
-  "provenance": {
-    "result_sha256": "466fd432d26dd8042a24425290d5c09ff749b3c504b137930334d97b7bb397be",
-    "environment_id": "8f11a9c3927a0fee",
-    "source_commit": "f1ed528c85871eb6174e614cb2070cf9d8f285c7"
-  }
+  ]
 }
