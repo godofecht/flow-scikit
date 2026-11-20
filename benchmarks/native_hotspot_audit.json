@@ -1,11 +1,27 @@
 {
   "schema_version": 1,
   "provenance": {
-    "result_sha256": "1815642da695afd256068c72395f8455b46831efb040feea26e7e1fa69760891",
+    "result_sha256": "586a357a316805ca70f4b70d7ed536d8b07fe3f4e2fbae9284935d1eb7104d5f",
     "environment_id": "dfc7d2341e474c4a",
-    "source_commit": "c5fadd095f3711ecfe0320997eb0c6a9565dc4dc"
+    "source_commit": "a5c9b2dd2489914b600d87d67ed026727a3be94d"
   },
   "rows": [
+    {
+      "module": "sklearn.cluster._kmeans",
+      "estimator": "KMeans",
+      "operation": "fit",
+      "execution_class": "mixed",
+      "ownership": "sklearn",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/cluster/_kmeans.py",
+      "evidence": [
+        "numpy-bound:np.",
+        "python-control-loops:4"
+      ],
+      "flow_scikit_status": "present",
+      "priority_score": 71.967,
+      "disposition": "already-equivalent",
+      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
+    },
     {
       "module": "sklearn.linear_model._logistic",
       "estimator": "LogisticRegression",
@@ -21,25 +37,9 @@
         "python-control-loops:2"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 72.063,
+      "priority_score": 71.827,
       "disposition": "retain-native",
       "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
-    },
-    {
-      "module": "sklearn.cluster._kmeans",
-      "estimator": "KMeans",
-      "operation": "fit",
-      "execution_class": "mixed",
-      "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/cluster/_kmeans.py",
-      "evidence": [
-        "numpy-bound:np.",
-        "python-control-loops:4"
-      ],
-      "flow_scikit_status": "present",
-      "priority_score": 72.062,
-      "disposition": "already-equivalent",
-      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
     {
       "module": "sklearn.linear_model._base",
@@ -57,7 +57,7 @@
         "python-control-loops:5"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 68.648,
+      "priority_score": 68.49,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -189,7 +189,7 @@
         "numpy-bound:np."
       ],
       "flow_scikit_status": "present",
-      "priority_score": 41.433,
+      "priority_score": 44.529,
       "disposition": "retain-native",
       "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
     },
