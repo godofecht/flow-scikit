@@ -195,7 +195,7 @@ The main generated views are:
 
 A speedup is `sklearn_ms / flow_ms`. Values above `1x` mean Flow is faster; values below `1x` mean scikit-learn is faster.
 
-The current architecture map shows a useful but non-causal pattern: Flow wins every headline row in all three substrate classes, and the margin varies with the class, from a mean of 28.89x on Python-bound rows down to 3.34x on external-native-bound ones. That ordering is evidence for prioritization. It is not proof that execution substrate alone determines performance.
+The current architecture map shows a useful but non-causal pattern: Flow wins every headline row in all three substrate classes, and the margin varies with the class, from a mean of 29.85x on Python-bound rows down to 3.34x on external-native-bound ones. That ordering is evidence for prioritization. It is not proof that execution substrate alone determines performance.
 
 Mature BLAS/LAPACK, liblinear, libsvm and other native backends are treated as native competitors. The optimization roadmap deliberately prefers retaining those kernels unless benchmark and parity evidence justify replacement.
 
@@ -324,6 +324,24 @@ instruction. A `while` loop with a constant step is vectorized, and the compiler
 subtraction and multiplication in vector lanes and adds the products one at a time, unfused. On
 arm64 at `-O3` the two forms differ in the last bit of some sums. On x86-64 without FMA, the CI
 target, and at `-O0` on both, they are identical.
+
+## Operation rows
+
+The canonical result classifies an estimator and dataset from fit plus
+prediction time. [`operation_rows.json`](operation_rows.json) lists each timed
+operation on its own: `fit`, and the prediction stage, which is `predict` for
+every estimator except PCA where it is `transform`. Each row has the median and
+IQR of both implementations, the speedup, a status, the parity status that
+makes the row eligible, and a tracking issue when the operation loses.
+
+`predict_proba`, `decision_function` and the other operations of a benchmarked
+estimator are not timed separately. They appear with status `not measured`.
+
+[`operation_loss_issues.json`](operation_loss_issues.json) maps each losing
+operation to its focused issue. `generate_operation_rows.py` rebuilds the file
+from `headline_result_v2.json`, and `--check` fails when the committed file
+differs from that build. The #478 exit criterion is evaluated here:
+`every_measured_operation_wins` is true only when no timed operation loses.
 
 ## Pages publication
 

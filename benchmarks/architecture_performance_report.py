@@ -7,6 +7,8 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
+from evidence_provenance import provenance
+
 ROOT = Path(__file__).resolve().parents[1]
 
 ESTIMATOR_ALIASES = {
@@ -94,6 +96,7 @@ def main():
 
     payload = {
         "schema_version": 1,
+        "provenance": provenance(args.headline),
         "joined_headline_rows": joined,
         "speedup_by_execution_substrate": substrate_summary,
         "coverage": {

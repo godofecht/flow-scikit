@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -16,12 +17,14 @@ DISPARITY = BENCH / "disparity_report.json"
 HISTORY = BENCH / "disparity_history.json"
 SCALED = BENCH / "scaled_ci_history.json"
 ESTIMATORS = BENCH / "estimator_comparison.json"
+OPERATIONS = BENCH / "operation_rows.json"
 DOC_RESULT = DOCS / "headline-result-v2.json"
 DOC_ARCH = DOCS / "architecture-performance-map.json"
 DOC_DISPARITY = DOCS / "disparity-report.json"
 DOC_HISTORY = DOCS / "disparity-history.json"
 DOC_SCALED = DOCS / "scaled-ci-history.json"
 DOC_ESTIMATORS = DOCS / "estimator-comparison.json"
+DOC_OPERATIONS = DOCS / "operation-rows.json"
 
 
 def validate_headline(result: dict) -> None:
@@ -93,6 +96,24 @@ def validate_estimators(payload: dict) -> None:
         raise SystemExit("the estimator comparison must carry the contract it was measured under")
 
 
+def validate_operations(payload: dict, result: dict) -> None:
+    rows = payload["rows"]
+    counts = payload["counts"]
+    if counts["operation_rows"] != len(rows):
+        raise SystemExit("operation rows count disagrees with its own rows")
+    measured = [r for r in rows if r["status"] != "not measured"]
+    if counts["measured_operations"] != len(measured):
+        raise SystemExit("operation rows measured count disagrees with its own rows")
+    if counts["flow_wins"] + counts["sklearn_wins"] + counts["ties"] + counts["parity_unresolved"] + counts["measurement_unresolved"] != len(measured):
+        raise SystemExit("operation row status counts do not add up to the measured operations")
+    for h in result["rows"]:
+        ops = [r for r in measured if r["algorithm"] == h["algorithm"] and r["dataset"] == h["dataset"]]
+        if sorted(r["stage"] for r in ops) != ["fit", "prediction"]:
+            raise SystemExit(f"{h['algorithm']}/{h['dataset']} lacks a fit row and a prediction row in operation_rows.json")
+    if payload["source_result_sha256"] != hashlib.sha256(RESULT.read_bytes()).hexdigest():
+        raise SystemExit("operation_rows.json was built from a different headline result")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--check", action="store_true")
@@ -114,6 +135,11 @@ def main() -> int:
         validate_estimators(estimators)
     elif not args.check:
         raise SystemExit("estimator_comparison.json must be present before Pages publication")
+    operations = json.loads(OPERATIONS.read_text()) if OPERATIONS.exists() else None
+    if operations is not None:
+        validate_operations(operations, result)
+    elif not args.check:
+        raise SystemExit("operation_rows.json must be generated before Pages publication")
     scaled = json.loads(SCALED.read_text()) if SCALED.exists() else None
     if scaled is not None:
         validate_scaled(scaled)
@@ -131,6 +157,7 @@ def main() -> int:
         shutil.copyfile(HISTORY, DOC_HISTORY)
         shutil.copyfile(SCALED, DOC_SCALED)
         shutil.copyfile(ESTIMATORS, DOC_ESTIMATORS)
+        shutil.copyfile(OPERATIONS, DOC_OPERATIONS)
         counts = result["counts"]
         print(f"published evidence: {counts['flow_wins']}/{counts['eligible_comparisons']} Flow wins; {disparity['counts']['rows_with_tracked_disparity']} rows with tracked disparities; {len(history['snapshots'])} history snapshots; scaled matrix over {scaled['counts']['runs']} runs; {estimators['counts']['compared']} estimators ranked")
     else:

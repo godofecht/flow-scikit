@@ -44,9 +44,13 @@ jobs:
           python benchmarks/verify_fixtures.py
           python benchmarks/test_generate_headline_summary.py
           python benchmarks/test_disparity_regression_policy.py
+          python benchmarks/test_generate_operation_rows.py
+          python benchmarks/generate_operation_rows.py --check
           python benchmarks/test_config_equivalence.py
           python benchmarks/test_rank_optimization_stages.py
           python benchmarks/publish_headline_v2.py --check
+          python benchmarks/test_check_evidence_drift.py
+          python benchmarks/check_evidence_drift.py
           python benchmarks/validate_execution_substrate.py
           python -m py_compile \
             benchmarks/timing.py \
@@ -68,6 +72,8 @@ jobs:
             benchmarks/publish_headline_v2.py \
             benchmarks/audit_hot_primitives.py \
             benchmarks/check_primitive_bench.py \
+            benchmarks/generate_operation_rows.py \
+            benchmarks/test_generate_operation_rows.py \
             benchmarks/validate_execution_substrate.py
           python - <<'PY'
           import json
