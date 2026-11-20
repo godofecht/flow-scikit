@@ -2,16 +2,17 @@
 
 | Estimator | Operation | Class | Owner | Disposition | Priority |
 |---|---|---|---|---|---:|
-| `KMeans` | `fit` | mixed | sklearn | already-equivalent | 72.2 |
-| `LogisticRegression` | `fit` | mixed | external | retain-native | 71.8 |
+| `LogisticRegression` | `fit` | mixed | external | retain-native | 72.1 |
+| `KMeans` | `fit` | mixed | sklearn | already-equivalent | 72.1 |
 | `LinearRegression` | `fit` | mixed | sklearn | already-equivalent | 68.6 |
 | `DecisionTreeClassifier` | `fit` | mixed | sklearn | already-equivalent | 48.0 |
 | `DecisionTreeClassifier` | `predict` | mixed | sklearn | already-equivalent | 48.0 |
 | `KernelRidge` | `fit` | mixed | sklearn | already-equivalent | 48.0 |
 | `Lasso` | `fit` | mixed | sklearn | already-equivalent | 48.0 |
+| `RandomForestClassifier` | `fit` | mixed | sklearn | already-equivalent | 48.0 |
 | `RandomForestClassifier` | `predict` | mixed | sklearn | already-equivalent | 48.0 |
 | `RandomForestClassifier` | `predict_proba` | mixed | sklearn | already-equivalent | 48.0 |
-| `RandomForestClassifier` | `fit` | mixed | sklearn | already-equivalent | 47.5 |
+| `SVC` | `fit` | external-native-bound | external | retain-native | 41.4 |
 | `ARDRegression` | `fit` | mixed | sklearn | already-equivalent | 40.5 |
 | `AdaBoostClassifier` | `fit` | mixed | sklearn | already-equivalent | 40.5 |
 | `AdaBoostRegressor` | `fit` | mixed | sklearn | already-equivalent | 40.5 |
@@ -127,7 +128,6 @@
 | `VarianceThreshold` | `fit` | mixed | sklearn | already-equivalent | 40.5 |
 | `VotingClassifier` | `predict_proba` | mixed | sklearn | already-equivalent | 40.5 |
 | `VotingClassifier` | `transform` | mixed | sklearn | already-equivalent | 40.5 |
-| `SVC` | `fit` | external-native-bound | external | retain-native | 40.1 |
 | `BisectingKMeans` | `predict` | cython-bound | sklearn | already-equivalent | 34.5 |
 | `GammaRegressor` | `predict` | cython-bound | sklearn | already-equivalent | 34.5 |
 | `GradientBoostingClassifier` | `predict_proba` | cython-bound | sklearn | already-equivalent | 34.5 |

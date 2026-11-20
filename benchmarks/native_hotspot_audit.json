@@ -1,27 +1,11 @@
 {
   "schema_version": 1,
   "provenance": {
-    "result_sha256": "0608960087bd56fe0fb13544948fc16c41804aa5a35f9f574574811905f87dac",
+    "result_sha256": "1815642da695afd256068c72395f8455b46831efb040feea26e7e1fa69760891",
     "environment_id": "dfc7d2341e474c4a",
-    "source_commit": "35a49cf615452ef7734dc584815802e161e87083"
+    "source_commit": "c5fadd095f3711ecfe0320997eb0c6a9565dc4dc"
   },
   "rows": [
-    {
-      "module": "sklearn.cluster._kmeans",
-      "estimator": "KMeans",
-      "operation": "fit",
-      "execution_class": "mixed",
-      "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/cluster/_kmeans.py",
-      "evidence": [
-        "numpy-bound:np.",
-        "python-control-loops:4"
-      ],
-      "flow_scikit_status": "present",
-      "priority_score": 72.151,
-      "disposition": "already-equivalent",
-      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
-    },
     {
       "module": "sklearn.linear_model._logistic",
       "estimator": "LogisticRegression",
@@ -37,9 +21,25 @@
         "python-control-loops:2"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 71.85,
+      "priority_score": 72.063,
       "disposition": "retain-native",
       "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
+    },
+    {
+      "module": "sklearn.cluster._kmeans",
+      "estimator": "KMeans",
+      "operation": "fit",
+      "execution_class": "mixed",
+      "ownership": "sklearn",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/cluster/_kmeans.py",
+      "evidence": [
+        "numpy-bound:np.",
+        "python-control-loops:4"
+      ],
+      "flow_scikit_status": "present",
+      "priority_score": 72.062,
+      "disposition": "already-equivalent",
+      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
     {
       "module": "sklearn.linear_model._base",
@@ -57,7 +57,7 @@
         "python-control-loops:5"
       ],
       "flow_scikit_status": "present",
-      "priority_score": 68.573,
+      "priority_score": 68.648,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
@@ -128,6 +128,24 @@
     {
       "module": "sklearn.ensemble._forest",
       "estimator": "RandomForestClassifier",
+      "operation": "fit",
+      "execution_class": "mixed",
+      "ownership": "sklearn",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
+      "evidence": [
+        "cython-bound:_forest",
+        "cython-bound:_tree",
+        "numpy-bound:np.",
+        "python-control-loops:11"
+      ],
+      "flow_scikit_status": "present",
+      "priority_score": 48.0,
+      "disposition": "already-equivalent",
+      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
+    },
+    {
+      "module": "sklearn.ensemble._forest",
+      "estimator": "RandomForestClassifier",
       "operation": "predict",
       "execution_class": "mixed",
       "ownership": "sklearn",
@@ -160,22 +178,20 @@
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
     },
     {
-      "module": "sklearn.ensemble._forest",
-      "estimator": "RandomForestClassifier",
+      "module": "sklearn.svm._classes",
+      "estimator": "SVC",
       "operation": "fit",
-      "execution_class": "mixed",
-      "ownership": "sklearn",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/ensemble/_forest.py",
+      "execution_class": "external-native-bound",
+      "ownership": "external",
+      "source_file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/svm/_base.py",
       "evidence": [
-        "cython-bound:_forest",
-        "cython-bound:_tree",
-        "numpy-bound:np.",
-        "python-control-loops:11"
+        "external-native-bound:libsvm",
+        "numpy-bound:np."
       ],
       "flow_scikit_status": "present",
-      "priority_score": 47.482,
-      "disposition": "already-equivalent",
-      "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
+      "priority_score": 41.433,
+      "disposition": "retain-native",
+      "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
     },
     {
       "module": "sklearn.linear_model._bayes",
@@ -2064,22 +2080,6 @@
       "priority_score": 40.5,
       "disposition": "already-equivalent",
       "replacement_hypothesis": "Flow implementation already exists; benchmark before further rewrite"
-    },
-    {
-      "module": "sklearn.svm._classes",
-      "estimator": "SVC",
-      "operation": "fit",
-      "execution_class": "external-native-bound",
-      "ownership": "external",
-      "source_file": "/opt/hostedtoolcache/Python/3.12.16/x64/lib/python3.12/site-packages/sklearn/svm/_base.py",
-      "evidence": [
-        "external-native-bound:libsvm",
-        "numpy-bound:np."
-      ],
-      "flow_scikit_status": "present",
-      "priority_score": 40.138,
-      "disposition": "retain-native",
-      "replacement_hypothesis": "retain mature native kernel and optimize orchestration"
     },
     {
       "module": "sklearn.cluster._bisect_k_means",
