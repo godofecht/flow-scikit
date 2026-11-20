@@ -94,14 +94,24 @@ function bp_case(n: i32) -> void {
     bp_fill(A.data, rows * n, 1)
     bp_fill(B.data, rows * n, 4)
     let pairs_per_pass: i32 = rows * rows
-    # Aim for about 20 ms per sample.
+    # Aim for about 20 ms per sample. The probe result is branched on so the
+    # optimizer cannot delete the probe pass. A deleted probe reads as about 0 ns and
+    # would ask for millions of repetitions, so the count is also capped by work.
     let mut reps: i32 = 1
     let probe_t0: i64 = flow_now_ns()
     let probe: f32 = bp_pass(2, A, B, rows, 1)
     let probe_ns: i64 = flow_now_ns() - probe_t0
+    if probe < 0.0 {
+        printf("PROBE|negative|%d\n", n)
+    }
     if probe_ns > 0 {
         reps = (20000000 / probe_ns) as i32
     }
+    # No case may run more than 2e8 element operations per pass, whatever the
+    # probe read.
+    let mut max_reps: i32 = (200000000 / ((pairs_per_pass * n) as i64)) as i32
+    if max_reps < 1 { max_reps = 1 }
+    if reps > max_reps { reps = max_reps }
     if reps < 1 { reps = 1 }
     let samples: i32 = 9
     let times: ptr<f64> = malloc((3 * samples * 8) as i64) as ptr<f64>

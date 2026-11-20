@@ -149,7 +149,7 @@ jobs:
           FLOW_HEADLINE_COMMAND: ${{ github.workspace }}/.flow-toolchain/flow run benchmarks/bench_flow_v2.flow
         run: |
           python benchmarks/run_headline.py --repeats 5
-          ${{ github.workspace }}/.flow-toolchain/flow run benchmarks/bench_primitives.flow > /tmp/primitives.txt
+          timeout 600 ${{ github.workspace }}/.flow-toolchain/flow run benchmarks/bench_primitives.flow > /tmp/primitives.txt
           python benchmarks/check_primitive_bench.py /tmp/primitives.txt
 
       - uses: actions/upload-artifact@v4
