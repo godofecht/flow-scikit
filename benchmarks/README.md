@@ -303,6 +303,28 @@ of it found a heap-buffer-overflow in `_solve_lstsq_qr`, which assumed a design
 has at least as many rows as columns; RANSAC reaches it by fitting 5 sampled
 rows against the 10 features of diabetes.
 
+## Shared hot primitives
+
+[`audit_hot_primitives.py`](audit_hot_primitives.py) scans `lib/scikit` for hot-loop shapes
+(squared differences, dot products, sums, RBF exponentials, row partitioning) and records which
+sites call a shared primitive. The result is in [`hot_primitive_audit.json`](hot_primitive_audit.json)
+and [`HOT_PRIMITIVE_AUDIT.md`](HOT_PRIMITIVE_AUDIT.md). `--check` fails when it is stale. The scan
+matches loop shapes by text, so it counts squared-error and variance sums with the distance loops.
+
+`sqdist_f32` and `sqdist_f32_acc_f64` in `lib/scikit/matrix.flow` hold the row-to-row squared
+distance that KMeans, KernelRidge, KernelSVC, GaussianProcess, TSNE, SpectralClustering,
+LabelSpreading and the kernel approximations used to carry inline. `tests/test_shared_primitives.flow`
+compares them with the loops they replaced, bit for bit. `bench_primitives.flow` times them against
+both inline forms in one process, and `check_primitive_bench.py` fails when the primitive is more
+than 10% slower than either form or when the checksums differ.
+
+The loop form decides the rounding on a target with fused multiply-add. Flow emits `for` loops with
+a runtime stride, which LLVM does not vectorize, so the compiler fuses `s + d * d` into one
+instruction. A `while` loop with a constant step is vectorized, and the compiler then does the
+subtraction and multiplication in vector lanes and adds the products one at a time, unfused. On
+arm64 at `-O3` the two forms differ in the last bit of some sums. On x86-64 without FMA, the CI
+target, and at `-O0` on both, they are identical.
+
 ## Operation rows
 
 The canonical result classifies an estimator and dataset from fit plus

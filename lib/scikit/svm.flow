@@ -1170,11 +1170,7 @@ function _rbf_kernel(X1: Matrix, X2: Matrix, gamma: f32) -> Matrix {
     let result: Matrix = matrix_new(X1.rows, X2.rows)
     for i in 0 to X1.rows {
         for j in 0 to X2.rows {
-            let mut sum: f64 = 0.0
-            for k in 0 to X1.cols {
-                let d: f64 = (matrix_at(X1, i, k) - matrix_at(X2, j, k)) as f64
-                sum = sum + d * d
-            }
+            let sum: f64 = sqdist_f32_acc_f64(X1.data + i * X1.cols, X2.data + j * X2.cols, X1.cols)
             let val: f32 = _rbf_exp_f64(0.0 - (gamma as f64) * sum) as f32
             matrix_set(result, i, j, val)
         }
@@ -2210,13 +2206,7 @@ function _svm_tanh_f32(x: f32) -> f32 {
 # #1004.
 function _svm_kernel_vec(r1: ptr<f32>, r2: ptr<f32>, n_features: i32, kernel: i32, gamma: f32, degree: i32, coef0: f32) -> f32 {
     if kernel == KERNEL_RBF {
-        let mut s: f32 = 0.0
-        let mut k: i32 = 0
-        while k < n_features {
-            let d: f32 = r1[k] - r2[k]
-            s = s + d * d
-            k = k + 1
-        }
+        let s: f32 = sqdist_f32(r1, r2, n_features)
         return exp((0.0 - gamma * s) as f64) as f32
     }
 

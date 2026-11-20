@@ -1,0 +1,159 @@
+# Microbenchmark for the shared squared-distance primitive (issue #498).
+#
+# Times sqdist_f32 against the two loop forms it replaced, in one process with
+# the variants interleaved sample by sample, at the feature counts the
+# canonical datasets use (4 iris, 10 diabetes, 64 digits) and at 784 and 4096.
+# Every variant sums the same row pairs, and the checksums must match to the
+# bit, so a variant the compiler removed shows up as a mismatch rather than as
+# a fast time.
+#
+#   FLOW_OPT_LEVEL=3 flow run benchmarks/bench_primitives.flow > primitives.txt
+#   python benchmarks/check_primitive_bench.py primitives.txt
+#
+# Output: PRIMITIVE|variant|n_features|median_ns_per_pair|checksum
+
+import "lib/scikit/scikit.flow"
+
+extern {
+    function printf(fmt: string, ...) -> i32
+    function flow_now_ns() -> i64
+}
+
+function bp_fill(a: ptr<f32>, n: i32, seed: i32) -> void {
+    let mut i: i32 = 0
+    while i < n {
+        let raw: i32 = (i * 37 + seed * 11 + (i * i) % 17) % 101
+        a[i] = ((raw - 50) as f32) * 0.173 + ((seed % 5) as f32) * 0.0371
+        i = i + 1
+    }
+}
+
+function bp_ref_for(a: ptr<f32>, b: ptr<f32>, n: i32) -> f32 {
+    let mut s: f32 = 0.0
+    for i in 0 to n {
+        let d: f32 = a[i] - b[i]
+        s = s + d * d
+    }
+    return s
+}
+
+function bp_ref_matrix_at(A: Matrix, ra: i32, B: Matrix, rb: i32) -> f32 {
+    let mut s: f32 = 0.0
+    for k in 0 to A.cols {
+        let d: f32 = matrix_at(A, ra, k) - matrix_at(B, rb, k)
+        s = s + d * d
+    }
+    return s
+}
+
+function bp_pass(variant: i32, A: Matrix, B: Matrix, rows: i32, reps: i32) -> f32 {
+    let n: i32 = A.cols
+    let mut total: f32 = 0.0
+    let mut r: i32 = 0
+    while r < reps {
+        let mut i: i32 = 0
+        while i < rows {
+            let mut j: i32 = 0
+            while j < rows {
+                if variant == 0 {
+                    total = total + bp_ref_for(A.data + i * n, B.data + j * n, n)
+                }
+                if variant == 1 {
+                    total = total + bp_ref_matrix_at(A, i, B, j)
+                }
+                if variant == 2 {
+                    total = total + sqdist_f32(A.data + i * n, B.data + j * n, n)
+                }
+                j = j + 1
+            }
+            i = i + 1
+        }
+        r = r + 1
+    }
+    return total
+}
+
+function bp_sort(v: ptr<f64>, n: i32) -> void {
+    let mut i: i32 = 1
+    while i < n {
+        let key: f64 = v[i]
+        let mut j: i32 = i - 1
+        while j >= 0 && v[j] > key {
+            v[j + 1] = v[j]
+            j = j - 1
+        }
+        v[j + 1] = key
+        i = i + 1
+    }
+}
+
+function bp_case(n: i32) -> void {
+    let rows: i32 = 64
+    let A: Matrix = matrix_new(rows, n)
+    let B: Matrix = matrix_new(rows, n)
+    bp_fill(A.data, rows * n, 1)
+    bp_fill(B.data, rows * n, 4)
+    let pairs_per_pass: i32 = rows * rows
+    # Aim for about 20 ms per sample. The probe result is branched on so the
+    # optimizer cannot delete the probe pass. A deleted probe reads as about 0 ns and
+    # would ask for millions of repetitions, so the count is also capped by work.
+    let mut reps: i32 = 1
+    let probe_t0: i64 = flow_now_ns()
+    let probe: f32 = bp_pass(2, A, B, rows, 1)
+    let probe_ns: i64 = flow_now_ns() - probe_t0
+    if probe < 0.0 {
+        printf("PROBE|negative|%d\n", n)
+    }
+    if probe_ns > 0 {
+        reps = (20000000 / probe_ns) as i32
+    }
+    # No case may run more than 2e8 element operations per pass, whatever the
+    # probe read.
+    let mut max_reps: i32 = (200000000 / ((pairs_per_pass * n) as i64)) as i32
+    if max_reps < 1 { max_reps = 1 }
+    if reps > max_reps { reps = max_reps }
+    if reps < 1 { reps = 1 }
+    let samples: i32 = 9
+    let times: ptr<f64> = malloc((3 * samples * 8) as i64) as ptr<f64>
+    let sums: ptr<f32> = array_new_f32(3)
+    let mut s: i32 = 0
+    # Two warmup rounds, then the timed rounds. Variant order rotates each round.
+    let mut round: i32 = -2
+    while round < samples {
+        let mut v: i32 = 0
+        while v < 3 {
+            let which: i32 = (v + round + 2) % 3
+            let t0: i64 = flow_now_ns()
+            let total: f32 = bp_pass(which, A, B, rows, reps)
+            let t1: i64 = flow_now_ns()
+            sums[which] = total
+            if round >= 0 {
+                times[which * samples + round] = ((t1 - t0) as f64) / ((pairs_per_pass * reps) as f64)
+            }
+            v = v + 1
+        }
+        round = round + 1
+    }
+    let mut which: i32 = 0
+    while which < 3 {
+        bp_sort(times + which * samples, samples)
+        let median: f64 = times[which * samples + samples / 2]
+        let name: string = "inline_for"
+        if which == 1 { name = "inline_matrix_at" }
+        if which == 2 { name = "sqdist_f32" }
+        printf("PRIMITIVE|%s|%d|%.4f|%.9g\n", name, n, median, sums[which] as f64)
+        which = which + 1
+    }
+    free(times as ptr<void>)
+    matrix_free(A)
+    matrix_free(B)
+}
+
+function main() -> i32 {
+    bp_case(4)
+    bp_case(10)
+    bp_case(64)
+    bp_case(784)
+    bp_case(4096)
+    return 0
+}

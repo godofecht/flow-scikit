@@ -48,11 +48,7 @@ function kernel_compute(x1: ptr<f32>, x2: ptr<f32>, n: i32, kernel_type: i32, ga
         return pow_f32(gamma * dot + coef0, degree)
     }
     if kernel_type == KR_KERNEL_RBF {
-        let mut sum: f32 = 0.0
-        for i in 0 to n {
-            let d: f32 = x1[i] - x2[i]
-            sum = sum + d * d
-        }
+        let sum: f32 = sqdist_f32(x1, x2, n)
         return exp((0.0 - gamma * sum) as f64) as f32
     }
     if kernel_type == KR_KERNEL_SIGMOID {
